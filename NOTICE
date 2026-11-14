@@ -1,0 +1,18 @@
+Ozzie by FlockConnect
+Copyright 2026 FlockConnect
+
+This product is licensed under the Apache License, Version 2.0. See LICENSE.
+
+Third-party material included in this repository:
+
+- Figtree and Newsreader typefaces, unmodified, in product/web/public/fonts/.
+  Licensed under the SIL Open Font License, Version 1.1. The license texts are
+  in that directory (figtree-OFL.txt, newsreader-OFL.txt).
+
+JavaScript and Rust dependencies are not included in this repository. pnpm and
+Cargo download them from their public registries, and each keeps its own
+license.
+
+The Apache License does not grant permission to use the product name
+Ozzie by FlockConnect or the Ozzie logo, except as required for reasonable and
+customary use in describing the origin of the work (section 6 of the license).

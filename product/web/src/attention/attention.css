@@ -1,0 +1,26 @@
+.attention-page { min-width: 0; overflow-wrap: anywhere; }
+.attention-page .attention-boundary { color: var(--secondary); line-height: 1.6; max-width: 66ch; }
+.attention-section { margin: 0 0 24px; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.attention-section > p { max-width: 68ch; }
+.attention-choices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; margin: 24px 0; }
+.attention-choices label { display: grid; gap: 8px; min-width: 0; font-weight: 600; }
+.attention-page select { min-width: 0; max-width: 100%; font-weight: 400; }
+.attention-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 24px; }
+.attention-actions button { max-width: 100%; white-space: normal; min-height: 44px; }
+.attention-status { color: var(--warning); }
+.attention-uncertain { color: var(--uncertain); background: var(--uncertain-surface); padding: 12px; border-radius: 4px; }
+.attention-finding { padding: 24px 0; border-top: 1px solid var(--line); }
+.attention-finding h3 { font-size: 1.125rem; line-height: 1.4; }
+.attention-details { border-top: 1px solid var(--line); margin-top: 16px; }
+.attention-details summary { min-height: 44px; padding: 12px 0; cursor: pointer; font-weight: 600; color: var(--accent); }
+.attention-details blockquote { margin: 16px 0; padding-left: 16px; border-left: 3px solid var(--control); }
+.attention-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 24px; }
+.attention-source { min-width: 0; padding: 16px 0; border-top: 1px solid var(--line); }
+.attention-source h4 { font-size: 1rem; margin: 0 0 8px; }
+.attention-source p { color: var(--secondary); }
+.attention-literal { white-space: pre-wrap; overflow-wrap: anywhere; }
+.attention-page :is(button, select, summary):focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+@media (max-width: 520px) {
+  .attention-section { padding: 16px; }
+  .attention-actions { align-items: stretch; flex-direction: column; }
+}

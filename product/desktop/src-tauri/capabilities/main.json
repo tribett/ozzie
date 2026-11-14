@@ -1,0 +1,1 @@
+{ "$schema": "../gen/schemas/desktop-schema.json", "identifier": "main", "description": "No plugin commands are granted. The Sunday notice comes only from the app's notify_sunday_attention command, whose text is fixed in native code.", "windows": ["main"], "permissions": [] }
