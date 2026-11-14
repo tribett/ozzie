@@ -393,7 +393,7 @@ describe("everything sent passes a TS mirror of the native agent_step checks", (
     }
   }, 30_000);
 
-  it("fixed wording avoids ordinary words that are also common first names", { timeout: 120_000 }, async () => {
+  it("fixed wording avoids ordinary words that are also common first names", async () => {
     const fixed = [
       ...Object.values(TOOL_SPECS).flatMap(s => [s.description, ...Object.values(s.parameters.properties).map(p => p.description)]),
       ...[...skills.values()].flatMap(s => [s.title, s.purpose, s.body]),
@@ -406,7 +406,7 @@ describe("everything sent passes a TS mirror of the native agent_step checks", (
       expect(nameWordsIn(text), `${label}: ${text.slice(0, 120)}`).toEqual([]);
     }
     expect(containsNameWord("Would you be able to help?", NAME_WORD_ROSTER)).toBe(false);
-  }, 30_000);
+  }, 120_000);
 
   it("the mirror itself refuses what native refuses", () => {
     const none = {};
