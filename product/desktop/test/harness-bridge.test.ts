@@ -1,0 +1,397 @@
+// The harness in the desktop app: native error mapping, the ledger grammar, a ledger that fails or
+// stalls never breaking a task, HarnessData from app state, Sunday checks as ledger tasks, and Ask
+// Ozzie end to end through the real harness with scripted models. Fictional fixed data; no native calls.
+import { describe, expect, it, vi } from "vitest";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
+import { REFUSALS } from "../../../core/src/ask.js";
+import { NATIVE_TOOL_ALLOWLIST, type AgentStepReply, type AgentStepRequest, type ModelStep, type TaskEvent } from "../../../core/src/harness/contract.js";
+import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
+import type { Harness } from "../../../core/src/harness/index.js";
+import { HarnessSession } from "../../../core/src/harness/session.js";
+import { nov22Capture } from "../../../core/src/fictional-sunday.js";
+import { withFictionalOperations, withFictionalOperationsOff } from "../../../core/src/fictional-operations.js";
+import type { SundayCapture } from "../../../core/src/sunday-capture.js";
+import type { ConnectionStatus } from "../src/connection.js";
+import {
+  agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, runtimeFor, StepFailure, stepFailure, StepNotes,
+  type Invoke,
+} from "../src/harness-bridge.js";
+import { ASK_FAILURES, ledgerDetail } from "../src/harness-words.js";
+import { answer, draftTurns, fakeNative as fakeLedger, fictionalData, greeterTurns, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
+
+const skills = await bundledSkills();
+const status = (over: Partial<ConnectionStatus> = {}): ConnectionStatus =>
+  ({ state: "connected", organization: "1001", checked_at_ms: 1, source: "test", problem: null, scopes: "services-and-operations", ...over });
+const harness = (model: ModelStep, recorder?: LedgerRecorder, data = fictionalData()): Harness =>
+  createAppHarness({ workspace_id: "fictional", data, skills, session: new HarnessSession(), loop: "ts", step: model, ...(recorder ? { recorder } : {}) });
+const hashOf = async (id: string) => skills.get(id)?.hash;
+const recorder = (invoke: Invoke, over: Partial<ConstructorParameters<typeof LedgerRecorder>[0]> = {}) =>
+  new LedgerRecorder({ invoke, hashFor: hashOf, newId: ids(), readyMs: 200, ...over });
+
+// ---- agent_step ---------------------------------------------------------------------------------------
+
+describe("the model step over native agent_step", () => {
+  it("maps every native error code (a bare string) to the loop's FailureCode", () => {
+    expect(stepFailure("egress")).toBe("egress");
+    expect(stepFailure("limit")).toBe("limit");
+    expect(stepFailure("budget")).toBe("limit");
+    expect(stepFailure("not-configured")).toBe("no-model");
+    expect(stepFailure("model-not-allowed")).toBe("no-model");
+    // Review C9: the codes H5b added keep their meaning.
+    expect(stepFailure("denied")).toBe("denied");
+    expect(stepFailure("invalid-task")).toBe("invalid-task");
+    expect(stepFailure("daily-limit")).toBe("limit");
+    expect(stepFailure("ledger-unavailable")).toBe("transport");
+    for (const code of ["rate-limited", "provider-failure", "invalid-request", "something-new", ""]) expect(stepFailure(code)).toBe("transport");
+    expect(stepFailure(new Error("egress"))).toBe("transport");
+    expect(stepFailure(undefined)).toBe("transport");
+  });
+
+  it("tells a spent allowance, today's allowance and an unavailable record apart in the Ask panel (review C9)", async () => {
+    for (const [native, text] of [["budget", ASK_FAILURES.allowance], ["daily-limit", ASK_FAILURES.today], ["ledger-unavailable", ASK_FAILURES.ledger],
+      ["denied", ASK_FAILURES.denied], ["invalid-task", ASK_FAILURES.invalid], ["limit", ASK_FAILURES.steps], ["rate-limited", ASK_FAILURES.unfinished]] as const) {
+      const notes = new StepNotes();
+      const failing = fakeLedger(() => Promise.reject(native));
+      const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "ts", step: agentStep(failing.invoke, notes) });
+      const turn = await askOzzie(h, "Who could cover Greeter?", { skills, notes });
+      expect(turn, native).toMatchObject({ state: "problem", text });
+    }
+    expect(ASK_FAILURES.ledger).toBe("Ozzie's record of its work isn't available, so it didn't ask the AI.");
+    expect(`${ASK_FAILURES.today} ${ASK_FAILURES.allowance}`).toMatch(/today's allowance for AI help.*its allowance for AI help/u);
+  });
+
+  it("sends the request as is and throws an object with the mapped code", async () => {
+    const reply: AgentStepReply = { content: "Fine.", tool_calls: [], finish: "stop" };
+    const ok = fakeLedger(() => reply);
+    const request: AgentStepRequest = { task_id: "00000000-0000-4000-8000-000000000001", messages: [{ role: "user", content: "Hi" }], tools: [], max_tokens: 700 };
+    await expect(agentStep(ok.invoke)(request, new AbortController().signal)).resolves.toEqual(reply);
+    expect(ok.log).toEqual([["agent_step", { request }]]);
+    for (const [native, code] of [["egress", "egress"], ["budget", "limit"], ["not-configured", "no-model"], ["rate-limited", "transport"]] as const) {
+      const failing = fakeLedger(() => Promise.reject(native));
+      const error = await agentStep(failing.invoke)(request, new AbortController().signal).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(StepFailure);
+      expect((error as StepFailure).code).toBe(code);
+    }
+  });
+
+  it("gives up at once when the task is stopped", async () => {
+    const never = fakeLedger(() => new Promise(() => {}));
+    const controller = new AbortController();
+    const pending = agentStep(never.invoke)({ task_id: "x", messages: [], tools: [], max_tokens: 1 }, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "transport" });
+  });
+});
+
+// ---- the ledger grammar ---------------------------------------------------------------------------------
+
+describe("runtime events in the native ledger grammar", () => {
+  it("translates every event shape the conformance suite produces", () => {
+    for (const tool of NATIVE_TOOL_ALLOWLIST) {
+      for (const status of ["complete", "partial", "stale", "denied", "provider-failure", "unverified"]) {
+        expect(ledgerDetail("tool", `${tool}:${status}`)).toBe(`${tool} ${status}`);
+      }
+    }
+    // A name the model chose that isn't allowlisted is never written: only its status.
+    expect(ledgerDetail("tool", "unknown:denied")).toBe("denied");
+    expect(ledgerDetail("tool", "email.send:denied")).toBe("denied");
+    expect(ledgerDetail("tool", "sunday.open_needs:whatever")).toBeNull();
+    expect(ledgerDetail("model", "step 1")).toBe("1");
+    expect(ledgerDetail("model", "step 6", "tool_calls")).toBe("6 tool_calls");
+    expect(ledgerDetail("model", "step 2", "stop")).toBe("2 stop");
+    expect(ledgerDetail("model", "step 3", "egress")).toBe("3 egress");
+    expect(ledgerDetail("model", "step 3", "nonsense")).toBe("3");
+    expect(ledgerDetail("model", "step 0")).toBeNull();
+    for (const code of ["invalid-task", "limit", "timeout", "egress", "fidelity", "transport", "no-model", "stale", "partial", "provider-failure", "unverified", "denied"]) {
+      expect(ledgerDetail("failed", code)).toBe(code);
+    }
+    expect(ledgerDetail("failed", "Sam")).toBeNull();
+    expect(ledgerDetail("cancelled", "cancelled")).toBe("");
+    expect(ledgerDetail("verified", "")).toBe("");
+    expect(ledgerDetail("admitted", "")).toBe("");
+    expect(ledgerDetail("running", "")).toBe("");
+  });
+});
+
+// ---- the recorder ---------------------------------------------------------------------------------------
+
+const ledgerOnly = (log: [string, Record<string, unknown>][]) => log.filter(([c]) => c.startsWith("ledger_"));
+const shape = (log: [string, Record<string, unknown>][]) => ledgerOnly(log).map(([c, a]) =>
+  c === "ledger_admit" ? `admit ${a["kind"]} ${a["skillId"]}` : c === "ledger_transition" ? `to ${a["to"]}${a["code"] ? ` ${a["code"]}` : ""}` : `${a["kind"]} ${a["detail"]}`);
+
+describe("the ledger recorder", () => {
+  it("admits the task, records each tool and the outcome, but not model steps (native records those)", async () => {
+    const ledger = fakeLedger();
+    const r = recorder(ledger.invoke);
+    const turn = await askOzzie(harness(scripted(greeterTurns).model, r), "Who could cover Greeter?", { recorder: r, skills });
+    await r.idle();
+    expect(turn.state).toBe("answered");
+    expect(shape(ledger.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "tool sunday.who_could_help complete", "to verified"]);
+    const [, admit] = ledgerOnly(ledger.log)[0]!;
+    expect(admit).toEqual({ taskId: expect.stringMatching(/^[0-9a-f-]{36}$/u), kind: "ask", skillId: "answer-from-what-was-read", skillHash: skills.get("answer-from-what-was-read")!.hash });
+    // Name-free: nothing typed, answered or read reaches the ledger.
+    expect(JSON.stringify(ledger.log)).not.toMatch(/Greeter|Riley|Thornbury|\[Person|\[Role/u);
+  });
+
+  it("is admitted and running before the first model step reaches native", async () => {
+    let running = false;
+    const ledger = fakeLedger(async (command, args) => {
+      if (command === "ledger_transition" && args["to"] === "running") { await new Promise(r => setTimeout(r, 30)); running = true; }
+      return {};
+    });
+    const r = recorder(ledger.invoke);
+    const seen: boolean[] = [];
+    const m = scripted([() => { seen.push(running); return answer("{\"answer\":\"not-covered\"}"); }]);
+    const turn = await askOzzie(harness(m.model, r), "What still needs a decision this Sunday?", { recorder: r, skills });
+    expect(turn.state).toBe("answered");
+    expect(seen).toEqual([true]);
+  });
+
+  it("can record model steps with their outcome when switched on", async () => {
+    const ledger = fakeLedger();
+    const r = recorder(ledger.invoke, { recordModelEvents: true });
+    await askOzzie(harness(scripted(greeterTurns).model, r), "Who could cover Greeter?", { recorder: r, skills });
+    await r.idle();
+    expect(shape(ledger.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "model 1 tool_calls", "tool sunday.who_could_help complete", "model 2 stop", "to verified"]);
+    const failing = fakeLedger();
+    const r2 = recorder(failing.invoke, { recordModelEvents: true });
+    await askOzzie(harness(scripted([() => new StepFailure("no-model")]).model, r2), "Who could cover Greeter?", { recorder: r2, skills });
+    await r2.idle();
+    expect(shape(failing.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "model 1 no-model", "to failed no-model"]);
+  });
+
+  it("never breaks the task when the ledger is unavailable, and logs only fixed codes", async () => {
+    const lines: string[] = [];
+    const ledger = fakeLedger(() => Promise.reject("unavailable"));
+    const r = recorder(ledger.invoke, { log: line => lines.push(line) });
+    const turn = await askOzzie(harness(scripted(greeterTurns).model, r), "Who could cover Greeter?", { recorder: r, skills });
+    await r.idle();
+    expect(turn.state).toBe("answered");
+    // After a failed admit nothing else is tried for that task.
+    expect(shape(ledger.log)).toEqual(["admit ask answer-from-what-was-read"]);
+    expect(lines).toEqual(["ledger: admit unavailable"]);
+    // A throwing invoke and a strange rejection are handled the same way.
+    const throwing = recorder(() => { throw new Error("Riley Thornbury"); }, { log: line => lines.push(line) });
+    expect((await askOzzie(harness(scripted(greeterTurns).model, throwing), "Who could cover Greeter?", { recorder: throwing, skills })).state).toBe("answered");
+    await throwing.idle();
+    expect(lines.at(-1)).toBe("ledger: admit unknown");
+    expect(lines.join("\n")).not.toMatch(/Riley|Greeter/u);
+  });
+
+  it("never holds up the task when the ledger stalls", async () => {
+    const ledger = fakeLedger(() => new Promise(() => {}));
+    const r = recorder(ledger.invoke, { readyMs: 20 });
+    const started = Date.now();
+    const turn = await askOzzie(harness(scripted(greeterTurns).model, r), "Who could cover Greeter?", { recorder: r, skills });
+    expect(turn.state).toBe("answered");
+    // Waiting for the ledger to catch up is bounded too (the autopilot waits on it).
+    await r.idle(30);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("keeps going when an event is refused, and still records the outcome", async () => {
+    const ledger = fakeLedger((command) => command === "ledger_event" ? Promise.reject("full") : {});
+    const lines: string[] = [];
+    const r = recorder(ledger.invoke, { log: line => lines.push(line) });
+    await askOzzie(harness(scripted(greeterTurns).model, r), "Who could cover Greeter?", { recorder: r, skills });
+    await r.idle();
+    expect(shape(ledger.log).at(-1)).toBe("to verified");
+    expect(lines).toEqual(["ledger: event full"]);
+  });
+
+  it("records a task the harness refused before any step as running then failed", async () => {
+    const ledger = fakeLedger();
+    const r = recorder(ledger.invoke);
+    const observer = r.task("ask", "answer-from-what-was-read");
+    observer.onEvent({ task_id: "00000000-0000-4000-8000-0000000000aa", sequence: 1, at: "2026-11-20T15:05:00Z", type: "failed", detail: "egress" });
+    await r.idle();
+    expect(shape(ledger.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "to failed egress"]);
+    // Cancelled straight from admitted.
+    const cancelled = fakeLedger();
+    const r2 = recorder(cancelled.invoke);
+    const o2 = r2.task("skill", "sunday-ready");
+    const ev = (type: TaskEvent["type"], sequence: number, detail = ""): TaskEvent => ({ task_id: "00000000-0000-4000-8000-0000000000bb", sequence, at: "x", type, detail });
+    o2.onEvent(ev("admitted", 1)); o2.onEvent(ev("cancelled", 2));
+    await r2.idle();
+    expect(shape(cancelled.log)).toEqual(["admit skill sunday-ready", "to cancelled"]);
+  });
+
+  it("records nothing for a question refused before anything was sent", async () => {
+    const ledger = fakeLedger();
+    const r = recorder(ledger.invoke);
+    const turn = await askOzzie(harness(scripted([]).model, r), "What's Riley Thornbury's phone number? Call 555-123-4567", { recorder: r, skills });
+    await r.idle();
+    expect(turn).toEqual({ state: "refused", text: REFUSALS.contact });
+    expect(ledger.log).toEqual([]);
+  });
+});
+
+// ---- Sunday checks --------------------------------------------------------------------------------------
+
+describe("Sunday checks in the ledger", () => {
+  const capture = nov22Capture();
+  it("records each check as a check task under Sunday ready, with no model", async () => {
+    const ledger = fakeLedger();
+    const store = new Map<string, string>();
+    const triggers = localTriggers({ getItem: k => store.get(k) ?? null, setItem: (k, v) => { store.set(k, v); } });
+    const r = recorder(ledger.invoke, { triggers });
+    await expect(r.check(async () => capture, "manual")).resolves.toBe(capture);
+    const partial: SundayCapture = { ...capture, reads: [...capture.reads, { ...capture.reads[0]!, outcome: "failed" }] };
+    await r.check(async () => partial);
+    await expect(r.check(() => Promise.reject("not-connected"))).rejects.toBe("not-connected");
+    await expect(r.check(() => Promise.reject("rate-limited"))).rejects.toBe("rate-limited");
+    await r.idle();
+    // Each task's calls are in order; different tasks may interleave.
+    const tasks = [...new Set(ledgerOnly(ledger.log).map(([, a]) => a["taskId"] as string))];
+    expect(tasks.map(id => shape(ledger.log.filter(([, a]) => a["taskId"] === id)))).toEqual([
+      ["admit check sunday-ready", "to running", "tool planning_center.refresh complete", "to verified"],
+      ["admit check sunday-ready", "to running", "tool planning_center.refresh partial", "to verified"],
+      ["admit check sunday-ready", "to running", "to failed denied"],
+      ["admit check sunday-ready", "to running", "to failed provider-failure"],
+    ]);
+    expect(ledgerOnly(ledger.log)[0]![1]["skillHash"]).toBe(skills.get("sunday-ready")!.hash);
+    expect(ledger.log.some(([c]) => c === "agent_step")).toBe(false);
+    const [first, second] = tasks as [string, string];
+    expect(triggers.get(first)).toBe("manual");
+    expect(triggers.get(second)).toBe("automatic");
+  });
+
+  it("never fails or delays a check when the ledger does", async () => {
+    const r = recorder(fakeLedger(() => new Promise(() => {})).invoke);
+    await expect(r.check(async () => capture)).resolves.toBe(capture);
+    const broken = recorder(() => { throw new Error("boom"); });
+    await expect(broken.check(async () => capture)).resolves.toBe(capture);
+    expect(checkFailure("invalid-credentials")).toBe("denied");
+    expect(checkFailure({ sunday_check: "timeout" })).toBe("provider-failure");
+  });
+});
+
+// ---- HarnessData ------------------------------------------------------------------------------------------
+
+describe("HarnessData from the app's state", () => {
+  const capture = withFictionalOperations(nov22Capture());
+  const base = { rules: RULES, decisions: [], now: "2026-11-20T15:05:00Z" };
+  const refresh = async () => fictionalData();
+
+  it("the fictional example: everything granted, its own import, never a real Planning Center check", () => {
+    const data = buildHarnessData({ ...base, capture, fictional: true, status: status(), configured: true }, refresh);
+    expect(data.mode).toBe("fictional");
+    expect(data.granted).toEqual(["services", "operations"]);
+    expect(data.attention?.ok).toBe(true);
+    expect(data.connected).toBe(false);
+    expect(data.refresh).toBeUndefined();
+    expect(data.brief?.mode).toBe("fictional");
+    expect(data.operations).not.toBeNull();
+  });
+
+  it("a live check: the verified scopes, and a fresh check only with a usable connection", () => {
+    const live = { ...capture, kind: "live" as const };
+    const both = buildHarnessData({ ...base, capture: live, fictional: false, status: status(), configured: true }, refresh);
+    expect(both.mode).toBe("live");
+    expect(both.granted).toEqual(["services", "operations"]);
+    expect(both.attention).toBeNull();
+    expect(both.connected).toBe(true);
+    expect(both.refresh).toBe(refresh);
+    const servicesOnly = buildHarnessData({ ...base, capture: live, fictional: false, status: status({ scopes: "services" }), configured: true }, refresh);
+    expect(servicesOnly.granted).toEqual(["services"]);
+    const signedOut = buildHarnessData({ ...base, capture: live, fictional: false, status: status({ state: "disconnected" }), configured: true }, refresh);
+    expect(signedOut.connected).toBe(false);
+    expect(signedOut.refresh).toBeUndefined();
+    expect(buildHarnessData({ ...base, capture: live, fictional: false, status: status(), configured: false }, refresh).connected).toBe(false);
+  });
+
+  it("a saved recording: recording mode; scopes from what the check itself read until the connection is verified", () => {
+    const recording = { ...capture, kind: "recording" as const };
+    const data = buildHarnessData({ ...base, capture: recording, fictional: false, status: null, configured: true });
+    expect(data.mode).toBe("recording");
+    expect(data.granted).toEqual(["services", "operations"]);
+    expect(data.connected).toBe(false);
+    expect(grantedFor({ ...withFictionalOperationsOff(nov22Capture()), kind: "recording" }, false, null)).toEqual(["services"]);
+  });
+
+  it("nothing checked yet", () => {
+    const data = buildHarnessData({ ...base, capture: null, fictional: false, status: null, configured: false });
+    expect(data).toMatchObject({ capture: null, brief: null, operations: null, mode: "live", granted: ["services"] });
+  });
+});
+
+// ---- Ask Ozzie through the harness -------------------------------------------------------------------------
+
+describe("Ask Ozzie as a harness task", () => {
+  for (const loop of ["pi", "ts"] as const) {
+    it(`gives a verified answer restored on this Mac, with its sources, procedure and steps (${loop})`, async () => {
+      const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop, step: scripted(greeterTurns).model });
+      const turn = await askOzzie(h, "Who could cover Greeter?", { skills, sender: "Pat" });
+      if (turn.state !== "answered") throw new Error(turn.state);
+      expect(turn.answer.body).toBe("Riley Thornbury has no overlap found for Greeter.\n\nThat doesn't mean they're free or willing; only they can say.");
+      expect(turn.answer.basedOn).toMatch(/^Based on: fictional example data as of /u);
+      expect(turn.answer.procedure).toEqual({ title: "Answer from what was read", body: skills.get("answer-from-what-was-read")!.body });
+      expect(turn.answer.steps).toEqual(["Looked at who on the team could help — complete", "Checked the facts it chose against what was read"]);
+      expect(turn.answer.aiSteps).toBe(2);
+      expect(turn.answer.notCovered).toBe(false);
+      expect(turn.answer.draft).toBeNull();
+    });
+  }
+
+  it("splits a drafted note out, greeting by first name and signing with the sender", async () => {
+    const h = harness(scripted(draftTurns).model);
+    const turn = await askOzzie(h, "Draft a note to someone who could cover Greeter", { skills, sender: "Pat" });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body).toBe("Here is a draft for you to read, change and send yourself. Nothing has been sent.\n\nRiley Thornbury has no overlap found for Greeter.\n\nThat doesn't mean they're free or willing; only they can say.");
+    expect(turn.answer.draft).toMatch(/^Hi Riley,/u);
+    expect(turn.answer.draft).toMatch(/Thank you,\nPat$/u);
+  });
+
+  it("says plainly why a question couldn't be answered", async () => {
+    const run = async (turns: Turn[]) => askOzzie(harness(scripted(turns).model), "Who could cover Greeter?", { skills });
+    expect(await run([() => new StepFailure("no-model")])).toEqual({ state: "no-model" });
+    expect(await run([() => new StepFailure("egress")])).toEqual({ state: "problem", code: "egress", text: ASK_FAILURES.egress });
+    expect(await run([() => answer("[Person 99] could help.")])).toEqual({ state: "problem", code: "fidelity", text: ASK_FAILURES.fidelity });
+    expect(await run([() => new StepFailure("transport")])).toEqual({ state: "problem", code: "transport", text: ASK_FAILURES.unfinished });
+    expect(await run([() => new StepFailure("limit")])).toEqual({ state: "problem", code: "limit", text: ASK_FAILURES.steps });
+    expect(ASK_FAILURES.egress).toMatch(/^That question includes details Ozzie keeps on this Mac/u);
+    expect(ASK_FAILURES.fidelity).toBe("Ozzie couldn't back that answer up with what it read, so it isn't shown.");
+    expect(ASK_FAILURES.unfinished).toBe("Ozzie couldn't finish that just now.");
+  });
+
+  it("stops when the person cancels", async () => {
+    const controller = new AbortController();
+    const h = harness(() => new Promise(() => {}));
+    const pending = askOzzie(h, "Who could cover Greeter?", { skills, signal: controller.signal });
+    controller.abort();
+    expect(await pending).toEqual({ state: "cancelled", text: ASK_FAILURES.cancelled });
+  });
+
+  it("uses the Pi loop; the plain loop only through the debug-only setting", () => {
+    expect(runtimeFor("pi").name).toBe("pi");
+    expect(runtimeFor("ts").name).toBe("ts");
+    const store = new Map<string, string>([["ozzie.dev.loop", "ts"]]);
+    vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } });
+    try {
+      expect(devLoop.get(false)).toBe("pi");
+      expect(devLoop.get(true)).toBe("ts");
+      devLoop.set("pi");
+      expect(devLoop.get(true)).toBe("pi");
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+describe("retrying a reply native dropped as denied", () => {
+  it("tries once more after denied, and only once", async () => {
+    const { retryDenied } = await import("../src/harness-bridge.js");
+    let calls = 0;
+    const ok = await retryDenied(async () => { calls++; if (calls === 1) throw "denied"; return "reply"; }, new AbortController().signal);
+    expect([ok, calls]).toEqual(["reply", 2]);
+    calls = 0;
+    await expect(retryDenied(async () => { calls++; throw "denied"; }, new AbortController().signal)).rejects.toBe("denied");
+    expect(calls).toBe(2);
+  });
+  it("doesn't retry other failures or after a cancel", async () => {
+    const { retryDenied } = await import("../src/harness-bridge.js");
+    let calls = 0;
+    await expect(retryDenied(async () => { calls++; throw "egress"; }, new AbortController().signal)).rejects.toBe("egress");
+    const c = new AbortController(); c.abort();
+    await expect(retryDenied(async () => { calls++; throw "denied"; }, c.signal)).rejects.toBe("denied");
+    expect(calls).toBe(2);
+  });
+});

@@ -54,7 +54,8 @@ describe("What runs automatically", () => {
     expect(page).toContain("Check Sunday coverage in Planning Center");
     expect(page).toContain("Reads only. It never changes Planning Center or sends messages.");
     expect(page).toContain("Planning Center organization 1001");
-    expect(page).toContain("When Ozzie opens, then every hour while Ozzie is open on this Mac.");
+    // Closing the window no longer stops Ozzie (it stays in the menu bar); quitting does.
+    expect(page).toContain("When Ozzie opens, then every hour while Ozzie is running on this Mac, even with its window closed. Nothing runs after you quit it.");
     expect(page).toContain("Time zone");
     expect(page).toContain("Pause automatic checks");
     expect(page).toContain("Check now");

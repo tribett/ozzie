@@ -1,0 +1,35 @@
+{
+  "about": "sha-256 (lower-case hex) of each bundled skill file and of the exact system message the harness sends for it (vocabulary.json system_message.format). Pinned by core/test/harness/fixed.test.ts; the native agent_step check can compare a request's system message against system_sha256 instead of name-scanning it.",
+  "procedures": {
+    "answer-from-what-was-read": {
+      "file": "core/skills/answer-from-what-was-read.md",
+      "file_sha256": "d2613def03eae9178bf01c61261c171d226429b8500b2322a93bb49d8616a211",
+      "system_sha256": "ab4442b550676b8694d1c35d36c7fb60ba1348aa4fbc6ce71207bcd277a51048"
+    },
+    "follow-up-owners": {
+      "file": "core/skills/follow-up-owners.md",
+      "file_sha256": "f06e8628b4522b814a41283885e373aa76ac0c2edb6357a92f99a68a0f82586b",
+      "system_sha256": "727443e044a77ed3e790e11429107474aa300ead941f83a91e3687d7ee0a017b"
+    },
+    "group-night": {
+      "file": "core/skills/group-night.md",
+      "file_sha256": "6cda0301d0404afa564f2b682bb26debe24bf09779cd90fe802f29496a9bd29d",
+      "system_sha256": "8b81292a57bfad7fcb8f3526fad42b126b53218a879a10ee1209822b3781f64a"
+    },
+    "room-check": {
+      "file": "core/skills/room-check.md",
+      "file_sha256": "471fc8c231500c2b6542665c9f48187afdc5271361aad4095a862479ceea7f51",
+      "system_sha256": "de2312ae0c54e54fb604c4b94f547999c41cfea12a7688275806220eabc86c5f"
+    },
+    "sunday-ready": {
+      "file": "core/skills/sunday-ready.md",
+      "file_sha256": "2f27133f7b7c73c539e87baf3353ac84ade20a96acd1c210b6dd0ac73d32c35f",
+      "system_sha256": "4552e97e04d1609078e935c9539202364dd2798a2213584a0079acdc775e3e7c"
+    },
+    "who-could-help": {
+      "file": "core/skills/who-could-help.md",
+      "file_sha256": "ddab77ca64917a410ef317478797e819e47e710fbdb4a5679cdeb1b3687ec458",
+      "system_sha256": "14da15fd0a904b071eb49bd20c51b1c50bfb283979cc8943facecd604a7badec"
+    }
+  }
+}

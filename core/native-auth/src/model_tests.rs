@@ -7,6 +7,8 @@ use std::{
 
 const GATEWAY_KEY: &str = "fictional-gateway-key-canary";
 const OWN_KEY: &str = "fictional-own-key-canary";
+/// Under the old plain account: bound to no host, so never sent anywhere.
+const UNBOUND_KEY: &str = "fictional-unbound-own-key-canary";
 
 struct FakeKeys {
     keys: BTreeMap<&'static str, &'static str>,
@@ -25,7 +27,8 @@ fn keys() -> FakeKeys {
     FakeKeys {
         keys: BTreeMap::from([
             ("vercel-ai-gateway", GATEWAY_KEY),
-            ("own-provider", OWN_KEY),
+            ("own-provider:api.example.invalid", OWN_KEY),
+            ("own-provider", UNBOUND_KEY),
         ]),
         lookups: AtomicUsize::new(0),
     }
@@ -304,7 +307,46 @@ fn route_urls_are_fixed_https_or_loopback_and_never_planning_center() {
         (Route::Local, Some("http://example.com/v1"), None),
         (Route::Local, None, Some("")),
         (Route::Local, None, Some("two words")),
-        (Route::Local, None, Some(&"m".repeat(129))),
+        (Route::Local, None, Some(&"m".repeat(101))),
+        // Planning Center's hosts with a trailing dot, and Church Center, its people-facing site.
+        (
+            Route::Own,
+            Some("https://api.planningcenteronline.com./v1"),
+            Some("m"),
+        ),
+        (Route::Own, Some("https://churchcenter.com/v1"), Some("m")),
+        (
+            Route::Own,
+            Some("https://grace.churchcenter.com./v1"),
+            Some("m"),
+        ),
+        (Route::Own, Some("https://./v1"), Some("m")),
+        // Model ids: the charset, and no contact detail.
+        (
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("riley-thornbury/555-123-4567"),
+        ),
+        (
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("riley@example.org"),
+        ),
+        (
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("model name"),
+        ),
+        (
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("model;drop"),
+        ),
+        (
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("mod\u{e9}l"),
+        ),
     ];
     for (route, base, model) in refused {
         assert_eq!(
@@ -457,7 +499,7 @@ fn the_call_cap_refuses_without_a_request_and_failed_calls_still_count() {
     assert_eq!(http.count(), 3);
     assert_eq!(
         ledger(&dir)["managed"],
-        json!({"calls":3,"prompt_tokens":12,"completion_tokens":3})
+        json!({"calls":3,"prompt_tokens":12,"completion_tokens":3,"agent_day":0,"agent_steps":0})
     );
     #[cfg(unix)]
     {
@@ -1834,4 +1876,289 @@ fn contact_details_anywhere_in_an_ask_request_are_refused_before_any_key_budget_
     assert!(!contact_detail(
         &pinned_facts("expect(rich.facts).toBe([").join("\n")
     ));
+}
+
+// ---- Own-provider keys, model ids and stricter contact rules (review A4, A7) ------------------
+
+#[test]
+fn an_own_provider_key_goes_only_to_the_host_it_was_saved_for() {
+    let dir = TempDir::new("bound");
+    let at = |base: &str| RouteConfig::new(Route::Own, Some(base), Some("vendor/model-1")).unwrap();
+    assert_eq!(
+        at("https://api.example.invalid/v1")
+            .key_account()
+            .as_deref(),
+        Some("own-provider:api.example.invalid")
+    );
+    assert_eq!(
+        at("https://api.example.invalid./v1")
+            .key_account()
+            .as_deref(),
+        Some("own-provider:api.example.invalid")
+    );
+    assert_eq!(
+        at("https://api.example.invalid:8443/v1")
+            .key_account()
+            .as_deref(),
+        Some("own-provider:api.example.invalid:8443")
+    );
+    assert_eq!(
+        RouteConfig::managed().key_account().as_deref(),
+        Some("vercel-ai-gateway")
+    );
+    assert_eq!(
+        RouteConfig::new(Route::Local, None, None)
+            .unwrap()
+            .key_account(),
+        None
+    );
+    // Pointed anywhere else, the route finds no key: nothing is sent, nothing is spent. The old
+    // unbound key is never read for a request.
+    for base in [
+        "https://attacker.example/v1",
+        "https://api.example.invalid:8443/v1",
+        "https://api.example.invalid.attacker.example/v1",
+    ] {
+        let http = FakeHttp::default();
+        assert_eq!(
+            send(&at(base), &dir.ledger(), &plain(), &keys(), &http).err(),
+            Some(ModelError::NotConfigured),
+            "{base}"
+        );
+        assert_eq!(http.count(), 0, "{base}");
+    }
+    assert!(!dir.ledger().exists());
+    let http = FakeHttp::default();
+    send(
+        &at("https://api.example.invalid/v1"),
+        &dir.ledger(),
+        &plain(),
+        &keys(),
+        &http,
+    )
+    .unwrap();
+    assert_eq!(http.sent.lock().unwrap()[0].key.as_deref(), Some(OWN_KEY));
+}
+
+#[test]
+fn status_says_which_key_is_missing_and_where_it_belongs() {
+    let dir = TempDir::new("setup");
+    assert_eq!(status(&dir.0, &keys()).setup, "no-route");
+    save_config(
+        &dir.0,
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("vendor/model-1"),
+    )
+    .unwrap();
+    let ready = status(&dir.0, &keys());
+    assert_eq!((ready.configured, ready.setup), (true, "ready"));
+    assert_eq!(
+        ready.key_account.as_deref(),
+        Some("own-provider:api.example.invalid")
+    );
+    // Moved to another host: the old plain-account key exists but is bound to nothing.
+    save_config(
+        &dir.0,
+        Route::Own,
+        Some("https://other.example.invalid/v1"),
+        Some("vendor/model-1"),
+    )
+    .unwrap();
+    let unbound = status(&dir.0, &keys());
+    assert_eq!(
+        (unbound.configured, unbound.setup),
+        (false, "own-key-not-bound")
+    );
+    assert_eq!(
+        unbound.key_account.as_deref(),
+        Some("own-provider:other.example.invalid")
+    );
+    let text = serde_json::to_string(&unbound).unwrap();
+    assert!(!text.contains(OWN_KEY) && !text.contains(UNBOUND_KEY));
+    assert_eq!(status(&dir.0, &no_keys()).setup, "no-key");
+    save_config(&dir.0, Route::Managed, None, None).unwrap();
+    assert_eq!(status(&dir.0, &no_keys()).setup, "no-key");
+    assert_eq!(status(&dir.0, &keys()).setup, "ready");
+    save_config(&dir.0, Route::Local, None, None).unwrap();
+    let local = status(&dir.0, &no_keys());
+    assert_eq!((local.setup, local.key_account), ("ready", None));
+}
+
+#[test]
+fn an_own_provider_at_the_gateway_host_requires_zero_data_retention() {
+    let gateway = RouteConfig::new(
+        Route::Own,
+        Some("https://ai-gateway.vercel.sh./v1"),
+        Some("anthropic/claude-haiku-5.5"),
+    )
+    .unwrap();
+    assert!(gateway.zero_retention());
+    assert!(RouteConfig::managed().zero_retention());
+    let elsewhere = RouteConfig::new(
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("m"),
+    )
+    .unwrap();
+    assert!(!elsewhere.zero_retention());
+    let zdr = json!({"gateway": {"zeroDataRetention": true}});
+    assert_eq!(
+        request_body(&gateway, &plain()).unwrap()["providerOptions"],
+        zdr
+    );
+    assert_eq!(
+        ask_body(&gateway, &asking("What still needs a decision?")).unwrap()["providerOptions"],
+        zdr
+    );
+    assert!(
+        request_body(&elsewhere, &plain())
+            .unwrap()
+            .get("providerOptions")
+            .is_none()
+    );
+    // Reasoning stays the managed route's own setting.
+    assert!(
+        request_body(&gateway, &plain())
+            .unwrap()
+            .get("reasoning")
+            .is_none()
+    );
+}
+
+#[test]
+fn model_ids_keep_their_charset_and_carry_no_contact_detail_or_remembered_name() {
+    let own = |model: &str| {
+        RouteConfig::new(
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some(model),
+        )
+    };
+    for model in [
+        "anthropic/claude-haiku-5.5",
+        "gpt-4o-mini-2024-07-18",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-sonnet@20240620",
+        "meta-llama/Llama-3.1-405B-Instruct",
+        "llama3.2:3b",
+        "vendor/model+tools",
+        "m",
+    ] {
+        assert!(own(model).is_ok(), "{model}");
+    }
+    for model in [
+        "riley-thornbury/555-123-4567",
+        "pat@example.org",
+        "pat@church",
+        "model-55512345",
+        "x".repeat(101).as_str(),
+        "model#1",
+        "",
+    ] {
+        assert_eq!(
+            own(model).err(),
+            Some(ModelError::InvalidRequest),
+            "{model}"
+        );
+    }
+    // A hand-edited model.json with such an id is refused at request time too.
+    let edited = RouteConfig {
+        model: "riley [at] example [dot] org".into(),
+        ..RouteConfig::managed()
+    };
+    assert_eq!(edited.endpoint().err(), Some(ModelError::NotConfigured));
+    // Names: the id is checked word by word, vendor and family words set aside.
+    let mut names = NameGuard::default();
+    names.remember(&[
+        "Riley Thornbury".to_string(),
+        "Claude Fictional".to_string(),
+    ]);
+    for model in [
+        "riley-thornbury",
+        "vendor/riley",
+        "rileythornbury",
+        "fictional-7b",
+    ] {
+        assert!(!model_free_of_names(model, &names), "{model}");
+    }
+    for model in [
+        MANAGED_MODEL,
+        LOCAL_MODEL,
+        "anthropic/claude-sonnet-4",
+        "claude3-haiku",
+        "vendor/model-1",
+    ] {
+        assert!(model_free_of_names(model, &names), "{model}");
+    }
+    let named = RouteConfig {
+        model: "vendor/riley".into(),
+        ..RouteConfig::managed()
+    };
+    let http = FakeHttp::default();
+    let dir = TempDir::new("model-name");
+    assert_eq!(
+        reword_using(&named, &dir.ledger(), &plain(), &keys(), &names, &http).err(),
+        Some(ModelError::NamePresent)
+    );
+    assert_eq!(
+        ask_using(
+            &named,
+            &dir.ledger(),
+            &asking("What still needs a decision?"),
+            &keys(),
+            &names,
+            &http
+        )
+        .err(),
+        Some(ModelError::NamePresent)
+    );
+    assert_eq!(http.count(), 0);
+    assert!(!dir.ledger().exists());
+}
+
+#[test]
+fn the_stricter_contact_rule_reads_written_out_addresses_and_long_spread_numbers() {
+    let pending = parity();
+    let list = |path: &str| -> Vec<String> {
+        pending
+            .pointer(path)
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect()
+    };
+    for text in list("/pendingNative/contact/found") {
+        assert!(contact_detail_strict(&text), "{text:?}");
+    }
+    for text in list("/pendingNative/contact/notFound")
+        .into_iter()
+        .chain(list("/contact/notFound"))
+    {
+        assert!(!contact_detail_strict(&text), "{text:?}");
+    }
+    for text in list("/contact/found") {
+        assert!(contact_detail_strict(&text), "{text:?}");
+    }
+    // Ask refuses them too, before any key, budget or request.
+    let dir = TempDir::new("ask-strict");
+    let http = FakeHttp::default();
+    for text in list("/pendingNative/contact/found") {
+        let question = format!("Is {text} right?");
+        assert_eq!(
+            ask_using(
+                &RouteConfig::managed(),
+                &dir.ledger(),
+                &asking(&question),
+                &keys(),
+                &NameGuard::default(),
+                &http
+            )
+            .err(),
+            Some(ModelError::InvalidRequest),
+            "{question:?}"
+        );
+    }
+    assert_eq!(http.count(), 0);
 }

@@ -34,7 +34,18 @@ pub const MANAGED_TAGS: (&str, &str) = (
 );
 pub const LOCAL_BASE: &str = "http://127.0.0.1:11434/v1";
 pub const LOCAL_MODEL: &str = "llama3.2";
+/// Vercel AI Gateway's host. An own-provider route pointed here gets the managed route's zero
+/// data retention requirement too.
+pub const GATEWAY_HOST: &str = "ai-gateway.vercel.sh";
 pub const KEYCHAIN_SERVICE: &str = "church.ozzie.model.v1";
+/// Keychain account for the managed route's key.
+pub const MANAGED_ACCOUNT: &str = "vercel-ai-gateway";
+/// An own-provider key is saved under `own-provider:<host>` (with `:<port>` when the URL names
+/// one), so it only ever goes to the host it was saved for: pointing the route at another host
+/// finds no key. A key under the old plain account `own-provider` is bound to no host and is never
+/// used; status reports `own-key-not-bound` until it is saved again under the host's account.
+pub const OWN_ACCOUNT_PREFIX: &str = "own-provider:";
+pub const LEGACY_OWN_ACCOUNT: &str = "own-provider";
 pub const CONFIG_FILE: &str = "model.json";
 pub const LEDGER_FILE: &str = "model-usage.json";
 pub const MAX_SYSTEM_CHARS: usize = 2000;
@@ -43,6 +54,12 @@ pub const MAX_REPLY_CHARS: usize = 4000;
 pub const MAX_TOKENS: u32 = 400;
 /// Paid calls allowed until the owner raises `call_cap` in model.json.
 pub const DEFAULT_CALL_CAP: u64 = 200;
+/// Agent steps per route per day (UTC), on every route, local included, whatever the call cap,
+/// until the owner changes `agent_steps_per_day` in model.json.
+pub const DEFAULT_AGENT_STEPS_PER_DAY: u64 = 200;
+/// Model ids: `^[A-Za-z0-9._:/@+-]{1,100}$`, no contact detail and no remembered name.
+pub const MAX_MODEL_CHARS: usize = 100;
+const DAY_MS: u64 = 86_400_000;
 const MAX_RESPONSE_BYTES: u64 = 262_144;
 
 // The only request shape the app sends (core/src/draft-request.ts, pinned by a test):
@@ -71,6 +88,9 @@ pub enum ModelError {
     ModelNotAllowed,
     /// A name this session has shown appears in the request; nothing was sent.
     NamePresent,
+    /// Agent steps only: today's agent steps on this route (model.json `agent_steps_per_day`)
+    /// are spent. Rewording and Ask never return it.
+    DailyLimit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,14 +116,6 @@ impl Route {
             Self::Local => "local",
         }
     }
-    /// Keychain account under KEYCHAIN_SERVICE; a local model needs no key.
-    pub fn account(self) -> Option<&'static str> {
-        match self {
-            Self::Managed => Some("vercel-ai-gateway"),
-            Self::Own => Some("own-provider"),
-            Self::Local => None,
-        }
-    }
     fn paid(self) -> bool {
         self != Self::Local
     }
@@ -119,9 +131,145 @@ pub struct RouteConfig {
     /// Owner-set ceiling on paid calls. Only editable in model.json, never over IPC.
     #[serde(default = "default_cap")]
     pub call_cap: u64,
+    /// Owner-set ceiling on agent steps per UTC day, on any route. Only editable in model.json.
+    #[serde(default = "default_day_cap")]
+    pub agent_steps_per_day: u64,
 }
 fn default_cap() -> u64 {
     DEFAULT_CALL_CAP
+}
+fn default_day_cap() -> u64 {
+    DEFAULT_AGENT_STEPS_PER_DAY
+}
+/// A URL's host as every check compares it: the url crate's lowercase, punycoded form without a
+/// trailing dot ("api.planningcenteronline.com." is the same host), with `:<port>` only when the
+/// URL names a port other than the scheme's default.
+fn host_key(url: &url::Url) -> Option<String> {
+    let host = url.host_str()?.trim_end_matches('.');
+    if host.is_empty() {
+        return None;
+    }
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
+}
+/// Planning Center and Church Center (its people-facing site), on any route.
+fn planning_center_host(host: &str) -> bool {
+    ["planningcenteronline.com", "churchcenter.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+/// An 8-digit date stamp in a model id ("claude-3-5-sonnet-20241022", "…@20240620"): 20YYMMDD.
+fn date_stamp(digits: &str) -> bool {
+    let n = |range: std::ops::Range<usize>| digits[range].parse::<u32>().unwrap_or(0);
+    digits.len() == 8
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && digits.starts_with("20")
+        && (1..=12).contains(&n(4..6))
+        && (1..=31).contains(&n(6..8))
+}
+/// The model id rules every route keeps (see MAX_MODEL_CHARS): the charset, and no email address
+/// or phone number once version date stamps are set aside.
+fn model_id_ok(model: &str) -> bool {
+    let charset = (1..=MAX_MODEL_CHARS).contains(&model.len())
+        && model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:/@+-".contains(&b));
+    if !charset {
+        return false;
+    }
+    // Set aside each date stamp, with the "@" a Vertex-style version puts before one.
+    let mut rest = String::with_capacity(model.len());
+    let bytes = model.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let run = bytes[at..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        if run > 0 {
+            let digits = &model[at..at + run];
+            if !date_stamp(digits) {
+                rest.push_str(digits);
+            } else if rest.ends_with('@') {
+                rest.pop();
+            }
+            at += run;
+        } else {
+            rest.push(char::from(bytes[at]));
+            at += 1;
+        }
+    }
+    !contact_detail_strict(&rest)
+}
+/// Words that name model vendors and families rather than anyone. A model id is name-checked
+/// without them, so a member called Claude doesn't stop every request to a Claude model.
+const MODEL_WORDS: [&str; 34] = [
+    "anthropic",
+    "claude",
+    "haiku",
+    "sonnet",
+    "opus",
+    "openai",
+    "gpt",
+    "llama",
+    "meta",
+    "mistral",
+    "mixtral",
+    "gemini",
+    "gemma",
+    "google",
+    "qwen",
+    "deepseek",
+    "grok",
+    "xai",
+    "phi",
+    "microsoft",
+    "instruct",
+    "chat",
+    "mini",
+    "nano",
+    "turbo",
+    "preview",
+    "latest",
+    "vertex",
+    "bedrock",
+    "amazon",
+    "nova",
+    "pro",
+    "flash",
+    "lite",
+];
+/// No name this session has shown in the model id (it is sent with every request). The two
+/// built-in model ids are fixed text and pass; any other is checked word by word, as Ask checks a
+/// question, with vendor and family words (MODEL_WORDS) set aside.
+pub fn model_free_of_names(model: &str, names: &NameGuard) -> bool {
+    if model == MANAGED_MODEL || model == LOCAL_MODEL {
+        return true;
+    }
+    let mut words: Vec<&str> = Vec::new();
+    let mut start = None;
+    let class = |b: u8| (b.is_ascii_alphabetic(), b.is_ascii_digit());
+    let bytes = model.as_bytes();
+    for at in 0..=bytes.len() {
+        let continues =
+            start.is_some_and(|s: usize| at < bytes.len() && class(bytes[s]) == class(bytes[at]));
+        if continues {
+            continue;
+        }
+        if let Some(s) = start.take() {
+            words.push(&model[s..at]);
+        }
+        if at < bytes.len() && bytes[at].is_ascii_alphanumeric() {
+            start = Some(at);
+        }
+    }
+    let kept: Vec<&str> = words
+        .into_iter()
+        .filter(|word| !MODEL_WORDS.contains(&word.to_ascii_lowercase().as_str()))
+        .collect();
+    !names.present_as_word(&kept.join(" "))
 }
 impl RouteConfig {
     pub fn managed() -> Self {
@@ -130,6 +278,34 @@ impl RouteConfig {
             base_url: MANAGED_BASE.into(),
             model: MANAGED_MODEL.into(),
             call_cap: DEFAULT_CALL_CAP,
+            agent_steps_per_day: DEFAULT_AGENT_STEPS_PER_DAY,
+        }
+    }
+    /// The base URL's host (see `host_key`).
+    fn host(&self) -> Option<String> {
+        url::Url::parse(&self.base_url)
+            .ok()
+            .as_ref()
+            .and_then(host_key)
+    }
+    /// Keychain account under KEYCHAIN_SERVICE for this route's key: MANAGED_ACCOUNT, or the own
+    /// provider's account bound to the base URL's host (OWN_ACCOUNT_PREFIX). A local model needs none.
+    pub fn key_account(&self) -> Option<String> {
+        match self.route {
+            Route::Managed => Some(MANAGED_ACCOUNT.to_owned()),
+            Route::Own => self
+                .host()
+                .map(|host| format!("{OWN_ACCOUNT_PREFIX}{host}")),
+            Route::Local => None,
+        }
+    }
+    /// Zero data retention is required on the managed route, and on an own-provider route whose
+    /// host is AI Gateway's.
+    pub fn zero_retention(&self) -> bool {
+        match self.route {
+            Route::Managed => true,
+            Route::Own => self.host().as_deref() == Some(GATEWAY_HOST),
+            Route::Local => false,
         }
     }
     /// Fills route defaults, then applies the URL and model rules.
@@ -155,25 +331,26 @@ impl RouteConfig {
             base_url: base_url.trim_end_matches('/').into(),
             model: model.into(),
             call_cap: DEFAULT_CALL_CAP,
+            agent_steps_per_day: DEFAULT_AGENT_STEPS_PER_DAY,
         };
         config.endpoint().map_err(|_| ModelError::InvalidRequest)?;
         Ok(config)
     }
     /// The one URL a request may go to: `{base}/chat/completions`.
-    /// Managed is fixed; own must be https; local must be this Mac's loopback.
+    /// Managed is fixed; own must be https; local must be this Mac's loopback; never Planning
+    /// Center or Church Center. The model id keeps `model_id_ok` on every route.
     pub fn endpoint(&self) -> Result<String, ModelError> {
         let refuse = Err(ModelError::NotConfigured);
         let base = self.base_url.as_str();
-        let model_ok = (1..=128).contains(&self.model.len())
-            && self
-                .model
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b));
         let Ok(url) = url::Url::parse(base) else {
             return refuse;
         };
-        let clean = model_ok
+        let Some(host) = host_key(&url) else {
+            return refuse;
+        };
+        let clean = model_id_ok(&self.model)
             && self.call_cap <= 1_000_000
+            && self.agent_steps_per_day <= 100_000
             && base.len() <= 256
             && !base.ends_with('/')
             && url.username().is_empty()
@@ -181,19 +358,19 @@ impl RouteConfig {
             && url.query().is_none()
             && url.fragment().is_none()
             && url.as_str().trim_end_matches('/') == base;
-        // Never Planning Center, whatever the route.
-        let planning_center = url.host_str().is_some_and(|host| {
-            host == "planningcenteronline.com" || host.ends_with(".planningcenteronline.com")
-        });
+        // Never Planning Center, whatever the route, trailing dot or not.
+        let planning_center = url
+            .host_str()
+            .is_some_and(|raw| planning_center_host(raw.trim_end_matches('.')));
         let loopback = match url.host() {
             Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
             Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
-            Some(url::Host::Domain(host)) => host == "localhost",
+            Some(url::Host::Domain(_)) => host.split(':').next() == Some("localhost"),
             None => false,
         };
         let allowed = match self.route {
             Route::Managed => base == MANAGED_BASE,
-            Route::Own => url.scheme() == "https" && url.host().is_some(),
+            Route::Own => url.scheme() == "https",
             Route::Local => matches!(url.scheme(), "http" | "https") && loopback,
         };
         if !clean || planning_center || !allowed {
@@ -208,8 +385,9 @@ impl RouteConfig {
 pub trait ModelKeys: Send + Sync {
     fn key(&self, account: &str) -> Result<Option<Zeroizing<String>>, StoreError>;
 }
-/// Keychain items under KEYCHAIN_SERVICE with plain account names, e.g.
-/// `security add-generic-password -s church.ozzie.model.v1 -a vercel-ai-gateway -w`.
+/// Keychain items under KEYCHAIN_SERVICE, account `RouteConfig::key_account`, e.g.
+/// `security add-generic-password -s church.ozzie.model.v1 -a vercel-ai-gateway -w`, or
+/// `-a own-provider:api.example.com` for an own provider at that host.
 pub struct KeychainKeys;
 #[cfg(target_os = "macos")]
 impl ModelKeys for KeychainKeys {
@@ -229,11 +407,17 @@ impl ModelKeys for KeychainKeys {
 fn usable_key(key: &str) -> bool {
     (1..=4096).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_graphic())
 }
-fn key_for(route: Route, keys: &dyn ModelKeys) -> Result<Option<Zeroizing<String>>, ModelError> {
-    let Some(account) = route.account() else {
+/// The route's key, read from its own account only: an own-provider key saved for another host,
+/// or under the old unbound account, is never read here.
+fn key_for(
+    config: &RouteConfig,
+    keys: &dyn ModelKeys,
+) -> Result<Option<Zeroizing<String>>, ModelError> {
+    if config.route == Route::Local {
         return Ok(None);
-    };
-    match keys.key(account) {
+    }
+    let account = config.key_account().ok_or(ModelError::NotConfigured)?;
+    match keys.key(&account) {
         Ok(Some(key)) if usable_key(&key) => Ok(Some(key)),
         _ => Err(ModelError::NotConfigured),
     }
@@ -268,8 +452,10 @@ pub fn request_body(config: &RouteConfig, request: &DraftRequest) -> Result<Valu
         "max_tokens": request.max_tokens.min(MAX_TOKENS),
         "temperature": 0.4,
     });
-    if config.route == Route::Managed {
+    if config.zero_retention() {
         body["providerOptions"] = json!({"gateway": {"zeroDataRetention": true}});
+    }
+    if config.route == Route::Managed {
         // A one-note reword needs no hidden reasoning; adaptive thinking can spend the whole
         // token budget and return empty text (observed live with claude-haiku-5.5).
         body["reasoning"] = json!({"enabled": false});
@@ -454,8 +640,10 @@ pub fn ask_body(config: &RouteConfig, request: &AskRequest) -> Result<Value, Mod
         "max_tokens": request.max_tokens.min(MAX_ASK_TOKENS),
         "temperature": 0.2,
     });
-    if config.route == Route::Managed {
+    if config.zero_retention() {
         body["providerOptions"] = json!({"gateway": {"zeroDataRetention": true}});
+    }
+    if config.route == Route::Managed {
         body["reasoning"] = json!({"enabled": false});
     }
     Ok(body)
@@ -491,7 +679,7 @@ fn ask_labels(text: &str) -> Option<Vec<(usize, usize)>> {
     Some(found)
 }
 /// As `labels_standalone`, plus a possessive 's after a label ("[Person 1]'s role").
-fn ask_labels_standalone(text: &str, labels: &[(usize, usize)]) -> bool {
+pub(crate) fn ask_labels_standalone(text: &str, labels: &[(usize, usize)]) -> bool {
     labels.iter().all(|&(start, end)| {
         let before = text[..start].chars().next_back();
         let before_ok =
@@ -509,7 +697,8 @@ fn ask_labels_standalone(text: &str, labels: &[(usize, usize)]) -> bool {
         before_ok && after_ok
     })
 }
-fn strip_ask_labels(text: &str, labels: &[(usize, usize)], with: &str) -> String {
+/// `labels` are sorted, non-overlapping byte ranges; agent.rs strips its own label ranges with it.
+pub(crate) fn strip_ask_labels(text: &str, labels: &[(usize, usize)], with: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     for &(start, end) in labels {
@@ -565,9 +754,10 @@ struct DigitGroup {
     digits: usize,
     gap: String,
 }
-/// 7+ digits once dates (2026-11-22, 11/22/2026) and times (9:30, 10:30-11:30, 9.30) are set
-/// aside. A dotted time only counts when the dots don't run on, so "06.12.34.56.78" is a phone.
-fn phone_like(groups: &[DigitGroup]) -> bool {
+/// `min_digits` or more digits once dates (2026-11-22, 11/22/2026) and times (9:30, 10:30-11:30,
+/// 9.30) are set aside. A dotted time only counts when the dots don't run on, so "06.12.34.56.78"
+/// is a phone.
+fn phone_like(groups: &[DigitGroup], min_digits: usize) -> bool {
     let date_separator = |gap: &str| {
         let mut chars = gap.chars();
         matches!(
@@ -599,7 +789,7 @@ fn phone_like(groups: &[DigitGroup]) -> bool {
                     || (a.gap == "." && (i == 0 || groups[i - 1].gap != ".") && b.gap != "."))
         });
         if date || time {
-            if total >= 7 {
+            if total >= min_digits {
                 return true;
             }
             total = 0;
@@ -609,19 +799,139 @@ fn phone_like(groups: &[DigitGroup]) -> bool {
         total += a.digits;
         i += 1;
     }
-    total >= 7
+    total >= min_digits
 }
 /// An email address, or 7+ digits (any decimal digits) whose groups are separated by one to
 /// three of anything but letters, numbers and line breaks.
 pub fn contact_detail(text: &str) -> bool {
-    use crate::name_guard::{decimal_digit, letter_or_number, line_break};
     let chars: Vec<char> = text.chars().collect();
-    if (0..chars.len()).any(|at| chars[at] == '@' && email_at(&chars, at)) {
-        return true;
+    (0..chars.len()).any(|at| chars[at] == '@' && email_at(&chars, at))
+        || digit_contact(&chars, 3, 7)
+}
+/// `contact_detail`, and the disguises it leaves to the closed grammars (native only so far; see
+/// `pendingNative` in core/test/ask-parity.json): an email address written out ("pat [at]
+/// example [dot] org", "pat (at) example.org", "pat at example dot org"), and 10+ digits whose
+/// groups are separated by up to eight of anything but letters, numbers and line breaks
+/// ("555----123----4567"). Ask's question and every agent step use it.
+pub fn contact_detail_strict(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    contact_detail(text) || spelled_email(&chars) || digit_contact(&chars, 8, 10)
+}
+/// Word, at, word, then one or more dot-word pairs ending in a 2-24 letter top-level domain, where
+/// "at" is "@", "[at]", "(at)", "{at}", "<at>" or the word "at", and "dot" is a "." with no space
+/// on either side, "[dot]" and the like, or the word "dot". Spaces may surround a written-out at
+/// or dot, never a bare ".", so "Ask Pat at noon. Then" is not an address.
+fn spelled_email(chars: &[char]) -> bool {
+    use crate::name_guard::letter_or_number;
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum T {
+        Word(usize, usize),
+        At,
+        Dot,
+        TightDot,
+        Space,
+        Other,
     }
+    let lower: Vec<char> = chars.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let word = |c: char| letter_or_number(c) || "_%+-".contains(c);
+    // "[at]", "(dot)" and the like at `i`: the token and its length.
+    let bracketed = |i: usize| {
+        let close = match lower[i] {
+            '[' => ']',
+            '(' => ')',
+            '{' => '}',
+            '<' => '>',
+            _ => return None,
+        };
+        [("at", T::At), ("dot", T::Dot)]
+            .into_iter()
+            .find_map(|(inner, token)| {
+                let end = i + 1 + inner.len();
+                let fits = lower.get(i + 1..end)?.iter().copied().eq(inner.chars())
+                    && lower.get(end) == Some(&close);
+                fits.then_some((token, inner.len() + 2))
+            })
+    };
+    let mut tokens: Vec<T> = Vec::new();
+    let mut i = 0;
+    while i < lower.len() {
+        let c = lower[i];
+        if word(c) {
+            let start = i;
+            while i < lower.len() && word(lower[i]) {
+                i += 1;
+            }
+            tokens.push(T::Word(start, i));
+            continue;
+        }
+        if let Some((token, len)) = bracketed(i) {
+            tokens.push(token);
+            i += len;
+            continue;
+        }
+        let token = match c {
+            '@' | '\u{ff20}' => T::At,
+            '.' | '\u{3002}' | '\u{ff0e}' | '\u{ff61}' => T::TightDot,
+            c if c.is_whitespace() => T::Space,
+            _ => T::Other,
+        };
+        // A run of spaces is one space.
+        if !(token == T::Space && tokens.last() == Some(&T::Space)) {
+            tokens.push(token);
+        }
+        i += 1;
+    }
+    // The words "at" and "dot" between spaces; a bare "." only with no space on either side.
+    let text_of = |(a, b): (usize, usize)| lower[a..b].iter().collect::<String>();
+    let n = tokens.len();
+    let mut joined: Vec<T> = Vec::with_capacity(n);
+    for k in 0..n {
+        let spaced = k > 0 && k + 1 < n && tokens[k - 1] == T::Space && tokens[k + 1] == T::Space;
+        joined.push(match tokens[k] {
+            T::Word(a, b) if spaced && text_of((a, b)) == "at" => T::At,
+            T::Word(a, b) if spaced && text_of((a, b)) == "dot" => T::Dot,
+            T::TightDot => {
+                let tight = k > 0
+                    && k + 1 < n
+                    && matches!(tokens[k - 1], T::Word(..))
+                    && matches!(tokens[k + 1], T::Word(..));
+                if tight { T::Dot } else { T::Other }
+            }
+            token => token,
+        });
+    }
+    // Spaces only ever sit beside an at or a dot here; drop them there, keep them elsewhere.
+    let mut flat: Vec<T> = Vec::with_capacity(n);
+    for (k, token) in joined.iter().enumerate() {
+        let beside = |t: Option<&T>| matches!(t, Some(T::At | T::Dot));
+        if *token == T::Space && (beside(joined.get(k + 1)) || beside(flat.last())) {
+            continue;
+        }
+        flat.push(*token);
+    }
+    (0..flat.len()).any(|k| {
+        let [T::Word(..), T::At, T::Word(..), rest @ ..] = &flat[k..] else {
+            return false;
+        };
+        let mut last = None;
+        for pair in rest.chunks(2) {
+            match pair {
+                [T::Dot, T::Word(a, b)] => last = Some((*a, *b)),
+                _ => break,
+            }
+        }
+        last.is_some_and(|(a, b)| {
+            (2..=24).contains(&(b - a)) && lower[a..b].iter().all(|c| c.is_alphabetic())
+        })
+    })
+}
+/// `min_digits` or more decimal digits (any script) whose groups are separated by one to
+/// `max_gap` of anything but letters, numbers and line breaks, dates and times set aside.
+fn digit_contact(chars: &[char], max_gap: usize, min_digits: usize) -> bool {
+    use crate::name_guard::{decimal_digit, letter_or_number, line_break};
     let mut groups: Vec<DigitGroup> = Vec::new();
     let (mut digits, mut gap) = (0usize, String::new());
-    for c in chars.into_iter().chain(std::iter::once('\n')) {
+    for c in chars.iter().copied().chain(std::iter::once('\n')) {
         if decimal_digit(c) {
             if digits == 0
                 && let Some(last) = groups.last_mut()
@@ -642,10 +952,10 @@ pub fn contact_detail(text: &str) -> bool {
         if groups.is_empty() {
             continue;
         }
-        if !letter_or_number(c) && !line_break(c) && gap.chars().count() < 3 {
+        if !letter_or_number(c) && !line_break(c) && gap.chars().count() < max_gap {
             gap.push(c);
         } else {
-            if phone_like(&groups) {
+            if phone_like(&groups, min_digits) {
                 return true;
             }
             groups.clear();
@@ -769,8 +1079,8 @@ fn fact_line_ok(line: &str) -> bool {
 /// Line breaks of every kind (U+2028, U+2029 and U+0085 included), controls, format and
 /// private-use characters. The webview turns them into spaces or removes them, so a question
 /// carrying one did not come from it; a line separator could otherwise start a forged fact line
-/// for any reader that splits on it.
-fn not_in_a_question(c: char) -> bool {
+/// for any reader that splits on it. agent.rs refuses the same set apart from `\n` and `\t`.
+pub(crate) fn not_in_a_question(c: char) -> bool {
     use icu_properties::props::GeneralCategory::{
         Control, Format, LineSeparator, ParagraphSeparator, PrivateUse, Surrogate,
     };
@@ -804,8 +1114,8 @@ pub fn check_ask(request: &AskRequest, names: &NameGuard) -> Result<(), ModelErr
         || question_chars > MAX_ASK_QUESTION_CHARS
         || question.chars().any(not_in_a_question)
         // The whole user text, every fact line included, raw and NFKC.
-        || contact_detail(user)
-        || contact_detail(&compat)
+        || contact_detail_strict(user)
+        || contact_detail_strict(&compat)
     {
         return Err(ModelError::InvalidRequest);
     }
@@ -838,6 +1148,51 @@ struct Usage {
     calls: u64,
     prompt_tokens: u64,
     completion_tokens: u64,
+    /// The UTC day (days since 1970-01-01) `agent_steps` counts, and the agent steps that day.
+    agent_day: u64,
+    agent_steps: u64,
+}
+/// What one call reserves in the usage file before it is sent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spend {
+    /// Rewording or Ask: one call against the route's paid call cap.
+    Call,
+    /// An agent step: one call, and one of the route's agent steps for this UTC day.
+    AgentStep { day: u64 },
+}
+/// Days since 1970-01-01, UTC.
+pub(crate) fn utc_day(unix_ms: u64) -> u64 {
+    unix_ms / DAY_MS
+}
+/// One call's spend against the route's usage: refused when a cap is spent.
+fn spend_on(config: &RouteConfig, ledger: &mut Ledger, spend: Spend) -> Result<(), ModelError> {
+    let route = config.route;
+    let usage = ledger.usage(route);
+    if route.paid() && usage.calls >= config.call_cap {
+        return Err(ModelError::Budget);
+    }
+    if let Spend::AgentStep { day } = spend {
+        // A clock that steps back keeps counting the later day rather than starting afresh.
+        if day > usage.agent_day {
+            usage.agent_day = day;
+            usage.agent_steps = 0;
+        }
+        if usage.agent_steps >= config.agent_steps_per_day {
+            return Err(ModelError::DailyLimit);
+        }
+        usage.agent_steps += 1;
+    }
+    usage.calls += 1;
+    Ok(())
+}
+fn reserve(config: &RouteConfig, ledger: &Path, spend: Spend) -> Result<(), ModelError> {
+    update_ledger(ledger, |ledger| spend_on(config, ledger, spend))
+}
+/// Whether `reserve` would succeed now, without spending anything.
+fn affordable(config: &RouteConfig, ledger: &Path, spend: Spend) -> Result<(), ModelError> {
+    let _lock = LEDGER.lock().unwrap_or_else(|e| e.into_inner());
+    let mut ledger = read_ledger(ledger)?;
+    spend_on(config, &mut ledger, spend)
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -893,17 +1248,20 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+/// The usage file. An unreadable one cannot prove the cap holds: refuse rather than reset it.
+fn read_ledger(path: &Path) -> Result<Ledger, ModelError> {
+    match read_small(path) {
+        Ok(None) => Ok(Ledger::default()),
+        Ok(Some(bytes)) => serde_json::from_slice(&bytes).map_err(|_| ModelError::Budget),
+        Err(_) => Err(ModelError::Budget),
+    }
+}
 fn update_ledger(
     path: &Path,
     change: impl FnOnce(&mut Ledger) -> Result<(), ModelError>,
 ) -> Result<(), ModelError> {
     let _lock = LEDGER.lock().unwrap_or_else(|e| e.into_inner());
-    // An unreadable ledger cannot prove the cap holds: refuse rather than reset it.
-    let mut ledger = match read_small(path) {
-        Ok(None) => Ledger::default(),
-        Ok(Some(bytes)) => serde_json::from_slice(&bytes).map_err(|_| ModelError::Budget)?,
-        Err(_) => return Err(ModelError::Budget),
-    };
+    let mut ledger = read_ledger(path)?;
     change(&mut ledger)?;
     let bytes = serde_json::to_vec(&ledger).map_err(|_| ModelError::Budget)?;
     write_private(path, &bytes).map_err(|_| ModelError::Budget)
@@ -919,9 +1277,9 @@ pub(crate) trait ModelHttp {
         body: &[u8],
     ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError>;
 }
-struct NativeModelHttp(reqwest::blocking::Client);
+pub(crate) struct NativeModelHttp(reqwest::blocking::Client);
 impl NativeModelHttp {
-    fn new(route: Route) -> Result<Self, ModelError> {
+    pub(crate) fn new(route: Route) -> Result<Self, ModelError> {
         Ok(Self(
             reqwest::blocking::Client::builder()
                 // Plain http is only ever reachable for a validated loopback local model.
@@ -971,6 +1329,15 @@ impl ModelHttp for NativeModelHttp {
     }
 }
 
+/// The model id goes out with every request: no name this session has shown in it.
+pub(crate) fn check_model(config: &RouteConfig, names: &NameGuard) -> Result<(), ModelError> {
+    if model_free_of_names(&config.model, names) {
+        Ok(())
+    } else {
+        Err(ModelError::NamePresent)
+    }
+}
+
 /// Rewords one placeholder-only draft through the configured route.
 pub fn reword(
     config: &RouteConfig,
@@ -983,6 +1350,7 @@ pub fn reword(
     config.endpoint()?;
     request_body(config, request)?;
     check_draft(request, names)?;
+    check_model(config, names)?;
     let http = NativeModelHttp::new(config.route)?;
     reword_using(config, ledger, request, keys, names, &http)
 }
@@ -999,6 +1367,7 @@ pub(crate) fn reword_using(
         .map_err(|_| ModelError::InvalidRequest)?;
     // Before any key, budget or network: the exact shape, and no remembered name.
     check_draft(request, names)?;
+    check_model(config, names)?;
     complete_using(config, ledger, &url, &body, MANAGED_TAGS, keys, http)
 }
 
@@ -1014,6 +1383,7 @@ pub fn ask(
     config.endpoint()?;
     ask_body(config, request)?;
     check_ask(request, names)?;
+    check_model(config, names)?;
     let http = NativeModelHttp::new(config.route)?;
     ask_using(config, ledger, request, keys, names, &http)
 }
@@ -1030,11 +1400,11 @@ pub(crate) fn ask_using(
         serde_json::to_vec(&ask_body(config, request)?).map_err(|_| ModelError::InvalidRequest)?;
     // Before any key, budget or network: the Ask shape, and no remembered name anywhere.
     check_ask(request, names)?;
+    check_model(config, names)?;
     complete_using(config, ledger, &url, &body, ASK_TAGS, keys, http)
 }
 
-/// Key, call cap, one POST and the closed reason codes, shared by every request kind, so Ask and
-/// rewording spend from one per-route cap. Callers have already checked the request.
+/// Reword and Ask: one exchange, then the reply text and its token counts.
 fn complete_using(
     config: &RouteConfig,
     ledger: &Path,
@@ -1044,38 +1414,7 @@ fn complete_using(
     keys: &dyn ModelKeys,
     http: &dyn ModelHttp,
 ) -> Result<Reply, ModelError> {
-    let key = key_for(config.route, keys)?;
-    let route = config.route;
-    update_ledger(ledger, |ledger| {
-        let usage = ledger.usage(route);
-        if route.paid() && usage.calls >= config.call_cap {
-            return Err(ModelError::Budget);
-        }
-        usage.calls += 1;
-        Ok(())
-    })?;
-    let tagged = [tags];
-    let headers: &[(&str, &str)] = if route == Route::Managed {
-        &tagged
-    } else {
-        &[]
-    };
-    let (status, bytes) = http.post(url, key.as_ref().map(|k| k.as_str()), headers, body)?;
-    drop(key);
-    // Only these fixed markers are looked for; no provider text is ever returned.
-    let refused_model = |bytes: &[u8]| {
-        let text = String::from_utf8_lossy(bytes);
-        text.contains("RestrictedModelsError") || text.contains("no_providers_available")
-    };
-    match status {
-        200 => {}
-        429 => return Err(ModelError::RateLimited),
-        _ if refused_model(&bytes) => return Err(ModelError::ModelNotAllowed),
-        401 | 403 => return Err(ModelError::NotConfigured),
-        400 | 422 => return Err(ModelError::InvalidRequest),
-        _ => return Err(ModelError::ProviderFailure),
-    }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| ModelError::ProviderFailure)?;
+    let value = exchange_using(config, ledger, url, body, tags, keys, http)?;
     let text = value["choices"][0]["message"]["content"]
         .as_str()
         .filter(|text| {
@@ -1083,6 +1422,99 @@ fn complete_using(
             chars > 0 && chars <= MAX_REPLY_CHARS
         })
         .ok_or(ModelError::ProviderFailure)?;
+    let (prompt_tokens, completion_tokens) = record_tokens(ledger, config.route, &value);
+    Ok(Reply {
+        text: text.to_owned(),
+        prompt_tokens,
+        completion_tokens,
+    })
+}
+
+/// Key, call cap, one POST and the closed reason codes, shared by every request kind (rewording,
+/// Ask and agent steps), so all of them spend from one per-route cap. Callers have already checked
+/// the request. Returns the provider's JSON for the caller to read; it is never echoed in an error.
+pub(crate) fn exchange_using(
+    config: &RouteConfig,
+    ledger: &Path,
+    url: &str,
+    body: &[u8],
+    tags: (&str, &str),
+    keys: &dyn ModelKeys,
+    http: &dyn ModelHttp,
+) -> Result<Value, ModelError> {
+    let exchange = Exchange {
+        config,
+        usage: ledger,
+        url,
+        body,
+        tags,
+        keys,
+        http,
+    };
+    exchange.send(Spend::Call, || Ok(()))
+}
+/// One checked request on its way to the route.
+pub(crate) struct Exchange<'a> {
+    pub config: &'a RouteConfig,
+    /// The usage file (LEDGER_FILE).
+    pub usage: &'a Path,
+    pub url: &'a str,
+    pub body: &'a [u8],
+    pub tags: (&'a str, &'a str),
+    pub keys: &'a dyn ModelKeys,
+    pub http: &'a dyn ModelHttp,
+}
+impl Exchange<'_> {
+    /// The key, then the caps (looked at, not spent), then `before_send`, then the usage
+    /// reservation (`spend`), then the one POST. Nothing is spent when the key is missing, a cap
+    /// is already spent, or `before_send` refuses (an agent step's ledger reservation, review
+    /// 2026-11-14 C11); only a cap spent in between by another call refuses after `before_send`
+    /// ran, leaving what it recorded for the caller to close. Once reserved, a call stays spent,
+    /// as a timeout's would.
+    pub(crate) fn send<E: From<ModelError>>(
+        &self,
+        spend: Spend,
+        before_send: impl FnOnce() -> Result<(), E>,
+    ) -> Result<Value, E> {
+        let key = key_for(self.config, self.keys)?;
+        affordable(self.config, self.usage, spend)?;
+        before_send()?;
+        reserve(self.config, self.usage, spend)?;
+        let tagged = [self.tags];
+        let headers: &[(&str, &str)] = if self.config.route == Route::Managed {
+            &tagged
+        } else {
+            &[]
+        };
+        let key_text = key.as_ref().map(|k| k.as_str());
+        let (status, bytes) = self.http.post(self.url, key_text, headers, self.body)?;
+        drop(key);
+        // Only these fixed markers are looked for; no provider text is ever returned.
+        let refused_model = |bytes: &[u8]| {
+            let text = String::from_utf8_lossy(bytes);
+            text.contains("RestrictedModelsError") || text.contains("no_providers_available")
+        };
+        let refused = match status {
+            200 => None,
+            429 => Some(ModelError::RateLimited),
+            _ if refused_model(&bytes) => Some(ModelError::ModelNotAllowed),
+            401 | 403 => Some(ModelError::NotConfigured),
+            400 | 422 => Some(ModelError::InvalidRequest),
+            _ => Some(ModelError::ProviderFailure),
+        };
+        if let Some(error) = refused {
+            return Err(error.into());
+        }
+        serde_json::from_slice(&bytes).map_err(|_| ModelError::ProviderFailure.into())
+    }
+}
+
+/// Adds a reply's reported token counts to the route's usage and returns them.
+pub(crate) fn record_tokens(
+    ledger: &Path,
+    route: Route,
+    value: &Value,
+) -> (Option<u64>, Option<u64>) {
     let prompt_tokens = value["usage"]["prompt_tokens"].as_u64();
     let completion_tokens = value["usage"]["completion_tokens"].as_u64();
     // The call already counted; a failed token write must not hide the reply.
@@ -1096,11 +1528,7 @@ fn complete_using(
             .saturating_add(completion_tokens.unwrap_or(0));
         Ok(())
     });
-    Ok(Reply {
-        text: text.to_owned(),
-        prompt_tokens,
-        completion_tokens,
-    })
+    (prompt_tokens, completion_tokens)
 }
 
 /// Saved route, or None when absent or not valid under the current rules.
@@ -1110,7 +1538,8 @@ pub fn load_config(dir: &Path) -> Option<RouteConfig> {
     config.endpoint().ok()?;
     Some(config)
 }
-/// Writes model.json, keeping any owner-set call cap. Keys are never accepted here.
+/// Writes model.json, keeping any owner-set caps. Keys are never accepted here. A changed base URL
+/// changes `key_account` for an own provider, so a key saved for one host is never sent to another.
 pub fn save_config(
     dir: &Path,
     route: Route,
@@ -1120,6 +1549,7 @@ pub fn save_config(
     let mut config = RouteConfig::new(route, base_url, model)?;
     if let Some(previous) = load_config(dir) {
         config.call_cap = previous.call_cap;
+        config.agent_steps_per_day = previous.agent_steps_per_day;
     }
     let bytes = serde_json::to_vec_pretty(&config).map_err(|_| ModelError::InvalidRequest)?;
     write_private(&dir.join(CONFIG_FILE), &bytes).map_err(|_| ModelError::ProviderFailure)?;
@@ -1132,6 +1562,14 @@ pub struct ModelStatus {
     /// "managed" | "own" | "local" | "none"
     pub route: &'static str,
     pub label: String,
+    /// What is missing, as a closed code the app can explain: "ready"; "no-route" (no usable
+    /// model.json); "no-key" (nothing under `key_account`); or "own-key-not-bound" (an own-provider
+    /// key saved under the old account `own-provider`, which is bound to no host and never used:
+    /// save it again under `key_account`).
+    pub setup: &'static str,
+    /// The Keychain account (service KEYCHAIN_SERVICE) this route's key belongs under; None for a
+    /// local model. Never a key.
+    pub key_account: Option<String>,
 }
 pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
     let Some(config) = load_config(dir) else {
@@ -1139,13 +1577,19 @@ pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
             configured: false,
             route: "none",
             label: "No AI model set up".into(),
+            setup: "no-route",
+            key_account: None,
         };
     };
-    let configured = key_for(config.route, keys).is_ok();
-    let host = url::Url::parse(&config.base_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .unwrap_or_default();
+    let configured = key_for(&config, keys).is_ok();
+    // Presence only: a key under the old unbound account is looked at, never used.
+    let unbound = || matches!(keys.key(LEGACY_OWN_ACCOUNT), Ok(Some(key)) if usable_key(&key));
+    let setup = match (configured, config.route) {
+        (true, _) => "ready",
+        (false, Route::Own) if unbound() => "own-key-not-bound",
+        (false, _) => "no-key",
+    };
+    let host = config.host().unwrap_or_default();
     let label = match config.route {
         Route::Managed => format!("Ozzie managed AI, zero data retention ({})", config.model),
         Route::Own => format!("Your AI provider at {host} ({})", config.model),
@@ -1155,6 +1599,8 @@ pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
         configured,
         route: config.route.name(),
         label,
+        setup,
+        key_account: config.key_account(),
     }
 }
 

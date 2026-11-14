@@ -98,6 +98,18 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     for (const name of names) expect(h.store.dump()).not.toContain(name);
   });
 
+  it("tells each check how it started, so the task ledger can say automatic or manual", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    const trigger = () => (h.check.mock.calls.at(-1) as unknown[] | undefined)?.[2];
+    await h.launch();
+    expect(trigger()).toBe("launch");
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(trigger()).toBe("scheduled");
+    await h.p.checkNow();
+    expect(trigger()).toBe("manual");
+  });
+
   it("holds the notice during quiet hours and sends it once after they end", async () => {
     // 03:00Z is 9:00 PM in Chicago; quiet hours start at 9:30 PM.
     const h = harness("2026-11-21T03:00:00Z");
@@ -118,6 +130,53 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     expect(h.p.view().history.find(e => e.kind === "changes")!.notice).toBe("sent-later");
     await h.p.tick();
     expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("Pause everything pauses this check too, drops a held notice, and lifting it restores each to its own state", async () => {
+    const h = harness("2026-11-21T03:00:00Z");
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-21T04:00:00Z");
+    await h.p.tick();
+    expect(h.p.view().history[0]).toMatchObject({ kind: "changes", notice: "held" });
+    h.p.pauseWithEverything(true);
+    expect(h.p.view().schedule).toMatchObject({ paused: true, held: null });
+    // The held entry no longer says it is waiting, as the responsibilities' held notices don't.
+    expect(h.p.view().history[0]!.notice).toBe("none");
+    h.p.pauseWithEverything(false);
+    expect(h.p.view().schedule.paused).toBe(false);
+    // Resuming checks again at once; quiet hours end with nothing held to send.
+    await h.p.tick();
+    expect(h.p.view().schedule.held).toBeNull();
+    h.set("2026-11-21T12:31:00Z");
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("lifting Pause everything leaves this check as the person last set it, even after a restart", async () => {
+    // Paused on its own first: it stays paused.
+    const h = harness("2026-11-20T15:00:00Z");
+    await h.launch();
+    h.p.pause();
+    h.p.pauseWithEverything(true);
+    const again = harness("2026-11-20T16:00:00Z", h.store);
+    again.p.pauseWithEverything(false);
+    expect(again.p.view().schedule.paused).toBe(true);
+    // Paused on its own while everything was paused: lifting everything leaves it paused.
+    const k = harness("2026-11-20T15:00:00Z");
+    await k.launch();
+    k.p.pauseWithEverything(true);
+    k.p.resume();
+    k.p.pause();
+    k.p.pauseWithEverything(false);
+    expect(k.p.view().schedule.paused).toBe(true);
+    // Not paused on its own: lifting everything resumes it.
+    const m = harness("2026-11-20T15:00:00Z");
+    await m.launch();
+    m.p.pauseWithEverything(true);
+    m.p.pauseWithEverything(true);
+    m.p.pauseWithEverything(false);
+    expect(m.p.view().schedule.paused).toBe(false);
   });
 
   it("lets an urgent change through quiet hours only when the person chose that", async () => {

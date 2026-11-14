@@ -1,0 +1,138 @@
+// Placeholder labels for one app session (build contract §6: stable tokens, local restore).
+// People and positions use the Ask session's labels, so the same person or position keeps one
+// label whether it reached the model through Ask or through an agent tool. Rooms, follow-up
+// workflows and steps, and imported events get their own label families here. Everything a label
+// stands for stays on this Mac; only the label itself is ever placed in a tool result.
+//
+// A position is labelled by its name, as Ask labels it. When two teams of the same plan hold a
+// position of the same name, the tools label each team's one by (team, name) instead, so their
+// people and statuses are never merged (review 2026-11-14 B-S2); a question naming the position
+// still gets the name's own label, which stands for every team's position of that name.
+import { AskSession, type AskedQuestion } from "../ask.js";
+
+export type LabelKind = "person" | "role" | "room" | "workflow" | "step" | "event";
+export type LabelTarget =
+  | { kind: "person"; scope: string; id: string }
+  | { kind: "role"; name: string; team?: string }
+  | { kind: "room" | "workflow" | "step" | "event"; id: string };
+
+/** Every label a tool may issue: the families below, numbered from 1. */
+export const LABEL_PATTERN = /\[(?:Person|Role|Room|Workflow|Step|Event) [1-9]\d{0,3}\]/gu;
+/** Any square-bracketed text, label or not. */
+export const BRACKETED = /\[[^\]\n]{0,80}\]/gu;
+export const YOUR_NAME = "[Your name]";
+const FAMILY: Record<"room" | "workflow" | "step" | "event", string> = { room: "Room", workflow: "Workflow", step: "Step", event: "Event" };
+
+export class HarnessSession {
+  readonly ask: AskSession;
+  readonly #targets = new Map<string, LabelTarget>();
+  readonly #own = new Map<string, string>();
+  readonly #counts = { room: 0, workflow: 0, step: 0, event: 0 };
+  constructor(ask: AskSession = new AskSession()) { this.ask = ask; }
+
+  /** `scope` is the organization, so one Planning Center person keeps one label across checks. */
+  person(scope: string, id: string): string {
+    const label = this.ask.person(scope, id);
+    this.#targets.set(label, { kind: "person", scope, id });
+    return label;
+  }
+  /** A position, by its exact name; with `team`, that team's position of the name only (header). */
+  role(name: string, team?: string): string {
+    const label = this.ask.role(team === undefined ? name : `${name}\u0000${team}`);
+    this.#targets.set(label, team === undefined ? { kind: "role", name } : { kind: "role", name, team });
+    return label;
+  }
+  room(id: string): string { return this.#mint("room", id); }
+  workflow(id: string): string { return this.#mint("workflow", id); }
+  step(id: string): string { return this.#mint("step", id); }
+  event(id: string): string { return this.#mint("event", id); }
+  #mint(kind: "room" | "workflow" | "step" | "event", id: string): string {
+    const key = `${kind}\u0000${id}`;
+    let label = this.#own.get(key);
+    if (!label) {
+      label = `[${FAMILY[kind]} ${++this.#counts[kind]}]`;
+      this.#own.set(key, label);
+      this.#targets.set(label, { kind, id });
+    }
+    return label;
+  }
+
+  /** Whether this session issued the label (through a tool or a prepared question). */
+  has(label: string): boolean { return this.#targets.has(label); }
+  target(label: string): LabelTarget | undefined { return this.#targets.get(label); }
+  /** Labels a prepared Ask question used, so later tool arguments and restores know them. */
+  record(asked: AskedQuestion, scope: string): void {
+    for (const [label, id] of asked.people) if (label.startsWith("[Person ")) this.#targets.set(label, { kind: "person", scope, id });
+    for (const [label, name] of asked.roles) if (!this.#targets.has(label)) this.#targets.set(label, { kind: "role", name });
+  }
+}
+
+export const labelsIn = (text: string): string[] => [...new Set(text.match(LABEL_PATTERN) ?? [])];
+export const kindOf = (label: string): LabelKind | null => {
+  const m = /^\[(Person|Role|Room|Workflow|Step|Event) [1-9]\d{0,3}\]$/u.exec(label);
+  return m ? m[1]!.toLowerCase() as LabelKind : null;
+};
+
+/** What a label is put back as, on this Mac only. */
+export interface RestoreSources {
+  names: Readonly<Record<string, string>>;
+  /** The organization of the check the names come from. A person label issued for another organization restores as "a team member". */
+  organization?: string;
+  /** Room, workflow and step display names (capture.labels `room:<id>` or operations.labels `room<id>`). Local only. */
+  places?: Readonly<Record<string, string>>;
+  /** Imported event titles by id (fictional import). Local only. */
+  events?: Readonly<Record<string, string>>;
+  sender?: string;
+  /** Drafts greet people by first name. */
+  firstNames?: boolean;
+  /** The church's own zone, for showing ISO times in plain words. */
+  timeZone?: string | null;
+}
+const GENERIC: Record<LabelKind, string> = {
+  person: "a team member", role: "a role", room: "a room", workflow: "a follow-up workflow", step: "a follow-up step", event: "an event",
+};
+
+// Times stay ISO 8601 all the way to this Mac (the model copies them exactly; verification checks them
+// against the tool results). Here they become plain words in the church's own zone.
+const ISO_DATETIME = /\b(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})(?![\d:])/gu;
+const ISO_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b(?![T\d])/gu;
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const clock = (hour: number, minute: string) => `${hour % 12 || 12}:${minute} ${hour < 12 ? "AM" : "PM"}`;
+/** "2026-11-22T09:30-05:00" → "9:30 AM on November 22" in the church's zone; "2026-11-22" → "November 22". Local only. */
+export function showTimes(text: string, timeZone?: string | null): string {
+  return text.replace(ISO_DATETIME, (whole, y: string, mo: string, d: string, h: string, mi: string, offset: string) => {
+    const instant = Date.parse(whole);
+    if (Number.isNaN(instant) || +mo < 1 || +mo > 12) return whole;
+    if (timeZone) {
+      try {
+        const parts = new Intl.DateTimeFormat("en-US", { timeZone, month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h23" })
+          .formatToParts(new Date(instant));
+        const part = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+        return `${clock(+part("hour"), part("minute"))} on ${MONTHS[+part("month") - 1]} ${+part("day")}`;
+      } catch { /* not a zone this runtime knows: the time as written below */ }
+    }
+    return `${clock(+h, mi)}${offset === "Z" ? " UTC" : ""} on ${MONTHS[+mo - 1]} ${+d}`;
+  }).replace(ISO_DATE, (whole, _y: string, mo: string, d: string) => +mo >= 1 && +mo <= 12 && !Number.isNaN(Date.parse(whole)) ? `${MONTHS[+mo - 1]} ${+d}` : whole);
+}
+
+/**
+ * Local only: labels back to names, and ISO times to plain words. A label this session didn't issue, or with nothing
+ * known, becomes plain words, as "[a team member]" (a name part several people share) does (review C11).
+ */
+export function restoreLabels(text: string, session: HarnessSession, sources: RestoreSources): string {
+  const place = (kind: string, id: string) => sources.places?.[`${kind}:${id}`] ?? sources.places?.[`${kind}${id}`];
+  // Times first, so nothing a name or place holds is ever read as a time.
+  return showTimes(text, sources.timeZone).replace(/\[Your name\]/gu, () => sources.sender?.trim() || YOUR_NAME)
+    .replace(/\[a team member\]/gu, GENERIC.person).replace(LABEL_PATTERN, label => {
+    const t = session.target(label), kind = kindOf(label)!;
+    if (!t) return GENERIC[kind];
+    if (t.kind === "person") {
+      if (sources.organization !== undefined && t.scope !== sources.organization) return GENERIC.person;
+      const name = sources.names[t.id]?.trim();
+      return name ? (sources.firstNames ? name.split(/\s+/u)[0]! : name) : GENERIC.person;
+    }
+    if (t.kind === "role") return t.name;
+    const restored = t.kind === "event" ? sources.events?.[t.id] : place(t.kind, t.id);
+    return restored?.trim() || GENERIC[t.kind];
+  });
+}

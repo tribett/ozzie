@@ -1,0 +1,401 @@
+// What Ozzie keeps an eye on, on screen: the plan a person confirms (from Ask or "Set up something
+// new"), the list on What runs automatically, and what comes to the person on Today ("What Ozzie is
+// keeping an eye on" and "Ozzie noticed"). Every word is fixed local copy (responsibility-words.ts);
+// names appear only on this Mac, resolved from the current check.
+import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  defaultPlan, TEMPLATE_IDS, TEMPLATES, untilLifetime, upcomingWeekday, validPlan, addDays, limitsLeft,
+  type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type TemplateId,
+} from "../../../core/src/harness/responsibilities.js";
+import type { Autostart } from "./background.js";
+import type { NoticedItem, Runner, RunnerView } from "./responsibility-runner.js";
+import {
+  accountsText, assumedText, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT, NOTICE_WORDS, noticedBadge, noticedChanges,
+  noticedTitle, ONLY_WHILE, PURPOSE, refusalText, REPORT_CHOICES, reportText, runText, scheduleText, statusText, STOP_TEXT, WATCHES, whenText,
+} from "./responsibility-words.js";
+import { Icon } from "./icons.js";
+import { zoneLabel } from "./proactive-page.js";
+import { dateText } from "./responsibility-words.js";
+
+export const useRunnerView = (runner: Runner) => useSyncExternalStore(runner.subscribe, runner.view, runner.view);
+
+/** What a plan card needs to know about this Mac's setup. */
+export interface PlanContext {
+  organization: string;
+  granted: readonly Area[];
+  modelReady: boolean;
+  /** A saved Planning Center connection and a chosen Sunday. */
+  connected: boolean;
+  /** The church's zone when known, otherwise this Mac's. */
+  zone: string;
+  now: () => string;
+  /** The church-local date of the Sunday chosen in Settings, once a check has read it. */
+  sunday?: string | null;
+  /** This Mac's zone (defaults to the system's). */
+  macZone?: string;
+  /** What Ozzie already keeps an eye on: one of each kind at a time. */
+  existing?: readonly Responsibility[];
+  /** "Pause everything" is on. */
+  pausedAll?: boolean;
+}
+/** A plan's times are on the clock it was made in (the church's when known); say so when this Mac's clock is different. */
+function zoneNote(zone: string, context: PlanContext): string {
+  const mac = context.macZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return zone === mac ? "" : ` Times are the church's: ${zoneLabel(zone)}.`;
+}
+const at = (plan: Pick<Plan, "zone">, context: PlanContext) => ({ now: context.now(), zone: plan.zone });
+/** The one of this kind Ozzie already keeps an eye on (active or paused), if any. */
+const existingFor = (template: TemplateId, context: PlanContext) => context.existing?.find(r => r.template === template && r.status !== "ended") ?? null;
+/** An existing responsibility as a plan to change, on its own clock (or this one's, for one made before clocks were kept). */
+export const asPlan = (r: Responsibility, context: PlanContext): Plan => ({
+  template: r.template, schedule: r.schedule, report: r.report, lifetime: r.lifetime, limits: r.limits, zone: r.zone ?? context.zone,
+});
+/** A "Keep Sunday covered" plan that would stop before the Sunday chosen in Settings. */
+function endsEarly(plan: Plan, context: PlanContext): string | null {
+  const chosen = context.sunday;
+  if (plan.template !== "keep-sunday-covered" || plan.lifetime.kind !== "until" || !chosen || plan.lifetime.until >= chosen) return null;
+  return `This ends before ${dateText(chosen)}, the Sunday chosen in Settings. Change it if you meant that Sunday.`;
+}
+export interface PlanActions {
+  start: (plan: Plan) => Promise<unknown>;
+  /** Changes one Ozzie already keeps an eye on (instead of setting up a second of the same kind). */
+  edit?: (id: string, plan: Plan) => Promise<unknown>;
+  onSettings: () => void;
+  onAutomatic: () => void;
+}
+const errorCode = (e: unknown) => typeof e === "string" ? e : "unavailable";
+const TONE: Record<string, string> = { ok: "b-ok", muted: "b-muted", attn: "b-attn", look: "b-look" };
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** The lifetimes offered when changing a plan: its own date, the chosen Sunday, the coming two Sundays, and until stopped. */
+function lifetimeOptions(plan: Plan, context: PlanContext): Lifetime[] {
+  const sunday = upcomingWeekday(context.now(), plan.zone, 0);
+  const chosen = context.sunday && context.sunday > addDays(sunday, 7) ? [context.sunday] : [];
+  const dated = [sunday, addDays(sunday, 7), ...chosen].map(d => untilLifetime(d, plan.zone)).filter((l): l is Lifetime => l !== null);
+  const own = plan.lifetime.kind === "until" && !dated.some(l => l.kind === "until" && l.until === (plan.lifetime as { until: string }).until) ? [plan.lifetime] : [];
+  return [...own, ...dated, { kind: "until-stopped" }];
+}
+const planOptions = (context: PlanContext) => ({ sunday: context.sunday ?? null });
+const lifetimeKey = (l: Lifetime) => l.kind === "until" ? l.until : "until-stopped";
+
+/** "Change it": time, day (weekly ones), until when, and how it tells you. */
+export function PlanEditor({ plan, context, onDone, onCancel, doneLabel = "Use these changes" }: {
+  plan: Plan; context: PlanContext; onDone: (plan: Plan) => void; onCancel: () => void; doneLabel?: string;
+}) {
+  const [draft, setDraft] = useState<Plan>(plan);
+  const options = lifetimeOptions(plan, context);
+  const ok = validPlan(draft, context.now());
+  const weekly = TEMPLATES[draft.template].cadence === "weekly";
+  return <div className="form plan-edit">
+    <div className="row rule-row">
+      <label htmlFor={`time-${draft.template}`}>Check at</label>
+      <input id={`time-${draft.template}`} type="time" value={draft.schedule.time}
+        onChange={e => setDraft({ ...draft, schedule: { ...draft.schedule, time: e.target.value } })} />
+    </div>
+    {weekly && <div className="row rule-row">
+      <label htmlFor={`day-${draft.template}`}>Every</label>
+      <select id={`day-${draft.template}`} className="input" value={draft.schedule.weekdays[0] ?? 0}
+        onChange={e => setDraft({ ...draft, schedule: { ...draft.schedule, weekdays: [Number(e.target.value)] } })}>
+        {DAY_NAMES.map((d, i) => <option key={d} value={i}>{d}</option>)}
+      </select>
+    </div>}
+    <div className="row rule-row">
+      <label htmlFor={`until-${draft.template}`}>Until</label>
+      <select id={`until-${draft.template}`} className="input" value={lifetimeKey(draft.lifetime)}
+        onChange={e => setDraft({ ...draft, lifetime: options.find(l => lifetimeKey(l) === e.target.value) ?? draft.lifetime })}>
+        {options.map(l => <option key={lifetimeKey(l)} value={lifetimeKey(l)}>{lifetimeChoice(l)}</option>)}
+      </select>
+    </div>
+    {draft.template !== "morning-briefing" && <fieldset className="plan-report">
+      <legend className="bold">Tell me</legend>
+      {(["decisions-only", "every-check"] as const).map(r => <label key={r} className="confirmation">
+        <input type="radio" name={`report-${draft.template}`} checked={draft.report === r} onChange={() => setDraft({ ...draft, report: r })} />
+        <span>{REPORT_CHOICES[r]}</span></label>)}
+    </fieldset>}
+    {!ok && <p className="problem" role="alert">That time or date isn't one Ozzie can use.</p>}
+    <div className="find-next">
+      <button type="button" className="btn btn-primary btn-sm" disabled={!ok} onClick={() => onDone(draft)}>{doneLabel}</button>
+      <button type="button" className="btn btn-quiet btn-sm" onClick={onCancel}>Cancel</button>
+    </div>
+  </div>;
+}
+
+/** The plan rows: what it watches, which accounts, when, how it tells you, until when, limits, how to stop. */
+export function PlanRows({ plan, context }: { plan: Plan; context: PlanContext }) {
+  return <div className="sp">
+    <div className="sp-row sp-2"><span className="sp-h">What Ozzie will watch</span><span>{WATCHES[plan.template]}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">Accounts</span><span>{accountsText(plan.template, context.organization)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">When it checks</span><span>{scheduleText(plan, at(plan, context))}{zoneNote(plan.zone, context)} {ONLY_WHILE}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">When it tells you</span><span>{reportText(plan)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(plan.lifetime, plan.template)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">Limits</span><span>{limitsText(plan, context.modelReady)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">How to stop</span><span>{STOP_TEXT}</span></div>
+  </div>;
+}
+
+/** What the plan card says once it has started: only what is true now (checking, waiting for a connection, or paused). */
+export function startedText(plan: Plan, context: PlanContext): string {
+  const then = scheduleText(plan, at(plan, context)).replace(/^Every/u, "every").replace(/\.$/u, "");
+  const first = context.pausedAll ? `Everything is paused, so Ozzie won't check until you resume everything. Then ${then}.`
+    : !context.connected ? `Ozzie will check as soon as Planning Center is connected, then ${then}.`
+      : `Ozzie is checking now, then ${then}.`;
+  return `${first} ${ONLY_WHILE} ${STOP_TEXT}`;
+}
+
+/**
+ * One confirmation before Ozzie takes something on (owner decision, November 4): a short, editable
+ * plan. "Looks good — start it" creates it; nothing runs before that. Access that isn't granted is
+ * offered, never widened.
+ */
+export function PlanCard({ plan: initial, assumed = [], context, actions }: {
+  plan: Plan; assumed?: readonly string[]; context: PlanContext; actions: PlanActions;
+}) {
+  const [plan, setPlan] = useState(initial);
+  const [stage, setStage] = useState<"review" | "edit" | "starting" | "started" | "declined" | "exists" | "change" | "changed" | "kept">(
+    () => existingFor(initial.template, context) ? "exists" : "review");
+  const [problem, setProblem] = useState<string | null>(null);
+  const t = TEMPLATES[plan.template];
+  const access = missingAccess(plan.template, context.granted);
+  const assumption = stage === "review" && plan === initial ? assumedText(plan, assumed) : null;
+  const early = endsEarly(plan, context);
+  const existing = existingFor(plan.template, context);
+  const start = async () => {
+    setStage("starting"); setProblem(null);
+    try { await actions.start(plan); setStage("started"); }
+    catch (e) {
+      // One of each kind at a time: the one already running is changed instead.
+      if (errorCode(e) === "exists" && existingFor(plan.template, context)) { setStage("exists"); return; }
+      setProblem(refusalText(errorCode(e))); setStage("review");
+    }
+  };
+  if (stage === "declined") return <div className="find plan-card"><p className="small">Not started. Nothing will run.</p></div>;
+  if (stage === "started") {
+    return <div className="find plan-card" role="status">
+      <div className="find-top"><span className="badge b-ok"><Icon name="check" small />Started</span><span className="find-where">{t.title}</span></div>
+      <p className="find-body">{startedText(plan, context)}</p>
+      <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={actions.onAutomatic}>Open What runs automatically</button></div>
+    </div>;
+  }
+  if (stage === "changed") return <div className="find plan-card" role="status"><p className="small">Changed. Ozzie keeps an eye on it with these changes.</p></div>;
+  if (stage === "kept") return <div className="find plan-card"><p className="small">Nothing changed. Ozzie keeps an eye on it as before.</p></div>;
+  if ((stage === "exists" || stage === "change") && existing) {
+    const current = asPlan(existing, context);
+    return <div className="find plan-card">
+      <div className="find-top"><span className="badge b-muted">{existing.status === "paused" ? "Paused" : "Already running"}</span><span className="find-where">{t.title}</span></div>
+      <p className="find-body">Ozzie is already keeping an eye on this.</p>
+      {stage === "change"
+        ? <PlanEditor plan={current} context={context} doneLabel="Save changes" onCancel={() => setStage("exists")}
+          onDone={p => { setProblem(null); void actions.edit?.(existing.id, p).then(() => setStage("changed"), e => { setProblem(refusalText(errorCode(e))); setStage("exists"); }); }} />
+        : <PlanRows plan={current} context={context} />}
+      {problem && <p className="problem" role="alert">{problem}</p>}
+      {stage === "exists" && <div className="find-next">
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => actions.edit ? setStage("change") : actions.onAutomatic()}>Change it</button>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={() => setStage("kept")}>Leave it as it is</button>
+      </div>}
+    </div>;
+  }
+  return <div className="find plan-card">
+    <div className="find-top"><span className="badge b-muted">Plan · not started yet</span><span className="find-where">Planning Center</span></div>
+    <h3 className="find-title">{t.title}</h3>
+    {stage === "edit"
+      ? <PlanEditor plan={plan} context={context} onDone={p => { setPlan(p); setStage("review"); }} onCancel={() => setStage("review")} />
+      : <PlanRows plan={plan} context={context} />}
+    {assumption && <p className="small plan-assumed"><Icon name="info" small />{assumption}</p>}
+    {early && stage !== "edit" && <p className="panel-warn" role="status"><Icon name="info" small />{early}</p>}
+    <p className="small">{NEVER_TEXT}</p>
+    {access && <p className="panel-warn" role="status"><Icon name="lock" small />{access}</p>}
+    {!access && !context.connected && <p className="panel-info"><Icon name="info" small />Planning Center isn't connected yet, so the first check waits until it is.</p>}
+    {problem && <p className="problem" role="alert">{problem}</p>}
+    {stage !== "edit" && <div className="find-next">
+      {access
+        ? <button type="button" className="btn btn-primary btn-sm" onClick={actions.onSettings}>Set up access in Settings</button>
+        : <button type="button" className="btn btn-primary btn-sm" disabled={stage === "starting"} onClick={() => { void start(); }}>
+          {stage === "starting" ? <><Icon name="spinner" small spin />Starting…</> : "Looks good — start it"}</button>}
+      {!access && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setStage("edit")}>Change it</button>}
+      <button type="button" className="btn btn-quiet btn-sm" onClick={() => setStage("declined")}>Not now</button>
+    </div>}
+  </div>;
+}
+
+/** A question back when the request left something important unclear, then the plan. */
+export function PlanTurn({ parsed, context, actions }: { parsed: Exclude<Parsed, { kind: "none" }>; context: PlanContext; actions: PlanActions }) {
+  const [chosen, setChosen] = useState<{ plan: Plan; assumed: readonly string[] } | null>(parsed.kind === "plan" ? { plan: parsed.plan, assumed: parsed.assumed } : null);
+  if (chosen) return <PlanCard plan={chosen.plan} assumed={chosen.assumed} context={context} actions={actions} />;
+  if (parsed.kind === "ask" && parsed.need === "what") return <div className="find plan-card">
+    <p className="find-body">What should Ozzie keep an eye on?</p>
+    <div className="plan-choices">{parsed.choices.map(id => <button key={id} type="button" className="btn btn-secondary btn-sm"
+      onClick={() => setChosen({ plan: defaultPlan(id, context.now(), context.zone, planOptions(context)), assumed: ["lifetime"] })}>{TEMPLATES[id].title}</button>)}</div>
+  </div>;
+  if (parsed.kind === "ask") return <div className="find plan-card">
+    <p className="find-body">{TEMPLATES[parsed.template].title}: until when?</p>
+    <div className="plan-choices">{parsed.choices.map(l => <button key={lifetimeKey(l)} type="button" className="btn btn-secondary btn-sm"
+      onClick={() => setChosen({ plan: { ...defaultPlan(parsed.template, context.now(), context.zone, planOptions(context)), lifetime: l }, assumed: [] })}>{lifetimeChoice(l)}</button>)}</div>
+  </div>;
+  return null;
+}
+
+/** "Set up something new": the fixed templates, each opening its plan. */
+export function TemplatePicker({ context, actions, onCancel }: { context: PlanContext; actions: PlanActions; onCancel: () => void }) {
+  const [picked, setPicked] = useState<TemplateId | null>(null);
+  if (picked) return <PlanCard plan={defaultPlan(picked, context.now(), context.zone, planOptions(context))} context={context} actions={actions} />;
+  return <div className="find template-picker">
+    <h3 className="find-title">What should Ozzie keep an eye on?</h3>
+    <ul className="list template-list">{TEMPLATE_IDS.map(id => <li key={id}>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicked(id)}>{TEMPLATES[id].title}</button>
+      <span className="small">{PURPOSE[id]}</span>
+    </li>)}</ul>
+    <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={onCancel}>Cancel</button></div>
+  </div>;
+}
+
+// ---- What runs automatically -------------------------------------------------------------------------
+
+function ResponsibilityCard({ r, view, context, runner }: { r: Responsibility; view: RunnerView; context: PlanContext; runner: Runner }) {
+  const [editing, setEditing] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const now = context.now();
+  // The newest thing it reported about a check, if that was that it couldn't check (the store refused the run).
+  const lastReport = view.noticed.find(i => i.responsibility_id === r.id && (i.kind === "couldnt-check" || i.kind === "found" || i.kind === "clear" || i.kind === "briefing"));
+  const couldnt = lastReport?.kind === "couldnt-check";
+  const status = statusText(r, view.paused_all, couldnt);
+  const left = limitsLeft(r, now);
+  const next = view.next[r.id];
+  const running = view.running === r.id;
+  const plan = asPlan(r, context);
+  const items = view.noticed.filter(i => i.responsibility_id === r.id && (i.kind === "missed" || i.kind === "couldnt-check" || i.kind === "limit")).slice(0, 3);
+  const act = (work: () => Promise<unknown>) => { setProblem(null); void work().catch(e => setProblem(refusalText(errorCode(e)))); };
+  return <section className="find responsibility" aria-label={r.title}>
+    <div className="find-top"><span className={`badge ${TONE[status.tone]}`}>{status.label}</span><span className="find-where">{accountsText(r.template, context.organization).replace(/\. Reads only\.$/u, "")}</span></div>
+    <h3 className="find-title">{r.title}</h3>
+    {editing
+      ? <PlanEditor plan={plan} context={context} doneLabel="Save changes" onCancel={() => setEditing(false)}
+        onDone={p => { setEditing(false); act(() => runner.edit(r.id, p)); }} />
+      : <div className="sp">
+        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{WATCHES[r.template]}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">When</span><span>{scheduleText(plan, at(plan, context))}{zoneNote(plan.zone, context)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now) : "Not yet."}</span></div>
+        {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
+          <span>{next ? whenText(next, now) : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
+        <div className="sp-row sp-2"><span className="sp-h">Today</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} checks used in the last 24 hours.</span></div>
+      </div>}
+    {items.length > 0 && <ul className="list resp-problems">{items.map(i => <li key={i.id}><Icon name="clock" small />{noticedTitle(i, now)}</li>)}</ul>}
+    {problem && <p className="problem" role="alert">{problem}</p>}
+    {!editing && <div className="find-next">
+      <button type="button" className="btn btn-primary btn-sm" disabled={running || r.status !== "active" || view.paused_all}
+        onClick={() => act(() => runner.runNow(r.id))}>{running ? <><Icon name="spinner" small spin />Checking…</> : status.tone === "attn" ? "Try again now" : "Check now"}</button>
+      {r.status === "paused"
+        ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => act(() => runner.resume(r.id))}>Resume</button>
+        : <button type="button" className="btn btn-secondary btn-sm" onClick={() => act(() => runner.pause(r.id))}>Pause</button>}
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}>Change</button>
+      {confirmStop
+        ? <><span className="small">Stop for good? Ozzie won't check this again.</span>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setConfirmStop(false); act(() => runner.stop(r.id)); }}>Yes, stop it</button>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirmStop(false)}>Keep it</button></>
+        : <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirmStop(true)}>Stop</button>}
+    </div>}
+  </section>;
+}
+
+/** The home for responsibilities on What runs automatically. */
+export function ResponsibilityList({ view, context, runner, actions }: {
+  view: RunnerView; context: PlanContext; runner: Runner; actions: PlanActions;
+}) {
+  const [picking, setPicking] = useState(false);
+  const active = view.items.filter(r => r.status !== "ended");
+  const ended = view.items.filter(r => r.status === "ended").slice(0, 3);
+  return <section className="stack responsibilities" aria-labelledby="resp-title">
+    <div className="row resp-head">
+      <h2 id="resp-title" className="h3">What Ozzie is keeping an eye on</h2>
+      <span className="spacer" />
+      {view.items.length > 0 && (view.paused_all
+        ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void runner.pauseAll(false); }}>Resume everything</button>
+        : <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void runner.pauseAll(true); }}>Pause everything</button>)}
+    </div>
+    <p className="small">Ozzie keeps checking while its window is closed; it stays in the menu bar. Nothing runs after you quit Ozzie or while this Mac is asleep, and it catches up once when it can. Ozzie keeps an eye on one of each kind at a time; change it rather than setting up another.</p>
+    {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it keeps an eye on couldn't be read on this Mac right now.</p>}
+    {view.paused_all && <p className="panel-info" role="status"><Icon name="info" small />Everything is paused. Nothing runs automatically until you resume.</p>}
+    {view.available && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “Keep an eye on Sunday”, or set one up here.</p>}
+    {active.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} />)}
+    {picking
+      ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
+      : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
+    {ended.length > 0 && <details className="resp-ended"><summary>Ended recently</summary>
+      <ul className="list">{ended.map(r => <li key={r.id}><Icon name="dot" small />{r.title} · {lifetimeText(r.lifetime, r.template).replace(/ Then it stops on its own\.$/u, "")}</li>)}</ul>
+    </details>}
+  </section>;
+}
+
+// ---- Today -------------------------------------------------------------------------------------------
+
+/** "What Ozzie is keeping an eye on": each active one, its next check and its last result. */
+export function WatchStrip({ view, now, onAutomatic }: { view: RunnerView; now: string; onAutomatic: () => void }) {
+  const active = view.items.filter(r => r.status === "active");
+  return <section className="watch-strip" aria-labelledby="watch-title">
+    <h2 id="watch-title" className="h3">What Ozzie is keeping an eye on</h2>
+    {active.length === 0
+      ? <p className="small">Nothing yet. Ask Ozzie, “Keep an eye on Sunday,” and it will check without being asked again.
+        <button type="button" className="btn btn-quiet btn-sm" onClick={onAutomatic}>Set one up</button></p>
+      : <ul className="list watch-list">{active.map(r => {
+        const last = r.runs.find(x => x.outcome);
+        const next = view.next[r.id];
+        return <li key={r.id}><Icon name="repeat" small /><span><strong>{r.title}</strong>
+          {view.paused_all ? " · paused with everything" : next ? ` · next check ${whenText(next, now)}` : ""}
+          {last ? ` · last: ${last.outcome === "ok" ? last.noticed ? `${last.noticed} to look at` : "nothing new" : "couldn't finish"}` : ""}</span></li>;
+      })}</ul>}
+    {active.length > 0 && <button type="button" className="btn btn-quiet btn-sm" onClick={onAutomatic}>Change what Ozzie keeps an eye on</button>}
+  </section>;
+}
+
+function NoticedCard({ item, view, names, now, onOpen }: { item: NoticedItem; view: RunnerView; names: Readonly<Record<string, string>>; now: string; onOpen: (page: "sunday" | "automatic" | "connection") => void }) {
+  const badge = noticedBadge(item);
+  const changes = noticedChanges(item, names);
+  const ready = view.prepared[item.id];
+  const notice = item.notice ? NOTICE_WORDS[item.notice] : null;
+  const page = item.kind === "couldnt-check" && item.access ? "connection" : item.kind === "missed" || item.kind === "limit" || item.kind === "couldnt-check" ? "automatic" : "sunday";
+  return <article className="find noticed">
+    <div className="find-top"><span className={`badge ${TONE[badge.tone]}`}>{badge.label}</span>
+      <span className="find-where">{TEMPLATES[item.template].title} · {whenText(item.at, now)}</span></div>
+    <p className="find-title">{noticedTitle(item, now)}</p>
+    {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
+    {ready?.summary && <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>}
+    {ready?.draft && <div className="draft"><span className="badge b-draft">Draft only. Nothing has been sent.</span>
+      <div className="draft-body">{ready.draft.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div></div>}
+    {item.drafts ? <p className="small">{item.drafts === 1 ? "1 note is" : `${item.drafts} notes are`} ready for you to review and send yourself.</p> : null}
+    <div className="find-next">
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen(page)}>
+        {page === "sunday" ? "Open Sunday" : page === "connection" ? "Open Settings" : "Open What runs automatically"}</button>
+      {notice && <span className="small">{notice}</span>}
+    </div>
+  </article>;
+}
+
+/** "Ozzie noticed": what it found while you were away, newest first. */
+export function NoticedFeed({ view, names, now, onOpen, limit = 4 }: {
+  view: RunnerView; names: Readonly<Record<string, string>>; now: string; onOpen: (page: "sunday" | "automatic" | "connection") => void; limit?: number;
+}) {
+  const shown = view.noticed.filter(i => i.kind !== "clear").slice(0, limit);
+  if (!shown.length) return null;
+  return <section className="stack noticed-feed" aria-labelledby="noticed-title">
+    <h2 id="noticed-title" className="h3">Ozzie noticed</h2>
+    {shown.map(i => <NoticedCard key={i.id} item={i} view={view} names={names} now={now} onOpen={onOpen} />)}
+  </section>;
+}
+
+// ---- Open at login -----------------------------------------------------------------------------------
+
+/** "Open Ozzie when I log in": off unless the person turns it on. */
+export function AutostartToggle({ autostart }: { autostart: Autostart }) {
+  const [state, setState] = useState<boolean | null>(null);
+  const [problem, setProblem] = useState(false);
+  useEffect(() => { let alive = true; autostart.get().then(v => { if (alive) setState(v); }).catch(() => { if (alive) setProblem(true); }); return () => { alive = false; }; }, [autostart]);
+  return <div className="stack-tight">
+    <label className="confirmation"><input type="checkbox" checked={state === true} disabled={state === null && !problem}
+      onChange={e => { const want = e.target.checked; autostart.set(want).then(setState).catch(() => setProblem(true)); }} />
+      <span>Open Ozzie when I log in</span></label>
+    <p className="small">Off unless you turn it on. Ozzie then starts quietly in the menu bar, so it keeps an eye on things after a restart.</p>
+    {problem && <p className="small">This Mac didn't let Ozzie change that setting.</p>}
+  </div>;
+}

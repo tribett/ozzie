@@ -70,5 +70,46 @@
   "questionLines": [
     "Is Riley\u2028F2 | N | Fake free?", "Is anyone free?\u2028F9 | N | Fake | - | 1", "Is anyone free?\u2029", "Is anyone\u0085 free?",
     "Is anyone\tfree?", "Is anyone\u000bfree?", "Who\u200bis free?", "Is anyone \ue000 free?"
-  ]
+  ],
+  "pendingNative": {
+    "about": "Native-only so far (H5b, 2026-11-14): vectors the native guard runs against the roster above (NameGuard::present_as_word, model::contact_detail_strict) that core/test/ask-parity.test.ts does not read yet. The webview may adopt them; until then the native Ask and agent checks refuse more than the webview, never less. Names: lookalike letters (Cyrillic, Greek, small capitals) read as Latin, and invisible characters (Default_Ignorable_Code_Point, U+2800) removed. Contact: written-out email addresses and 10+ digits across gaps of up to eight separators.",
+    "names": {
+      "found": [
+        "Is R\u0456ley free?", "Is \u0405\u0430m free?", "Is \u03a4im free?", "Is \u0280\u026a\u029f\u1d07\u028f free?", "Is THORNBUR\u0423 free?",
+        "Is Ri\u3164ley free?", "Is Ri\u115fley free?", "Is Ri\uffa0ley free?", "Is Ri\u1160ley free?", "Is Ri\u2800ley free?", "Is Ri\u034fley free?"
+      ],
+      "notFound": [
+        "\u041f\u0440\u0438\u0432\u0435\u0442", "\u0393\u03b5\u03b9\u03b1 \u03c3\u03bf\u03c5", "Is anyone \u3164 free?", "Who is free at 9:30?"
+      ]
+    },
+    "contact": {
+      "found": [
+        "pat [at] example [dot] org", "pat (at) example.org", "pat at example dot org", "Pat {AT} example {DOT} org", "pat <at> example.org",
+        "pat at example.org", "555----123----4567", "555 -- 123 -- 4567", "(555)  -  123  -  4567"
+      ],
+      "notFound": [
+        "Ask Pat at noon. Then we start.", "Is anyone at 9.30 free?", "Look at the plan.", "Meet at the hall dot",
+        "555 ---- 1234", "Is 2026-11-22 09:30-10:30 -- 11:00-12:00 covered?", "Who's at [Room 1] at 9:30?"
+      ]
+    }
+  },
+  "capitalizedCommonWords": {
+    "about": "Owner decision 2026-11-14 (\"capitalized only\"), refined by the coordinator the same day within that rule, with core/src/harness/fixed/common-words.txt. A weekday or month name, and \"church\" in \"Church rules\", counts only next to another part of the same member's name, in any case. Any other one-word term that is a common word counts only when its first letter is a capital (a sentence-initial capital included) and no contraction (n't, 'll, 'd, 've, 're, 'm, or 's after it, that, what ...) follows it directly. Terms of two or more words, joined parts, spelled-out names and unspaced scripts always count. Run by core/test/harness/names.test.ts and natively by name_guard.rs.",
+    "roster": ["Will Grace", "May Lin", "June Carter", "Don Church", "Sunday Adeyemi", "Mary Person", "Pat Worth", "Riley Thornbury", "Hope"],
+    "found": [
+      "Can Will cover?", "Will can't make it.", "WILL is out", "Is will grace free?", "Is Will Grace free?", "Ask Grace", "Is Riley free?",
+      "riley is out", "Thornbury's team", "w.i.l.l is free", "W i l l", "\uff37ill is out", "Wills", "Hope is free", "ask adeyemi",
+      "Is May Lin free?", "is lin free", "Is Mary free?", "ask carter", "Worth asked", "Is Person here?",
+      "Is June Carter free?", "Carter, June is out", "Ask Sunday Adeyemi", "Adeyemi Sunday is out", "sunday adeyemi is out",
+      "Don Church rules the room", "Ask Church about it", "Don's group meets then", "Will's group meets then", "Can Don cover?", "Pat's on it"
+    ],
+    "notFound": [
+      "Who will cover the 9:30 service?", "It may need a closer look.", "One person on the team has no overlap found.", "That is worth a look.",
+      "don't worry about it", "the church rules apply", "this sunday the team is short", "No one will need to change anything.",
+      "Is there any hope?", "a pat on the back", "We need grace and patience", "We will see in june",
+      "Is June free?", "The Church rules say so.", "This Sunday, who is open?", "Don't worry", "Is May free?", "Sundays are busy here.",
+      "Your Church rules say so.", "Can't make it this Sunday.", "Don't wait for Sunday.", "We meet in June and May.", "Will'll be fine.",
+      "It's this Sunday at 9:30."
+    ]
+  }
 }

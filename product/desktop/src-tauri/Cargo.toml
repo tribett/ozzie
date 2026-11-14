@@ -10,10 +10,18 @@ rust-version = "1.99.1"
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
-tauri = { version = "=2.12.4", features = [] }
+# tray-icon: the menu bar icon that keeps Ozzie reachable while its window is closed.
+tauri = { version = "=2.12.4", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 ozzie-native-auth = { path = "../../../core/native-auth" }
 tauri-plugin-notification = "=2.8.0"
+# "Open Ozzie when I log in": off unless the person turns it on (a Launch Agent in ~/Library/LaunchAgents).
+tauri-plugin-autostart = "=2.7.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already locked through tauri; used only to keep App Nap from pausing scheduled checks.
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
 
 [features]
 default = ["custom-protocol"]

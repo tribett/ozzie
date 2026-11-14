@@ -58,8 +58,19 @@ function localStore(): Storage | null {
   try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; }
 }
 
-function Why({ finding, checkedAt }: { finding: Finding; checkedAt: string | null }) {
-  const [open, setOpen] = useState(false);
+/** Which of Ozzie's procedures each kind of Sunday finding comes from (core/skills). */
+export const PROCEDURE_FOR = {
+  needs: "who-could-help", room: "room-check", followUp: "follow-up-owners", group: "group-night", overall: "sunday-ready",
+} as const;
+export const procedureFor = (finding: Finding) => finding.kind === "needs-people" ? PROCEDURE_FOR.needs : PROCEDURE_FOR.overall;
+/** "See how this works" under Why I flagged this: opens the procedure on the Church rules page. */
+function HowLink({ onHow }: { onHow: (() => void) | undefined }) {
+  if (!onHow) return null;
+  return <div className="why-how"><button type="button" className="btn btn-quiet btn-sm" onClick={onHow}><Icon name="rules" small /> See how this works</button></div>;
+}
+
+export function Why({ finding, checkedAt, onHow, defaultOpen = false }: { finding: Finding; checkedAt: string | null; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   return <div className="find-src">
     <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}>
       <Icon name="info" small /> Why I flagged this
@@ -67,6 +78,7 @@ function Why({ finding, checkedAt }: { finding: Finding; checkedAt: string | nul
     <span className="badge b-muted">Planning Center</span>
     {checkedAt && <span>Checked {time(checkedAt)}</span>}
     {open && <ul className="list why">{finding.why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
+    {open && <HowLink onHow={onHow} />}
   </div>;
 }
 
@@ -130,7 +142,7 @@ function Draft({ finding, person, names, sender, canReword, onClose }: {
     } finally { setWorking(null); }
   };
   return <DraftBox label="Draft note" body={body} onBody={b => { setBody(b); setEdited(true); }} onClose={onClose}
-    footer="Ozzie never sends messages. The AI sees placeholders like [Volunteer A] instead of names.">
+    footer="Ozzie never sends messages. The AI sees placeholders like [Volunteer A] instead of the names Ozzie read from Planning Center.">
     {canReword && <div className="find-next reword">
       <span className="find-next-l">Ask Ozzie to reword it</span>
       {(Object.keys(REWORDINGS) as Rewording[]).map(choice => <button key={choice} type="button" className="chip" disabled={working !== null} onClick={() => { void reword(choice); }}>
@@ -208,9 +220,10 @@ function Earlier({ decision }: { decision: SundayDecision }) {
   </ul>;
 }
 
-function FindingCard({ item, names, checkedAt, sender, canReword, onDecide }: {
+function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHow }: {
   item: DecidedItem; names: Names; checkedAt: string | null; sender: string; canReword: boolean;
   onDecide: (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) => void;
+  onHow?: ((procedure: string) => void) | undefined;
 }) {
   const { finding } = item;
   const [draftFor, setDraftFor] = useState<string | null>(null);
@@ -287,7 +300,7 @@ function FindingCard({ item, names, checkedAt, sender, canReword, onDecide }: {
     {choosing && <DecisionForm key={choosing} choice={choosing} onCancel={() => setChoosing(null)}
       onSave={reason => { onDecide(finding, choosing, reason, item.decision); setChoosing(null); }} />}
     {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} onClose={() => setLeaderFor(null)} />}
-    <Why finding={finding} checkedAt={checkedAt} />
+    <Why finding={finding} checkedAt={checkedAt} onHow={onHow ? () => onHow(procedureFor(finding)) : undefined} />
   </article>;
 }
 
@@ -340,8 +353,8 @@ const uncertaintyText: Partial<Record<string, string>> = {
   "snooze-recheck": "A snoozed follow-up's snooze has ended and needs a fresh look.",
 };
 
-function OpsWhy({ evidence, why }: { evidence: OperationsResult["checked_scopes"]; why: string[] }) {
-  const [open, setOpen] = useState(false);
+export function OpsWhy({ evidence, why, onHow, defaultOpen = false }: { evidence: OperationsResult["checked_scopes"]; why: string[]; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   // Only Planning Center reads have a check time; Church rules are the church's own settings.
   const at = evidence.filter(e => e.source !== "church-rule").map(e => e.check_time).sort()[0];
   const sources = [...new Set(evidence.map(e => e.source === "church-rule" ? "Church rules" : e.source === "normalized-calendar" ? "Calendar" : "People follow-ups"))];
@@ -349,6 +362,7 @@ function OpsWhy({ evidence, why }: { evidence: OperationsResult["checked_scopes"
     <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}><Icon name="info" small /> Why I flagged this</button>
     {sources.map(s => <span key={s} className="badge b-muted">{s}</span>)}{at && <span>Checked {time(at)}</span>}
     {open && <ul className="list why">{why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
+    {open && <HowLink onHow={onHow} />}
   </div>;
 }
 
@@ -365,7 +379,12 @@ export const hasOperationsSection = (operations: SundayOperations | null): opera
  * "nothing found" line appears only when the operations check says every part was fully read, and
  * names only those parts, with the time Planning Center was read (never a Church-rules time).
  */
-export function OperationsSection({ operations }: { operations: SundayOperations }) {
+export function OperationsSection({ operations, onHow, whyOpen = false }: {
+  operations: SundayOperations; onHow?: ((procedure: string) => void) | undefined;
+  /** Start with every Why I flagged this open (tests). */
+  whyOpen?: boolean;
+}) {
+  const how = (procedure: string) => onHow ? () => onHow(procedure) : undefined;
   const { labels, result } = operations;
   if (operations.stale) return <section className="stack" aria-label="Rooms and follow-ups">
     <h2 className="h3">Rooms and follow-ups</h2>
@@ -397,7 +416,7 @@ export function OperationsSection({ operations }: { operations: SundayOperations
       {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original)}) and {label(b.booking_id, "another booking")} ({span(b.original)}) overlap
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
       <div className="find-next"><span className="find-next-l">Next step</span><span>{f.next_action}</span></div>
-      <OpsWhy evidence={f.evidence} why={why} />
+      <OpsWhy evidence={f.evidence} why={why} onHow={how(PROCEDURE_FOR.room)} defaultOpen={whyOpen} />
     </article>;
   };
   const followUp = (f: FollowUpFinding) => <article className="find" key={f.finding_id}>
@@ -405,7 +424,8 @@ export function OperationsSection({ operations }: { operations: SundayOperations
       <span className="find-where">{label(f.workflow_id, "A follow-up")}</span></div>
     <h3 className="find-title">“{label(f.step_id, "A follow-up step")}” has no owner. It was due {time(f.due_at)}.</h3>
     <div className="find-next"><span className="find-next-l">Next step</span><span>{f.next_action}</span></div>
-    <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${time(f.due_at)}, has passed.`]} />
+    <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${time(f.due_at)}, has passed.`]}
+      onHow={how(PROCEDURE_FOR.followUp)} defaultOpen={whyOpen} />
   </article>;
   return <section className="stack" aria-label="Rooms and follow-ups">
     <h2 className="h3">Rooms and follow-ups</h2>
@@ -420,8 +440,8 @@ export function OperationsSection({ operations }: { operations: SundayOperations
   </section>;
 }
 
-function GroupMeetingCard({ item, names }: { item: GroupMeeting; names: Names }) {
-  const [open, setOpen] = useState(false);
+function GroupMeetingCard({ item, names, onHow, defaultOpen = false }: { item: GroupMeeting; names: Names; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   const roles = [...new Set(item.serving.map(s => s.position ?? "their role"))].join(", ");
   const serving = [...new Set(item.serving.map(s => `${s.status} for ${s.position ?? "a role"}`))].join(" and ");
   const why = [
@@ -438,16 +458,18 @@ function GroupMeetingCard({ item, names }: { item: GroupMeeting; names: Names })
       <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}><Icon name="info" small /> Why I flagged this</button>
       <span className="badge b-muted">Groups</span><span className="badge b-muted">Planning Center</span><span>Checked {time(item.checked_at)}</span>
       {open && <ul className="list why">{why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
+      {open && <HowLink onHow={onHow} />}
     </div>
   </article>;
 }
 
 /** People on this plan whose group meets while they serve. Listed alphabetically, never ranked; names resolve on this Mac. */
-export function GroupMeetings({ items, names }: { items: GroupMeeting[]; names: Names }) {
+export function GroupMeetings({ items, names, onHow, whyOpen = false }: { items: GroupMeeting[]; names: Names; onHow?: ((procedure: string) => void) | undefined; whyOpen?: boolean }) {
   return <section className="stack" aria-label="Group meetings">
     <h2 className="h3">Group meetings</h2>
     {[...items].sort((a, b) => nameOf(names, a.person_id).localeCompare(nameOf(names, b.person_id)))
-      .map(m => <GroupMeetingCard key={m.person_id} item={m} names={names} />)}
+      .map(m => <GroupMeetingCard key={m.person_id} item={m} names={names} defaultOpen={whyOpen}
+        onHow={onHow ? () => onHow(PROCEDURE_FOR.group) : undefined} />)}
   </section>;
 }
 
@@ -457,6 +479,8 @@ export function SundayPage(props: {
   decisions: SundayDecision[]; onDecisions: (next: SundayDecision[]) => void;
   operations: SundayOperations | null;
   onCheck: () => void; onRecording: () => void; onExample: () => void; onLaterExample?: (() => void) | undefined;
+  /** "See how this works" under Why I flagged this: opens that procedure on the Church rules page. */
+  onHow?: ((procedure: string) => void) | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
   const stamp = useMemo(() => brief?.checked_at ? time(brief.checked_at) : null, [brief]);
@@ -496,7 +520,7 @@ export function SundayPage(props: {
     {props.problem && <p role="alert" className="problem">{props.problem}</p>}
     {brief && <section className="stack" aria-labelledby="sunday-open-title">
       <h2 id="sunday-open-title" className="sr-only">Open for this Sunday</h2>
-      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={props.sender} canReword={props.canReword} onDecide={onDecide} />)}
+      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={props.sender} canReword={props.canReword} onDecide={onDecide} onHow={props.onHow} />)}
       {brief.findings.length === 0 && <p className="lede">No open needs, pending requests or Church-rule check-ins in what was read.</p>}
       {brief.findings.length > 0 && open.length === 0 && <p className="lede">Everything left is something you resolved yourself, below.</p>}
     </section>}
@@ -506,8 +530,8 @@ export function SundayPage(props: {
       {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => onDecisions(withoutDecision(decisions, i.finding.key))} />)}
       {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => onDecisions(withoutDecision(decisions, h.decision.key))} />)}
     </section>}
-    {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} />}
-    {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names} />}
+    {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} onHow={props.onHow} />}
+    {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names} onHow={props.onHow} />}
     {brief && <section className="notchecked" aria-label="What I didn't check">
       <h2 className="h3">What I didn't check</h2>
       <ul className="list">{[...brief.not_checked, ...(props.operations ? props.operations.not_checked : operationsNotChecked(null))].map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul>

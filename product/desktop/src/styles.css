@@ -198,3 +198,41 @@ body { background: #FAF6EE; }
 .oz .cards-photo > .btn-quiet { margin-left: -14px; }
 .oz .ask-quick.is-compact { padding-right: 16px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
 .oz .listen-more > summary { padding-right: 4px; }
+/* How Ozzie checks (Church rules), "See how this works" in Ask, and recent work in What happened */
+.oz .procedure-body { white-space: pre-line; overflow-wrap: anywhere; font-size: 14.5px; color: var(--ink-2); margin-top: 6px; padding: 12px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); }
+.oz .how-checks { display: flex; flex-direction: column; gap: 10px; }
+.oz .how-checks .procedure { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; border-top: 1px solid var(--line); }
+.oz .how-checks .procedure .listen-more { margin-top: 2px; }
+.oz .why-how { flex-basis: 100%; }
+.oz .why-how > .btn-quiet { margin-left: -14px; }
+.oz .ask-how-body { margin-top: 4px; }
+.oz .ask-how-body .procedure-body { font-size: 13.5px; }
+.oz .ask-steps { padding-left: 20px; font-size: 13.5px; color: var(--ink-2); list-style: decimal; }
+.oz .ask-steps li { display: list-item; }
+.oz .log.recent > li { display: block; padding: 0; }
+.oz .log.recent .recent-steps li { display: flex; gap: 8px; align-items: flex-start; border-top: 0; padding: 3px 0; }
+.oz .recent-task > summary { padding: 10px 16px; cursor: pointer; font-size: 14.5px; list-style-position: inside; }
+.oz .recent-task[open] > summary { border-bottom: 1px solid var(--line); }
+.oz .recent-steps { padding: 10px 16px 12px; font-size: 14px; color: var(--ink-2); }
+.oz .recent-quiet { display: flex; gap: 8px; align-items: flex-start; }
+/* What Ozzie keeps an eye on: the plan to confirm, What runs automatically, and Today */
+.oz .plan-card { display: flex; flex-direction: column; gap: 8px; }
+.oz .plan-card .find-title { margin: 0; }
+.oz .plan-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.oz .plan-assumed, .oz .resp-problems li { display: flex; gap: 8px; align-items: flex-start; }
+.oz .plan-edit { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.oz .plan-report { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.oz .resp-head { align-items: center; }
+.oz .resp-problems { margin-top: 8px; font-size: 14px; color: var(--ink-2); }
+.oz .responsibility .find-next .small { color: var(--ink-2); }
+.oz .template-list li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
+.oz .resp-ended > summary { cursor: pointer; font-size: 14px; color: var(--ink-2); }
+.oz .watch-strip { display: flex; flex-direction: column; gap: 6px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--sunken); }
+.oz .watch-list li { display: flex; gap: 8px; align-items: flex-start; font-size: 14.5px; }
+.oz .watch-strip > .btn-quiet, .oz .watch-strip p .btn-quiet { align-self: flex-start; margin-left: -10px; }
+.oz .noticed .find-title { font-size: 16px; }
+.oz .noticed-summary { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); font-size: 14.5px; }
+/* In the narrow Ask panel a plan's rows stack: label over value. */
+.oz .ask-panel .plan-card .sp-row.sp-2 { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 8px 0; }
+.oz .ask-panel .plan-card .find-title { font-size: 20px; }
+.oz .ask-panel .plan-card .find-next { gap: 8px; }

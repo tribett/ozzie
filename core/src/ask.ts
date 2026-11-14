@@ -199,8 +199,8 @@ function emailAt(chars: readonly string[], at: number): boolean {
   return domain > right && DOT.test(chars[domain] ?? "") && word(chars[domain + 1]);
 }
 interface DigitGroup { digits: number; gap: string }
-/** 7+ digits once dates (2026-11-22, 11/22/2026) and times (9:30, 10:30-11:30, 9.30) are set aside. */
-function phoneLike(groups: readonly DigitGroup[]): boolean {
+/** `min` or more digits once dates (2026-11-22, 11/22/2026) and times (9:30, 10:30-11:30, 9.30) are set aside. */
+function phoneLike(groups: readonly DigitGroup[], min = 7): boolean {
   let total = 0;
   for (let i = 0; i < groups.length;) {
     const a = groups[i]!, b = groups[i + 1], c = groups[i + 2];
@@ -210,18 +210,16 @@ function phoneLike(groups: readonly DigitGroup[]): boolean {
     const time = b && a.digits <= 2 && b.digits === 2 &&
       (a.gap === ":" || (a.gap === "." && (i === 0 || groups[i - 1]!.gap !== ".") && b.gap !== "."));
     if (date || time) {
-      if (total >= 7) return true;
+      if (total >= min) return true;
       total = 0; i += date ? 3 : 2; continue;
     }
     total += a.digits; i++;
   }
-  return total >= 7;
+  return total >= min;
 }
-/** An email address, or 7+ digits (any decimal digits) whose groups are separated by one to three of anything
- *  but letters, numbers and line breaks. Mirrored natively (`contact_detail`). */
-export function hasContactDetail(text: string): boolean {
-  const chars = [...text];
-  if (chars.some((c, i) => c === "@" && emailAt(chars, i))) return true;
+/** `min` or more digits (any decimal digits) whose groups are separated by one to `maxGap` of anything but letters,
+ *  numbers and line breaks. Mirrored natively (`digit_contact`). */
+function digitContact(chars: readonly string[], maxGap: number, min: number): boolean {
   let groups: DigitGroup[] = [], digits = 0, gap = "";
   for (const c of [...chars, "\n"]) {
     if (DIGIT.test(c)) {
@@ -231,12 +229,92 @@ export function hasContactDetail(text: string): boolean {
     }
     if (digits) { groups.push({ digits, gap: "" }); digits = 0; }
     if (!groups.length) continue;
-    if (!LETTER_OR_NUMBER.test(c) && !LINE_BREAK.test(c) && [...gap].length < 3) gap += c;
-    else { if (phoneLike(groups)) return true; groups = []; gap = ""; }
+    if (!LETTER_OR_NUMBER.test(c) && !LINE_BREAK.test(c) && [...gap].length < maxGap) gap += c;
+    else { if (phoneLike(groups, min)) return true; groups = []; gap = ""; }
   }
   return false;
 }
+/** An email address, or 7+ digits (any decimal digits) whose groups are separated by one to three of anything
+ *  but letters, numbers and line breaks. Mirrored natively (`contact_detail`). */
+export function hasContactDetail(text: string): boolean {
+  const chars = [...text];
+  return chars.some((c, i) => c === "@" && emailAt(chars, i)) || digitContact(chars, 3, 7);
+}
+type EmailToken = { word: [number, number] } | "at" | "dot" | "tight-dot" | "space" | "other";
+/**
+ * An email address written out (review 2026-11-14 C11; native `spelled_email`): word, at, word, then one or more
+ * dot-word pairs ending in a 2–24 letter top-level domain, where "at" is "@", "[at]", "(at)", "{at}", "<at>" or the
+ * word "at", and "dot" is a "." with no space on either side, "[dot]" and the like, or the word "dot". Spaces may
+ * surround a written-out at or dot, never a bare ".", so "Ask Pat at noon. Then" is not an address.
+ */
+function spelledEmail(chars: readonly string[]): boolean {
+  const lower = chars.map(c => /^[A-Z]$/u.test(c) ? c.toLowerCase() : c);
+  const word = (c: string) => LETTER_OR_NUMBER.test(c) || "_%+-".includes(c);
+  const CLOSE: Record<string, string> = { "[": "]", "(": ")", "{": "}", "<": ">" };
+  const bracketed = (i: number): [EmailToken, number] | null => {
+    const close = CLOSE[lower[i]!];
+    if (!close) return null;
+    for (const [inner, token] of [["at", "at"], ["dot", "dot"]] as const) {
+      const end = i + 1 + inner.length;
+      if (lower.slice(i + 1, end).join("") === inner && lower[end] === close) return [token, inner.length + 2];
+    }
+    return null;
+  };
+  const tokens: EmailToken[] = [];
+  for (let i = 0; i < lower.length;) {
+    const c = lower[i]!;
+    if (word(c)) {
+      const start = i;
+      while (i < lower.length && word(lower[i]!)) i++;
+      tokens.push({ word: [start, i] });
+      continue;
+    }
+    const b = bracketed(i);
+    if (b) { tokens.push(b[0]); i += b[1]; continue; }
+    const token: EmailToken = c === "@" || c === "\uff20" ? "at" : ".。．｡".includes(c) ? "tight-dot" : /^\p{White_Space}$/u.test(c) ? "space" : "other";
+    // A run of spaces is one space.
+    if (!(token === "space" && tokens.at(-1) === "space")) tokens.push(token);
+    i++;
+  }
+  const textOf = (t: EmailToken) => typeof t === "object" ? lower.slice(t.word[0], t.word[1]).join("") : null;
+  const isWord = (t: EmailToken | undefined) => typeof t === "object";
+  const joined = tokens.map((t, k): EmailToken => {
+    const spaced = k > 0 && k + 1 < tokens.length && tokens[k - 1] === "space" && tokens[k + 1] === "space";
+    if (spaced && textOf(t) === "at") return "at";
+    if (spaced && textOf(t) === "dot") return "dot";
+    if (t === "tight-dot") return isWord(tokens[k - 1]) && isWord(tokens[k + 1]) ? "dot" : "other";
+    return t;
+  });
+  // Spaces only ever sit beside an at or a dot here; drop them there, keep them elsewhere.
+  const flat: EmailToken[] = [];
+  joined.forEach((t, k) => {
+    const beside = (x: EmailToken | undefined) => x === "at" || x === "dot";
+    if (t === "space" && (beside(joined[k + 1]) || beside(flat.at(-1)))) return;
+    flat.push(t);
+  });
+  return flat.some((_, k) => {
+    if (!isWord(flat[k]) || flat[k + 1] !== "at" || !isWord(flat[k + 2])) return false;
+    let last: [number, number] | null = null;
+    for (let j = k + 3; j < flat.length; j += 2) {
+      const d = flat[j], w = flat[j + 1];
+      if (d === "dot" && w !== undefined && typeof w === "object") last = w.word; else break;
+    }
+    return last !== null && last[1] - last[0] >= 2 && last[1] - last[0] <= 24 && lower.slice(last[0], last[1]).every(c => /^\p{Alphabetic}$/u.test(c));
+  });
+}
+/**
+ * hasContactDetail, and the disguises the native agent and Ask routes refuse too (`contact_detail_strict`): an email
+ * address written out ("pat [at] example [dot] org", "pat at example dot org"), and 10+ digits whose groups are
+ * separated by up to eight of anything but letters, numbers and line breaks ("555----123----4567"). Shared vectors:
+ * core/test/ask-parity.json `pendingNative.contact`.
+ */
+export function hasContactDetailStrict(text: string): boolean {
+  const chars = [...text];
+  return hasContactDetail(text) || spelledEmail(chars) || digitContact(chars, 8, 10);
+}
 const contactIn = (text: string) => hasContactDetail(text) || hasContactDetail(text.normalize("NFKC"));
+/** The question itself is held to the strict rule, as the native routes hold it. */
+const strictContactIn = (text: string) => hasContactDetailStrict(text) || hasContactDetailStrict(text.normalize("NFKC"));
 
 // ---- Facts -----------------------------------------------------------------------------------
 
@@ -442,15 +520,38 @@ const RELIGIOUS_ASK = new RegExp([
   SCRIPTURE_REFERENCE,
   `\\b(?:${SCRIPTURE_QUOTES})\\b`,
 ].join("|"), "u");
-const ACT = "send|text|e-?mail|message|call|phone|notify|invite|post|forward|reply|respond|contact|reach\\s+out(?:\\s+to)?|schedule|reschedule|unschedule|assign|reassign|add|remove|delete|decline|accept|confirm|change|update|edit|move|swap|book|cancel|mark|fill|sign\\s+(?:up|in)|block|approve|publish";
+// Requests to contact people or change records (review 2026-11-14, question side), matched on the folded
+// placeholder form with every person label as \u0001 and every role label as \u0002, so they are refused only as
+// actual requests: a verb said to Ozzie (at the start of a sentence, after "can you", "please", "I need you to",
+// "and then" …) that sends or contacts someone, puts someone on or off a schedule, or changes a record. "Can you
+// confirm whether…", "update me", "add up", "call out", "post … here" and "Mark is asking" are questions.
+const FRAME = "(?:(?:^|[.!?;:]\\s*)(?:(?:hey|hi|ok|okay)\\s*,?\\s+)?(?:ozzie\\s*[,:]?\\s*)?(?:please\\s+)?" +
+  "|\\b(?:can|could|would|will)\\s+you\\s+(?:please\\s+)?(?:just\\s+)?(?:go\\s+ahead\\s+and\\s+)?" +
+  "|\\b(?:please|go\\s+ahead\\s+and|i\\s+(?:want|need)\\s+you\\s+to|i'?d\\s+like\\s+you\\s+to|and(?:\\s+then)?|then)\\s+)";
+/** Someone a message could go to, or who could be put on a schedule. */
+const SOMEONE = "(?:\\u0001|them|him|her|everyone|everybody|anyone|anybody|someone|somebody|people|volunteers|leaders|parents|members|" +
+  "(?:the|our|my|all\\s+the)\\s+(?:team|volunteers?|leaders?|team\\s+leaders?|parents|members|group|congregation|staff|\\u0002(?:\\s+(?:team|leaders?|volunteers?|people))?)|" +
+  "\\u0002\\s+(?:team|leaders?|volunteers?|people))";
+/** What a change is made to: a label, or a word that begins naming a record. */
+const RECORD = "(?:\\u0001|\\u0002|it|this|that|these|those|them|the|a|an|all|every|each|my|our|his|her|their|planning\\s+center|sunday|[\\p{L}]+'s)";
+const NOT_A_RECORD = "(?:the\\s+|this\\s+|that\\s+|my\\s+|your\\s+)?(?:wording|tone|draft|note|message)\\b";
 const SEND_OR_CHANGE = new RegExp([
-  `^(?:(?:hey|hi|ok|okay)\\s+)?(?:ozzie\\s*[,:]?\\s+)?(?:please\\s+)?(?:${ACT})\\b`,
-  `\\b(?:can|could|would|will)\\s+you\\s+(?:please\\s+)?(?:just\\s+)?(?:go\\s+ahead\\s+and\\s+)?(?:${ACT})\\b`,
-  `\\b(?:please|go\\s+ahead\\s+and|i\\s+(?:want|need)\\s+you\\s+to|and(?:\\s+then)?|then)\\s+(?:${ACT})\\b`,
+  // Sending: always a request to contact someone, unless it is the leader asking for something ("send me …").
+  `${FRAME}(?:send|text|e-?mail|message|dm|ping|notify|remind|forward)\\b(?!\\s+(?:me|us)\\b)`,
+  // Contacting someone, or posting or replying to them.
+  `${FRAME}(?:call|phone|ring|contact|reach\\s+out\\s+to|invite|tell|reply\\s+to|respond\\s+to|let)\\s+${SOMEONE}(?![\\p{L}])`,
+  `${FRAME}post\\b[^.?!]{0,40}?\\bto\\s+${SOMEONE}(?![\\p{L}])`,
+  // Putting someone on or off a schedule.
+  `${FRAME}(?:assign|reassign|unassign|schedule|reschedule|unschedule|add|remove|move|swap|put|slot|sign\\s+up|book|replace|drop)\\s+${SOMEONE}(?![\\p{L}])`,
+  `${FRAME}(?:assign|reassign|schedule|reschedule|add|put|move|slot|sign)\\b[^.?!]{0,40}?\\b(?:to|on|onto|into|off|from)\\s+(?:the\\s+)?(?:schedule|roster|rota|plan|team|lineup|\\u0002|planning\\s+center)`,
+  // Changing a record in Planning Center.
+  `${FRAME}(?:change|update|edit|modify|delete|remove|cancel|book|reserve|approve|publish|block|unblock|set|unassign)\\s+(?!${NOT_A_RECORD})${RECORD}(?![\\p{L}])`,
+  // Settling one: someone, a role, or a request, booking or assignment ("confirm whether …" is a question).
+  `${FRAME}(?:confirm|accept|decline|mark|fill|clear|fix|resolve)\\s+(?:${SOMEONE}|\\u0002|it|this|that|the\\s+(?:requests?|bookings?|reservations?|assignments?|schedule|blockouts?|conflicts?|rooms?|slots?|spots?|roles?|positions?|follow-?ups?))(?![\\p{L}])`,
 ].join("|"), "u");
-const RANKING = /\b(?:rank\w*|scor(?:e|es|ed|ing)|rate|rating|ratings|grade|(?:most|least|more|less)\s+(?:reliable|faithful|committed|dependable|likely|consistent)|best\s+(?:person|people|volunteers?|choice|fit|option|one|pick|candidate)|who(?:'s|\s+is)\s+(?:the\s+)?(?:best|better|worst|strongest|weakest)|better\s+(?:choice|fit|volunteer|person)|top\s+(?:picks?|choices?|candidates?)|strongest|weakest|likeliest|percent\w*)\b|%/u;
+const RANKING = /\b(?:rank\w*|scor(?:e|es|ed|ing)|rate|rating|ratings|grade|(?:most|least|more|less)\s+(?:reliable|faithful|committed|dependable|likely|consistent)|best\s+(?:person|people|volunteers?|choice|fit|option|one|pick|candidate)|who(?:'s|\s+is)\s+(?:the\s+)?(?:best|better|worst|strongest|weakest)|better\s+(?:choice|fit|volunteer|person)|top\s+(?:picks?|choices?|candidates?)|strongest|weakest|likeliest)\b/u;
 /** Evaluative words about a person (never-list 4), refused in questions and answers alike. */
-const CHARACTER = /(?<![\p{L}\p{N}])(?:(?:un)?reliable|(?:un)?dependable|(?:un)?faithful|uncommitted|flak(?:y|ey)|lazy|laziness|slack(?:er|ers|ing)|fall(?:ing|en|s)?\s+away|backslid\w*|drift(?:ing|ed|s)?(?:\s+away)?|at[\s-]risk|disengag\w*|lukewarm|apathetic|careless|irresponsible|(?:un)?trustworthy|burn(?:ed|t|ing)?[\s-]?out|unmotivated|uninterested|(?:losing|lost)\s+interest|not\s+pulling|let(?:s|ting)?\s+(?:the\s+team|us|everyone|people)\s+down|can(?:'t|not)?\s+be\s+counted\s+on|wayward|lapsed)(?![\p{L}\p{N}])/u;
+export const CHARACTER = /(?<![\p{L}\p{N}])(?:(?:un)?reliable|(?:un)?dependable|(?:un)?faithful|uncommitted|flak(?:y|ey)|lazy|laziness|slack(?:er|ers|ing)|fall(?:ing|en|s)?\s+away|backslid\w*|drift(?:ing|ed|s)?(?:\s+away)?|at[\s-]risk|disengag\w*|lukewarm|apathetic|careless|irresponsible|(?:un)?trustworthy|burn(?:ed|t|ing)?[\s-]?out|unmotivated|uninterested|(?:losing|lost)\s+interest|not\s+pulling|let(?:s|ting)?\s+(?:the\s+team|us|everyone|people)\s+down|can(?:'t|not)?\s+be\s+counted\s+on|wayward|lapsed)(?![\p{L}\p{N}])/u;
 const DRAFT_ASK = /\b(?:draft|write|compose|prepare|word)\b[^.?!]{0,60}\b(?:note|message|email|e-mail|text|reply|letter|invite|invitation)\b/u;
 
 /** A symbol (not a letter) that NFKC turns into two or more letters ("™" → "TM") is kept as its own word, so it
@@ -499,19 +600,100 @@ function spelledRuns(f: string, tokens: readonly Token[], gap: RegExp): Token[][
   }
   return runs;
 }
+/**
+ * How names are matched (owner decision 2026-11-14, "capitalized only", refined by the coordinator the same day
+ * within that rule). Without `common`, every whole-word match of any name term
+ * counts (strict; Ask's own default, which the native Ask route mirrors). With `common` (lower-case common
+ * English words), one-word terms follow the prose rule (mirrored natively by NameGuard::present_in_prose):
+ *  - a weekday or month name ("Sunday", "June"), and "church" in Ozzie's own term "Church rules", counts only
+ *    when it sits next to another part of the same member's name ("June Carter", "Adeyemi, Sunday"), whatever
+ *    its case, so "this Sunday", "Sundays", "in June" and "Your Church rules" name no one;
+ *  - any other term that is in `common`, such as "will" for Will Grace, counts only where its first letter was
+ *    typed as a capital, a capital at the start of a sentence included, and never when a contraction follows it
+ *    directly (n't, 'll, 'd, 've, 're, 'm, and 's after it, that, what …), so "Don't" is not Don;
+ *  - every other term always counts.
+ * Terms of two or more words (a full name), joined parts, spelled-out names and unspaced scripts always count.
+ */
+export interface NameMatchOptions { readonly common?: ReadonlySet<string> }
+const CAPITAL = /^[\p{Lu}\p{Lt}]/u;
+/** Weekday and month names: under the prose rule, a name only beside another part of the same member's name. */
+export const CALENDAR_WORDS: ReadonlySet<string> = new Set(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+  "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
+/** Words before which a following "'s" is a contraction ("it's", "let's"), never a possessive. */
+const S_CONTRACTED: ReadonlySet<string> = new Set(["it", "that", "what", "who", "there", "here", "he", "she", "let", "where", "how", "when", "why"]);
+/** What may stand between two parts of one person's name, in folded text (as JOIN below). */
+const NEIGHBOUR_GAP = /^[\s,.'-]{1,3}$/u;
+/** For each calendar word or "church" in a member's name, every other part of that member's name, folded. */
+function nameNeighbours(names: Readonly<Names>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const full of Object.values(names)) {
+    const parts = fold(full).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    for (const part of parts) {
+      if (!CALENDAR_WORDS.has(part) && part !== "church") continue;
+      const set = out.get(part) ?? new Set<string>();
+      for (const other of parts) if (other !== part) set.add(other);
+      out.set(part, set);
+    }
+  }
+  return out;
+}
+/** The word just before position `a` of folded text `f`, when only a short gap of NEIGHBOUR_GAP separates them. */
+function wordBefore(f: string, a: number): string | null {
+  let i = a;
+  while (i > 0 && !wordChar(charBefore(f, i))) i -= charBefore(f, i)!.length;
+  if (i === a || !NEIGHBOUR_GAP.test(f.slice(i, a))) return null;
+  let j = i;
+  while (j > 0 && wordChar(charBefore(f, j))) j -= charBefore(f, j)!.length;
+  return j < i ? f.slice(j, i) : null;
+}
+/** The word just after position `b`, the same way. */
+function wordAfter(f: string, b: number): string | null {
+  let i = b;
+  while (i < f.length && !wordChar(charAt(f, i))) i += charAt(f, i)!.length;
+  if (i === b || !NEIGHBOUR_GAP.test(f.slice(b, i))) return null;
+  let j = i;
+  while (j < f.length && wordChar(charAt(f, j))) j += charAt(f, j)!.length;
+  return j > i ? f.slice(i, j) : null;
+}
+/** A contraction directly after `term`, which ends at `b`: an apostrophe, then n't's t, ll, d, ve, re or m, or s after it, that … */
+function contracted(f: string, b: number, term: string): boolean {
+  if (f[b] !== "'") return false;
+  let j = b + 1;
+  while (j < f.length && wordChar(charAt(f, j))) j += charAt(f, j)!.length;
+  const suffix = f.slice(b + 1, j);
+  return ["ll", "d", "ve", "re", "m"].includes(suffix) || (suffix === "t" && term.endsWith("n")) || (suffix === "s" && S_CONTRACTED.has(term));
+}
+/** The prose rule for one occurrence [a, b) of a one-word term in folded text `f`, or null when the term isn't one it decides. */
+function proseHit(text: string, f: string, from: readonly number[], a: number, b: number, plural: boolean, term: string,
+  common: ReadonlySet<string>, neighbours: ReadonlyMap<string, ReadonlySet<string>>): boolean | null {
+  const next = wordAfter(f, b);
+  if (CALENDAR_WORDS.has(term) || (term === "church" && next === "rules")) {
+    const near = neighbours.get(term);
+    const before = wordBefore(f, a);
+    return !!near && ((before !== null && near.has(before)) || (next !== null && near.has(next)));
+  }
+  if (!common.has(term)) return null;
+  return CAPITAL.test(String.fromCodePoint(text.codePointAt(from[a]!)!)) && (plural || !contracted(f, b, term));
+}
 /** Roster-name occurrences (header, point 4), longest first, never overlapping `avoid`:
  *  whole words with an optional plural/possessive "s", any occurrence for unspaced scripts, and
  *  names spelled out one letter at a time. Mirrored natively by NameGuard::present_as_word. */
-function hits(text: string, terms: Map<string, Set<string>>, avoid: [number, number][] = []): Hit[] {
+function hits(text: string, terms: Map<string, Set<string>>, avoid: [number, number][] = [], common?: ReadonlySet<string>,
+  neighbours: ReadonlyMap<string, ReadonlySet<string>> = new Map()): Hit[] {
   const { f, from, to } = folded(text);
   const found: { a: number; b: number; keys: Set<string> }[] = [];
   for (const [t, keys] of terms) {
     if (!t) continue;
     for (let a = f.indexOf(t); a >= 0; a = f.indexOf(t, a + 1)) {
       const b = a + t.length;
-      if (UNSPACED.test(t)) found.push({ a, b, keys });
-      else if (!wordChar(charBefore(f, a)) && !wordChar(charAt(f, b))) found.push({ a, b, keys });
-      else if (!wordChar(charBefore(f, a)) && charAt(f, b) === "s" && !wordChar(charAt(f, b + 1))) found.push({ a, b: b + 1, keys });
+      let end: number | null = null;
+      if (UNSPACED.test(t)) end = b;
+      else if (!wordChar(charBefore(f, a)) && !wordChar(charAt(f, b))) end = b;
+      else if (!wordChar(charBefore(f, a)) && charAt(f, b) === "s" && !wordChar(charAt(f, b + 1))) end = b + 1;
+      if (end === null) continue;
+      // The prose rule (NameMatchOptions) decides one-word terms that are calendar words or common words.
+      if (common && !UNSPACED.test(t) && proseHit(text, f, from, a, end, end > b, t, common, neighbours) === false) continue;
+      found.push({ a, b: end, keys });
     }
   }
   // Spelled out: one-character words whose letters, read together, hold a term.
@@ -553,9 +735,10 @@ function replaceSpans(text: string, spans: { start: number; end: number; label: 
 }
 /** The Ask name check (header, points 4 and 5): any roster name left as a whole word, spelled out,
  *  or in an unspaced script, with labels removed outright and replaced by spaces. */
-export function containsNameWord(text: string, names: Readonly<Names>): boolean {
-  const terms = personTerms(names);
-  return hits(withoutLabels(text, ""), terms).length > 0 || hits(withoutLabels(text, " "), terms).length > 0;
+export function containsNameWord(text: string, names: Readonly<Names>, options: NameMatchOptions = {}): boolean {
+  const terms = personTerms(names), neighbours = nameNeighbours(names);
+  return hits(withoutLabels(text, ""), terms, [], options.common, neighbours).length > 0 ||
+    hits(withoutLabels(text, " "), terms, [], options.common, neighbours).length > 0;
 }
 /** Ask's terms for one name (header, point 4): nameTerms plus every run of two or more consecutive
  *  whole parts joined ("marykate", "delacruz"). Mirrored natively (NameGuard word terms). */
@@ -577,22 +760,44 @@ function personTerms(names: Readonly<Names>): Map<string, Set<string>> {
 const JOIN = /^[\s,.'’-]{1,3}$/u;
 const only = (keys: ReadonlySet<string>) => keys.size === 1 ? [...keys][0] : undefined;
 
+/**
+ * Options for a caller other than the Ask panel (the agent harness). Ask itself passes none, so its
+ * behaviour, mirrored by the native Ask route, is unchanged.
+ *  - roles: more positions to label before any name is replaced (label → exact position name), such as
+ *    every position of this plan, not only those in the findings.
+ *  - common: the "capitalized only" name rule (NameMatchOptions).
+ *  - protect: room, follow-up and event names the caller replaces with its own labels straight after
+ *    (review 2026-11-14 C5): kept whole as typed, so no person label lands inside one, and set aside by
+ *    the name checks here. The caller must label every one before anything is sent.
+ */
+export interface PrepareOptions extends NameMatchOptions {
+  readonly roles?: ReadonlyMap<string, string>;
+  readonly protect?: readonly string[];
+}
+
 /** Everything that happens to a question before it can be sent. Refusals send nothing. */
-export function prepareAsk(session: AskSession, context: AskContext, typed: string): AskPrepared {
+export function prepareAsk(session: AskSession, context: AskContext, typed: string, options: PrepareOptions = {}): AskPrepared {
   if (!contexts.has(context)) throw new Error("Only facts Ozzie built can be sent.");
   if (!context.usable) return refuse(REFUSALS.facts);
   const names = context.names as Names;
   const question = clean(typed);
   if (!question) return refuse(REFUSALS.empty);
   if (question.length > MAX_QUESTION_CHARS) return refuse(REFUSALS.long);
+  const match: NameMatchOptions = options.common ? { common: options.common } : {};
   // Position names first, so a position named after someone (or holding a number) stays one label.
   // They are cleaned the way the question was, so a suggested question always finds its position.
-  const roleTerms = new Map([...context.roles].map(([label, role]) => [fold(clean(role)), new Set([label])]));
+  const roleLabels = new Map([...context.roles, ...(options.roles ?? [])]);
+  const roleTerms = new Map([...roleLabels].map(([label, role]) => [fold(clean(role)), new Set([label])]));
   const withRoles = replaceSpans(question, hits(question, roleTerms).map(h => ({ ...h, label: [...h.keys][0]! })));
-  if (contactIn(withRoles)) return refuse(REFUSALS.contact);
+  if (strictContactIn(withRoles)) return refuse(REFUSALS.contact);
+  // Place names the caller labels next (PrepareOptions.protect) are kept whole, so a surname inside one
+  // ("Thornbury Hall") never becomes a person label; the name checks below look past them too.
+  const protectTerms = new Map((options.protect ?? []).filter(n => n.trim()).map(n => [fold(clean(n)), new Set([n])]));
+  const protectedSpans = (text: string): [number, number][] => protectTerms.size ? hits(text, protectTerms, labelSpans(text)).map(h => [h.start, h.end]) : [];
+  const unprotected = (text: string) => protectedSpans(text).reduceRight((t, [a, b]) => t.slice(0, a) + " ".repeat(b - a) + t.slice(b), text);
   // Then roster names (header, point 4). Adjacent parts join into one label only when each is one and
   // the same person; a part several people share, never guessed, becomes "[a team member]".
-  const found = hits(withRoles, personTerms(names), labelSpans(withRoles));
+  const found = hits(withRoles, personTerms(names), [...labelSpans(withRoles), ...protectedSpans(withRoles)], match.common, nameNeighbours(names));
   const groups: Hit[] = [];
   for (const h of found) {
     const prev = groups.at(-1), id = only(h.keys);
@@ -609,20 +814,23 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   }));
   if (!/[\p{L}\p{N}]{2}/u.test(withoutLabels(sent, " "))) return refuse(REFUSALS.onlyNames);
   const plain = fold(withoutLabels(sent, " ")).replace(/\s+/gu, " ").trim();
+  // Person labels as \u0001 and role labels as \u0002, for "Text [Person 1]" or "Add [Person 1] to [Role 1]".
+  const marked = fold(sent.replace(LABEL, l => l.startsWith("[Person ") || l === TEAM_MEMBER ? " \u0001 " : l.startsWith("[Role ") ? " \u0002 " : " "))
+    .replace(/\s+/gu, " ").trim();
   if (RELIGIOUS_ASK.test(plain)) return refuse(REFUSALS.religious);
-  if (SEND_OR_CHANGE.test(plain)) return refuse(REFUSALS.send);
+  if (SEND_OR_CHANGE.test(marked)) return refuse(REFUSALS.send);
   if (RANKING.test(plain) || CHARACTER.test(plain)) return refuse(REFUSALS.rank);
   // Fail closed: no roster name may remain as a whole word (header, point 5).
-  if (containsNameWord(sent, names)) return refuse(REFUSALS.name);
+  if (containsNameWord(unprotected(sent), names, match)) return refuse(REFUSALS.name);
   if (sent.length > MAX_SENT_QUESTION_CHARS) return refuse(REFUSALS.long);
   const user = `${context.facts}${QUESTION_PREFIX}${sent}`;
   if (user.length > MAX_USER_CHARS) return refuse(REFUSALS.size);
   // The whole message, as the native route checks it.
   if (contactIn(user)) return refuse(REFUSALS.contact);
-  const allowed = new Set([...people.keys(), ...context.roles.keys(), TEAM_MEMBER]);
+  const allowed = new Set([...people.keys(), ...roleLabels.keys(), TEAM_MEMBER]);
   if (labelProblem(user, allowed)) return refuse(REFUSALS.apart);
-  if (containsNameWord(user, names)) return refuse(REFUSALS.name);
-  const roles = new Map(context.roles);
+  if (containsNameWord(unprotected(user), names, match)) return refuse(REFUSALS.name);
+  const roles = new Map(roleLabels);
   const result: AskedQuestion = Object.freeze({
     request: Object.freeze({ system: ASK_SYSTEM, user, max_tokens: ASK_MAX_TOKENS }),
     question, sent, people, roles, allowed: new Set([...labelsIn(user), "[Your name]"]), draft: DRAFT_ASK.test(plain), context,
@@ -648,7 +856,7 @@ export const ANSWER_PROBLEMS = {
 } as const;
 // Answer checks (coordinator decision 2026-11-13), on the folded text with labels as spaces.
 // Religious content beyond the shared NOT_OURS list: prayer language, praise words, quoted lines and references.
-const RELIGIOUS_REPLY = new RegExp([
+export const RELIGIOUS_REPLY = new RegExp([
   "\\b(?:heavenly|spiritual(?:ly)?|holy\\s+spirit|holy\\s+ghost|father\\s+god|our\\s+father|hallelujah|alleluia|hosanna|savio(?:u)?r|salvation|divine|godly|almighty|in\\s+(?:his|jesus'?s?|christ'?s?)\\s+name)\\b",
   "\\blift(?:s|ed|ing)?\\s+(?:[\\p{L}'-]+\\s+){0,3}?up\\b",
   `\\b(?:${SCRIPTURE_QUOTES})\\b`,
@@ -663,7 +871,7 @@ const DOING = "sending|e-?mailing|texting|messaging|notifying|contacting|invitin
 const CHANGED = "added|removed|moved|put|placed|slotted|add|remove|move|place|slot";
 const DESTINATION = "(?:to|from|on|off|onto|into|in)\\s+(?:the\\s+|your\\s+|this\\s+|our\\s+)?(?:[\\p{L}\\p{N}'-]+\\s+){0,3}?(?:schedule|plan|team|roster|rota|list|lineup|planning\\s+center)\\b";
 const MESSAGE = "(?:messages?|notes?|texts?|e-?mails?|reminders?|drafts?)";
-const CLAIMS = new RegExp([
+export const CLAIMS = new RegExp([
   `\\b(?:i|we|ozzie)(?:'ve|'d|\\s+have|\\s+has|\\s+had)?(?:\\s+(?:just|already|now|also|actually|(?:went|gone)\\s+ahead\\s+and))*\\s+(?:${DONE})\\b`,
   `\\b(?:i'll|i\\s+will|ozzie\\s+will|ozzie'll|we'll|we\\s+will|let\\s+me|i'm\\s+going\\s+to|i\\s+am\\s+going\\s+to|we're\\s+going\\s+to)\\s+(?:go\\s+ahead\\s+and\\s+)?(?:${DO})\\b`,
   `\\b(?:i'm|i\\s+am|we're|we\\s+are|ozzie\\s+is|ozzie's)\\s+(?:now\\s+|just\\s+|currently\\s+)?(?:${DOING})\\b`,
@@ -681,12 +889,12 @@ const CLAIMS = new RegExp([
   "\\bnow\\s+(?:assigned|booked|added|removed|signed\\s+up)\\b",
   "^\\s*(?:all\\s+)?done\\b",
 ].join("|"), "u");
-const RANKED = /\b(?:rank(?:ed|ing|s)?|scor(?:e|es|ed|ing)|rating|(?:most|least)\s+(?:reliable|faithful|committed|dependable)|best\s+(?:person|choice|fit|option|pick|candidate|volunteer)|top\s+(?:picks?|choices?|candidates?)|first\s+choice|second\s+choice)\b|\d\s?%/u;
+export const RANKED = /\b(?:rank(?:ed|ing|s)?|scor(?:e|es|ed|ing)|rating|(?:most|least)\s+(?:reliable|faithful|committed|dependable)|best\s+(?:person|choice|fit|option|pick|candidate|volunteer)|top\s+(?:picks?|choices?|candidates?)|first\s+choice|second\s+choice)\b|\d\s?%/u;
 // Structural ranking: an ordinal or comparison within three words of a person label, or between two.
 // Checked on the folded answer with each person label as \u0001.
 const RANK_WORD = "\\d+(?:st|nd|rd|th)|#\\s?\\d+|number\\s+(?:one|two|three|[1-9])|first|second|third|fourth|fifth|then|strongest|weakest|best|better|worst|worse|top|ranked|ranking|ranks?|likeliest|(?:most|least|more|less)\\s+(?:likely|dependable|reliable|committed|faithful|consistent|available|suitable|qualified|experienced|willing|eager|responsive|capable|trustworthy)|stronger|weaker|preferred|ideal|go-to";
 const WORD_RUN = "[\\p{L}\\p{N}'-]+", BETWEEN = "[^\\p{L}\\p{N}'\\u0001-]+";
-const NEAR_PERSON = new RegExp([
+export const NEAR_PERSON = new RegExp([
   `\\u0001(?:${BETWEEN}${WORD_RUN}){0,3}?${BETWEEN}(?:${RANK_WORD})(?![\\p{L}\\p{N}])`,
   `(?<![\\p{L}\\p{N}])(?:${RANK_WORD})(?:${BETWEEN}${WORD_RUN}){0,3}?${BETWEEN}\\u0001`,
   `\\u0001(?:${BETWEEN}${WORD_RUN}){0,2}?${BETWEEN}(?:over|before|ahead\\s+of|rather\\s+than|instead\\s+of|followed\\s+by|than|above|below|behind)${BETWEEN}(?:${WORD_RUN}${BETWEEN}){0,2}?\\u0001`,
@@ -769,19 +977,19 @@ export function restoreAnswer(answer: CheckedAnswer, sender: string): AskAnswer 
 }
 
 /** Up to four questions that fit what was read. Local text; asking one still goes through prepareAsk,
- *  which sends each position as its [Role N] label like the facts. */
+ *  which sends each position as its [Role N] label like the facts. The note it suggests is one Ozzie's drafting
+ *  tool can prepare: to someone the check listed for a role that still needs people (structured answers show only
+ *  that tool's draft, never one the AI writes). */
 export function suggestedQuestions(brief: SundayBrief | null): string[] {
   if (!brief) return [];
   const role = (f: Finding) => f.position?.name.replace(/\s+/gu, " ").trim() ?? "";
   const open = brief.findings.find(f => f.kind === "needs-people" && role(f));
   const flagged = brief.findings.find(f => role(f));
-  // A note to a team leader Planning Center actually lists, when there is one.
-  const toLeader = brief.findings.find(f => (f.kind === "needs-people" || f.kind === "lead-missing") && role(f) && f.leaders?.length) ?? open;
   const out = [
     ...(open ? [`Who could cover ${role(open)}?`] : []),
     ...(brief.findings.some(f => f.tone === "decision") ? ["What still needs a decision this Sunday?"] : []),
     ...(flagged ? [`Why is ${role(flagged)} flagged?`] : []),
-    ...(toLeader ? [`Draft a note to the ${role(toLeader)} team leader`] : []),
+    ...(open ? [`Draft a note to someone who could cover ${role(open)}`] : []),
     ...(brief.findings.length === 0 ? ["What did you check for this Sunday?"] : []),
   ];
   return out.slice(0, 4);

@@ -1,4 +1,7 @@
+import type { Skill } from "../../../core/src/harness/contract.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
+import { taskLine, taskSteps, type CheckTrigger, type TaskRow } from "./harness-words.js";
+import { Icon } from "./icons.js";
 
 const what: Record<string, string> = {
   plan: "Read this Sunday's plan", plan_times: "Read the service times", needed_positions: "Read the open positions",
@@ -20,20 +23,59 @@ export const activityOutcome = (o: string, notGranted = false) => o === "ok" ? "
     : o === "denied" ? "Planning Center didn't allow it" : "Didn't complete";
 export const activityLabel = (collection: string) => Object.hasOwn(what, collection) ? what[collection]! : collection;
 
-/** "What happened": every Planning Center read in this check, in order. All reads; no writes exist. */
-export function ActivityPage({ capture, notGranted = false }: { capture: SundayCapture | null; notGranted?: boolean }) {
+export const LEDGER_UNAVAILABLE = "Ozzie's list of recent work isn't available right now. Every Planning Center read in the latest check is still listed below.";
+
+/** Recent work, newest first: one plain line per task, opening to its steps. Name-free: the list holds no question, answer or source text. */
+export function RecentWork({ tasks, procedures = null, trigger = () => undefined, now }: {
+  /** undefined while loading; null when the list isn't available. */
+  tasks: TaskRow[] | null | undefined;
+  procedures?: ReadonlyMap<string, Skill> | null;
+  /** "automatic" or "manual" for a Sunday check, when this Mac knows. */
+  trigger?: (taskId: string) => CheckTrigger | undefined;
+  now?: Date;
+}) {
+  if (tasks === undefined) return null;
+  if (tasks === null) return <p className="small recent-quiet"><Icon name="info" small />{LEDGER_UNAVAILABLE}</p>;
+  if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each Sunday check appear here.</p>;
+  const sorted = [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return <ol className="log recent">{sorted.map(row => {
+    const steps = taskSteps(row);
+    const line = taskLine(row, { procedures, ...(trigger(row.task_id) ? { trigger: trigger(row.task_id)! } : {}), ...(now ? { now } : {}) });
+    return <li key={row.task_id} className={row.state === "failed" ? "is-problem" : ""}>
+      <details className="recent-task">
+        <summary>{line}</summary>
+        {steps.length > 0 ? <ol className="list recent-steps">{steps.map((s, i) => <li key={i}><Icon name="dot" small />{s}</li>)}</ol>
+          : <p className="small">No steps were recorded.</p>}
+      </details>
+    </li>;
+  })}</ol>;
+}
+
+/** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, now }: {
+  capture: SundayCapture | null; notGranted?: boolean;
+  tasks?: TaskRow[] | null | undefined; procedures?: ReadonlyMap<string, Skill> | null;
+  trigger?: (taskId: string) => CheckTrigger | undefined; now?: Date;
+}) {
   return <div className="col">
     <p className="eyebrow">What happened</p>
-    <h1 className="h1">Every read in this check</h1>
+    <h1 className="h1">What Ozzie did</h1>
     <p className="lede">Ozzie only reads from Planning Center. It has no way to change records, send messages or mark anything.</p>
-    {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once Sunday is checked, or when you open the fictional example on the Sunday page.</p>}
-    {capture && <>
-      <p className="checkline">{capture.kind === "recording" ? "Saved recording" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
-      <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>
-        <span className="log-t">{new Date(r.checked_at).toLocaleTimeString()}</span>
-        <span>{activityLabel(r.collection)}{r.offset ? ` (page from ${r.offset})` : ""}</span>
-        <span className="small">{activityOutcome(r.outcome, notGranted)}</span>
-      </li>)}</ol>
-    </>}
+    <section className="stack" aria-labelledby="recent-title">
+      <h2 id="recent-title" className="h3">Recent work</h2>
+      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(now ? { now } : {})} />
+    </section>
+    <section className="stack" aria-labelledby="reads-title">
+      <h2 id="reads-title" className="h3">Every read in the latest check</h2>
+      {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once Sunday is checked, or when you open the fictional example on the Sunday page.</p>}
+      {capture && <>
+        <p className="checkline">{capture.kind === "recording" ? "Saved recording" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
+        <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>
+          <span className="log-t">{new Date(r.checked_at).toLocaleTimeString()}</span>
+          <span>{activityLabel(r.collection)}{r.offset ? ` (page from ${r.offset})` : ""}</span>
+          <span className="small">{activityOutcome(r.outcome, notGranted)}</span>
+        </li>)}</ol>
+      </>}
+    </section>
   </div>;
 }

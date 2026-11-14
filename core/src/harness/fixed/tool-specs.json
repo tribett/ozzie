@@ -1,0 +1,80 @@
+[
+  {
+    "name": "sunday.overview",
+    "description": "What the last Planning Center check found for this Sunday: when it was read, how complete it is, and each finding in brief.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "sunday.open_needs",
+    "description": "Roles that still need people and roles with no scheduled lead, with Planning Center's remaining count and how many people the check listed for each.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "sunday.who_could_help",
+    "description": "People on one role's team in no particular order (not ranked), each with what the check found: no overlap found, possible conflict, availability needs confirmation, or left out and why.",
+    "parameters": {
+      "type": "object",
+      "properties": { "role": { "type": "string", "description": "A role label from an earlier result or the question, written exactly, such as [Role 1]." } },
+      "required": ["role"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "sunday.pending_requests",
+    "description": "Assignments that are pending (not accepted yet), and whether Planning Center records the request as sent.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "sunday.rule_checkins",
+    "description": "People the Church rules suggest checking in with because of how many Sundays in a row they are scheduled. A check-in is about care, not performance.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "sunday.not_checked",
+    "description": "What the last check couldn't read or didn't cover, so nothing unread is taken as all-clear.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "rooms.conflicts",
+    "description": "Room bookings on this Sunday that overlap under the church's room rules, from Planning Center Calendar.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "followups.unowned",
+    "description": "Overdue follow-ups in Planning Center People that have no owner.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "groups.clashes",
+    "description": "People scheduled this Sunday whose group meets while they serve, from Planning Center Groups.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "today.attention",
+    "description": "Items from the fictional email and calendar import that need a person's decision. Only available beside the fictional example.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "rules.current",
+    "description": "The Church rules Ozzie applied: the check-in rule, Sunday lead rules and room rules.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "planning_center.refresh",
+    "description": "Check Planning Center again now. It only reads; nothing in Planning Center changes. Use it at most once, and only when the last check is out of date.",
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "name": "drafts.prepare_note",
+    "description": "Prepare Ozzie's short draft note asking one person listed for a role that still needs people. It is only a draft: a person reviews it and sends it themselves.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "person": { "type": "string", "description": "A person label from an earlier result, written exactly, such as [Person 1]." },
+        "role": { "type": "string", "description": "A role label from an earlier result or the question, written exactly, such as [Role 1]." }
+      },
+      "required": ["person", "role"],
+      "additionalProperties": false
+    }
+  }
+]

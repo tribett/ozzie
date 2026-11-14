@@ -6,6 +6,14 @@ import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { Icon } from "./icons.js";
 import { BriefingPanel } from "./briefing.js";
+import type { RunnerView } from "./responsibility-runner.js";
+import { NoticedFeed, WatchStrip } from "./responsibility-views.js";
+
+/** What Ozzie keeps an eye on, for Today: it comes to the person here first. */
+export interface TodayWatch {
+  view: RunnerView; now: string;
+  onAutomatic: () => void; onOpen: (page: "sunday" | "automatic" | "connection") => void;
+}
 
 const tz = "America/New_York";
 const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", timeZone: tz });
@@ -44,10 +52,12 @@ function Item({ finding, sources }: { finding: AttentionFinding; sources: (Messa
 const NO_NAMES: Record<string, string> = {};
 const NO_DECISIONS: readonly SundayDecision[] = [];
 
-export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions = NO_DECISIONS, operations = null }: {
+export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions = NO_DECISIONS, operations = null, watch = null }: {
   brief: SundayBrief | null; onSunday: () => void; names?: Record<string, string> | undefined; sundayDecisions?: readonly SundayDecision[];
   /** Rooms, follow-ups and group meetings for the same check, so the briefing says what the Sunday page says. */
   operations?: SundayOperations | null;
+  /** What Ozzie keeps an eye on and what it noticed; null where it isn't available. */
+  watch?: TodayWatch | null;
 }) {
   const report = useMemo(() => evaluateAttentionImport(harborAttentionImport()), []);
   const spoken = useMemo(() => {
@@ -67,6 +77,10 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   return <div className="col">
     <p className="eyebrow">{day(report.evaluated_at)} · {clock(report.evaluated_at)}</p>
     <h1 className="h1">What needs you today</h1>
+    {watch && <>
+      <NoticedFeed view={watch.view} names={names} now={watch.now} onOpen={watch.onOpen} />
+      <WatchStrip view={watch.view} now={watch.now} onAutomatic={watch.onAutomatic} />
+    </>}
     <p className="banner dashed"><Icon name="info" small />Fictional import: invented email and calendar records for “{input.workspace_id === "harbor" ? "Harbor Example Church" : input.workspace_id}”. Not a connected mailbox.</p>
     <p className="lede">One thing needs a decision before tonight. Everything else I read can wait or is already handled.</p>
     {report.findings.map(f => <Item key={f.id} finding={f} sources={report.sources} />)}

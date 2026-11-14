@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { connection, type ConnectionStatus } from "./connection.js";
 import { sundayProblem, sundaySource, type Settings } from "./sunday-source.js";
+import { desktopRecorder } from "./harness-bridge.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import {
   compareSundayCheck, DEFAULT_URGENT_WITHIN_HOURS, recordSundayCheck, type SundayChange, type SundayCheckMemory, type SundayCheckRecord,
@@ -72,12 +73,18 @@ export interface ProactiveHooks {
   context: () => ProactiveContext;
   onStatus: (s: ConnectionStatus) => void;
   onCapture: (capture: SundayCapture, trigger: RunTrigger) => void;
+  /** What an automatic check found changed (person ids only), so a responsibility can check sooner. */
+  onChanges?: (changes: SundayChange[]) => void;
 }
 export interface ProactiveDeps {
   store: KeyValueStore;
   now: () => string;
   timeZone: () => string;
-  check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void) => Promise<SundayCapture>;
+  /**
+   * One Sunday check. `trigger` is how it started (the desktop records each check in the task ledger);
+   * `source` overrides how the ledger records it (a responsibility's run is automatic, though it asks like Check now).
+   */
+  check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic") => Promise<SundayCapture>;
   notify: () => Promise<void>;
   /** Fixed local copy for a failed check. */
   problem: (error: unknown) => string;
@@ -97,16 +104,28 @@ export interface ProactiveController {
   start(hooks: ProactiveHooks): void;
   stop(): void;
   tick(): Promise<void>;
-  checkNow(): Promise<SundayCapture>;
+  /**
+   * "Check now", and the check a responsibility's run makes (`source` "automatic" for the ledger). Either
+   * way its changes show in Ozzie and never send the Sunday notice; the responsibility decides on notices.
+   */
+  checkNow(source?: "manual" | "automatic"): Promise<SundayCapture>;
   pause(): void;
   resume(): void;
+  /**
+   * "Pause everything" (menu bar or What runs automatically) pauses this check too; lifting it restores
+   * this check to what it was before (paused on its own stays paused). Either way a held notice is dropped.
+   */
+  pauseWithEverything(paused: boolean): void;
   setPrefs(prefs: ProactivePrefs): void;
   markSeen(): void;
   view(): ProactiveView;
   subscribe(listener: () => void): () => void;
 }
 
-const KEYS = { prefs: "ozzie.proactive.prefs.v1", schedule: "ozzie.proactive.schedule.v1", history: "ozzie.proactive.history.v1", memory: "ozzie.proactive.sundays.v1", seen: "ozzie.proactive.seen.v1" };
+const KEYS = {
+  prefs: "ozzie.proactive.prefs.v1", schedule: "ozzie.proactive.schedule.v1", history: "ozzie.proactive.history.v1", memory: "ozzie.proactive.sundays.v1", seen: "ozzie.proactive.seen.v1",
+  everything: "ozzie.proactive.everything.v1",
+};
 const TICK_MS = 10_000;
 const HISTORY_LIMIT = 20;
 const SUNDAYS_KEPT = 6;
@@ -139,6 +158,14 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
   let sundays = Object.fromEntries(Object.entries(read<{ version: 1; sundays: Record<string, SundayCheckMemory> }>(deps.store, KEYS.memory)?.sundays ?? {})
     .filter(([, m]) => m?.latest?.version === 2 && m?.known?.version === 2));
   let seenAt = read<string>(deps.store, KEYS.seen);
+  /** While "Pause everything" is on: whether this check was paused on its own, to restore when it's lifted. */
+  let beforeEverything = read<{ paused: boolean }>(deps.store, KEYS.everything);
+  const setBefore = (value: { paused: boolean } | null) => { beforeEverything = value; deps.store.set(KEYS.everything, JSON.stringify(value)); };
+  /** Pausing drops a held notice; its entry stops saying it is waiting. */
+  const pauseNow = () => {
+    schedule = pauseSchedule(schedule);
+    history = history.map(e => e.notice === "held" ? { ...e, notice: "none" } : e);
+  };
   let hooks: ProactiveHooks | null = null;
   let inflight: Promise<SundayCapture> | null = null;
   let launched = false;
@@ -180,6 +207,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const about = { trigger, plan_id: capture.plan_id, plan_dates: record.plan_dates };
     if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return; }
     if (!changes.length) return;
+    if (trigger !== "manual") { try { hooks?.onChanges?.(changes); } catch { /* the check itself finished */ } }
     const found = { worse: changes.some(c => c.effect === "worse"), urgent: changes.some(c => c.urgency === "urgent") };
     let notice: HistoryEntry["notice"] = "none";
     if (found.worse && trigger === "manual") notice = "in-app";
@@ -191,11 +219,11 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     add({ at: now, kind: "changes", ...about, changes, notice });
   }
 
-  function run(trigger: RunTrigger): Promise<SundayCapture> {
+  function run(trigger: RunTrigger, source?: "manual" | "automatic"): Promise<SundayCapture> {
     const ctx = hooks!.context();
     const work = (async () => {
       try {
-        const capture = await deps.check(ctx, s => hooks?.onStatus(s));
+        const capture = await deps.check(ctx, s => hooks?.onStatus(s), trigger, ...(source ? [source] as const : []));
         const now = deps.now();
         try { await afterCapture(capture, trigger, ctx.rules, now); } catch { /* the check itself finished; comparing is best effort */ }
         schedule = finishRun(schedule, scheduleSettings(), now, { ok: true });
@@ -261,18 +289,30 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
       timer = null;
     },
     tick,
-    checkNow() {
+    checkNow(source) {
       if (inflight) return inflight;
       if (!hooks) return Promise.reject("not-connected");
       const step = startManual(schedule, deps.now());
       if (!step.start) return Promise.reject("busy");
       schedule = step.state;
-      const work = run("manual");
+      const work = run("manual", source);
       emit();
       return work;
     },
-    pause() { schedule = pauseSchedule(schedule); emit(); },
-    resume() { schedule = resumeSchedule(schedule, deps.now()); emit(); void tick(); },
+    // A person pausing or resuming this check while everything is paused is what it returns to afterwards.
+    pause() { if (beforeEverything) setBefore({ paused: true }); pauseNow(); emit(); },
+    resume() { if (beforeEverything) setBefore({ paused: false }); schedule = resumeSchedule(schedule, deps.now()); emit(); void tick(); },
+    pauseWithEverything(paused) {
+      if (paused) {
+        if (!beforeEverything) setBefore({ paused: schedule.paused });
+        if (!schedule.paused) { pauseNow(); emit(); }
+        return;
+      }
+      const before = beforeEverything;
+      if (!before) return;
+      setBefore(null);
+      if (!before.paused && schedule.paused) { schedule = resumeSchedule(schedule, deps.now()); emit(); void tick(); }
+    },
     setPrefs(next) {
       prefs = cleanPrefs(next);
       deps.store.set(KEYS.prefs, JSON.stringify(prefs));
@@ -301,7 +341,8 @@ export function desktopProactive(): ProactiveController {
     store: browserStore,
     now: () => new Date().toISOString(),
     timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
-    check: verifiedSundayCheck,
+    // Every check, automatic or manual, is a "check" task in the task ledger. No model is involved.
+    check: (ctx, onStatus, trigger, source) => desktopRecorder().check(() => verifiedSundayCheck(ctx, onStatus), source ?? (trigger === "manual" ? "manual" : "automatic")),
     notify: notifySundayAttention,
     problem: sundayProblem,
     timers: { setInterval: (fn, ms) => setInterval(fn, ms), clearInterval: handle => clearInterval(handle as ReturnType<typeof setInterval>) },

@@ -16,7 +16,9 @@
         "height": 840,
         "minWidth": 900,
         "minHeight": 620,
-        "devtools": false
+        "visible": false,
+        "devtools": false,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
@@ -32,7 +34,7 @@
       "app"
     ],
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "14.0"
     },
     "icon": [
       "icons/icon.png"

@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import { AskSession } from "../../../core/src/ask.js";
 import { SundayPage } from "../src/sunday-page.js";
 import { TodayPage } from "../src/today-page.js";
 import { AskPanel } from "../src/ask-panel.js";
@@ -48,7 +47,7 @@ describe("Sunday: a needs-people card with no one to list", () => {
 
 describe("Ask Ozzie beside Settings", () => {
   const panel = (page?: string) => renderToStaticMarkup(React.createElement(AskPanel, {
-    open: true, onClose: () => {}, session: new AskSession(), brief: null, names: {}, organization: "", decisions: [], modelReady: false, sender: "", onOpen: () => {}, ...(page ? { page } : {}),
+    open: true, onClose: () => {}, ask: null, brief: null, modelReady: false, onOpen: () => {}, ...(page ? { page } : {}),
   }));
   it("offers no button to the page already on screen", () => {
     expect(panel("connection")).not.toContain(">Open Settings</button>");

@@ -474,7 +474,7 @@ describe("checking an answer before it is shown", () => {
 describe("suggested questions", () => {
   it("fit what was read and pass the boundary as asked", () => {
     const chips = suggestedQuestions(fictional());
-    expect(chips).toEqual(["Who could cover Greeter?", "What still needs a decision this Sunday?", "Why is Greeter flagged?", "Draft a note to the Nursery team leader"]);
+    expect(chips).toEqual(["Who could cover Greeter?", "What still needs a decision this Sunday?", "Why is Greeter flagged?", "Draft a note to someone who could cover Greeter"]);
     for (const chip of chips) expect(prepareAsk(new AskSession(), contextFor(new AskSession()), chip).ok, chip).toBe(true);
     expect(suggestedQuestions(null)).toEqual([]);
   });

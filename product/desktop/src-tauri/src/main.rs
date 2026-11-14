@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use ozzie_native_auth::agent::{self, AgentError, AgentStepReply};
+use ozzie_native_auth::ledger::{LedgerError, TaskLedger, TaskRow};
 use ozzie_native_auth::model::{
     self as model_route, AskRequest, DraftRequest, KeychainKeys, ModelError, ModelStatus, Route,
 };
@@ -18,6 +20,8 @@ use std::sync::{
 use tauri::Manager;
 
 use ozzie_native_auth::lifetime;
+// H6: keeps running with the window closed (menu bar, timer, App Nap, open at login, responsibilities).
+mod always_on;
 mod local_tools;
 struct Session {
     auth: Arc<AuthController>,
@@ -447,16 +451,144 @@ async fn ask_ozzie(
     .await
     .map_err(|_| ModelError::ProviderFailure)?
 }
-/// Chooses the route. Never accepts a key: keys go into the Keychain outside this IPC.
+/// One step of an agent task (core/src/harness/contract.ts `ModelStep`): the agent loop's only path
+/// to a model. The task must already be in the task ledger and running (`ledger_admit`, then
+/// `ledger_transition` to running); otherwise `invalid-task`, and `ledger-unavailable` when the
+/// ledger couldn't be opened. `request` is an AgentStepRequest; agent.rs parses and checks all of it
+/// (allowlisted tools of the task's procedure, shape, sizes, call ids minted for this task, and no
+/// name this session has shown or contact detail in anything sent) before any key, budget or
+/// network, then sends it on the same route, keys and call cap as Ask, within the route's agent
+/// steps per day (`daily-limit`). The step and its outcome are recorded in the ledger natively; the
+/// webview records tool events only. Never goes to Planning Center. The reply is checked the same
+/// way before it is returned.
+#[tauri::command]
+async fn agent_step(
+    ledger: tauri::State<'_, Ledger>,
+    names: tauri::State<'_, SessionNames>,
+    app: tauri::AppHandle,
+    request: agent::Json,
+) -> Result<AgentStepReply, AgentError> {
+    let ledger = ledger.get().map_err(|_| AgentError::LedgerUnavailable)?;
+    // A copy, so a long model call never holds the lock a Sunday check needs.
+    let names = names.inner().snapshot();
+    tauri::async_runtime::spawn_blocking(move || {
+        let request = agent::parse_request(request)?;
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| AgentError::NotConfigured)?;
+        let config = model_route::load_config(&dir).ok_or(AgentError::NotConfigured)?;
+        agent::agent_step(
+            &config,
+            &dir.join(model_route::LEDGER_FILE),
+            &request,
+            &KeychainKeys,
+            &names,
+            &ledger,
+        )
+    })
+    .await
+    .map_err(|_| AgentError::ProviderFailure)?
+}
+/// The task ledger in this Mac's app data folder, set once at start after recovery. Until then, or
+/// when it couldn't be opened (or another copy of Ozzie holds it), the ledger commands answer
+/// `unavailable` and the app keeps its deterministic Sunday path; nothing is admitted before recovery.
+#[derive(Default)]
+struct Ledger(std::sync::OnceLock<Option<Arc<TaskLedger>>>);
+impl Ledger {
+    fn get(&self) -> Result<Arc<TaskLedger>, LedgerError> {
+        self.0
+            .get()
+            .cloned()
+            .flatten()
+            .ok_or(LedgerError::Unavailable)
+    }
+}
+fn open_ledger(app: &tauri::AppHandle) -> Option<Arc<TaskLedger>> {
+    let ledger = TaskLedger::open(&app.path().app_data_dir().ok()?).ok()?;
+    // The host is the watchdog: a task still admitted or running belonged to an earlier launch.
+    ledger.recover().ok()?;
+    Some(Arc::new(ledger))
+}
+/// Records a new agent task as admitted. Name-free fields only: `skill_id` must be a bundled
+/// procedure paired with `kind` (ask: answer-from-what-was-read; check: sunday-ready; skill: any
+/// other) and `skill_hash` the sha-256 of its bundled file, else `invalid`. The id is then one of a
+/// few fixed words, so it is never name-scanned.
+#[tauri::command]
+async fn ledger_admit(
+    ledger: tauri::State<'_, Ledger>,
+    task_id: String,
+    kind: String,
+    skill_id: String,
+    skill_hash: String,
+) -> Result<TaskRow, LedgerError> {
+    let ledger = ledger.get()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        ledger.admit(&task_id, &kind, &skill_id, &skill_hash)
+    })
+    .await
+    .map_err(|_| LedgerError::Unavailable)?
+}
+/// Moves a task to running, verified, failed (with a failure code) or cancelled.
+#[tauri::command]
+async fn ledger_transition(
+    ledger: tauri::State<'_, Ledger>,
+    task_id: String,
+    to: String,
+    code: Option<String>,
+) -> Result<TaskRow, LedgerError> {
+    let ledger = ledger.get()?;
+    tauri::async_runtime::spawn_blocking(move || ledger.transition(&task_id, &to, code.as_deref()))
+        .await
+        .map_err(|_| LedgerError::Unavailable)?
+}
+/// Adds a name-free tool event to an admitted or running task. Model events are recorded natively
+/// by `agent_step`; `kind` "model" is `invalid` here.
+#[tauri::command]
+async fn ledger_event(
+    ledger: tauri::State<'_, Ledger>,
+    task_id: String,
+    kind: String,
+    detail: String,
+) -> Result<TaskRow, LedgerError> {
+    let ledger = ledger.get()?;
+    tauri::async_runtime::spawn_blocking(move || ledger.event(&task_id, &kind, &detail))
+        .await
+        .map_err(|_| LedgerError::Unavailable)?
+}
+/// Recent tasks for What happened, newest first (default 50, at most the 500 kept).
+#[tauri::command]
+async fn ledger_list(
+    ledger: tauri::State<'_, Ledger>,
+    limit: Option<u32>,
+) -> Result<Vec<TaskRow>, LedgerError> {
+    let ledger = ledger.get()?;
+    let limit = limit.map_or(50, |n| n as usize);
+    tauri::async_runtime::spawn_blocking(move || ledger.list(limit))
+        .await
+        .map_err(|_| LedgerError::Unavailable)
+}
+/// Chooses the route. Never accepts a key: keys go into the Keychain outside this IPC, and an own
+/// provider's key is read only from the account bound to the base URL's host (`ModelStatus`
+/// `key_account`), so changing the URL here can't send a saved key anywhere else. A model id
+/// holding a name this session has shown is `name-present`.
 #[tauri::command]
 async fn set_model_route(
+    names: tauri::State<'_, SessionNames>,
     app: tauri::AppHandle,
     route: String,
     base_url: Option<String>,
     model: Option<String>,
 ) -> Result<ModelStatus, ModelError> {
+    let names = names.inner().snapshot();
     tauri::async_runtime::spawn_blocking(move || {
         let route = Route::parse(&route).ok_or(ModelError::InvalidRequest)?;
+        if model
+            .as_deref()
+            .is_some_and(|model| !model_route::model_free_of_names(model, &names))
+        {
+            return Err(ModelError::NamePresent);
+        }
         let dir = model_dir(&app)?;
         model_route::save_config(&dir, route, base_url.as_deref(), model.as_deref())?;
         Ok(model_route::status(&dir, &KeychainKeys))
@@ -539,16 +671,25 @@ fn main() {
     let smoke = std::env::args().any(|arg| arg == "--lifecycle-smoke");
     let consumer = Consumer::default();
     let cleanup = consumer.clone();
-    let app = tauri::Builder::default()
+    let app = always_on::manage(tauri::Builder::default())
         .plugin(tauri_plugin_notification::init())
         .manage(consumer)
         .manage(SundayChecks::default())
         .manage(SessionNames::default())
+        .manage(Ledger::default())
         .manage(local_tools::LocalTools::default())
         .manage(Smoke {
             enabled: smoke,
             ready: AtomicBool::new(false),
         })
+        // At start, before any command can use it: open the task ledger and fail what an earlier
+        // launch left admitted or running.
+        .setup(|app| {
+            let _ = app.state::<Ledger>().0.set(open_ledger(app.handle()));
+            always_on::setup(app)?;
+            Ok(())
+        })
+        .on_window_event(always_on::on_window_event)
         .invoke_handler(tauri::generate_handler![
             connection_status,
             connect_planning_center,
@@ -564,22 +705,41 @@ fn main() {
             model_status,
             reword_draft,
             ask_ozzie,
+            agent_step,
+            ledger_admit,
+            ledger_transition,
+            ledger_event,
+            ledger_list,
             set_model_route,
             notify_sunday_attention,
             local_tools::speak_briefing,
             local_tools::stop_briefing,
             local_tools::read_card_text,
-            local_tools::cancel_card_reading
+            local_tools::cancel_card_reading,
+            always_on::background_info,
+            always_on::background_next_due,
+            always_on::autostart_get,
+            always_on::autostart_set,
+            always_on::notify_ozzie,
+            always_on::responsibility_list,
+            always_on::responsibility_create,
+            always_on::responsibility_edit,
+            always_on::responsibility_pause,
+            always_on::responsibility_resume,
+            always_on::responsibility_stop,
+            always_on::responsibility_pause_all,
+            always_on::responsibility_run_begin,
+            always_on::responsibility_run_end,
+            always_on::responsibility_agent_step
         ])
-        .on_page_load(|window, _| {
-            let _ = window.show();
-        })
+        .on_page_load(|window, _| always_on::on_page_load(window))
         .build(tauri::generate_context!())
         .expect("native consumer failed to start");
     if smoke {
         println!("native-lifecycle: native window and event loop starting");
     }
     app.run(move |app, event| {
+        always_on::on_run_event(app, &event);
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
@@ -604,6 +764,15 @@ mod tests {
             SUNDAY_NOTICE_BODY,
             "Sunday coverage needs attention. Open Ozzie to see details."
         );
+    }
+
+    #[test]
+    fn the_ledger_is_unavailable_until_start_up_opens_and_recovers_it() {
+        let ledger = Ledger::default();
+        assert_eq!(ledger.get().err(), Some(LedgerError::Unavailable));
+        // Start-up couldn't open it (no app data folder, or another copy of Ozzie holds it).
+        ledger.0.set(None).ok().unwrap();
+        assert_eq!(ledger.get().err(), Some(LedgerError::Unavailable));
     }
 
     #[test]

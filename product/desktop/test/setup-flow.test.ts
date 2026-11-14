@@ -25,7 +25,7 @@ describe("guided setup", () => {
 
   it("starts with what Ozzie does and never does, and keeps the fictional example one click away", () => {
     const html = render("about");
-    for (const line of ["Reads only.", "Never sends.", "Names stay on this Mac.", "People decide."]) expect(html).toContain(line);
+    for (const line of ["Reads only.", "Never sends.", "Names Ozzie reads stay on this Mac.", "People decide."]) expect(html).toContain(line);
     expect(html).toContain("See the fictional example");
   });
 

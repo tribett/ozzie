@@ -9,6 +9,8 @@ import { AiSettings } from "./ai-settings.js";
 import { ConnectForm, SundayPlanFields, useConnectionControl } from "./planning-center-forms.js";
 import { quietLine, scheduleLine } from "./proactive-page.js";
 import { Icon } from "./icons.js";
+import { autostart as macAutostart, type Autostart } from "./background.js";
+import { AutostartToggle } from "./responsibility-views.js";
 export { planFromAddress } from "./planning-center-forms.js";
 
 const SETUP = "ozzie.setup.v1";
@@ -25,11 +27,13 @@ const TITLES: Record<Step, string> = {
   wording: "Wording help (optional)", automatic: "Automatic checks and quiet hours",
 };
 const numeric = (v: string) => /^[1-9]\d{0,31}$/.test(v);
-export function SetupFlow({ status, settings, onSettings, onStatus, prefs, onModel, onClose, onExample, onAutomatic, initial = "about" }: {
+export function SetupFlow({ status, settings, onSettings, onStatus, prefs, onModel, onClose, onExample, onAutomatic, initial = "about", autostart = macAutostart }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   prefs: ProactivePrefs; onModel: (configured: boolean) => void;
   /** Skip for now, or finished. Either way setup isn't shown again on its own; Settings can reopen it. */
   onClose: () => void; onExample: () => void; onAutomatic: () => void; initial?: Step;
+  /** "Open Ozzie when I log in" on this Mac. */
+  autostart?: Autostart;
 }) {
   const [step, setStep] = useState<Step>(initial);
   const index = STEPS.indexOf(step);
@@ -55,7 +59,7 @@ export function SetupFlow({ status, settings, onSettings, onStatus, prefs, onMod
       <ul className="list setup-promises">
         <li><Icon name="lock" small /><span><strong>Reads only.</strong> Ozzie never changes anything in Planning Center.</span></li>
         <li><Icon name="x" small /><span><strong>Never sends.</strong> Drafts are yours to read, change and send from your own email or phone.</span></li>
-        <li><Icon name="user" small /><span><strong>Names stay on this Mac.</strong> If you turn on wording help, the AI only sees placeholders like [Volunteer A].</span></li>
+        <li><Icon name="user" small /><span><strong>Names Ozzie reads stay on this Mac.</strong> If you turn on AI help, the AI sees placeholders like [Volunteer A] instead of the names Ozzie read from Planning Center.</span></li>
         <li><Icon name="check" small /><span><strong>People decide.</strong> Ozzie never scores or ranks anyone; it shows facts, where they came from and when it checked.</span></li>
       </ul>
       <p className="small">Want to look around first? The fictional example church works without any connection.</p>
@@ -75,13 +79,15 @@ export function SetupFlow({ status, settings, onSettings, onStatus, prefs, onMod
     </>}
 
     {step === "automatic" && <>
-      <p className="lede">While Ozzie is open on this Mac, it checks the chosen Sunday on a schedule and tells you privately when something gets worse.</p>
+      <p className="lede">Ozzie checks the chosen Sunday on a schedule and tells you privately when something gets worse. When you close its window, it keeps running in the menu bar.</p>
       <div className="sp">
         <div className="sp-row sp-2"><span className="sp-h">Checks</span><span>{scheduleLine(prefs)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Quiet hours</span><span>{quietLine(prefs)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Notices</span><span>“Sunday coverage needs attention. Open Ozzie to see details.” Never names or details.</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Status</span><span>{connected && chosen ? "Ready to run." : !connected ? "Waits until Planning Center is connected." : "Waits until you choose the Sunday."}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">More</span><span>Ask Ozzie to keep an eye on something, like “Keep an eye on Sunday” or “Watch room bookings every week”. It shows you a plan before anything starts.</span></div>
       </div>
+      <AutostartToggle autostart={autostart} />
       <div className="find-next"><button type="button" className="btn btn-secondary" onClick={onAutomatic}>Change these in What runs automatically</button></div>
     </>}
 

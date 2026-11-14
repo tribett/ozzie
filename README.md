@@ -35,7 +35,19 @@ invented people). No church data is shown.
   about is labelled "Worth a look".
 - **Drafts, never sends.** Notes are drafts you copy into your own email or
   phone.
-- **Keeps a record of what happened**, including checks that could not finish.
+- **Keeps a record of what happened**, including checks that could not finish:
+  each task, the fixed tools it used and how it ended, never a question,
+  answer or name.
+- **Keeps an eye on things when you ask it to.** From Ask Ozzie you can hand
+  it an ongoing job ("Keep an eye on Sunday", room bookings, follow-ups
+  without an owner, group night clashes, a morning briefing). Ozzie shows the
+  plan (schedule, limits, how long) and starts only after you confirm it. It
+  lives in the menu bar and keeps running with the window closed, can open
+  when you log in (off unless you turn it on), checks on schedule and when
+  Planning Center changes, and comes to you with a discreet notification
+  whose text never holds a name or detail, outside the quiet hours you set.
+  Missed and failed checks are reported, not hidden. It works only while your
+  Mac is awake and Ozzie is running, and it still only reads and drafts.
 - **Works without a connection.** "See the fictional example" shows the app
   with an invented church.
 
@@ -58,35 +70,56 @@ These are not settings. No user, church or plan can switch them off.
 ## How names stay off AI models
 
 AI is optional. Without it, every check and draft still works. With it, Ozzie
-can reword a draft note or answer a question about the Sunday it checked.
+can reword a draft note, answer a question about the Sunday it checked, and
+summarise what a job it keeps an eye on found.
 
 - **Placeholders, not names.** A draft goes to the model in placeholder form,
   for example "Hi [Volunteer A], could you serve as [Role]?". The model only
   rewords text Ozzie wrote itself, never text you typed about a person, and
   real names are put back on your Mac after the reply comes back
   (`core/src/draft-request.ts`).
-- **Questions use a fact sheet without names.** When you ask about a Sunday,
-  the model sees short fact lines in which people are `[Person 1]`,
-  `[Person 2]` and so on (`core/src/ask.ts`). A question that contains a name
-  the app has shown is refused, and nothing is sent. Ozzie can only recognise
-  names it has read, so it can't catch a nickname or a family member's name
-  that Planning Center doesn't hold. Don't type other people's details into a
-  question.
+- **Questions run as a small, fixed procedure.** Your question goes to the
+  model with the names Ozzie read from Planning Center replaced by labels such
+  as `[Person 1]` and `[Role 1]` (`core/src/ask.ts`, `core/src/harness/`). The
+  model can only call a fixed list of read-only tools over the check Ozzie
+  already made; each returns labels, counts, times and fixed words, never a
+  name, a note someone typed or other text from Planning Center, and each fact
+  in it has an id. There is no tool that sends, writes, browses or runs
+  anything. The procedures are plain-language files in `core/skills/`, shown
+  word for word under "See how this works".
+- **The model chooses facts; Ozzie writes the answer.** The model's answer is
+  only a short JSON object naming the facts that answer the question (for
+  example `{"answer":"facts","facts":["f3","f7"]}`). Ozzie checks that every
+  id is one its own tools returned, then writes each sentence on your Mac from
+  a fixed template, lists people in its own order, and puts the names back. So
+  the AI can't rank people, call someone willing or free, claim something was
+  sent, or describe anyone, and a draft is always Ozzie's own wording
+  (`core/src/harness/verify.ts`, `core/src/harness/compose.ts`).
+- **Ozzie can only recognise names it has read.** It can't catch a nickname or
+  a family member's name that Planning Center doesn't hold; such a word in a
+  question is sent as typed. Don't type other people's details into a
+  question. Email addresses and phone numbers, even written out, are refused
+  and nothing is sent.
 - **A second check in native code.** Before any request leaves the app, the
-  Rust layer checks it against every name the app has shown in this session.
-  If one appears, nothing is sent (`core/native-auth/src/name_guard.rs`). The
-  TypeScript and Rust checks run the same test vectors
-  (`core/test/ask-parity.json`).
-- **Names stay on your Mac.** Names read from Planning Center are used for
-  display. A saved check (shown, with its original time, when Planning Center
-  can't be reached) keeps the names it showed, in a file only your user
-  account can read.
+  Rust layer checks it again (`core/native-auth/src/agent.rs`,
+  `name_guard.rs`): Ozzie's own texts and tool descriptions must be exactly the
+  pinned ones, tool results must fit a closed grammar, earlier replies must be
+  exactly what the model returned, and no name the app has shown in this
+  session, contact detail or hidden character may appear anywhere else. The
+  model's final reply is held to the same answer form. Each task has a small,
+  fixed number of model calls and tool calls, and each AI route a daily
+  allowance. The TypeScript and Rust checks run the same test vectors
+  (`core/test/ask-parity.json`, `core/test/answer-parity.json`).
+- **Names stay on your Mac.** The names Ozzie read from Planning Center are
+  used for display. A saved check (shown, with its original time, when
+  Planning Center can't be reached) keeps the names it showed, in a file only
+  your user account can read.
 
 ## Build and run
 
 Requirements:
 
-- macOS 13 or later on Apple Silicon, with the Xcode Command Line Tools
+- macOS 14 or later on Apple Silicon, with the Xcode Command Line Tools
 - Node.js 22.19 or later (`.node-version` names the version we test with)
 - pnpm 10
 - Rust 1.99.1 through rustup (`rustup toolchain install 1.99.1`); the crates
@@ -130,14 +163,19 @@ Under **Settings**, choose one of:
   default address of [Ollama](https://ollama.com), with the model `llama3.2`
   (run `ollama pull llama3.2` first). Requests stay on this Mac.
 - **Your own AI provider.** Any OpenAI-compatible service over HTTPS. Enter its
-  address and model name, then add your key to the Keychain yourself:
+  address and model name, then add your key to the Keychain yourself, under an
+  account named for the provider's host (with `:port` when the address names
+  one). Settings shows the exact command for your address, for example:
 
   ```sh
-  security add-generic-password -U -s church.ozzie.model.v1 -a own-provider -w
+  security add-generic-password -U -s church.ozzie.model.v1 -a "own-provider:api.example.com" -w
   ```
 
-  The `-w` flag with no value makes `security` ask for the key, so it does not
-  end up in your shell history. The key never reaches the app's web view.
+  The `-w` flag with no value makes `security` ask for the key at a hidden
+  prompt, so it is never on a command line or in your shell history. The key
+  never reaches the app's web view, and a key saved for one address is never
+  sent to another. A key saved under the older plain account `own-provider`
+  is tied to no address and is not used; save it again under the new name.
 
 Whichever you choose, the same placeholder rules and native name check apply.
 
@@ -155,8 +193,14 @@ it, and every safety check lives here, in the open code.
   operations findings (rooms, follow-ups, group events), the placeholder
   boundary, church time zones, and safety primitives (authorization broker,
   egress boundary, ledger). Tested with fixed, invented data.
+- `core/src/harness/`, `core/skills/` — the question and procedure harness:
+  the fixed read-only tools, the closed grammars and pinned texts the native
+  check also compiles in, answer verification and the answer composer, two
+  interchangeable loops (one built on the pinned Pi library, one in plain TypeScript), the
+  procedures in plain language, and the ongoing jobs Ozzie can keep an eye on.
 - `core/native-auth/` — Rust crate: Planning Center OAuth, Keychain storage,
-  the allowlisted read path, model routes and the native name check.
+  the allowlisted read path, model routes, the native checks on every model
+  step, the local task record and the store for ongoing jobs.
 - `product/desktop/` — the Tauri desktop app (React web view plus Rust shell).
 - `product/web/` — a browser walkthrough of the Sunday review with invented
   data.

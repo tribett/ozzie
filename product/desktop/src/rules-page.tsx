@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SundayRules } from "../../../core/src/sunday-capture.js";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { roomRules } from "../../../core/src/operations-capture.js";
+import type { Skill } from "../../../core/src/harness/contract.js";
+import { Icon } from "./icons.js";
 
 /**
  * A room's rule, stored with the other rules. "Not shared" is the only room rule, with its setup
@@ -11,13 +13,39 @@ export function withRoomRule(rules: SundayRules, room_id: string, next: { setup_
   return { ...rules, rooms: [...roomRules(rules).filter(r => r.room_id !== room_id), ...(next ? [{ room_id, exclusive: true, setup_minutes: next.setup_minutes }] : [])] };
 }
 
+/**
+ * How Ozzie checks: each procedure Ozzie follows, by title and purpose, with its exact text under
+ * "See how this works". Read-only; a procedure can't widen what Ozzie may read, and none changes Planning Center.
+ */
+export function HowOzzieChecks({ procedures, focus = null }: { procedures: readonly Skill[]; focus?: string | null }) {
+  useEffect(() => {
+    if (focus && typeof document !== "undefined") document.getElementById(`procedure-${focus}`)?.scrollIntoView?.({ block: "start" });
+  }, [focus]);
+  return <section className="find how-checks" aria-labelledby="how-checks-title">
+    <h2 id="how-checks-title" className="h3">How Ozzie checks</h2>
+    <p className="find-body">These are the steps Ozzie follows when it checks Sunday or answers a question, written for people to read. They can't be changed here, and none of them changes anything in Planning Center.</p>
+    {procedures.map(p => <div key={p.id} id={`procedure-${p.id}`} className="procedure">
+      <p className="bold">{p.title}</p>
+      <p className="small">{p.purpose}</p>
+      <details className="listen-more" open={focus === p.id}>
+        <summary><Icon name="info" small />See how this works</summary>
+        <div className="procedure-body">{p.body}</div>
+      </details>
+    </div>)}
+  </section>;
+}
+
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
-export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [] }: {
+export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
   /** Team leaders Planning Center lists, by team (null when that read didn't complete). Names resolve on this Mac. */
   leaders?: Record<string, string[] | null>; names?: Record<string, string>;
   /** Rooms Planning Center Calendar listed in the last check. Names are local only. */
   rooms?: { room_id: string; name: string | null }[];
+  /** Ozzie's procedures, in the order shown; null until loaded. */
+  procedures?: readonly Skill[] | null;
+  /** A procedure to open and bring into view (from a Sunday card's "See how this works"). */
+  focus?: string | null;
 }) {
   const roomRule = (id: string) => roomRules(rules).find(r => r.room_id === id);
   const setRoom = (id: string, next: { setup_minutes: number } | null) => onChange(withRoomRule(rules, id, next));
@@ -82,5 +110,6 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
       })}
       {rooms.length > 0 && <p className="small">For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records: an overlap Calendar lists as not yet resolved shows as Room use needs review. Overlaps in a room with no rule set, or that Ozzie can't confirm, show as Worth a look.</p>}
     </section>
+    {procedures && procedures.length > 0 && <HowOzzieChecks procedures={procedures} focus={focus} />}
   </div>;
 }
