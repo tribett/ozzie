@@ -1,5 +1,7 @@
 # Ozzie
 
+[![Checks](https://github.com/tribett/ozzie/actions/workflows/ci.yml/badge.svg)](https://github.com/tribett/ozzie/actions/workflows/ci.yml)
+
 Ozzie by FlockConnect is a desktop app for church staff and ministry leaders.
 It reads your church's Planning Center account, checks the coming Sunday
 against rules you set, and lays out what needs a decision: a serving role
