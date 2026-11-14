@@ -130,7 +130,7 @@ function Draft({ finding, person, names, sender, canReword, onClose }: {
     } finally { setWorking(null); }
   };
   return <DraftBox label="Draft note" body={body} onBody={b => { setBody(b); setEdited(true); }} onClose={onClose}
-    footer="Ozzie never sends messages. The AI only ever sees placeholders like [Volunteer A], never a name.">
+    footer="Ozzie never sends messages. The AI sees placeholders like [Volunteer A] instead of names.">
     {canReword && <div className="find-next reword">
       <span className="find-next-l">Ask Ozzie to reword it</span>
       {(Object.keys(REWORDINGS) as Rewording[]).map(choice => <button key={choice} type="button" className="chip" disabled={working !== null} onClick={() => { void reword(choice); }}>
