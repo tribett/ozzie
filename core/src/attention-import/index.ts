@@ -89,7 +89,7 @@ export function evaluateAttentionImport(value: unknown): AttentionResult {
           : "A message reports the room unavailable; the calendar could not be verified.",
       rule: "review-operational-disagreement",
       why_now: passed ? "The recorded event has started or passed. Verify the current plans yourself."
-        : "A human plans decision is needed before the recorded event starts.",
+        : "A person needs to decide before the event starts.",
       next_step: cancelled ? "Verify the plans and communicate any cancellation yourself." : "Decide the location and communicate the plans yourself.",
       urgent: untilStart !== null && untilStart > 0 && untilStart <= 48 * 60 * 60 * 1000 && !uncertain,
       uncertain,
