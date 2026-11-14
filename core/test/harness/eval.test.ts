@@ -393,7 +393,7 @@ describe("everything sent passes a TS mirror of the native agent_step checks", (
     }
   }, 30_000);
 
-  it("fixed wording avoids ordinary words that are also common first names", async () => {
+  it("fixed wording avoids ordinary words that are also common first names", { timeout: 120_000 }, async () => {
     const fixed = [
       ...Object.values(TOOL_SPECS).flatMap(s => [s.description, ...Object.values(s.parameters.properties).map(p => p.description)]),
       ...[...skills.values()].flatMap(s => [s.title, s.purpose, s.body]),

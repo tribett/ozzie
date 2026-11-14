@@ -142,7 +142,9 @@ describe("the plan Ozzie shows before taking something on", () => {
     expect(scheduleText(plan("Keep an eye on Sunday every friday"), { now: mon, zone: ET })).toBe("Every Friday at 7:00 AM, and sooner when something changes.");
     expect(scheduleText(plan("Keep an eye on Sunday until Wednesday"), { now: mon, zone: ET })).toBe("Every day at 7:00 AM, and sooner when something changes.");
     const card = render(React.createElement(PlanCard, { plan: plan("Keep an eye on Sunday until Wednesday"), context: context({ now: () => mon }), actions }));
-    expect(card).toContain("When it checks Every day at 7:00 AM, and sooner when something changes. Only while this Mac is awake and Ozzie is running.");
+    // On a Mac in another time zone the card also says whose times these are, between the two sentences.
+    expect(card).toContain("When it checks Every day at 7:00 AM, and sooner when something changes.");
+    expect(card).toContain("Only while this Mac is awake and Ozzie is running.");
     expect(card).not.toContain("two days before Sunday");
   });
 
