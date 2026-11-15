@@ -265,7 +265,9 @@ export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[])
   const all = factsIn(evidence);
   const chosen = ordered(parsed.facts.flatMap(id => all.get(id) ?? []));
   const rendered = chosen.flatMap(f => { const s = sentenceFor(f); return s ? [{ f, s }] : []; });
-  const lines = rendered.map(r => r.s);
+  // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
+  // shown once, in the longer sentence's place.
+  const lines = rendered.map(r => r.s).filter((s, i, all) => !all.some((o, j) => j !== i && (o === s ? j < i : o.startsWith(`${s} `))));
   const people = rendered.filter(r => r.f.list !== null && PERSON_LISTS.has(r.f.list));
   const after = [
     ...(rendered.some(r => r.f.tool === "sunday.who_could_help" && r.f.row["status"] === "no overlap found") ? [NOT_FREE] : []),

@@ -88,10 +88,21 @@ export function devKidsRules(rules: SundayRules, spec: string | undefined): Sund
   return kidsTeams.length ? { ...rules, kidsTeams } : rules;
 }
 
-export async function runAutopilot(settings: Settings, rules: SundayRules, operations: boolean, show: (c: SundayCapture) => void, harness?: AutopilotHarness) {
+export async function runAutopilot(settings: Settings, rules: SundayRules, operations: boolean, show: (c: SundayCapture) => void, harness?: AutopilotHarness, oneClick = false) {
   try {
     await log("start");
     let status: ConnectionStatus | null = await connection.status();
+    if (oneClick) {
+      // One-click connect: Ozzie's own registration; Planning Center names the organization.
+      await log(`one-click: built_in=${await connection.appAvailable()} browser sign-in opened`);
+      status = await connection.connectApp(operations);
+      for (let i = 0; i < 150 && !(status?.state === "connected" && status.found) && status?.state !== "failed" && status?.state !== "expired" && status?.state !== "cancelled"; i++) {
+        await wait(2000);
+        status = await connection.status();
+      }
+      await log(`one-click: ${status?.state ?? "none"} found=${status?.found === true} org_matches_env=${status?.organization === settings.organization}`);
+      if (status?.state === "connected") settings = { ...settings, clientId: "", organization: status.organization };
+    }
     if (status?.state !== "connected") {
       try { status = await connection.refresh(settings.clientId, settings.organization, true); }
       catch (e) { await log(`saved connection unusable: ${code(e)}`); }

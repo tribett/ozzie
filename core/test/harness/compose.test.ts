@@ -148,3 +148,15 @@ describe("every fact every tool gives has a sentence", () => {
     expect(facts).toBeGreaterThan(200);
   });
 });
+
+describe("a sentence two tools both give is said once", () => {
+  it("drops a need repeated at the start of a fuller sentence, and an exact repeat", () => {
+    const evidence = [
+      { tool: "sunday.open_needs", payload: { needs: [{ fact: "f1", kind: "needs people", role: "[Role 1]", time: { starts_at: "[Time 1]" }, remaining: 1, confirmed: ["[Person 1]"] }] } },
+      { tool: "sunday.who_could_help", payload: { times: [{ fact: "f2", role: "[Role 1]", time: { starts_at: "[Time 1]" }, remaining: 1 }, { fact: "f3", role: "[Role 1]", time: { starts_at: "[Time 1]" }, remaining: 1 }] } },
+    ] as unknown as ToolEnvelope[];
+    const c = composeAnswer('{"answer":"facts","facts":["f1","f2","f3"]}', evidence);
+    expect(c.paragraphs).toEqual(["[Role 1] at [Time 1] still needs 1 more person, by Planning Center's count. Already confirmed: [Person 1]."]);
+  });
+});
+

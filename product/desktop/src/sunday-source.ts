@@ -27,7 +27,7 @@ export const sundaySource = {
   loadRecording: (organization: string, pathId: string) => invoke<SundayCapture>("load_sunday_recording", { organization, pathId }),
   deleteRecordings: (organization: string) => invoke<void>("delete_sunday_recordings", { organization }),
   /** Debug builds only: non-secret IDs from the developer's local settings; release builds return empty strings. */
-  devDefaults: () => invoke<{ clientId: string; organization: string; serviceTypeId: string; planId: string; autopilot: boolean; autopilotOperations?: boolean; kidsTeams?: string }>("dev_defaults"),
+  devDefaults: () => invoke<{ clientId: string; organization: string; serviceTypeId: string; planId: string; autopilot: boolean; autopilotOperations?: boolean; autopilotOneClick?: boolean; kidsTeams?: string }>("dev_defaults"),
 };
 
 export interface Settings { clientId: string; organization: string; serviceTypeId: string; planId: string }

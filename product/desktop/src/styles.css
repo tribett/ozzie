@@ -342,3 +342,6 @@ body { background: #FAF6EE; }
 .oz .rule-kids .kids-count { margin: 6px 0 4px 34px; }
 .oz .rule-kids .kids-count label { min-width: 146px; }
 .oz .rule-kids .kids-background { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.oz .briefing-preview { margin-top: 10px; padding: 12px 14px; border-radius: 10px; border: 1px dashed var(--line); }
+.oz .briefing-preview > .small { margin-top: 4px; }
+.oz .briefing-preview .sunday-ready { margin-top: 8px; }

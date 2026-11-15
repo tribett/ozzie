@@ -368,6 +368,8 @@ describe("Today: what comes to the person", () => {
     expect(page).toContain("Keep Sunday covered: 2 things need a decision.");
     expect(page).toContain("Avery Brightwater declined Greeter after confirming.");
     expect(page).toContain("Greeter still needs one person.");
+    // The write-up restates the findings, so it's folded under "Read Ozzie's write-up".
+    expect(page).toMatch(/Read Ozzie's write-up\s+Greeter still needs one person\./u);
     expect(page).toContain("1 note is ready for you to review and send yourself.");
     expect(page).toMatch(/Your Mac was asleep at .+, so Ozzie checked at .+ instead\./u);
     expect(page).toContain("Your morning briefing is ready.");

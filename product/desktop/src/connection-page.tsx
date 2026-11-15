@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { connection, type ConnectionStatus } from "./connection.js";
+import type { ConnectionStatus } from "./connection.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
 import { AiSettings } from "./ai-settings.js";
@@ -52,7 +52,7 @@ export function SavedRecordings({ count, onDelete, sharing, confirming = false }
 }
 
 /** Settings: Planning Center, AI help, automatic checks, other AI apps, saved recordings and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing }: {
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, oneClick }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** The automatic-check schedule, summarized here and changed under What runs automatically. */
@@ -63,11 +63,13 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   developer?: { loop: "pi" | "ts"; onLoop: (loop: "pi" | "ts") => void } | undefined;
   /** "Use Ozzie's last check in other AI apps" (share-check.ts), off by default; `problem` when turning it on or off failed. */
   sharing?: { on: boolean; onChange: (on: boolean) => void; problem?: string | null } | undefined;
+  /** Tests only: whether Ozzie's own registration is built in, instead of asking the app. */
+  oneClick?: boolean;
 }) {
-  const control = useConnectionControl(settings, onStatus, status);
-  const { ready, working, pending, registered, run } = control;
-  // The opt-in signs in again with the same registration confirmation as the sign-in form.
-  const reconnect = (operations: boolean) => { void run(() => connection.connect(settings.clientId, settings.organization, registered, operations), "operations"); };
+  const control = useConnectionControl(settings, onStatus, status, oneClick);
+  const { canSignIn, working, pending, run } = control;
+  // The opt-in signs in again with the same registration (Ozzie's own, or yours under Advanced) as the sign-in form.
+  const reconnect = (operations: boolean) => { void run(() => control.signIn(operations), "operations"); };
   return <div className="col settings">
     <h1 className="h1">Settings</h1>
     <p className="lede">How Ozzie reads your church's Planning Center, and what it keeps on this Mac.</p>
@@ -90,8 +92,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
         <p className="checkline granted">{grantedCopy(status)}</p>
         <div className="row form-actions">
           {status?.scopes !== "services-and-operations"
-            ? <button className="btn btn-secondary" disabled={!ready || working || pending} onClick={() => reconnect(true)}>Also check rooms, follow-ups and group events</button>
-            : <button className="btn btn-secondary" disabled={!ready || working || pending} onClick={() => reconnect(false)}>Sign in again with Services only</button>}
+            ? <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(true)}>Also check rooms, follow-ups and group events</button>
+            : <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(false)}>Sign in again with Services only</button>}
         </div>
         {control.problem?.from === "operations" && <p role="alert" className="problem">{control.problem.text}</p>}
       </section>

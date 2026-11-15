@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { connection, operationsAsked, type ConnectionStatus } from "./connection.js";
+import { connection, foundOrganization, operationsAsked, type ConnectionStatus } from "./connection.js";
 import "./hearth.css";
 import "./styles.css";
 import { buildSundayBrief, teamLeaders } from "../../../core/src/sunday-brief.js";
@@ -18,7 +18,7 @@ import { Icon } from "./icons.js";
 import { model } from "./model.js";
 import { devKidsRules, responsibilityAutopilot, runAutopilot } from "./autopilot.js";
 import { loadRules, loadSettings, saveRules, saveSettings, sundayProblem, sundaySource, type RecordingSummary } from "./sunday-source.js";
-import { browserStore, desktopProactive, proactiveReadiness, type ProactiveHooks } from "./proactive.js";
+import { browserStore, desktopProactive, proactiveReadiness, verifySavedOnLaunch, type ProactiveHooks } from "./proactive.js";
 import { ProactivePage, useProactiveView } from "./proactive-page.js";
 import { AskIcon, AskPanel, type AskFn, type PlanHooks } from "./ask-panel.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
@@ -127,6 +127,14 @@ export function App() {
     const timer = setInterval(() => { void update(); setNow(new Date().toISOString()); }, 1000);
     return () => { alive = false; clearInterval(timer); };
   }, []);
+  // One-click sign-in: remember the organization Planning Center named (once per sign-in).
+  const appliedFound = useRef<string | null>(null);
+  useEffect(() => {
+    const found = foundOrganization(settings, status, appliedFound.current);
+    if (!found) return;
+    appliedFound.current = found.key;
+    setSettings(found.settings);
+  }, [status, settings]);
   const org = /^[1-9]\d{0,31}$/.test(settings.organization) ? settings.organization : "";
   const refreshRecordings = () => { if (org) sundaySource.recordings(org).then(setRecordings).catch(() => setRecordings([])); else setRecordings([]); };
   useEffect(refreshRecordings, [org]);
@@ -230,14 +238,23 @@ export function App() {
         setSetup("closed");
         setPage("sunday");
         void runAutopilot(merged(loadSettings()), devKidsRules(loadRules(), d.kidsTeams), Boolean(d.autopilotOperations), c => { setCapture(c); setFictional(false); refreshRecordings(); },
-          { recorder, loop: chosenLoop })
+          { recorder, loop: chosenLoop }, Boolean(d.autopilotOneClick))
           .then(() => model.status().then(s => setModelReady(s.configured)).catch(() => undefined))
           .finally(() => {
             begin();
             // Then a responsibility from a typed request, confirmed, run once, and a limit probe.
             void responsibilityAutopilot(runner, () => runnerState.current.zone, () => runnerState.current.sunday, debugRunner.fast);
           });
-      } else begin();
+      } else {
+        // The saved sign-in is checked once on launch, so automatic checks (and "check when Ozzie opens") can run.
+        void connection.status().then(current => verifySavedOnLaunch(merged(loadSettings()), current))
+          .then(verified => {
+            if (!verified) return;
+            setStatus(verified);
+            // The scheduler reads this ref on its first tick, before React re-renders.
+            current.current = { ...current.current, status: verified };
+          }).catch(() => undefined).finally(begin);
+      }
     }).catch(begin).finally(() => setLaunched(true));
   }, []);
   useEffect(() => saveRules(rules), [rules]);
@@ -249,14 +266,14 @@ export function App() {
   // Rooms, follow-ups and group meetings from the capture's own reads, on the church's own time zone
   // (the example's fictional church is on Eastern time). A fictional example is evaluated as of its own check.
   const operations = useMemo(() => capture ? sundayOperations(capture, rules, fictional ? {} : { now }) : null, [capture, rules, now, fictional]);
-  const connected = (status?.state === "connected" || status?.state === "stored-unchecked") && Boolean(settings.clientId && settings.organization);
+  const connected = (status?.state === "connected" || status?.state === "stored-unchecked") && Boolean(settings.organization) && status?.organization === settings.organization;
   const configured = /^\d+$/.test(settings.serviceTypeId) && /^\d+$/.test(settings.planId);
   const latest = recordings.filter(r => r.plan_id === settings.planId).sort((a, b) => b.completed_at.localeCompare(a.completed_at))[0];
 
   // The harness reads the check on screen. Checking Planning Center again from inside an answer is the
   // same check as "Check Planning Center now" (recorded, never two at once), and the app then shows it.
   const latestState = useRef({ rules, decisions, status, configured: false });
-  latestState.current = { rules, decisions, status, configured: Boolean(settings.clientId && org && configured) };
+  latestState.current = { rules, decisions, status, configured: Boolean(org && configured) };
   const refreshForHarness = useCallback(async function refresh(): Promise<HarnessData> {
     const c = await proactive.checkNow();
     const at = new Date().toISOString();
@@ -265,8 +282,8 @@ export function App() {
     return buildHarnessData({ capture: c, fictional: false, rules: s.rules, decisions: s.decisions, status: s.status, configured: s.configured, now: at }, refresh);
   }, []);
   const harnessData = useMemo(() => buildHarnessData({
-    capture, fictional, rules, decisions, status, configured: Boolean(settings.clientId && org && configured), now, brief, operations,
-  }, refreshForHarness), [capture, fictional, rules, decisions, status, settings.clientId, org, configured, now, brief, operations, refreshForHarness]);
+    capture, fictional, rules, decisions, status, configured: Boolean(org && configured), now, brief, operations,
+  }, refreshForHarness), [capture, fictional, rules, decisions, status, org, configured, now, brief, operations, refreshForHarness]);
   const dataNow = useRef(harnessData);
   dataNow.current = harnessData;
   const workspace = org || "this-mac";
@@ -302,7 +319,7 @@ export function App() {
   const check = () => act(() => proactive.checkNow());
   // First run: no saved Planning Center registration or no chosen Sunday on this Mac, decided once when launch settles.
   // It then stays open while the person fills it in, until they skip, finish or leave it.
-  const needsSetup = !(settings.clientId && org && configured);
+  const needsSetup = !(org && configured);
   useEffect(() => { if (launched) setSetup(s => s === "auto" ? needsSetup ? "open" : "closed" : s); }, [launched]);
   const showSetup = setup === "open" || (setup === "auto" && launched && needsSetup);
   const endSetup = (then: Page) => { setupMemory.close(); setSetup("closed"); setPage(then); };
@@ -316,7 +333,7 @@ export function App() {
   const chosenSunday = capture && !fictional && capture.organization === org && capture.plan_id === settings.planId ? brief?.plan.date ?? null : null;
   runnerState.current = {
     readiness, status, rules, decisions, modelReady, prefs: automatic.prefs, zone: scheduleZone, procedures, loop, workspace, capture, fictional,
-    configured: Boolean(settings.clientId && org && configured), sunday: chosenSunday,
+    configured: Boolean(org && configured), sunday: chosenSunday,
   };
   const granted = grantedFor(fictional ? null : capture, false, status);
   const planContext: PlanContext = {
@@ -362,7 +379,7 @@ export function App() {
           onExample={() => { endSetup("sunday"); void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }} />}
         {!showSetup && <>
         {page === "today" && <TodayPage brief={brief} names={capture?.names} sundayDecisions={decisions} operations={operations} onSunday={() => setPage("sunday")}
-          watch={{ view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} />}
+          watch={{ view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={!connected} />}
         {page === "sunday" && <SundayPage brief={brief} names={capture?.names ?? {}} busy={busy} problem={problem} sender=""
           connected={connected} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady}
           decisions={decisions} onDecisions={setDecisions} operations={operations}

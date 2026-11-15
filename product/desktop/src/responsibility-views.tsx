@@ -4,7 +4,7 @@
 // names appear only on this Mac, resolved from the current check.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
-  BRIEFING_WEEKDAYS, defaultPlan, TEMPLATE_IDS, TEMPLATES, untilLifetime, upcomingWeekday, validPlan, addDays, limitsLeft,
+  BRIEFING_WEEKDAYS, defaultPlan, TEMPLATE_IDS, TEMPLATES, untilLifetime, upcomingWeekday, validPlan, addDays, templateLimitsLeft,
   type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type RunRow, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { Autostart } from "./background.js";
@@ -277,7 +277,8 @@ function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
   const lastReport = view.noticed.find(i => i.responsibility_id === r.id && (i.kind === "couldnt-check" || i.kind === "found" || i.kind === "clear" || i.kind === "briefing"));
   const couldnt = lastReport?.kind === "couldnt-check";
   const status = statusText(r, view.paused_all, couldnt);
-  const left = limitsLeft(r, now);
+  // As the Mac counts it: this kind's checks in the last 24 hours, including one stopped and set up again.
+  const left = templateLimitsLeft(r, view.items, now);
   const next = view.next[r.id];
   const running = view.running === r.id;
   const plan = asPlan(r, context);
@@ -448,7 +449,11 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
     <h3 id={titleId} className="find-title">{written ? preparedTitle(written) : noticedTitle(item, now)}</h3>
     {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
     {item.kind === "briefing" && item.sunday_ready && sundayReady}
-    {ready?.summary && <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>}
+    {/* A report's write-up restates its findings, so it stays folded; on its own card it's the content itself. */}
+    {ready?.summary && (own
+      ? <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>
+      : <details className="listen-more today-writeup"><summary><Icon name="chev" small />Read Ozzie's write-up</summary>
+        <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div></details>)}
     {ready?.draft && <div className="draft" role="region" aria-label="Draft note">
       <span className="badge b-draft">Draft only. Nothing has been sent.</span>
       <div className="draft-body">{ready.draft.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>

@@ -225,6 +225,10 @@ pub struct ConnectionStatus {
     /// once this session has verified it (`connected`); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Scopes>,
+    /// True on a connection handed over from a one-click sign-in (`find_organization`): Planning
+    /// Center named this organization at sign-in, so the app can remember it. Omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub found: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredConnection {
@@ -278,6 +282,10 @@ impl SundayWriterFailure {
 }
 pub struct AuthController {
     binding: Binding,
+    /// One-click sign-in only (`find_organization`): the workspace prefix the found organization
+    /// is saved under. Such a controller signs in and saves once, then hands over through
+    /// `adopt_found`; it never refreshes, reads or disconnects a saved connection itself.
+    finding: Option<&'static str>,
     store: Arc<dyn CredentialStore>,
     provider: Arc<dyn Provider>,
     now: Arc<dyn Fn() -> u64 + Send + Sync>,
@@ -327,9 +335,11 @@ impl AuthController {
             problem: None,
             organization_diagnostic: None,
             scopes: None,
+            found: false,
         };
         Ok(Self {
             binding,
+            finding: None,
             store,
             provider,
             now,
@@ -363,6 +373,96 @@ impl AuthController {
                 Err(error)
             }
         }
+    }
+    /// One-click sign-in with Ozzie's own Public registration: no organization is known yet.
+    /// After Planning Center's consent, the organization its userinfo names (a plain numeric
+    /// id, or nothing is saved) becomes the binding: the credential is saved under
+    /// `workspace_prefix` + that id, replacing and revoking any saved connection there. The app
+    /// then calls `adopt_found` for an ordinary bound controller and drops this one.
+    pub fn find_organization(
+        client_id: String,
+        workspace_prefix: &'static str,
+        store: Arc<dyn CredentialStore>,
+        provider: Arc<dyn Provider>,
+        now: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Result<Self, AuthError> {
+        if client_id.is_empty()
+            || client_id.len() > 256
+            || client_id.chars().any(char::is_control)
+            || workspace_prefix.is_empty()
+            || workspace_prefix.len() > 64
+        {
+            return Err(AuthError::InvalidConfiguration);
+        }
+        Ok(Self {
+            binding: Binding {
+                workspace: String::new(),
+                organization: String::new(),
+                client_id,
+            },
+            finding: Some(workspace_prefix),
+            store,
+            provider,
+            now,
+            state: Mutex::new(State {
+                pending: None,
+                status: ConnectionStatus {
+                    state: ConnectionState::Disconnected,
+                    organization: String::new(),
+                    checked_at_ms: None,
+                    source: "Planning Center /oauth/userinfo",
+                    problem: None,
+                    organization_diagnostic: None,
+                    scopes: None,
+                    found: false,
+                },
+                unchecked_save: None,
+                nothing_stored: true,
+            }),
+            generation: AtomicU64::new(0),
+            busy: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            sunday: None,
+        })
+    }
+    /// Hands a finished one-click sign-in over to an ordinary controller bound to the
+    /// organization Planning Center named, connected as of this sign-in's check. Refused unless
+    /// this is a finder whose sign-in saved a connection, and unless the record saved there
+    /// still names this registration, organization and granted scopes. Single use: the finder
+    /// is retired. Every later read still re-verifies the organization with Planning Center.
+    pub fn adopt_found(&self) -> Result<AuthController, AuthError> {
+        let prefix = self.finding.ok_or(AuthError::InvalidConfiguration)?;
+        let _operation = self.operation()?;
+        let status = self.lock()?.status.clone();
+        let scopes = status.scopes.ok_or(AuthError::InvalidToken)?;
+        if status.state != ConnectionState::Connected || !numeric_id(&status.organization) {
+            return Err(AuthError::InvalidToken);
+        }
+        let bound = Self::new(
+            Binding {
+                workspace: format!("{prefix}{}", status.organization),
+                organization: status.organization.clone(),
+                client_id: self.binding.client_id.clone(),
+            },
+            self.store.clone(),
+            self.provider.clone(),
+            self.now.clone(),
+        )?;
+        let stored = bound.stored()?;
+        if stored.scopes != scopes {
+            return Err(AuthError::InvalidToken);
+        }
+        drop(stored);
+        {
+            let mut state = bound.lock()?;
+            state.status.state = ConnectionState::Connected;
+            state.status.checked_at_ms = status.checked_at_ms;
+            state.status.scopes = Some(scopes);
+            state.status.found = true;
+        }
+        drop(_operation);
+        self.cancel();
+        Ok(bound)
     }
     fn prepare_mutation(&self, reason: RetireReason) -> Result<Option<RetiredTag>, AuthError> {
         let Some((authority, controller)) = &self.sunday else {
@@ -572,25 +672,56 @@ impl AuthController {
             self.check_writer(generation, expires, writer)?;
         }
         // Preserve original outer errors; only a still-live operation may retain details.
-        match organization {
-            Err(failure) => {
+        // A one-click finder (never on the Sunday writer path) takes the organization named.
+        let (workspace, bound_organization) = match (organization, self.finding) {
+            (Err(failure), _) => {
                 if self.check_writer(generation, expires, writer).is_ok() {
                     *diagnostic = Some(failure.diagnostic);
                 }
                 return Err(failure.error);
             }
-            Ok(id) if id != self.binding.organization => {
+            (Ok(id), Some(prefix)) if writer.is_none() => {
+                if !numeric_id(&id) {
+                    if self.check_writer(generation, expires, writer).is_ok() {
+                        *diagnostic = Some(OrganizationDiagnostic::userinfo(
+                            UserInfoReason::OrganizationIdInvalid,
+                        ));
+                    }
+                    return Err(AuthError::OrganizationUnverified);
+                }
+                (format!("{prefix}{id}"), id)
+            }
+            (Ok(_), Some(_)) => return Err(AuthError::InvalidConfiguration),
+            (Ok(id), None) if id != self.binding.organization => {
                 if self.check_writer(generation, expires, writer).is_ok() {
                     *diagnostic = Some(OrganizationDiagnostic::mismatch());
                 }
                 return Err(AuthError::OrganizationUnverified);
             }
-            Ok(_) => {}
-        }
+            (Ok(_), None) => (
+                self.binding.workspace.clone(),
+                self.binding.organization.clone(),
+            ),
+        };
         self.check_writer(generation, expires, writer)?;
+        // A finder learns only now which saved connection a sign-in replaces.
+        // An unreadable slot fails closed rather than orphaning a credential it can't see.
+        let previous = match self.finding {
+            Some(_) => read_private(self.store.as_ref(), &workspace, &bound_organization)
+                .map_err(AuthError::Store)?,
+            None => None,
+        };
+        let replaced = previous
+            .as_ref()
+            .and_then(|bytes| serde_json::from_slice::<StoredConnection>(bytes).ok())
+            .filter(|old| {
+                old.tokens.access_token != tokens.access_token
+                    && (old.tokens.refresh_token.is_none()
+                        || old.tokens.refresh_token != tokens.refresh_token)
+            });
         let record = StoredConnection {
             client_id: self.binding.client_id.clone(),
-            organization: self.binding.organization.clone(),
+            organization: bound_organization.clone(),
             tokens,
             scopes,
         };
@@ -598,9 +729,7 @@ impl AuthController {
             Zeroizing::new(serde_json::to_vec(&record).map_err(|_| AuthError::InvalidToken)?);
         let mut state = self.lock()?;
         self.check_writer(generation, expires, writer)?;
-        let put = self
-            .store
-            .put(&self.binding.workspace, &self.binding.organization, &bytes);
+        let put = self.store.put(&workspace, &bound_organization, &bytes);
         if writer.is_some() && put.is_err() {
             // An uncertain failed put never supplies cleanup or receipt evidence.
             self.check_writer(generation, expires, writer)?;
@@ -619,11 +748,25 @@ impl AuthController {
                 self.compensate_sunday_save(
                     &bytes, generation, expires, writer, &failure, &mut state,
                 );
+            } else if let (Some(_), Some(old)) = (self.finding, previous.as_ref()) {
+                // A one-click sign-in cancelled after its write puts back the connection it
+                // replaced, and revokes its own new credential, which nothing will hold.
+                self.store
+                    .put(&workspace, &bound_organization, old)
+                    .map_err(AuthError::Store)?;
+                // Unless Planning Center handed back the very credential just put back.
+                let undecodable = serde_json::from_slice::<StoredConnection>(old).is_err();
+                if replaced.is_some() || undecodable {
+                    self.discard(&record.tokens);
+                }
             } else {
                 self.store
-                    .delete(&self.binding.workspace, &self.binding.organization)
+                    .delete(&workspace, &bound_organization)
                     .map_err(AuthError::Store)?;
                 state.nothing_stored = true;
+                if self.finding.is_some() {
+                    self.discard(&record.tokens);
+                }
             }
             return Err(failure.authentication());
         }
@@ -671,7 +814,16 @@ impl AuthController {
         state.status.problem = None;
         state.status.organization_diagnostic = None;
         state.status.scopes = Some(scopes);
-        Ok(state.status.clone())
+        if self.finding.is_some() {
+            state.status.organization = bound_organization;
+        }
+        let status = state.status.clone();
+        drop(state);
+        // Revoked as the registration it was issued to (a pasted ID may differ from Ozzie's).
+        if let Some(old) = replaced {
+            self.discard_as(&old.client_id, &old.tokens);
+        }
+        Ok(status)
     }
     // Called only while the existing OAuth operation exclusion and State are held.
     // The get/delete trait cannot exclude an external process after the comparison.
@@ -717,6 +869,9 @@ impl AuthController {
     /// outcome: nothing here holds the credential afterwards. Not on the Sunday authority's
     /// path, whose provider and store I/O are fixed.
     fn discard(&self, tokens: &Tokens) {
+        self.discard_as(&self.binding.client_id, tokens);
+    }
+    fn discard_as(&self, client: &str, tokens: &Tokens) {
         if self.sunday.is_some() {
             return;
         }
@@ -724,7 +879,7 @@ impl AuthController {
             Some(refresh) => (refresh, "refresh_token"),
             None => (tokens.access_token.as_str(), "access_token"),
         };
-        let _ = self.provider.revoke(&self.binding.client_id, token, hint);
+        let _ = self.provider.revoke(client, token, hint);
     }
     /// The saved connection a sign-in for `new` is about to replace, unless it is that same
     /// credential (Planning Center may hand back an existing token). Unreadable records are
@@ -744,6 +899,10 @@ impl AuthController {
         &self.binding
     }
     fn stored(&self) -> Result<StoredConnection, AuthError> {
+        // A finder has no saved connection of its own; it hands over through `adopt_found`.
+        if self.finding.is_some() {
+            return Err(AuthError::InvalidToken);
+        }
         let bytes = read_private(
             self.store.as_ref(),
             &self.binding.workspace,
@@ -1100,6 +1259,28 @@ impl AuthController {
                 .retire_controller(controller, RetireReason::AuthorityChanged)
                 .map_err(|_| AuthError::Busy)?;
             return Err(AuthError::Busy);
+        }
+        if let Some(prefix) = self.finding {
+            // A finder whose sign-in saved a connection (and wasn't handed over) disconnects that
+            // connection through an ordinary bound controller: revoke, then delete.
+            let saved = self.lock()?.status.organization.clone();
+            self.cancel();
+            if numeric_id(&saved) {
+                let bound = Self::new(
+                    Binding {
+                        workspace: format!("{prefix}{saved}"),
+                        organization: saved,
+                        client_id: self.binding.client_id.clone(),
+                    },
+                    self.store.clone(),
+                    self.provider.clone(),
+                    self.now.clone(),
+                )?;
+                return bound.disconnect_within(wait);
+            }
+            let mut state = self.lock()?;
+            state.status.state = ConnectionState::Disconnected;
+            return Ok(state.status.clone());
         }
         self.cancel();
         let started = std::time::Instant::now();

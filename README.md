@@ -180,12 +180,22 @@ Settings, Privacy & Security.
 
 ### Connect Planning Center
 
+In the Ozzie for Mac download, connecting is one click: **Settings** →
+**Connect Planning Center**, sign in in your browser and choose **Allow**.
+Ozzie finds your organization from the sign-in itself, and the token is
+stored in your Mac's Keychain.
+
+A copy you build yourself has no Planning Center registration built in, so
+you use your own:
+
 1. In Planning Center's developer settings, register a public OAuth
    application (Ozzie signs in with PKCE and holds no client secret) with the
    redirect URI `http://127.0.0.1:42819/oauth/callback`.
-2. In Ozzie, open **Settings** and enter the application ID and your
-   organization ID, then choose **Connect Planning Center**. Sign-in happens
-   in your browser; the token is stored in your Mac's Keychain.
+2. Either build with `OZZIE_PCO_APP_CLIENT_ID=<your application ID>` set, which
+   gives your build the same one-click connect, or open **Settings** →
+   **Advanced: use your own Planning Center registration**, enter the
+   application ID and your organization ID, and choose **Connect with these
+   IDs**.
 3. Choose the Sunday to check from the upcoming plans setup lists (or enter
    the service type and plan IDs, or paste the plan's address).
 

@@ -5,7 +5,10 @@
 import type { Finding, SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
+import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../core/src/harness/responsibilities.js";
+import { isTimeZone } from "../../../core/src/church-time.js";
 import { Icon } from "./icons.js";
+import { backgroundTitle, fewConfirmedTitle } from "./sunday-page.js";
 
 type Names = Readonly<Record<string, string>>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -21,6 +24,9 @@ export function sundayReadyLine(f: Finding, names: Names): string {
     case "streak": return `${nameOf(names, f.person_id)} is scheduled ${f.sundays} Sundays in a row. Your Church rules suggest a check-in.`;
     case "lead-missing": return `No one is scheduled to lead ${pos} this Sunday.`;
     case "lead-unverified": return `The scheduled lead for ${pos} couldn't be confirmed.`;
+    // The kids rules read as on the Sunday page: which team, which time, and (on this Mac only) who.
+    case "too-few-confirmed": return fewConfirmedTitle(f);
+    case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
     case "worth-a-look": return f.stale ? "This check is out of date. Check Planning Center again before relying on it." : "Part of this Sunday couldn't be checked, so it isn't a full picture.";
     default: return f.why[0] ?? "Something else is worth a look.";
   }
@@ -60,5 +66,41 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
     <p className="small">{brief.mode === "recording" ? "From a saved recording made" : "Read from Planning Center"} {time(brief.checked_at ?? brief.completed_at)}.</p>
     <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSunday}>Open Sunday to decide</button></div>
+  </section>;
+}
+
+const DAY_MS = 86_400_000;
+const zoned = (iso: string, zone: string, withDay = true) => new Date(iso).toLocaleString(undefined, {
+  ...(withDay ? { weekday: "short", month: "short", day: "numeric" } : {}), hour: "numeric", minute: "2-digit", timeZone: zone,
+});
+
+/**
+ * When the morning briefing runs next, and when its next Thursday run is (which carries the Sunday Ready brief),
+ * both within the coming eight days. `next` prefers the runner's own next time (it knows about pauses and catch-up).
+ */
+export function briefingPreviewTimes(r: Scheduled & { zone?: string | null }, now: string, fallbackZone: string, runnerNext?: string | null):
+  { next: string | null; thursday: string | null; zone: string } {
+  const zone = r.zone && isTimeZone(r.zone) ? r.zone : fallbackZone;
+  const slots = scheduledSlots(r, now, new Date(Date.parse(now) + 8 * DAY_MS).toISOString(), zone);
+  const next = runnerNext ?? slots[0] ?? null;
+  return { next, thursday: slots.find(at => includesSundayReady(at, zone)) ?? null, zone };
+}
+
+/**
+ * "Preview this briefing": what the morning briefing will include on its next run, from Ozzie's last check. Nothing is
+ * read or sent to make it. When the next run isn't Thursday's, it also shows the Sunday Ready brief Thursday's will carry.
+ */
+export function BriefingPreview({ next, thursday, zone, brief, decisions = [], operations = null, names, onSunday }: {
+  next: string | null; thursday: string | null; zone: string; brief: SundayBrief | null; decisions?: readonly SundayDecision[];
+  operations?: SundayOperations | null; names: Names; onSunday: () => void;
+}) {
+  const nextIsThursday = next !== null && thursday !== null && next === thursday;
+  const ready = <SundayReadyBrief brief={brief} decisions={decisions} operations={operations} names={names} onSunday={onSunday} />;
+  return <section className="briefing-preview" aria-label="Briefing preview">
+    <p className="bold">{next ? `Next briefing: ${zoned(next, zone)}` : "No briefing is scheduled right now"}</p>
+    <p className="small">It brings together what still needs you before Sunday, and anything that came up overnight.
+      {nextIsThursday ? " It's Thursday's, so it includes the full Sunday Ready brief:" : thursday ? ` Thursday's briefing, ${zoned(thursday, zone)}, also includes the full Sunday Ready brief. From Ozzie's last check, it would say:` : " Thursday's briefing also includes the full Sunday Ready brief. From Ozzie's last check, it would say:"}</p>
+    {ready}
+    <p className="small">A preview from Ozzie's last check. Nothing was read or sent to make it. The briefing checks Planning Center again when it runs, so it can differ.</p>
   </section>;
 }

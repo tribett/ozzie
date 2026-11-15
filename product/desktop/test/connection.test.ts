@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ConnectionPage } from "../src/connection-page.js";
-import { connectionProblem } from "../src/connection.js";
+import { connectionProblem, foundOrganization, type ConnectionStatus } from "../src/connection.js";
 
 describe("private consumer status-only presentation", () => {
   it("starts disconnected with connection actions disabled until Public registration is confirmed", () => {
@@ -19,5 +19,59 @@ describe("private consumer status-only presentation", () => {
     expect(connectionProblem({ authentication: { store: "unavailable" } })).toContain("unavailable");
     expect(connectionProblem("fictional-secret-material")).not.toContain("fictional-secret-material");
     expect(connectionProblem(undefined)).toContain("could not be checked");
+  });
+});
+
+const connectedStatus = (over: Partial<ConnectionStatus> = {}): ConnectionStatus => ({
+  state: "connected", organization: "513367", checked_at_ms: 1_000, source: "Planning Center /oauth/userinfo", problem: null, scopes: "services", ...over,
+});
+
+describe("one-click Planning Center connect", () => {
+  const empty = { clientId: "", organization: "", serviceTypeId: "", planId: "" };
+  it("leads with one Connect button and folds the IDs under Advanced when Ozzie's registration is built in", () => {
+    const html = renderToStaticMarkup(React.createElement(ConnectionPage, { status: null, settings: empty, onSettings: () => {}, onStatus: () => {}, oneClick: true }));
+    expect(html).toMatch(/<button class="btn btn-primary">Connect Planning Center<\/button>/);
+    expect(html).toContain("Ozzie finds your church&#x27;s organization itself");
+    expect(html).toMatch(/<details class="listen-more"><summary><svg[^]*?<\/svg>Advanced: use your own Planning Center registration<\/summary>/);
+    // The typed-ID button is secondary and still needs both IDs and the confirmation.
+    expect(html).toMatch(/<button class="btn btn-secondary" disabled="">Connect with these IDs<\/button>/);
+    // The rooms opt-in can sign in with Ozzie's registration, so it isn't greyed out for missing IDs.
+    expect(html).toMatch(/<button class="btn btn-secondary">Also check rooms, follow-ups and group events<\/button>/);
+  });
+  it("opens Advanced when your own registration's ID is in use", () => {
+    const html = renderToStaticMarkup(React.createElement(ConnectionPage, {
+      status: null, settings: { ...empty, clientId: "fictional-own-client", organization: "1001" }, onSettings: () => {}, onStatus: () => {}, oneClick: true,
+    }));
+    expect(html).toContain('<details class="listen-more" open="">');
+  });
+  it("says connected again rather than offering a first connect once connected", () => {
+    const html = renderToStaticMarkup(React.createElement(ConnectionPage, {
+      status: connectedStatus({ found: true }), settings: { ...empty, organization: "513367" }, onSettings: () => {}, onStatus: () => {}, oneClick: true,
+    }));
+    expect(html).toContain(">Sign in again</button>");
+    expect(html).toContain("Planning Center confirmed organization 513367");
+  });
+  it("remembers the organization Planning Center named, once per sign-in, with Ozzie's registration", () => {
+    const status = connectedStatus({ found: true });
+    const first = foundOrganization({ ...empty, clientId: "fictional-own-client" }, status, null);
+    expect(first?.settings).toEqual({ clientId: "", organization: "513367", serviceTypeId: "", planId: "" });
+    // Applied once: typing under Advanced afterwards isn't overwritten by the same sign-in.
+    expect(foundOrganization({ ...empty, organization: "999" }, status, first!.key)).toBeNull();
+    // A new sign-in (new check time) applies again.
+    expect(foundOrganization(empty, { ...status, checked_at_ms: 2_000 }, first!.key)?.settings.organization).toBe("513367");
+  });
+  it("keeps the chosen Sunday for the same organization and clears it for a different one", () => {
+    const status = connectedStatus({ found: true });
+    const same = foundOrganization({ clientId: "", organization: "513367", serviceTypeId: "1", planId: "2" }, status, null);
+    expect(same?.settings).toMatchObject({ serviceTypeId: "1", planId: "2" });
+    const other = foundOrganization({ clientId: "", organization: "1001", serviceTypeId: "1", planId: "2" }, status, null);
+    expect(other?.settings).toMatchObject({ organization: "513367", serviceTypeId: "", planId: "" });
+  });
+  it("ignores anything but a connected, found, numeric organization", () => {
+    expect(foundOrganization(empty, null, null)).toBeNull();
+    expect(foundOrganization(empty, connectedStatus(), null)).toBeNull();
+    expect(foundOrganization(empty, connectedStatus({ found: true, state: "checking" }), null)).toBeNull();
+    expect(foundOrganization(empty, connectedStatus({ found: true, organization: "01" }), null)).toBeNull();
+    expect(foundOrganization(empty, connectedStatus({ found: true, organization: "" }), null)).toBeNull();
   });
 });

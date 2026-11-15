@@ -213,7 +213,7 @@ export function validPlan(plan: Plan, now: string): boolean {
     && int(l?.checks_per_day, t.max.checks_per_day) && int(l?.ai_steps_per_day, t.max.ai_steps_per_day) && life;
 }
 
-type Scheduled = Pick<Responsibility, "template" | "schedule" | "lifetime" | "confirmed_at">;
+export type Scheduled = Pick<Responsibility, "template" | "schedule" | "lifetime" | "confirmed_at">;
 export const lifetimeEnded = (r: Pick<Responsibility, "lifetime">, now: string) => r.lifetime.kind === "until" && ms(now) >= ms(r.lifetime.ends_at);
 const endMs = (r: Scheduled) => r.lifetime.kind === "until" ? ms(r.lifetime.ends_at) : Infinity;
 
@@ -346,6 +346,15 @@ export function usage(runs: readonly RunRow[], now: string): { checks: number; a
 export function limitsLeft(r: Pick<Responsibility, "limits" | "runs" | "open_run">, now: string): { checks: number; ai_steps: number } {
   const used = usage([...r.runs, ...(r.open_run ? [r.open_run] : [])].filter((x, i, all) => all.findIndex(y => y.run_id === x.run_id) === i), now);
   return { checks: Math.max(0, r.limits.checks_per_day - used.checks), ai_steps: Math.max(0, r.limits.ai_steps_per_day - used.ai_steps) };
+}
+
+/**
+ * What's left for `r` as the native store counts it: a template's rolling 24 hours, whichever of its responsibilities
+ * used them (so stopping one and setting up another doesn't reset its limits). `all` is every listed responsibility.
+ */
+export function templateLimitsLeft(r: Pick<Responsibility, "template" | "limits">, all: readonly Pick<Responsibility, "template" | "runs" | "open_run">[], now: string): { checks: number; ai_steps: number } {
+  const same = all.filter(x => x.template === r.template);
+  return limitsLeft({ limits: r.limits, runs: same.flatMap(x => [...x.runs, ...(x.open_run ? [x.open_run] : [])]), open_run: null }, now);
 }
 
 /** Quiet hours hold a notice until they end (the first moment after a daylight-saving gap they end in); they never drop it. */

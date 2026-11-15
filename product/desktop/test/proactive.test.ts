@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSundayCheck, type KeyValueStore, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
+import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSundayCheck, verifySavedOnLaunch, type KeyValueStore, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
 import { sundayProblem, type Settings } from "../src/sunday-source.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
@@ -488,4 +488,20 @@ describe("native boundaries", () => {
     expect(proactiveReadiness(settings, null)).toBe("not-connected");
     expect(proactiveReadiness({ ...settings, planId: "" }, status("connected"))).toBe("not-configured");
   });
+  it("needs the connection to be for the organization in Settings, and works with Ozzie's own registration", () => {
+    expect(proactiveReadiness({ ...settings, organization: "2002" }, status("connected"))).toBe("not-connected");
+    expect(proactiveReadiness({ ...settings, clientId: "" }, status("connected"))).toBe("ready");
+  });
+
+  it("checks the saved sign-in once on launch, only when an organization is set and nothing has started", async () => {
+    const calls: string[] = [];
+    const refresh = async (c: string, o: string) => { calls.push(`${c}|${o}`); return status("connected"); };
+    expect(await verifySavedOnLaunch({ ...settings, clientId: "" }, null, refresh)).toMatchObject({ state: "connected" });
+    expect(calls).toEqual(["|1001"]);
+    expect(await verifySavedOnLaunch({ ...settings, organization: "" }, null, refresh)).toBeNull();
+    expect(await verifySavedOnLaunch(settings, status("waiting"), refresh)).toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(await verifySavedOnLaunch(settings, null, async () => { throw "invalid-token"; })).toBeNull();
+  });
 });
+

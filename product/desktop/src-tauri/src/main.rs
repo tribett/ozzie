@@ -30,6 +30,25 @@ mod local_tools;
 struct Session {
     auth: Arc<AuthController>,
     receiver: Option<CallbackServer>,
+    /// A one-click sign-in still waiting to hand over to a bound connection (`Consumer::settle`).
+    finding: bool,
+    /// The (registration, organization) of the bound connection: this session's own, or for a
+    /// finder the one it replaced, so Disconnect can still revoke it if the sign-in never finishes.
+    bound: Option<(String, String)>,
+}
+/// Where saved connections live in this Mac's Keychain, per organization: `local:<organization>`.
+const WORKSPACE_PREFIX: &str = "local:";
+/// Ozzie's own Public (PKCE) Planning Center registration, "Ozzie for Mac", built in at compile
+/// time from `OZZIE_PCO_APP_CLIENT_ID` (tools/release-mac.sh). A public client ID, not a secret;
+/// kept out of git so a self-built copy uses its own registration under Advanced.
+fn app_client_id() -> Option<&'static str> {
+    option_env!("OZZIE_PCO_APP_CLIENT_ID").filter(|id| {
+        !id.is_empty()
+            && id.len() <= 256
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    })
 }
 #[derive(Clone, Default)]
 struct Consumer(Arc<Mutex<Option<Session>>>, Arc<lifetime::Lifetime>);
@@ -71,19 +90,27 @@ impl Consumer {
             }
         }
     }
+    /// An empty `client` means Ozzie's built-in registration, which is registered by definition.
     fn prepare(
         &self,
         client: String,
         organization: String,
         registered: bool,
     ) -> Result<Arc<AuthController>, ConsumerError> {
-        if !registered {
+        let client = if client.is_empty() {
+            app_client_id()
+                .ok_or(ConsumerError::RegistrationRequired)?
+                .to_string()
+        } else if registered {
+            client
+        } else {
             return Err(ConsumerError::RegistrationRequired);
-        }
+        };
         self.stop_current();
+        let bound = Some((client.clone(), organization.clone()));
         let auth = Arc::new(AuthController::new(
             Binding {
-                workspace: format!("local:{organization}"),
+                workspace: format!("{WORKSPACE_PREFIX}{organization}"),
                 organization,
                 client_id: client,
             },
@@ -99,8 +126,84 @@ impl Consumer {
             .map_err(|_| ConsumerError::NativeUnavailable)? = Some(Session {
             auth: auth.clone(),
             receiver: None,
+            finding: false,
+            bound,
         });
         Ok(auth)
+    }
+    /// One click: Ozzie's built-in registration, and the organization Planning Center names.
+    fn prepare_finder(&self) -> Result<Arc<AuthController>, ConsumerError> {
+        let client = app_client_id().ok_or(ConsumerError::RegistrationRequired)?;
+        let (bound, orphan) = {
+            let current = self
+                .0
+                .lock()
+                .map_err(|_| ConsumerError::NativeUnavailable)?;
+            let bound = current.as_ref().and_then(|s| s.bound.clone());
+            // An earlier one-click sign-in that saved but was never handed over.
+            let orphan = current
+                .as_ref()
+                .filter(|s| s.finding)
+                .map(|s| s.auth.clone());
+            (bound, orphan)
+        };
+        self.stop_current();
+        if let Some(orphan) = orphan
+            && orphan
+                .status()
+                .is_ok_and(|status| !status.organization.is_empty())
+        {
+            orphan.disconnect()?;
+        }
+        let auth = Arc::new(AuthController::find_organization(
+            client.to_string(),
+            WORKSPACE_PREFIX,
+            Arc::new(MacKeychain {
+                service: "church.ozzie.planning-center.v1".into(),
+            }),
+            Arc::new(PcoProvider(NativeHttp::new()?)),
+            ozzie_native_auth::oauth::system_clock()?,
+        )?);
+        *self
+            .0
+            .lock()
+            .map_err(|_| ConsumerError::NativeUnavailable)? = Some(Session {
+            auth: auth.clone(),
+            receiver: None,
+            finding: true,
+            bound,
+        });
+        Ok(auth)
+    }
+    /// Once a one-click sign-in has saved a connection, swaps in the ordinary controller bound to
+    /// the organization Planning Center named. A refused hand-over leaves the finder in place, so
+    /// nothing reads; the person signs in again.
+    /// Returns the session's controller after any hand-over, under the same lock, and whether it
+    /// is still a finder (never to be used for reads).
+    fn settle(&self) -> Result<Option<(Arc<AuthController>, bool)>, ConsumerError> {
+        let mut current = self
+            .0
+            .lock()
+            .map_err(|_| ConsumerError::NativeUnavailable)?;
+        let Some(session) = current.as_mut() else {
+            return Ok(None);
+        };
+        if !session.finding || session.auth.status()?.state != ConnectionState::Connected {
+            return Ok(Some((session.auth.clone(), session.finding)));
+        }
+        let bound = session.auth.adopt_found()?;
+        let status = bound.status()?;
+        // The receiver ends itself after the callback it accepted; this only joins it.
+        if let Some(mut receiver) = session.receiver.take() {
+            receiver.stop();
+        }
+        *session = Session {
+            auth: Arc::new(bound),
+            receiver: None,
+            finding: false,
+            bound: app_client_id().map(|client| (client.to_string(), status.organization)),
+        };
+        Ok(Some((session.auth.clone(), false)))
     }
 }
 /// Every name this session has shown (live checks and loaded recordings), held only in memory
@@ -196,8 +299,9 @@ struct Smoke {
     enabled: bool,
     ready: AtomicBool,
 }
+/// Async so a one-click hand-over's Keychain reads never run on the main thread.
 #[tauri::command]
-fn connection_status(
+async fn connection_status(
     consumer: tauri::State<'_, Consumer>,
     smoke: tauri::State<'_, Smoke>,
     app: tauri::AppHandle,
@@ -209,14 +313,23 @@ fn connection_status(
             app.exit(0);
         });
     }
-    let current = consumer
-        .0
-        .lock()
-        .map_err(|_| ConsumerError::NativeUnavailable)?;
-    current
-        .as_ref()
-        .map(|s| s.auth.status().map_err(ConsumerError::from))
-        .transpose()
+    let consumer = consumer.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // A refused hand-over leaves the finder in place; its own status is reported.
+        let auth = match consumer.settle() {
+            Ok(auth) => auth.map(|(auth, _)| auth),
+            Err(_) => consumer
+                .0
+                .lock()
+                .map_err(|_| ConsumerError::NativeUnavailable)?
+                .as_ref()
+                .map(|s| s.auth.clone()),
+        };
+        auth.map(|a| a.status().map_err(ConsumerError::from))
+            .transpose()
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
 }
 /// `operations` (optional, default false) opts in to the Calendar, People and Groups scopes for
 /// the Sunday check's operations reads. Each Planning Center product scope permits read and
@@ -239,11 +352,51 @@ async fn connect_planning_center(
         Scopes::Services
     };
     tauri::async_runtime::spawn_blocking(move || {
+        sign_in(&consumer, scopes, |consumer| {
+            consumer.prepare(client_id, organization, registered)
+        })
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// One-click connect: Ozzie's built-in registration; Planning Center names the organization
+/// after sign-in, and the connection is then bound to it (`Consumer::settle`). Same scopes,
+/// Keychain storage and read-only reads as `connect_planning_center`.
+#[tauri::command]
+async fn connect_planning_center_app(
+    consumer: tauri::State<'_, Consumer>,
+    operations: Option<bool>,
+) -> Result<ConnectionStatus, ConsumerError> {
+    let consumer = consumer.inner().clone();
+    let scopes = if operations.unwrap_or(false) {
+        Scopes::ServicesAndOperations
+    } else {
+        Scopes::Services
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        sign_in(&consumer, scopes, Consumer::prepare_finder)
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// Whether this build has Ozzie's own registration built in (one-click connect).
+#[tauri::command]
+fn planning_center_app() -> bool {
+    app_client_id().is_some()
+}
+/// Starts a browser sign-in on the controller `prepare` makes and waits for nothing: the
+/// loopback receiver finishes it, and the app polls `connection_status`.
+fn sign_in(
+    consumer: &Consumer,
+    scopes: Scopes,
+    prepare: impl FnOnce(&Consumer) -> Result<Arc<AuthController>, ConsumerError>,
+) -> Result<ConnectionStatus, ConsumerError> {
+    {
         let (_transition, generation) = consumer
             .1
             .enter()
             .ok_or(ConsumerError::Authentication(AuthError::Busy))?;
-        let auth = consumer.prepare(client_id, organization, registered)?;
+        let auth = prepare(consumer)?;
         let url = auth.begin_with(scopes)?;
         if !consumer.1.current(generation) {
             auth.cancel();
@@ -279,9 +432,7 @@ async fn connect_planning_center(
             return Err(ConsumerError::BrowserUnavailable);
         }
         auth.status().map_err(ConsumerError::from)
-    })
-    .await
-    .map_err(|_| ConsumerError::NativeUnavailable)?
+    }
 }
 #[tauri::command]
 async fn cancel_connection(consumer: tauri::State<'_, Consumer>) -> Result<(), ConsumerError> {
@@ -324,16 +475,24 @@ async fn disconnect_planning_center(
             .enter()
             .ok_or(ConsumerError::Authentication(AuthError::Busy))?;
         consumer.stop_current();
-        let auth = consumer
+        let (auth, finding, bound) = consumer
             .0
             .lock()
             .map_err(|_| ConsumerError::NativeUnavailable)?
             .as_ref()
-            .map(|s| s.auth.clone())
+            .map(|s| (s.auth.clone(), s.finding, s.bound.clone()))
             .ok_or(ConsumerError::NativeUnavailable)?;
-        match auth.disconnect() {
+        let revoke = |auth: &AuthController| match auth.disconnect() {
             Err(AuthError::Busy) => Err(ConsumerError::NotRevoked),
             result => result.map_err(ConsumerError::from),
+        };
+        let status = revoke(&auth)?;
+        // A one-click sign-in that never finished: also revoke the connection it replaced.
+        match (finding, bound) {
+            (true, Some((client, organization))) => {
+                revoke(&*consumer.prepare(client, organization, true)?)
+            }
+            _ => Ok(status),
         }
     })
     .await
@@ -360,16 +519,7 @@ async fn check_sunday(
         let _turn = checks
             .take(Reader::Check, CHECK_WAITS_FOR_PICKER)
             .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
-        let auth = consumer
-            .0
-            .lock()
-            .map_err(|_| ConsumerError::NativeUnavailable)?
-            .as_ref()
-            .map(|s| s.auth.clone())
-            .ok_or(ConsumerError::NotConnected)?;
-        if auth.status()?.state != ConnectionState::Connected {
-            return Err(ConsumerError::NotConnected);
-        }
+        let auth = connected_auth(&consumer)?;
         // Disconnecting or quitting cancels the controller, which ends the check.
         let (capture, read) = sunday_check::check_sunday(
             &auth,
@@ -394,13 +544,10 @@ async fn check_sunday(
 }
 /// This session's verified Planning Center connection, or NotConnected.
 fn connected_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerError> {
-    let auth = consumer
-        .0
-        .lock()
-        .map_err(|_| ConsumerError::NativeUnavailable)?
-        .as_ref()
-        .map(|s| s.auth.clone())
-        .ok_or(ConsumerError::NotConnected)?;
+    let (auth, finding) = consumer.settle()?.ok_or(ConsumerError::NotConnected)?;
+    if finding {
+        return Err(ConsumerError::NotConnected);
+    }
     if auth.status()?.state != ConnectionState::Connected {
         return Err(ConsumerError::NotConnected);
     }
@@ -879,6 +1026,8 @@ struct DevDefaults {
     autopilot: bool,
     /// Debug builds only: the autopilot also opts in to rooms, follow-ups and group events (asks for consent).
     autopilot_operations: bool,
+    /// Debug builds only: the autopilot signs in with one-click connect (OZZIE_DEV_ONE_CLICK=1).
+    autopilot_one_click: bool,
     /// Debug builds only: `team_id:min` pairs the autopilot marks as kids teams (OZZIE_DEV_KIDS_TEAMS, e.g. "7593352:2").
     kids_teams: String,
 }
@@ -901,6 +1050,7 @@ fn dev_defaults_from(get: impl Fn(&str) -> Option<String>) -> DevDefaults {
         plan_id: id("OZZIE_PCO_PLAN"),
         autopilot: get("OZZIE_DEV_AUTOPILOT").as_deref() == Some("1"),
         autopilot_operations: get("OZZIE_DEV_OPERATIONS").as_deref() == Some("1"),
+        autopilot_one_click: get("OZZIE_DEV_ONE_CLICK").as_deref() == Some("1"),
         kids_teams: get("OZZIE_DEV_KIDS_TEAMS")
             .filter(|v| {
                 v.len() <= 200
@@ -984,6 +1134,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             connection_status,
             connect_planning_center,
+            connect_planning_center_app,
+            planning_center_app,
             cancel_connection,
             check_saved_connection,
             disconnect_planning_center,

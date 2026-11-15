@@ -29,11 +29,24 @@ export async function verifiedSundayCheck(ctx: { settings: Settings; status: Con
 /** Lock-screen privacy: the title and body are fixed in native code; the webview passes no text at all. */
 export const notifySundayAttention = () => invoke<void>("notify_sunday_attention");
 
+/**
+ * On launch nothing is connected in memory yet, so automatic checks would wait forever: check the saved sign-in once
+ * (a Planning Center userinfo read and token refresh, nothing else) when an organization is set and nothing has
+ * started. Returns the verified status, or null when there was nothing to check or the check couldn't run.
+ */
+export async function verifySavedOnLaunch(settings: Settings, status: ConnectionStatus | null,
+  refresh: (clientId: string, organization: string, registered: boolean) => Promise<ConnectionStatus> = connection.refresh): Promise<ConnectionStatus | null> {
+  if (status !== null || !/^[1-9]\d{0,31}$/.test(settings.organization)) return null;
+  try { return await refresh(settings.clientId, settings.organization, true); } catch { return null; }
+}
+
 export type Readiness = "ready" | "not-configured" | "not-connected";
 /** Automatic checks need a chosen Sunday and a saved connection. Never during sign-in: re-checking would cancel it. */
 export function proactiveReadiness(settings: Settings, status: ConnectionStatus | null): Readiness {
-  if (!settings.clientId || !/^[1-9]\d{0,31}$/.test(settings.organization) || !/^\d+$/.test(settings.serviceTypeId) || !/^\d+$/.test(settings.planId)) return "not-configured";
-  return status?.state === "connected" || status?.state === "stored-unchecked" ? "ready" : "not-connected";
+  // An empty client ID means Ozzie's own registration (one-click connect).
+  if (!/^[1-9]\d{0,31}$/.test(settings.organization) || !/^\d+$/.test(settings.serviceTypeId) || !/^\d+$/.test(settings.planId)) return "not-configured";
+  // The connection must be for the organization in Settings (one may have been typed under Advanced since).
+  return (status?.state === "connected" || status?.state === "stored-unchecked") && status.organization === settings.organization ? "ready" : "not-connected";
 }
 
 /** Per-person preferences on this Mac. The urgency window is a Church rule. */

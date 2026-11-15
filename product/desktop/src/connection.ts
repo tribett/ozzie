@@ -12,6 +12,8 @@ export type ConnectionStatus = {
   organization_diagnostic?: OrganizationDiagnostic;
   /** Present only once this session has verified the saved connection. */
   scopes?: ConnectionScopes;
+  /** True when one-click sign-in let Planning Center name this organization. */
+  found?: boolean;
 };
 const ASKED = "ozzie.operations-asked";
 /**
@@ -28,6 +30,15 @@ export const connection = {
   connect: (client_id: string, organization: string, registered: boolean, operations = false) => invoke<ConnectionStatus>("connect_planning_center",
     operations ? { clientId: client_id, organization, registered, operations: true } : { clientId: client_id, organization, registered })
     .then(status => { operationsAsked.set(operations); return status; }),
+  /**
+   * One click: Ozzie's own registration ("Ozzie for Mac"); Planning Center names the organization after
+   * sign-in. Only in builds that have that registration built in (`appAvailable`).
+   */
+  connectApp: (operations = false) => invoke<ConnectionStatus>("connect_planning_center_app", operations ? { operations: true } : {})
+    .then(status => { operationsAsked.set(operations); return status; }),
+  /** Whether this build can connect in one click. */
+  appAvailable: () => invoke<boolean>("planning_center_app").catch(() => false),
+  /** An empty `client_id` means Ozzie's own registration. */
   refresh: (client_id: string, organization: string, registered: boolean) => invoke<ConnectionStatus>("check_saved_connection", { clientId: client_id, organization, registered }),
   cancel: () => invoke<void>("cancel_connection"),
   disconnect: () => invoke<ConnectionStatus>("disconnect_planning_center"),
@@ -93,4 +104,19 @@ export function connectionStatusProblem(status: ConnectionStatus): string {
     return genericOrganizationProblem;
   }
   return connectionProblem(status.problem);
+}
+
+/**
+ * After a one-click sign-in, the settings to keep: the organization Planning Center named, with Ozzie's
+ * own registration (an empty client ID). A different organization clears the chosen Sunday, which
+ * belonged to the old one. Applied once per sign-in (`key`), so typing under Advanced afterwards sticks.
+ */
+export function foundOrganization<S extends { clientId: string; organization: string; serviceTypeId: string; planId: string }>(
+  settings: S, status: ConnectionStatus | null, applied: string | null,
+): { settings: S; key: string } | null {
+  if (status?.state !== "connected" || status.found !== true || !/^[1-9]\d{0,31}$/.test(status.organization)) return null;
+  const key = `${status.organization}@${status.checked_at_ms ?? ""}`;
+  if (key === applied) return null;
+  const same = settings.organization === status.organization;
+  return { key, settings: { ...settings, clientId: "", organization: status.organization, ...(same ? {} : { serviceTypeId: "", planId: "" }) } };
 }

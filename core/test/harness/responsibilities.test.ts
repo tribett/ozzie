@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_QUIET_HOURS, inQuietHours } from "../../src/schedule.js";
 import {
-  BRIEFING_WEEKDAYS, CHANGE_GAP_MS, changeEligible, defaultPlan, dueNow, includesSundayReady, settledPlan, FAST_MIN_GAP_MS, FAST_SLOT_MS, lifetimeEnded, limitsLeft, localInstant, MIN_GAP_MS, MISSED_AFTER_MS,
+  BRIEFING_WEEKDAYS, CHANGE_GAP_MS, changeEligible, defaultPlan, dueNow, includesSundayReady, settledPlan, FAST_MIN_GAP_MS, FAST_SLOT_MS, lifetimeEnded, limitsLeft, templateLimitsLeft, localInstant, MIN_GAP_MS, MISSED_AFTER_MS,
   nearDeadlineTimes, nextSlot, parseRequest, quietDeferral, RECHECK_MS, refusedUntil, RETRY_MS, retryAt, RUN_TIMEOUT_MS, scheduledSlots, TEMPLATE_IDS, TEMPLATES,
   untilLifetime, upcomingWeekday, usage, validPlan, wallInstant, type LocalState, type Plan, type Responsibility, type RunRow,
 } from "../../src/harness/responsibilities.js";
@@ -292,6 +292,13 @@ describe("daily limits", () => {
     const r = responsibility(sundayPlan(), { runs });
     expect(limitsLeft(r, SAT)).toEqual({ checks: 4, ai_steps: 4 });
     expect(limitsLeft({ ...r, runs: [...runs, run(-20, 4), run(-10), run(-5), run(-1)] }, SAT)).toEqual({ checks: 0, ai_steps: 0 });
+  });
+  it("count a kind's checks across a stopped one and its replacement, as the Mac's store does", () => {
+    const stopped = responsibility(sundayPlan(), { status: "ended", runs: [run(-120), run(-90), run(-60), run(-30), run(-20)] });
+    const fresh = responsibility(sundayPlan(), { id: "00000000-0000-4000-8000-000000000002", runs: [run(-5)] });
+    const briefing = responsibility(defaultPlan("morning-briefing", SAT, ZONE), { id: "00000000-0000-4000-8000-000000000003", runs: [run(-3)] });
+    expect(limitsLeft(fresh, SAT).checks).toBe(5);
+    expect(templateLimitsLeft(fresh, [stopped, fresh, briefing], SAT).checks).toBe(0);
   });
 });
 

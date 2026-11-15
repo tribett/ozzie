@@ -19,7 +19,7 @@ import {
 } from "./today-groups.js";
 import { correctionFor, type FeedbackEntry, type FeedbackTarget } from "../../../core/src/finding-feedback.js";
 import { FindingFeedback, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
-import { SundayReadyBrief } from "./sunday-ready.js";
+import { BriefingPreview, briefingPreviewTimes, SundayReadyBrief } from "./sunday-ready.js";
 
 /** What Ozzie keeps an eye on, for Today: it comes to the person here first. */
 export interface TodayWatch {
@@ -102,7 +102,7 @@ const NO_DECISIONS: readonly SundayDecision[] = [];
 const NO_ENTRIES: readonly FeedbackEntry[] = [];
 
 export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions = NO_DECISIONS, operations = null, watch = null, now: nowProp, zone: zoneProp, store = browserStore,
-  feedback = null }: {
+  feedback = null, example = true }: {
   brief: SundayBrief | null; onSunday: () => void; names?: Record<string, string> | undefined; sundayDecisions?: readonly SundayDecision[];
   /** Rooms, follow-ups and group meetings for the same check, so the briefing says what the Sunday page says. */
   operations?: SundayOperations | null;
@@ -114,6 +114,11 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   store?: KeyValueStore;
   /** What the person tells Ozzie on finding cards, kept with the Church rules. */
   feedback?: FeedbackSource | null;
+  /**
+   * The fictional email-and-calendar example (an invented church's inbox, including an email Ozzie ignores on purpose).
+   * Shown only until a real Planning Center connection exists, so it never sits among a church's own items.
+   */
+  example?: boolean;
 }) {
   const now = nowProp ?? watch?.now ?? new Date().toISOString();
   const zone = zoneProp ?? macZone();
@@ -126,12 +131,13 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   // Findings set aside by the person's Church rules are already out of the brief, so Sunday's count leaves them out too.
   const decided = useMemo(() => brief ? applyDecisions(brief, sundayDecisions) : null, [brief, sundayDecisions]);
   const spoken = useMemo(() => {
+    if (!example) return { attention: null, sunday: brief, decided, ignoredInstructions: 0, quietCount: 0, operations };
     if (!report.ok) return null;
     const flagged = new Set(report.findings.flatMap(f => f.source_ids));
     const ignored = input.assertions.filter(a => a.kind === "untrusted-instruction").map(a => a.message_id);
     return { attention: report, sunday: brief, decided, ignoredInstructions: ignored.length,
       quietCount: report.sources.filter(s => !flagged.has(s.id) && !ignored.includes(s.id)).length, operations };
-  }, [report, input, brief, decided, operations]);
+  }, [report, input, brief, decided, operations, example]);
 
   const memory = useMemo(() => todayMemory(store), [store]);
   const [setAside, setSetAside] = useState(() => memory.setAside());
@@ -146,8 +152,8 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   } : null, [brief, decided]);
   const items = useMemo(() => todayItems({
     now, sunday, watch: watch?.view ?? null, firstSeen,
-    attention: report.ok ? { findings: report.findings, messages: report.sources.filter(isMessage), evaluated_at: report.evaluated_at, zone: tz } : null,
-  }), [now, sunday, watch?.view, firstSeen, report]);
+    attention: example && report.ok ? { findings: report.findings, messages: report.sources.filter(isMessage), evaluated_at: report.evaluated_at, zone: tz } : null,
+  }), [now, sunday, watch?.view, firstSeen, report, example]);
   const grouped = groupToday(items, setAside, now);
 
   // Ages for items without a time of their own start when they are first on Today on this Mac.
@@ -160,6 +166,8 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   // After setting an item aside or bringing it back, focus lands on its group's heading rather than nowhere.
   useEffect(() => { if (focusGroup) { headings.current[focusGroup]?.focus(); setFocusGroup(null); } }, [focusGroup]);
 
+  // "Preview this briefing" on the morning briefing's card: which responsibility's preview is open.
+  const [previewing, setPreviewing] = useState<string | null>(null);
   const putAside = (item: TodayItem, until: string) => {
     setSetAside(memory.setAsideUntil(item.id, until, now));
     setAnnouncement(`Set aside. ${backText(until, now, zone)}.`);
@@ -232,6 +240,12 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           {watch && <p className="find-body">{watchLine(r, watch.view, now)}</p>}
           {s.notes.length > 0 && <ul className="list resp-problems">{s.notes.map(n => <li key={n.id}><Icon name="clock" small />
             {n.overnight && <span className="badge b-muted">Overnight</span>}{noticedTitle(n, now)}</li>)}</ul>}
+          {r.template === "morning-briefing" && <div className="find-next">
+            <button type="button" className="btn btn-secondary btn-sm" aria-expanded={previewing === r.id} aria-controls={`${titleId}-preview`} aria-describedby={titleId}
+              onClick={() => setPreviewing(previewing === r.id ? null : r.id)}>{previewing === r.id ? "Hide the preview" : "Preview this briefing"}</button></div>}
+          {r.template === "morning-briefing" && previewing === r.id && <div id={`${titleId}-preview`}>
+            <BriefingPreview {...briefingPreviewTimes(r, now, zone, r.status === "active" && !watch?.view.paused_all ? watch?.view.next[r.id] ?? null : null)}
+              brief={brief} decisions={sundayDecisions} operations={operations} names={names} onSunday={onSunday} /></div>}
         </article>;
       }
       case "answers": return <article key={item.id} className="find" aria-labelledby={titleId}>
@@ -267,7 +281,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     <p className="lede">{ledeText(grouped)}</p>
     <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
     {notice}
-    {!report.ok && <p role="alert" className="problem">The fictional import couldn't be read.</p>}
+    {example && !report.ok && <p role="alert" className="problem">The fictional import couldn't be read.</p>}
     {group("attention", sundayCalm)}
     {group("review")}
     {group("progress", progressMore)}
@@ -277,13 +291,13 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     {/* After the work, so the work comes first; the written script stays folded until asked for. */}
     {spoken && <BriefingPanel input={spoken} names={names} attentionTimeZone={tz} />}
 
-    {injected.length > 0 && <section className="find guarded" aria-labelledby="today-ignored">
+    {example && injected.length > 0 && <section className="find guarded" aria-labelledby="today-ignored">
       <div className="find-top"><span className="badge b-look"><Icon name="lock" small />Ignored on purpose</span></div>
       <h2 id="today-ignored" className="find-title">An email told me to “{injected[0]!.anchor.quote.replace(/\.$/, "")}”.</h2>
       <p className="find-body">I never follow instructions found inside email, and I can't send email or look up passwords at all. Nothing was done.</p>
     </section>}
 
-    {report.ok && <section className="notchecked" aria-labelledby="today-quiet">
+    {example && report.ok && <section className="notchecked" aria-labelledby="today-quiet">
       <h2 id="today-quiet" className="h3">Read, nothing needed from you</h2>
       <ul className="list">{quiet.map(s => <li key={s.id}><Icon name="check" small />{isMessage(s)
         ? <>Email “{s.subject}”: {input.assertions.find(a => a.message_id === s.id)?.anchor.quote ?? "no action found."}</>
