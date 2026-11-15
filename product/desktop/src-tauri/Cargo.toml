@@ -1,6 +1,6 @@
 [package]
 name = "ozzie-desktop"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
@@ -18,10 +18,23 @@ ozzie-native-auth = { path = "../../../core/native-auth" }
 tauri-plugin-notification = "=2.8.0"
 # "Open Ozzie when I log in": off unless the person turns it on (a Launch Agent in ~/Library/LaunchAgents).
 tauri-plugin-autostart = "=2.7.0"
+# Signature-checked updates from the public GitHub release (updater.rs). rustls only; no system proxy.
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
+# Already locked through tauri; the updater compares versions with it.
+semver = "1.0"
+
+[dev-dependencies]
+# The mock runtime, so the updater tests run the plugin's own checks without a window.
+tauri = { version = "=2.12.4", features = ["tray-icon", "test"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Already locked through tauri; used only to keep App Nap from pausing scheduled checks.
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
+# Already locked through tauri; used to keep App Nap from pausing scheduled checks, for the
+# images-only card photo panel and to open a draft in Mail or Messages (NSWorkspace).
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSProcessInfo", "NSString", "NSURL"] }
+objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSWindow", "NSWorkspace"] }
+# Already locked through tauri: O_NOFOLLOW and O_NONBLOCK when a chosen card photo is opened.
+libc = "=0.2.191"
 
 [features]
 default = ["custom-protocol"]

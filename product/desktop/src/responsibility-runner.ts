@@ -174,6 +174,11 @@ export interface RunnerHooks {
   check(): Promise<SundayCapture>;
   /** With an AI model: the template's procedure for this run, its steps paid from the grant. `signal` aborts when it's paused. */
   prepare(r: Responsibility, grant: Grant, capture: SundayCapture, signal?: AbortSignal): Promise<Prepared | null>;
+  /**
+   * Whether a check is of the church Ozzie uses now. A check of another church (one finished or shared from before a
+   * switch) is never reused or acted on. Absent: every check is.
+   */
+  belongs?(capture: SundayCapture): boolean;
 }
 export interface RunnerDeps {
   native: ResponsibilityNative;
@@ -569,10 +574,10 @@ export function createRunner(deps: RunnerDeps): Runner {
   /** A check recent enough to share, or null. */
   function shared(): SundayCapture | null {
     const window = options().fast ? FAST_SHARED_CHECK_MS : SHARED_CHECK_MS;
-    return latest && ms(deps.now()) - latest.at < window ? latest.capture : null;
+    return latest && ms(deps.now()) - latest.at < window && hooks?.belongs?.(latest.capture) !== false ? latest.capture : null;
   }
   function captured(capture: SundayCapture) {
-    if (capture.kind !== "live") return;
+    if (capture.kind !== "live" || hooks?.belongs?.(capture) === false) return;
     const at = Number.isFinite(ms(capture.completed_at)) ? Math.min(ms(capture.completed_at), ms(deps.now())) : ms(deps.now());
     if (!latest || at >= latest.at) latest = { capture, at };
     if (capture.reads.some(r => r.outcome === "rate-limited")) slowDown();
@@ -588,6 +593,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     if (recent) return recent;
     try {
       const capture = await hooks!.check();
+      // Finished after Ozzie switched churches: not this church's Sunday, so not acted on.
+      if (hooks!.belongs?.(capture) === false) throw "not-connected";
       captured(capture);
       return capture;
     } catch (error) {

@@ -4,8 +4,10 @@
 // never given free text that a person typed. It only rewords a placeholder-form draft that this
 // module produced itself (its own template, or a model reply it has checked), using one of a
 // fixed set of choices. The only source text sent is the position name, and if any roster name
-// part appears in it (or it could read as contact details, or is too long for a note), the whole
-// position name is replaced with [Role]. Names are put back on this Mac only.
+// part appears in it (or it could read as contact details, is too long for a note, or holds
+// background-check wording, which never goes to a model), the whole position name is replaced with
+// [Role]. Names are put back on this Mac only.
+import { backgroundWording, newerCharacter, OZZIES_OWN } from "./harness/background-wording.js";
 import type { Finding } from "./sunday-brief.js";
 
 export const REWORDINGS = { warmer: "Make it warmer.", shorter: "Make it shorter.", casual: "Make it more casual.", formal: "Make it a little more formal." } as const;
@@ -84,11 +86,35 @@ export function serviceWhen(finding: Finding, sunday?: string | null): string {
   return day && !Number.isNaN(day.getTime()) ? day.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }) : "Sunday";
 }
 
+/** Controls, format, private-use, default-ignorable and line-separator characters and the blank braille pattern. */
+const HIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}⠀]/u;
+/** A hidden character in a position name: HIDDEN_IN_NAME, or one of the background-check list's newer characters (review B3 L-1). */
+const hiddenInName = (name: string) => HIDDEN_IN_NAME.test(name) || [...name].some(newerCharacter);
+const PICTOGRAPH = /[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}]/u;
+/**
+ * A hidden character in a note, as the native and ozzie.church reword checks read it (model.rs `hidden_in_note`, web
+ * requests.ts `hiddenInNote`): one hiddenInName finds, apart from a line break and the joiners an emoji is spelled with
+ * (a variation selector after a pictograph, a digit, # or *, and a zero-width joiner between pictographs).
+ */
+export function hiddenInNote(note: string): boolean {
+  const chars = [...note];
+  const pictograph = (c: string | undefined) => c !== undefined && PICTOGRAPH.test(c);
+  return chars.some((c, at) => {
+    const before = chars[at - 1];
+    const joiner = c === "\uFE0E" || c === "\uFE0F" ? pictograph(before) || (before !== undefined && /^[0-9#*]$/u.test(before))
+      : c === "\u200D" ? (pictograph(before) || before === "\uFE0F") && pictograph(chars[at + 1]) : false;
+    return c !== "\n" && !joiner && hiddenInName(c);
+  });
+}
 /** Ozzie's own first wording, already in placeholder form. */
 export function templateDraft(ctx: DraftContext, names: Record<string, string>): PlaceholderDraft {
   const original = ctx.finding.position?.name ?? "a Sunday role";
-  // [Role] is restored to the exact role name on this Mac.
-  const role = containsName(original, names) || roleUnfit(original) ? "[Role]" : original;
+  // [Role] is restored to the exact role name on this Mac. A position named with background-check wording ("Security
+  // Screening") or holding a hidden character ("Security⠀Screening") is sent as [Role] too, so the note can still be
+  // reworded: the native and ozzie.church checks refuse both (owner decision 2026-11-14; reviews B L4, B2 M-1). So is
+  // one named exactly as one of Ozzie's own sentences, which holds the wording once it is inside a note (review B3 N-1).
+  const role = containsName(original, names) || roleUnfit(original) || hiddenInName(original) || OZZIES_OWN.includes(original)
+    || backgroundWording(original) ? "[Role]" : original;
   return mint([
     "Hi [Volunteer A],",
     // The service's own date, never "this week" or "this Sunday": the note may go out weeks before it.
@@ -115,9 +141,13 @@ const labelsStandalone = (text: string) => (text.match(/\[(?:Volunteer A|Role|Yo
 /** Check a model reply before anyone sees it. Rejected replies are never shown or restored. */
 export function acceptModelReply(reply: string, previous: PlaceholderDraft, names: Record<string, string>): PlaceholderDraft {
   if (!issued.has(previous)) throw new Error("Unknown draft.");
-  const text = reply.normalize("NFKC").replace(/[\p{Cf}\p{Co}]/gu, "").trim();
+  // Line endings and tabs as a note spells them, so a reply with "\r\n" or a tab can be reworded again (review B3 L-3).
+  const text = reply.normalize("NFKC").replace(/[\p{Cf}\p{Co}]/gu, "").replace(/\r\n?/gu, "\n").replace(/\t/gu, " ").trim();
   const brackets = text.match(/\[[^\]]*\]/g) ?? [];
   if (!text || text.length > 1200) throw new Error("The reworded draft wasn't usable. Your current draft is unchanged.");
+  // Never kept: what the next "Change the wording" would refuse before sending (model.rs `check_draft`, web
+  // `checkReword`): a hidden character, or background-check wording, which never goes to a model.
+  if (hiddenInNote(text) || backgroundWording(text)) throw new Error("The reworded draft wasn't usable. Your current draft is unchanged.");
   // An added or dropped [Role] is harmless: it restores to the original role name on this Mac.
   if (!text.includes("[Volunteer A]") || brackets.some(b => !LABELS.includes(b)) || !labelsStandalone(text))
     throw new Error("The reworded draft changed who it's addressed to. Your current draft is unchanged.");

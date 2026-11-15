@@ -150,6 +150,26 @@ function setup(over: Partial<RunnerContext> = {}) {
 const sunday = () => defaultPlan("keep-sunday-covered", FRI, ET);
 const at = (iso: string, minutes: number) => new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 
+describe("a check of a church Ozzie no longer uses (review S2, L1)", () => {
+  it("is never shared with a run, and one that finishes after a switch isn't acted on", async () => {
+    const h = setup();
+    let church = nov22Capture().organization;
+    h.runner.start({ context: () => h.context, check: h.check, prepare: h.prepare, belongs: c => c.organization === church });
+    await h.start(sunday());
+    expect(h.check).toHaveBeenCalledTimes(1);
+    // The regular Sunday check finished just before the switch; the runner would share it for two minutes.
+    h.set("2026-11-20T17:40:00.000Z");
+    h.runner.captured(captureAt(h.now(), decline));
+    church = "fictional-other-church";
+    await h.runner.changes([{ id: "x", kind: "need-opened", effect: "worse", urgency: "attention", position: "Greeter", from: 0, to: 1 }]);
+    // Not shared: a fresh check ran, and it too was of the old church (finished after the switch), so the run failed
+    // as "couldn't check" rather than reporting the old church's Sunday.
+    expect(h.check).toHaveBeenCalledTimes(2);
+    expect(h.fake.calls.at(-1)).toMatch(/^end failed denied/u);
+    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "couldnt-check" });
+  });
+});
+
 describe("a responsibility, from confirmation to what Ozzie noticed", () => {
   it("checks once as soon as it starts, prepares the work, and tells the person in Ozzie, not with a notice", async () => {
     const h = setup();

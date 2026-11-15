@@ -1,6 +1,11 @@
 import { shouldRefreshStale } from "./stale-refresh.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { connection, foundOrganization, operationsAsked, yourName, type ConnectionStatus } from "./connection.js";
+import {
+  connection, followInUse, foundOrganization, fresher, operationsAsked, parseInUse, parseSwitchQuestion, pendingSettings, seenInUse, yourName,
+  type ConnectionStatus,
+} from "./connection.js";
+import { adoptRules, loadRulesByChurch, moveRules, ofChurchInUse, onScreenCapture, rulesInUse, saveRulesByChurch } from "./church-in-use.js";
+import { SwitchWaiting } from "./planning-center-forms.js";
 import "./hearth.css";
 import "./styles.css";
 import { buildSundayBrief, sundayShownCount, teamLeaders } from "../../../core/src/sunday-brief.js";
@@ -40,6 +45,8 @@ import { ResponsibilityList, useRunnerView, type PlanActions, type PlanContext }
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import type { FeedbackSource } from "./finding-feedback.js";
 import { useSharing } from "./share-check.js";
+import { updates, useUpdates } from "./updates.js";
+import { UpdateLine, UpdatesSection } from "./updates-view.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "automatic" | "activity" | "connection";
 const nav: { id: Page; label: string; icon: string }[] = [
@@ -88,10 +95,20 @@ function useDarkAppearance(): boolean {
 
 export function App() {
   const [page, setPage] = useState<Page>("today");
-  const [status, setStatus] = useState<ConnectionStatus | null>(null);
+  const [status, setShownStatus] = useState<ConnectionStatus | null>(null);
+  // Native statuses carry a revision: one read before an answer but arriving after it is ignored (review S, L5).
+  const newestStatus = useRef(0);
+  const setStatus = useCallback((next: ConnectionStatus | null) => {
+    if (!fresher(next, newestStatus.current)) return;
+    if (next?.revision !== undefined) newestStatus.current = next.revision;
+    setShownStatus(next);
+  }, []);
   const [settings, setSettings] = useState(loadSettings);
-  const [rules, setRules] = useState(loadRules);
-  const [capture, setCapture] = useState<SundayCapture | null>(null);
+  // Church rules as set, and the church-specific ones kept for other churches (church-in-use.ts).
+  const [savedRules, setRules] = useState(loadRules);
+  // Rules saved before they were kept per church belong to the church in Settings, where they were set (review S2, M3).
+  const [rulesByChurch, setRulesByChurch] = useState(() => adoptRules(loadRulesByChurch(), loadSettings().organization));
+  const [heldCapture, setCapture] = useState<SundayCapture | null>(null);
   const [fictional, setFictional] = useState(false);
   const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
   const [busy, setBusy] = useState(false);
@@ -101,8 +118,14 @@ export function App() {
   // Guided setup: shown on its own until skipped or finished; Settings can reopen it.
   const [setup, setSetup] = useState<"auto" | "open" | "closed">(() => setupMemory.closed() ? "closed" : "auto");
   const [launched, setLaunched] = useState(false);
-  // The debug-only hidden-window probe never reads the Keychain (where the AI key lives).
-  useEffect(() => { void background.info().then(info => { if (!info.probe) model.status().then(s => setModelReady(s.configured)).catch(() => setModelReady(false)); }); }, []);
+  // The debug-only hidden-window probe and stand-in update test never read the Keychain (where the AI key lives).
+  useEffect(() => {
+    void Promise.all([background.info(), updates.status().catch(() => null)]).then(([info, update]) => {
+      if (!info.probe && !update?.probe) model.status().then(s => setModelReady(s.configured)).catch(() => setModelReady(false));
+    });
+  }, []);
+  // New versions of Ozzie (updater.rs): Settings' Updates section and, when one is ready, a line above Today.
+  const updateState = useUpdates();
   // Ask Ozzie: docked beside the work column on a wide window, otherwise opened on request.
   // One set of placeholder labels for the whole app, so a person or role keeps its label across questions.
   const [harnessSession] = useState(() => new HarnessSession());
@@ -130,7 +153,7 @@ export function App() {
     void update();
     const timer = setInterval(() => { void update(); setNow(new Date().toISOString()); }, 1000);
     return () => { alive = false; clearInterval(timer); };
-  }, []);
+  }, [setStatus]);
   // One-click sign-in: remember the organization Planning Center named (once per sign-in).
   const appliedFound = useRef<string | null>(null);
   useEffect(() => {
@@ -139,20 +162,63 @@ export function App() {
     appliedFound.current = found.key;
     setSettings(found.settings);
   }, [status, settings]);
+  // "Switch Ozzie to this church?" is open: Settings keeps the church Ozzie still uses until the person answers.
+  const switchQuestion = parseSwitchQuestion(status?.switch);
+  useEffect(() => {
+    const kept = pendingSettings(settings, parseSwitchQuestion(status?.switch));
+    if (kept) setSettings(kept);
+  }, [status, settings]);
+  // The church Ozzie uses natively. When it changes (an answer, a launch, a window reopened mid-answer), Settings follow
+  // it, keeping the chosen Sunday when it is the church last seen in use on this Mac (review S3, L1).
+  const inUse = parseInUse(status?.in_use);
+  const inUseOrg = inUse?.organization;
+  const lastInUse = useRef<string | null>(null);
+  const seenChurch = useRef<string | null>(seenInUse.get());
+  const churchNames = useRef(new Map<string, string>());
+  if (inUse?.name) churchNames.current.set(inUse.organization, inUse.name);
+  useEffect(() => {
+    const next = followInUse(settings, parseInUse(status?.in_use), lastInUse.current, seenChurch.current);
+    lastInUse.current = next.last;
+    if (next.last && next.last !== seenChurch.current) { seenChurch.current = next.last; seenInUse.set(next.last); }
+    if (next.settings) setSettings(next.settings);
+  }, [status, settings]);
+  // Church rules for one church's teams, rooms and findings stay with that church (church-in-use.ts).
+  useEffect(() => {
+    if (!inUseOrg) return;
+    const moved = moveRules(savedRules, rulesByChurch, inUseOrg, churchNames.current.get(rulesByChurch.church), settings.organization);
+    if (!moved) return;
+    setRules(moved.rules);
+    setRulesByChurch(moved.store);
+  }, [inUseOrg]);
+  useEffect(() => saveRulesByChurch(rulesByChurch), [rulesByChurch]);
+  const rules = rulesInUse(savedRules, rulesByChurch, inUseOrg, settings.organization);
+  // The church Ozzie last used, kept while the church in use drops out for a moment (a Keychain write): Ask's answers
+  // belong to it, and start afresh with another church (review S2, L2).
+  const askChurch = useRef<string | undefined>(undefined);
+  if (inUseOrg) askChurch.current = inUseOrg;
   const org = /^[1-9]\d{0,31}$/.test(settings.organization) ? settings.organization : "";
+  // Nothing read from another church is shown or used: the check on screen must be this church's (church-in-use.ts),
+  // and a check of a church Ozzie no longer uses is let go.
+  const capture = onScreenCapture(heldCapture, fictional, org, inUseOrg);
+  useEffect(() => {
+    if (heldCapture && !fictional && inUseOrg !== undefined && heldCapture.organization !== inUseOrg) setCapture(null);
+  }, [heldCapture, fictional, inUseOrg]);
   const refreshRecordings = () => { if (org) sundaySource.recordings(org).then(setRecordings).catch(() => setRecordings([])); else setRecordings([]); };
   useEffect(refreshRecordings, [org]);
   useEffect(() => saveSettings(settings), [settings]);
   // Scheduled checks read the latest app state through refs; they never change what the person typed.
-  const current = useRef({ settings, rules, status, fictional, refreshRecordings });
-  current.current = { settings, rules, status, fictional, refreshRecordings };
+  const current = useRef({ settings, rules, status, fictional, refreshRecordings, inUseOrg });
+  current.current = { settings, rules, status, fictional, refreshRecordings, inUseOrg };
+  // A live check is acted on only if it is of the church Ozzie uses now: one that finishes, or is shared, after a switch
+  // is dropped by every consumer (review S2, L1).
+  const belongs = (c: SundayCapture) => ofChurchInUse(c, current.current.settings.organization, current.current.inUseOrg);
   const automatic = useProactiveView(proactive);
   const hooks: ProactiveHooks = useMemo(() => ({
     context: () => current.current,
     onStatus: setStatus,
     onCapture: (c, trigger) => {
       // Responsibilities due soon share this check rather than reading Planning Center again.
-      runner.captured(c);
+      if (belongs(c)) runner.captured(c);
       current.current.refreshRecordings();
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
       // A scheduled check shows its result unless the person is looking at the fictional example.
@@ -190,10 +256,11 @@ export function App() {
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
       return c;
     },
+    belongs,
     // With an AI model: the template's procedure through the harness, each step paid from this run's grant.
     prepare: async (r, grant, c, signal) => {
       const s = runnerState.current;
-      if (!s.procedures) return null;
+      if (!s.procedures || !belongs(c)) return null;
       const data = buildHarnessData({ capture: c, fictional: false, rules: s.rules, decisions: s.decisions, status: s.status, configured: s.configured, now: new Date().toISOString() });
       const h = createAppHarness({ workspace_id: s.workspace, data, skills: s.procedures, session: harnessSession, loop: s.loop, recorder: desktopRecorder(), step: responsibilityStep(grant.run_id) });
       const observer = desktopRecorder().task("skill", r.skill_id);
@@ -251,6 +318,8 @@ export function App() {
           });
       } else {
         // The saved sign-in is checked once on launch, so automatic checks (and "check when Ozzie opens") can run.
+        // Native code checks the church Ozzie last used whatever Settings name (a switch carried out just before a quit
+        // included), and Settings then follow it (review S3, M1 and L1).
         void connection.status().then(current => verifySavedOnLaunch(merged(loadSettings()), current))
           .then(verified => {
             if (!verified) return;
@@ -261,7 +330,7 @@ export function App() {
       }
     }).catch(begin).finally(() => setLaunched(true));
   }, []);
-  useEffect(() => saveRules(rules), [rules]);
+  useEffect(() => saveRules(savedRules), [savedRules]);
 
   const brief = useMemo(() => capture ? buildSundayBrief(capture, rules, fictional ? capture.completed_at : now, fictional) : null, [capture, rules, now, fictional]);
   // Someone looking at Ozzie sees a current picture: with the window on screen, a live check that has
@@ -295,6 +364,7 @@ export function App() {
   latestState.current = { rules, decisions, status, configured: Boolean(org && configured) };
   const refreshForHarness = useCallback(async function refresh(): Promise<HarnessData> {
     const c = await proactive.checkNow();
+    if (!ofChurchInUse(c, current.current.settings.organization, current.current.inUseOrg)) throw "not-connected";
     const at = new Date().toISOString();
     setCapture(c); setFictional(false); setNow(at);
     const s = latestState.current;
@@ -394,7 +464,7 @@ export function App() {
           onClick={() => setAskOpen(!askOpen)}><AskIcon /><span className="nav-label">Ask Ozzie</span></button>
         <div className="side-foot">
           <p className="quiet-note"><Icon name="lock" small /><span className="nav-label">Reads only. Names Ozzie reads stay on this Mac.</span></p>
-          <p className="small side-org">{connected ? `Planning Center organization ${status!.organization}` : "Planning Center not connected"}</p>
+          <p className="small side-org">{!connected ? "Planning Center not connected" : inUse?.name ? `Planning Center: ${inUse.name}` : `Planning Center organization ${status!.organization}`}</p>
         </div>
       </aside>
       <main className="main" ref={mainRef}>
@@ -402,6 +472,8 @@ export function App() {
           onClose={() => endSetup("today")} onAutomatic={() => endSetup("automatic")}
           onExample={() => { endSetup("sunday"); void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }} />}
         {!showSetup && <>
+        {switchQuestion && page !== "connection" && <SwitchWaiting question={switchQuestion} onOpen={() => setPage("connection")} />}
+        {page === "today" && <UpdateLine state={updateState} nowMs={Date.parse(now)} />}
         {page === "today" && <TodayPage brief={brief} names={capture?.names} sundayDecisions={decisions} operations={operations} onSunday={() => setPage("sunday")}
           watch={{ view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={!connected} />}
         {page === "sunday" && <SundayPage brief={brief} names={capture?.names ?? {}} busy={busy} problem={problem} sender=""
@@ -414,7 +486,7 @@ export function App() {
             ? () => { void act(() => Promise.resolve(withFictionalOperations(nov22LaterCapture())), true); } : undefined}
           onHow={procedures ? showProcedure : undefined} feedback={feedback} onSettings={() => setPage("connection")} />}
         {page === "cards" && <CardsPage people={capture?.names ?? {}} workspace={org || "this-mac"} />}
-        {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions}
+        {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions} keptElsewhere={Object.entries(rulesByChurch.kept).map(([organization, k]) => ({ organization, ...(k.name ? { name: k.name } : {}) }))}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}
           procedures={orderedProcedures} focus={focusProcedure} />}
         {page === "automatic" && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId}
@@ -426,12 +498,12 @@ export function App() {
         {page === "connection" && <ConnectionPage status={status} settings={settings} onSettings={setSettings} onStatus={setStatus}
           recordingCount={recordings.length} onModel={setModelReady} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}
-          sharing={sharing.settings}
+          sharing={sharing.settings} updates={<UpdatesSection state={updateState} nowMs={Date.parse(now)} />}
           onAutomatic={() => setPage("automatic")} onSetup={() => setSetup("open")} autostart={autostart}
           onDeleteRecordings={() => { sharing.forget(); if (org) void sundaySource.deleteRecordings(org).finally(() => { refreshRecordings(); if (capture?.kind === "recording") setCapture(null); }); }} />}
         </>}
       </main>
-      <AskPanel open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
+      <AskPanel key={askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
         page={showSetup ? "setup" : page} plans={plans} />
     </div>
   </div>;

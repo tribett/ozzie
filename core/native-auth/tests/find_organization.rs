@@ -312,10 +312,10 @@ fn disconnecting_a_finder_that_saved_but_was_not_handed_over_revokes_and_deletes
     );
 }
 
-/// Switching organizations needs the person's confirmation and an owner decision first
-/// (independent review R, M1/M2), so a sign-in never revokes or deletes another organization's
-/// saved connection on its own. The connection it leaves behind is an open issue
-/// (recorded in the project's audit notes).
+/// Switching organizations needs the person's confirmation (independent review R, M1/M2), so a
+/// sign-in never revokes or deletes another organization's saved connection on its own. The
+/// desktop app asks first and signs out only on the person's answer (connections.rs; tested in
+/// tests/church_switch.rs).
 #[test]
 fn a_sign_in_never_revokes_or_deletes_another_organizations_connection_on_its_own() {
     let store = Arc::new(MemoryStore::default());

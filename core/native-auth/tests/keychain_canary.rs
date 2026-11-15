@@ -36,12 +36,23 @@ fn native_store_get_delete_org_isolation_and_cleanup() {
             Some(b"fictional-native-canary-b".to_vec())
         );
         assert!(store.get("different-workspace", "1001")?.is_none());
+        // Listed by attributes alone (no item data requested), only within this service.
+        let mut listed = store.accounts()?;
+        listed.sort();
+        assert_eq!(
+            listed,
+            [
+                ("fictional-workspace".to_string(), "1001".to_string()),
+                ("fictional-workspace".to_string(), "1002".to_string())
+            ]
+        );
         store.delete("fictional-workspace", "1001")?;
         assert!(store.get("fictional-workspace", "1001")?.is_none());
         assert!(store.get("fictional-workspace", "1002")?.is_some());
         store.delete("fictional-workspace", "1002")?;
         store.delete("fictional-workspace", "1002")?;
         assert!(store.get("fictional-workspace", "1002")?.is_none());
+        assert!(store.accounts()?.is_empty(), "nothing saved: an empty list");
         Ok::<(), ozzie_native_auth::credentials::StoreError>(())
     })();
     assert_eq!(result, Ok(()));

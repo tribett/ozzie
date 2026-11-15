@@ -3,7 +3,8 @@
 //! Ask Ozzie uses (core/mcp/snapshot.ts `sharedEnvelopes`); this module checks every one again exactly
 //! as `agent_step` checks a tool message before it may reach a model (`agent::tool_message_ok`: the
 //! closed grammar of fixed/vocabulary.json, no hidden character, escape or contact detail, and no
-//! name this session has shown in any label, time or fixed sentence), adds the task ledger's
+//! name this session has shown in any label, time or fixed sentence) and for background-check
+//! wording (background.rs; owner decision 2026-11-14: never in the shared copy), adds the task ledger's
 //! name-free rows, and writes `shared-check.json` in the app data folder (file 0600, written aside
 //! then renamed). Ozzie's read-only server (core/mcp) reads only that file and checks it again.
 //!
@@ -15,6 +16,7 @@
 //! without the webview: nothing is written while it's absent, turning sharing off removes it before
 //! the copy, and every start of the app removes a copy (and any half-written one) left while off.
 use crate::agent::tool_message_ok;
+use crate::background;
 use crate::ledger::{EventType, FailureCode, RunState, TaskKind, TaskRow};
 use crate::name_guard::NameGuard;
 use crate::sunday_check::{parse_rfc3339, rfc3339};
@@ -158,7 +160,10 @@ pub fn checked_envelopes(
                 .filter(|tool| SHARED_TOOLS.contains(tool) && !seen.iter().any(|s| s == tool))
                 .ok_or(ShareError::Invalid)?
                 .to_owned();
-            if !tool_message_ok(text, &tool, names) {
+            // Background-check wording never goes into the copy for other AI apps, even as
+            // placeholders (owner decision 2026-11-14; review B L3): refused whole, as any result
+            // that fails its check is, so nothing is written.
+            if !tool_message_ok(text, &tool, names) || background::in_tool_result(text) {
                 return Err(ShareError::Invalid);
             }
             seen.push(tool);

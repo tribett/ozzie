@@ -5,6 +5,7 @@
 import type { FailureCode, Skill, TaskEvent, ToolEnvelope, ToolName } from "../../../core/src/harness/contract.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../../../core/src/harness/contract.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
+import { REFUSALS } from "../../../core/src/ask.js";
 
 /** One task as the native ledger lists it (ledger.rs TaskRow). Name-free by construction. */
 export interface TaskEventRow { task_id: string; sequence: number; at: string; type: TaskEvent["type"]; detail: string }
@@ -106,6 +107,8 @@ export const ASK_FAILURES = Object.freeze({
   ledger: "Ozzie's record of its work isn't available, so it didn't ask the AI.",
   // Ozzie managed refused the question as holding a phone number or email address.
   contact: "That question looks like it holds a phone number or email address, so Ozzie managed didn't send it to the AI. Try asking again without it.",
+  // Background-check wording stopped on this Mac or by ozzie.church (native `background-check`): the page's own refusal.
+  background: REFUSALS.background,
   slowDown: "The AI service asked Ozzie to slow down. Try again in a minute.",
   unfinished: "Ozzie couldn't finish that just now.",
   cancelled: "You stopped this question. Ozzie won't show an answer for it.",
@@ -134,6 +137,8 @@ export const ASK_START = "Ozzie hasn't read anything from Planning Center yet, s
 export const ASK_LOADING = "Ozzie is still getting ready. Try again in a moment.";
 /** Under an answer written on this Mac. */
 export const LOCAL_NOTE = "Answered on this Mac without the AI. Nothing was sent.";
+/** First, above an answer written here because the question mentions background checks (review B2 L-3). */
+export const BACKGROUND_HERE = "Ozzie doesn't send questions with background-check or child-safety screening wording to the AI, so it answered this here from the Sunday page.";
 /** "See how this works" for an answer written on this Mac. */
 export const LOCAL_HOW = "Ozzie answered this on this Mac from its last check, without asking the AI. Nothing was sent to anyone, and nothing in Planning Center changed.";
 /** "See how this works" when items were added to the AI's choice on this Mac. */
@@ -153,6 +158,7 @@ export function askFailureText(code: FailureCode | null, native?: string): strin
   if (native === "budget") return ASK_FAILURES.allowance;
   if (native === "allowance-paused") return ASK_FAILURES.paused;
   if (native === "contact-detail") return ASK_FAILURES.contact;
+  if (native === "background-check") return ASK_FAILURES.background;
   if (native === "rate-limited") return ASK_FAILURES.slowDown;
   if (code === "egress") return ASK_FAILURES.egress;
   if (code === "fidelity") return ASK_FAILURES.fidelity;

@@ -15,7 +15,7 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { AgentRuntime, AgentStepReply, FailureCode, ModelStep, Skill, TaskEvent, TaskOutcome, ToolEnvelope } from "../../../core/src/harness/contract.js";
 import { REFUSALS } from "../../../core/src/ask.js";
 import {
-  decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_TO_DECIDE, openDecisions, type KidsQuestion, type LocalAnswer,
+  asksAboutChecksOrKids, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_TO_DECIDE, openDecisions, type KidsQuestion, type LocalAnswer,
 } from "../../../core/src/harness/compose.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { ASK_SKILL, composeAnswer, Harness, type HarnessData } from "../../../core/src/harness/index.js";
@@ -28,7 +28,8 @@ import type { SundayCapture, SundayRules } from "../../../core/src/sunday-captur
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
 import type { ConnectionStatus } from "./connection.js";
 import {
-  askFailureText, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, ledgerDetail, localSteps, modelSteps, outcomeSteps, type CheckTrigger, type TaskRow,
+  askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, ledgerDetail, localSteps, modelSteps, outcomeSteps, type CheckTrigger,
+  type TaskRow,
 } from "./harness-words.js";
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -38,7 +39,8 @@ const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 
 /** agent_step's closed error vocabulary (agent.rs AgentError), as Tauri rejects with it: a bare string. */
 export type AgentErrorCode = "egress" | "denied" | "limit" | "invalid-task" | "ledger-unavailable" | "not-configured" | "budget" | "daily-limit"
-  | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail";
+  | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail"
+  | "background-check";
 /** The FailureCodes a model step can end a task with (the loops keep exactly these from a step's error). */
 export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity";
 /**
@@ -57,6 +59,9 @@ const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   "allowance-paused": "limit",
   // Ozzie managed: ozzie.church refused the step as holding a phone number or email address; nothing went to the AI.
   "contact-detail": "egress",
+  // Background-check wording in the step (owner decision 2026-11-14), found natively or by ozzie.church before anything
+  // reached the AI. The ledger records only "egress"; the Ask panel shows the page's own refusal (askOzzie).
+  "background-check": "egress",
 });
 const nativeCode = (error: unknown): AgentErrorCode | null => {
   const raw = typeof error === "string" ? error : typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -596,15 +601,34 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     options.recorder?.answeredHere(local.evidence);
     return { state: "answered", answer: localAnswer(harness, local, first) };
   };
+  /**
+   * A question or note stopped by the background-check wording list (owner decision 2026-11-14): answered here from the
+   * Sunday page under a first line that says why (review B2 L-3), with the kids-team note when no kids team is marked,
+   * since that is why there are no background checks to show (review B3 L-2). Wording that also names other things and
+   * nothing about checks or kids ("Who is on the Safe Sanctuaries team?") gets the plain refusal and what to do instead,
+   * with nothing beside it that could read as an answer (reviews B2 L-3, B3 N-2); so does anything with nothing to show.
+   * Nothing is sent either way.
+   */
+  const keptHere = async (work: () => Promise<LocalAnswer>, first: string, alone: string): Promise<AskTurn> => {
+    if (!asksAboutChecksOrKids(typed)) return { state: "refused", text: alone };
+    const local = await work();
+    if (signal.aborted) return { state: "cancelled", text: askFailureText("cancelled") };
+    if (!local.paragraphs.length) return { state: "refused", text: alone };
+    options.recorder?.answeredHere(local.evidence);
+    return { state: "answered", answer: localAnswer(harness, local, [first]) };
+  };
   // The same refusals first, so nothing is answered here that couldn't be asked.
   const prepared = harness.prepare(typed);
   if (!prepared.ok) {
-    // A question naming a background check is never prepared for the AI (review Q H2): it is answered here instead.
-    if (prepared.refusal === REFUSALS.backgroundNote) return here(() => kidsAnswer(harness.tools, backgroundOnly(harness.data), signal), [REFUSALS.backgroundNote]);
+    // A question naming a background check is never prepared for the AI (review Q H2): it is answered here instead, and
+    // the answer says so first.
+    if (prepared.refusal === REFUSALS.backgroundNote) {
+      return keptHere(() => kidsAnswer(harness.tools, backgroundOnly(harness.data), signal), REFUSALS.backgroundNote, REFUSALS.backgroundNoteAlone);
+    }
     if (prepared.refusal === REFUSALS.background) {
       const q = kidsQuestion(typed, harness.data);
-      if (q && !q.whole) return here(() => kidsAnswer(harness.tools, q, signal));
-      return here(() => openDecisions(harness.tools, signal));
+      if (q && !q.whole) return keptHere(() => kidsAnswer(harness.tools, q, signal), BACKGROUND_HERE, REFUSALS.background);
+      return keptHere(() => openDecisions(harness.tools, signal), BACKGROUND_HERE, REFUSALS.background);
     }
     return { state: "refused", text: prepared.refusal };
   }
@@ -635,6 +659,8 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     } };
   }
   if (outcome.status === "cancelled") return { state: "cancelled", text: askFailureText("cancelled") };
+  // The second (native) or third (ozzie.church) refusal of background-check wording: the page's own words, as a refusal.
+  if (native === "background-check") return { state: "refused", text: askFailureText(outcome.code, native) };
   if (outcome.code === "no-model") return { state: "no-model" };
   return { state: "problem", code: outcome.code, text: askFailureText(outcome.code, native) };
 }

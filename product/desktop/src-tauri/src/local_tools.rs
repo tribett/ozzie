@@ -691,17 +691,27 @@ fn jpeg_size(image: &[u8]) -> Option<(u64, u64)> {
         at += length;
     }
 }
+/// The two kinds of photo the card reader opens (helpers/card-reader.swift: public.png and
+/// public.jpeg only), told apart by their bytes, never by a file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardImageKind {
+    Png,
+    Jpeg,
+}
 /// PNG or JPEG within the review's size limit, checked before any process starts: by signature,
 /// and by the picture size its header declares (never zero, at most MAX_IMAGE_PIXELS).
-pub fn card_image_ok(image: &[u8]) -> bool {
+pub fn card_image_kind(image: &[u8]) -> Option<CardImageKind> {
     if image.is_empty() || image.len() > MAX_IMAGE_BYTES {
-        return false;
+        return None;
     }
-    png_size(image)
-        .or_else(|| jpeg_size(image))
-        .is_some_and(|(width, height)| {
-            width > 0 && height > 0 && width.saturating_mul(height) <= MAX_IMAGE_PIXELS
-        })
+    let (kind, (width, height)) = match png_size(image) {
+        Some(size) => (CardImageKind::Png, size),
+        None => (CardImageKind::Jpeg, jpeg_size(image)?),
+    };
+    (width > 0 && height > 0 && width.saturating_mul(height) <= MAX_IMAGE_PIXELS).then_some(kind)
+}
+pub fn card_image_ok(image: &[u8]) -> bool {
+    card_image_kind(image).is_some()
 }
 
 /// What reads card text on this Mac, decided once per launch by `Cards::recognizer`.
@@ -1217,7 +1227,7 @@ pub fn cancel_listening(tools: tauri::State<'_, LocalTools>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn plain(argv: &[&str]) -> Command {
@@ -1471,7 +1481,7 @@ mod tests {
     }
 
     /// A PNG's signature and IHDR chunk declaring `width` x `height`.
-    fn png(width: u32, height: u32) -> Vec<u8> {
+    pub(crate) fn png(width: u32, height: u32) -> Vec<u8> {
         let mut bytes = vec![137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13];
         bytes.extend_from_slice(b"IHDR");
         bytes.extend_from_slice(&width.to_be_bytes());
@@ -1480,7 +1490,7 @@ mod tests {
         bytes
     }
     /// A JPEG with an APP0 segment, then a baseline frame declaring `width` x `height`.
-    fn jpeg(marker: u8, width: u16, height: u16) -> Vec<u8> {
+    pub(crate) fn jpeg(marker: u8, width: u16, height: u16) -> Vec<u8> {
         let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
         bytes.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
         bytes.extend_from_slice(&[0xFF, marker, 0x00, 0x11, 8]);
@@ -1521,6 +1531,19 @@ mod tests {
             Cards::default().read(b"not an image".to_vec()),
             Err(LocalToolError::InvalidInput)
         );
+    }
+
+    #[test]
+    fn a_card_photo_kind_comes_from_its_bytes() {
+        assert_eq!(card_image_kind(&png(1200, 800)), Some(CardImageKind::Png));
+        assert_eq!(
+            card_image_kind(&jpeg(0xC0, 4032, 3024)),
+            Some(CardImageKind::Jpeg)
+        );
+        // A PNG signature with a broken header is not read again as a JPEG.
+        assert_eq!(card_image_kind(&png(0, 800)), None);
+        assert_eq!(card_image_kind(b"GIF89a"), None);
+        assert_eq!(card_image_kind(&png(8000, 5001)), None);
     }
 
     #[test]

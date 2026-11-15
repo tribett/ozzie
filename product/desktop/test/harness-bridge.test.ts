@@ -1,9 +1,12 @@
 // The harness in the desktop app: native error mapping, the ledger grammar, a ledger that fails or
 // stalls never breaking a task, HarnessData from app state, Sunday checks as ledger tasks, and Ask
 // Ozzie end to end through the real harness with scripted models. Fictional fixed data; no native calls.
+import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { REFUSALS } from "../../../core/src/ask.js";
+import { backgroundInToolResult, backgroundWording } from "../../../core/src/harness/background-wording.js";
+import { asksAboutChecksOrKids, NO_KIDS_TEAM } from "../../../core/src/harness/compose.js";
 import { NATIVE_TOOL_ALLOWLIST, type AgentStepReply, type AgentStepRequest, type ModelStep, type TaskEvent } from "../../../core/src/harness/contract.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { Harness } from "../../../core/src/harness/index.js";
@@ -16,7 +19,7 @@ import {
   agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, runtimeFor, StepFailure, stepFailure, StepNotes,
   type Invoke,
 } from "../src/harness-bridge.js";
-import { ASK_FAILURES, CAN_DO_INSTEAD, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { ASK_FAILURES, BACKGROUND_HERE, CAN_DO_INSTEAD, ledgerDetail, taskLine } from "../src/harness-words.js";
 import { answer, BACKGROUND_IN_REQUEST, calls, draftTurns, everyRequest, fakeNative as fakeLedger, fictionalData, greeterTurns, payloadOf, row, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
@@ -80,7 +83,8 @@ describe("the model step over native agent_step", () => {
     const request: AgentStepRequest = { task_id: "00000000-0000-4000-8000-000000000001", messages: [{ role: "user", content: "Hi" }], tools: [], max_tokens: 700 };
     await expect(agentStep(ok.invoke)(request, new AbortController().signal)).resolves.toEqual(reply);
     expect(ok.log).toEqual([["agent_step", { request }]]);
-    for (const [native, code] of [["egress", "egress"], ["budget", "limit"], ["not-configured", "no-model"], ["rate-limited", "transport"], ["contact-detail", "egress"]] as const) {
+    for (const [native, code] of [["egress", "egress"], ["budget", "limit"], ["not-configured", "no-model"], ["rate-limited", "transport"], ["contact-detail", "egress"],
+      ["background-check", "egress"]] as const) {
       const failing = fakeLedger(() => Promise.reject(native));
       const error = await agentStep(failing.invoke)(request, new AbortController().signal).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(StepFailure);
@@ -558,9 +562,120 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
       expect(m.requests, q).toHaveLength(0);
       if (turn.state !== "answered") throw new Error(turn.state);
       const parts = turn.answer.body.split("\n\n");
-      expect(parts[0]).toBe("On the Sunday page, needing a decision:");
+      // It says first why it was answered here (review B2 L-3).
+      expect(parts.slice(0, 2)).toEqual([BACKGROUND_HERE, "On the Sunday page, needing a decision:"]);
       expect(parts.join(" ")).toMatch(/Greeter at 9:30 AM.*Blake Ashgrove has no current background check.*Room use needs review.*has no owner\./su);
     }
+  });
+
+  it("says first why a background-check question wasn't sent, then that no kids team is marked when none is (reviews B2 L-3, B3 L-2)", async () => {
+    // The fictional Sunday marks no kids team, as a new church's doesn't: that note is why there are no background checks
+    // to show, and how to get them, so it answers these.
+    for (const q of ["Any background check problems?", "Who on the kids team has a background check that expired?", "Is Riley cleared to teach?",
+      "Who will run the bg-check table?", "Is this check out of date?", "Has Cameron been screened?", "Who is on the Safe Sanctuaries team for the kids?"]) {
+      const m = anyModel();
+      const turn = await askOzzie(harness(m.model), q, { skills });
+      expect(m.requests, q).toHaveLength(0);
+      if (turn.state !== "answered") throw new Error(`${q}: ${turn.state}`);
+      expect(turn.answer.body.split("\n\n"), q).toEqual([BACKGROUND_HERE, NO_KIDS_TEAM]);
+      expect(turn.answer.local, q).toBe(true);
+      expect(turn.answer.draft, q).toBeNull();
+    }
+    // With kids teams marked, the background checks themselves under the same first line, and never the kids-team note.
+    const m = anyModel();
+    const turn = await askOzzie(harness(m.model, undefined, kidsData()), "Any background check problems?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body.split("\n\n")[0]).toBe(BACKGROUND_HERE);
+    expect(turn.answer.body).toMatch(/Blake Ashgrove has no current background check on file/u);
+    expect(turn.answer.body).not.toContain(NO_KIDS_TEAM);
+    expect(m.requests).toHaveLength(0);
+    // Team and policy names that read like child-safety screening are refused too (when in doubt, refuse), and say so: with
+    // nothing about checks or kids, nothing written here answers them, so nothing is shown beside the refusal, with or
+    // without kids teams (reviews B2 L-3, B3 N-2).
+    for (const data of [fictionalData(), kidsData()]) {
+      for (const q of ["Who is on the Safe Sanctuaries team?", "Is there a sex offender policy for Sunday?", "Where is our registered offender policy?",
+        "Who is leading the finger print art craft?", "Has the background come back from the printer?", "Is Blake a registered sex offender?",
+        "Did Blake's background come back?", "Is the offender registry open on Sunday?"]) {
+        const sent = anyModel();
+        expect(await askOzzie(harness(sent.model, undefined, data), q, { skills }), q).toEqual({ state: "refused", text: REFUSALS.background });
+        expect(sent.requests, q).toHaveLength(0);
+      }
+    }
+    expect(REFUSALS.background).toBe("Ozzie doesn't send questions with background-check or child-safety screening wording to the AI, so this one wasn't sent. "
+      + "Ask about the team by its role instead, or look at the Sunday page.");
+  });
+
+  it("keeps the kids-team note beside a background-check note request when no kids team is marked, and refuses other note wording plainly", async () => {
+    const m = anyModel();
+    const turn = await askOzzie(harness(m.model), "Draft a note to Blake Ashgrove saying his background check expired", { skills });
+    expect(m.requests).toHaveLength(0);
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body.split("\n\n")).toEqual([REFUSALS.backgroundNote, NO_KIDS_TEAM]);
+    expect(turn.answer.draft).toBeNull();
+    for (const data of [fictionalData(), kidsData()]) {
+      const sent = anyModel();
+      expect(await askOzzie(harness(sent.model, undefined, data), "Write a message to the Safe Sanctuaries team about Sunday", { skills }))
+        .toEqual({ state: "refused", text: REFUSALS.backgroundNoteAlone });
+      expect(sent.requests).toHaveLength(0);
+    }
+  });
+
+  it("refuses every question the shared list holds, with or without kids teams, sends nothing, and shows the kids-team note only under why", async () => {
+    const vectors = JSON.parse(readFileSync(new URL("../../../core/test/harness/background-wording-vectors.json", import.meta.url), "utf8")) as Record<string, string[]>;
+    const questions = [...vectors["match"]!, ...vectors["refused_on_purpose"]!];
+    expect(questions.length).toBeGreaterThan(150);
+    const byThisList = new Set<string>([REFUSALS.background, REFUSALS.backgroundNoteAlone]);
+    const answeredFirst = new Set<string>([BACKGROUND_HERE, REFUSALS.backgroundNote]);
+    let refused = 0, answered = 0, noted = 0;
+    for (const [data, kidsMarked] of [[fictionalData(), false], [kidsData(), true]] as const) {
+      for (const q of questions) {
+        const m = anyModel();
+        const turn = await askOzzie(harness(m.model, undefined, data), q, { skills });
+        expect(m.requests, JSON.stringify(q)).toHaveLength(0);
+        const shown = turn.state === "answered" ? turn.answer.body : turn.state === "refused" ? turn.text : "";
+        // The kids-team note only under a first line that says why, only with no kids team marked, and only for a question
+        // about checks or kids (review B3 L-2); never on its own (review B2 L-3).
+        if (shown.includes(NO_KIDS_TEAM)) {
+          expect(turn.state, JSON.stringify(q)).toBe("answered");
+          expect(kidsMarked, JSON.stringify(q)).toBe(false);
+          expect(asksAboutChecksOrKids(q), JSON.stringify(q)).toBe(true);
+          expect(shown, JSON.stringify(q)).not.toBe(NO_KIDS_TEAM);
+          noted += 1;
+        }
+        if (turn.state === "answered") {
+          expect(answeredFirst.has(turn.answer.body.split("\n\n")[0]!), JSON.stringify(q)).toBe(true);
+          expect(asksAboutChecksOrKids(q), JSON.stringify(q)).toBe(true);
+          answered += 1;
+        } else {
+          expect(turn.state, JSON.stringify(q)).toBe("refused");
+          if (byThisList.has(shown)) refused += 1;
+        }
+      }
+    }
+    // Most are this list's own refusal or an answer that says why first; the rest were refused earlier for another reason.
+    expect(refused + answered).toBeGreaterThan(questions.length);
+    expect(noted).toBeGreaterThan(0);
+  });
+
+  it("refuses a question whose hidden characters could spell the wording past every folding, and sends nothing (review B3 L-1)", async () => {
+    const vectors = JSON.parse(readFileSync(new URL("../../../core/test/harness/background-wording-vectors.json", import.meta.url), "utf8")) as Record<string, string[]>;
+    const hidden = vectors["hidden"]!;
+    expect(hidden.length).toBeGreaterThan(180);
+    for (const data of [fictionalData(), kidsData()]) {
+      for (const q of hidden) {
+        const m = anyModel();
+        const turn = await askOzzie(harness(m.model, undefined, data), q, { skills });
+        expect(m.requests, JSON.stringify(q)).toHaveLength(0);
+        expect(turn.state, JSON.stringify(q)).toBe("refused");
+      }
+    }
+    for (const q of ["Is Blake's crim\u2800inal\u209Drecord clean?", "Is Blake not\u209Dyet clear\u2800ed?", "Is Blake not\u200Bclear\u2800ed?",
+      "Is Blake's crim\u05C8inal\u05C8record clean?"]) {
+      const m = anyModel();
+      expect(await askOzzie(harness(m.model), q, { skills }), q).toEqual({ state: "refused", text: REFUSALS.hidden });
+      expect(m.requests, q).toHaveLength(0);
+    }
+    expect(REFUSALS.hidden).toBe("This question has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Try typing it again in plain words.");
   });
 
   it("carries the out-of-date line the rest of Ask uses (review Q H1)", async () => {
@@ -587,10 +702,36 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
     expect(turn.answer.body).toContain("Also on the Sunday page, needing a decision:");
     expect(turn.answer.body).not.toContain(CAN_DO_INSTEAD);
   });
+
+  it("shows the page's own refusal when this Mac or ozzie.church refuses the wording, and the ledger keeps only “egress”", async () => {
+    // As if the page had let a question through (a bug, or a new caller): native agent_step refuses it before any
+    // request, or ozzie.church does before the AI. Both answer with the same fixed code.
+    expect(stepFailure("background-check")).toBe("egress");
+    const native = fakeLedger(command => command === "agent_step" ? Promise.reject("background-check") : {});
+    const notes = new StepNotes();
+    const r = recorder(native.invoke);
+    const h = createAppHarness({ workspace_id: "fictional", data: kidsData(), skills, session: new HarnessSession(), loop: "ts", recorder: r, step: agentStep(native.invoke, notes) });
+    const turn = await askOzzie(h, "Who could cover Greeter?", { recorder: r, skills, notes });
+    await r.idle();
+    expect(turn).toEqual({ state: "refused", text: REFUSALS.background });
+    expect(ASK_FAILURES.background).toBe(REFUSALS.background);
+    // The task is recorded as stopped for "egress", a fixed code; nothing typed or read is in any ledger call.
+    expect(shape(native.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "to failed egress"]);
+    expect(JSON.stringify(ledgerOnly(native.log))).not.toMatch(/Greeter|background|\[Role|\[Person/iu);
+  });
 });
 
 afterAll(() => {
-  // Over every question this file asked through a model, none carried background-check wording (review Q H2).
+  // Over every question this file asked through a model, none carried background-check wording (review Q H2), and none
+  // would be refused by the native or ozzie.church check, which scan what varies with the page's own list.
   expect(everyRequest.length).toBeGreaterThan(10);
-  for (const r of everyRequest) expect(JSON.stringify(r)).not.toMatch(BACKGROUND_IN_REQUEST);
+  for (const r of everyRequest) {
+    expect(JSON.stringify(r)).not.toMatch(BACKGROUND_IN_REQUEST);
+    for (const m of r.messages) {
+      if (m.role === "system") continue;
+      const texts = [m.content, ...(m.role === "assistant" ? (m.tool_calls ?? []).map(c => c.arguments) : [])];
+      if (m.role === "tool") expect(backgroundInToolResult(m.content), m.content).toBe(false);
+      else for (const t of texts) expect(backgroundWording(t), t).toBe(false);
+    }
+  }
 });

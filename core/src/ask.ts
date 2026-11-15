@@ -52,6 +52,7 @@ import type { BriefPerson, Finding, SundayBrief } from "./sunday-brief.js";
 import { applyDecisions, type DecisionChoice, type SundayDecision } from "./sunday-decisions.js";
 import { BACKGROUND_LINE, forModels } from "./kids-rules.js";
 import { BOOKS, containsName, fold, nameTerms, NOT_OURS, UNSPACED } from "./draft-request.js";
+import { backgroundWording, newerCharacter } from "./harness/background-wording.js";
 
 // Pinned natively by model_tests.rs (`the_fixed_ask_text_matches_the_webview_exactly`).
 export const ASK_SYSTEM = [
@@ -496,8 +497,12 @@ export const REFUSALS = {
   religious: "Ozzie doesn't write prayers, sermons, scripture or devotionals. That work stays with people.",
   care: "Ozzie doesn't give pastoral care, comfort or counsel. That stays with people.",
   /** Background checks stay on this Mac (owner decision 2026-11-14); the app answers these here instead (harness-bridge.ts). */
-  background: "Ozzie keeps background checks on this Mac and never sends them to the AI. Ask about them on their own, such as “Any background check problems?”, and Ozzie answers here from the Sunday page.",
-  backgroundNote: "Ozzie doesn't use AI help for notes about background checks, so nothing was sent. Here is what the Sunday page shows; you can write that note yourself.",
+  background: "Ozzie doesn't send questions with background-check or child-safety screening wording to the AI, so this one wasn't sent. Ask about the team by its role instead, or look at the Sunday page.",
+  backgroundNote: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. Here is what the Sunday page shows; you can write that note yourself.",
+  /** A note request with that wording and nothing from the Sunday page to show beside it. */
+  backgroundNoteAlone: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. You can write that note yourself, or look at the Sunday page.",
+  /** A character no question may hold once cleaned (hiddenInQuestion): the native and ozzie.church checks refuse it too. */
+  hidden: "This question has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Try typing it again in plain words.",
   send: "Ozzie can't send messages or change Planning Center. It can draft a note for you to send yourself.",
   rank: "Ozzie doesn't rank, score or label people. Ask who has no overlap found; people are listed in no particular order.",
   name: "Something in your question could be part of a name in Planning Center. Nothing was sent. Try different wording.",
@@ -553,20 +558,20 @@ const CARE_ASK = new RegExp([
   "\\b(?:what|how)\\b[^.?!]{0,40}\\b(?:say|tell|write|support|encourage)\\b[^.?!]{0,60}\\b(?:griev\\w*|grief|bereave\\w*|mourn\\w*|hurting|passed\\s+away|died|funeral|diagnos\\w*|cancer|divorce|depress\\w*|miscarriage)",
 ].join("|"), "u");
 /**
- * Background checks and their usual names (owner decision 2026-11-14: never sent to any model, even as placeholders;
- * review Q H2). On folded text. Questions with one are answered on this Mac (harness-bridge.ts), never prepared here.
+ * Whether text names a background check or one of its usual names (owner decision 2026-11-14: never sent to any model,
+ * even as placeholders; review Q H2), as prepareAsk reads it. The one list, harness/fixed/background-wording.json,
+ * which the native check and ozzie.church read too (harness/background-wording.ts). Questions with one are answered
+ * on this Mac (harness-bridge.ts), never prepared here.
  */
-export const BACKGROUND_WORDING = new RegExp([
-  "\\bbackground[\\s-]*(?:checks?|checked|checking|screen\\w*|clearances?|vett\\w*)",
-  "\\bbg\\s+checks?\\b", "\\bclearances?\\b", "\\b(?:un|not\\s+(?:yet\\s+)?|never\\s+)cleared\\b",
-  "\\bcleared\\s+(?:to|for)\\s+(?:serve|serving|work|working|volunteer\\w*|help\\w*|be\\s+with|kids|children|the\\s+nursery|nursery|childcare)",
-  "\\bscreened\\b", "\\bscreenings?\\b", "\\b(?:dbs|crb|pvg|wwcc)\\b", "\\bsafeguarding\\b", "\\bvett(?:ed|ing)\\b", "\\bfingerprint\\w*",
-  "\\bcriminal\\s+(?:records?|history|background|checks?)", "\\b(?:police|record|records|disclosure|sex\\s+offender\\w*)\\s+checks?\\b",
-  "\\bworking\\s+with\\s+(?:children|kids|vulnerable)\\s+checks?\\b",
-  "\\b(?:checks?|certificates?|clearances?)\\s+(?:has\\s+|have\\s+|had\\s+|is\\s+|was\\s+|are\\s+|were\\s+)?(?:expir\\w*|lapsed|out\\s+of\\s+date|run\\s+out|overdue)",
-].join("|"), "u");
-/** Whether typed text names a background check (review Q H2), as prepareAsk reads it. */
-export const mentionsBackgroundCheck = (typed: string) => BACKGROUND_WORDING.test(fold(typed));
+export const mentionsBackgroundCheck = (typed: string) => backgroundWording(typed);
+const HIDDEN_IN_QUESTION = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}⠀]/u;
+/**
+ * A character no question may hold (agent.rs `hidden_in_question`, ozzie.church `questionCharactersOk`): controls,
+ * format, private-use and surrogate characters, line and paragraph separators, every default-ignorable character, the
+ * blank braille pattern, and the background-check list's newer characters. Each folding of the list reads them one way,
+ * so a question mixing them could spell its wording past all three (review B3 L-1); the question is refused instead.
+ */
+export const hiddenInQuestion = (text: string) => HIDDEN_IN_QUESTION.test(text) || [...text].some(newerCharacter);
 // Requests to contact people or change records (review 2026-11-14, question side), matched on the folded
 // placeholder form with every person label as \u0001 and every role label as \u0002, so they are refused only as
 // actual requests: a verb said to Ozzie (at the start of a sentence, after "can you", "please", "I need you to",
@@ -870,7 +875,10 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   if (SEND_OR_CHANGE.test(marked)) return refuse(REFUSALS.send);
   if (RANKING.test(plain) || CHARACTER.test(plain)) return refuse(REFUSALS.rank);
   // Nothing about a background check is ever prepared for a model, even as placeholders (review Q H2).
-  if (BACKGROUND_WORDING.test(plain)) return refuse(DRAFT_ASK.test(plain) ? REFUSALS.backgroundNote : REFUSALS.background);
+  // Read as typed too: cleaning deletes zero-width characters, which would join "DBS​done" into one word (review B2).
+  if (mentionsBackgroundCheck(plain) || mentionsBackgroundCheck(typed)) return refuse(DRAFT_ASK.test(plain) ? REFUSALS.backgroundNote : REFUSALS.background);
+  // What cleaning kept of a hidden character, as the native and ozzie.church checks would refuse it (review B3 L-1).
+  if (hiddenInQuestion(sent)) return refuse(REFUSALS.hidden);
   // Fail closed: no roster name may remain as a whole word (header, point 5).
   if (containsNameWord(unprotected(sent), names, match)) return refuse(REFUSALS.name);
   if (sent.length > MAX_SENT_QUESTION_CHARS) return refuse(REFUSALS.long);

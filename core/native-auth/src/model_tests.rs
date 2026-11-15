@@ -2616,3 +2616,403 @@ fn a_gateway_reply_without_the_retention_confirmation_is_refused_and_still_spent
         assert!(send_debug(&config, &dir, &keys(), &http).is_ok());
     }
 }
+
+// ---- Background-check wording (background.rs; owner decision 2026-11-14) ------------------------------
+
+/// Background-check wording a page bug could let into a note: the review's usual names, a note about
+/// one, and look-alike forms.
+const BACKGROUND_WORDING: [&str; 8] = [
+    "Your background check expired, so you can't serve until it's renewed.",
+    "Is your clearance current?",
+    "Have you been screened yet?",
+    "We still need your DBS.",
+    "The safeguarding check is due.",
+    "Please get fingerprinted first.",
+    "Once you're cleared to serve, just let me know.",
+    "Your \u{ff22}\u{ff21}\u{ff23}\u{ff2b}\u{ff27}\u{ff32}\u{ff2f}\u{ff35}\u{ff2e}\u{ff24} back\u{200b}ground check.",
+];
+
+/// Each route this Mac can send on: managed (a debug build's direct path), an own provider, a local
+/// model, and managed through ozzie.church with a device token.
+fn background_routes() -> Vec<(&'static str, RouteConfig, HostedConfig, bool)> {
+    vec![
+        (
+            "managed",
+            RouteConfig::managed(),
+            HostedConfig::from_env(true, None),
+            false,
+        ),
+        (
+            "own",
+            RouteConfig::new(
+                Route::Own,
+                Some("https://api.example.invalid/v1"),
+                Some("vendor/model-1"),
+            )
+            .unwrap(),
+            HostedConfig::from_env(true, None),
+            false,
+        ),
+        (
+            "local",
+            RouteConfig::new(Route::Local, None, None).unwrap(),
+            HostedConfig::from_env(true, None),
+            false,
+        ),
+        (
+            "ozzie.church",
+            RouteConfig::managed(),
+            HostedConfig::from_env(false, None),
+            true,
+        ),
+    ]
+}
+
+#[test]
+fn background_check_wording_in_a_note_is_refused_before_any_key_budget_or_request_on_every_route() {
+    for (route, config, hosted, connected_mac) in background_routes() {
+        for wording in BACKGROUND_WORDING {
+            let dir = TempDir::new("reword-background");
+            let note = NOTE.replace(
+                "It's completely fine to say no.",
+                &format!("{wording} It's completely fine to say no."),
+            );
+            let request = draft(SYSTEM, &user("Make it warmer.", &note), 120);
+            let http = FakeHttp::default();
+            let (plain_keys, memory) = (keys(), connected());
+            let keys: &dyn ModelKeys = if connected_mac { &memory } else { &plain_keys };
+            let names = NameGuard::default();
+            let error = reword_with(
+                &config,
+                &dir.ledger(),
+                &request,
+                keys,
+                &names,
+                &http,
+                &hosted,
+            )
+            .err();
+            assert_eq!(
+                error,
+                Some(ModelError::BackgroundCheck),
+                "{route}: {wording:?}"
+            );
+            assert_eq!(http.count(), 0, "{route}: {wording:?}");
+            let looked =
+                plain_keys.lookups.load(Ordering::SeqCst) + memory.lookups.load(Ordering::SeqCst);
+            assert_eq!(looked, 0, "{route}: no key or device token read");
+            assert!(!dir.ledger().exists(), "{route}: nothing spent");
+            // The fixed code only: nothing of the note travels in it.
+            assert_eq!(
+                serde_json::to_string(&error).unwrap(),
+                "\"background-check\""
+            );
+        }
+    }
+    // The public entry point refuses it the same way, before any client exists.
+    let dir = TempDir::new("reword-background-entry");
+    let note = NOTE.replace("[Role]", "[Role] (background check needed)");
+    let request = draft(SYSTEM, &user("Make it shorter.", &note), 120);
+    assert_eq!(
+        reword(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &request,
+            &keys(),
+            &NameGuard::default()
+        )
+        .err(),
+        Some(ModelError::BackgroundCheck)
+    );
+    assert!(!dir.ledger().exists());
+}
+
+#[test]
+fn background_check_wording_anywhere_in_an_ask_request_is_refused_before_any_key_budget_or_request()
+{
+    let questions = [
+        "Any background check problems?",
+        "Is [Person 1]'s clearance current?",
+        "Has [Person 1] been screened?",
+        "Does [Person 1] have a DBS?",
+        "Was [Person 1] fingerprinted?",
+        "Is [Person 1] cleared to serve in [Role 1]?",
+        "Draft a note to [Person 7] saying his background check expired and he can't serve in [Role 2]",
+        "Any \u{ff22}\u{ff21}\u{ff23}\u{ff2b}\u{ff27}\u{ff32}\u{ff2f}\u{ff35}\u{ff2e}\u{ff24} check problems?",
+    ];
+    let mut requests: Vec<(String, AskRequest)> = questions
+        .iter()
+        .map(|question| (question.to_string(), asking(question)))
+        .collect();
+    // A fact line is scanned as well as the question.
+    requests.push((
+        "fact line".into(),
+        ask_request(
+            &format!("{FICTIONAL_FACTS}\nF9 | clearance"),
+            "Who could cover [Role 1]?",
+            600,
+        ),
+    ));
+    for (route, config, hosted, _) in background_routes() {
+        for (label, request) in &requests {
+            let dir = TempDir::new("ask-background");
+            let http = FakeHttp::default();
+            let keys = keys();
+            let names = fictional_roster();
+            let error = ask_with(
+                &config,
+                &dir.ledger(),
+                request,
+                &keys,
+                &names,
+                &http,
+                &hosted,
+            )
+            .err();
+            assert_eq!(error, Some(ModelError::BackgroundCheck), "{route}: {label}");
+            assert_eq!(
+                (http.count(), keys.lookups.load(Ordering::SeqCst)),
+                (0, 0),
+                "{route}: {label}"
+            );
+            assert!(!dir.ledger().exists());
+        }
+    }
+    let dir = TempDir::new("ask-background-entry");
+    assert_eq!(
+        ask(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &asking("Has [Person 1] been vetted?"),
+            &keys(),
+            &fictional_roster()
+        )
+        .err(),
+        Some(ModelError::BackgroundCheck)
+    );
+    assert!(!dir.ledger().exists());
+}
+
+#[test]
+fn ordinary_sunday_words_go_out_and_ozzies_pinned_words_are_compared_not_scanned() {
+    for question in [
+        "Who could cover [Role 1]?",
+        "Is the projection screen booked?",
+        "Who checked in?",
+        "Is the kids check-in desk covered?",
+    ] {
+        let dir = TempDir::new("ask-ordinary");
+        let http = FakeHttp::answering(vec![Ok((200, ok_reply("Fine.")))]);
+        let names = fictional_roster();
+        let sent = ask_using(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &asking(question),
+            &keys(),
+            &names,
+            &http,
+        );
+        assert!(sent.is_ok(), "{question}");
+        assert_eq!(http.count(), 1, "{question}");
+    }
+    for role in ["Projection Screen", "Check-In Desk", "Screen Team"] {
+        let dir = TempDir::new("reword-ordinary");
+        let http = FakeHttp::default();
+        let note = NOTE.replace("[Role]", role);
+        let request = draft(SYSTEM, &user("Make it warmer.", &note), 120);
+        assert!(
+            send(
+                &RouteConfig::managed(),
+                &dir.ledger(),
+                &request,
+                &keys(),
+                &http
+            )
+            .is_ok(),
+            "{role}"
+        );
+        assert_eq!(http.count(), 1, "{role}");
+    }
+    // Wording added to Ozzie's own instructions makes them not Ozzie's: refused as any changed
+    // system text is, never sent.
+    let dir = TempDir::new("pinned-background");
+    let http = FakeHttp::default();
+    let changed = draft(
+        &format!("{SYSTEM} Never mention background checks."),
+        &user("Make it warmer.", NOTE),
+        120,
+    );
+    assert_eq!(
+        send(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &changed,
+            &keys(),
+            &http
+        )
+        .err(),
+        Some(ModelError::InvalidRequest)
+    );
+    let changed = AskRequest {
+        system: format!("{ASK_SYSTEM} Never mention background checks."),
+        ..asking("Who could cover [Role 1]?")
+    };
+    let names = fictional_roster();
+    assert_eq!(
+        ask_using(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &changed,
+            &keys(),
+            &names,
+            &http
+        )
+        .err(),
+        Some(ModelError::InvalidRequest)
+    );
+    assert_eq!(http.count(), 0);
+}
+
+#[test]
+fn ozzie_churchs_background_check_refusal_is_the_same_fixed_code_on_rewording() {
+    let dir = TempDir::new("hosted-background");
+    let hosted = HostedConfig::from_env(false, None);
+    let names = NameGuard::default();
+    let http = FakeHttp::answering(vec![Ok((400, r#"{"error":"background-check"}"#.into()))]);
+    let error = reword_with(
+        &RouteConfig::managed(),
+        &dir.ledger(),
+        &plain(),
+        &connected(),
+        &names,
+        &http,
+        &hosted,
+    )
+    .err();
+    assert_eq!(error, Some(ModelError::BackgroundCheck));
+    assert_eq!(
+        serde_json::to_string(&error).unwrap(),
+        "\"background-check\""
+    );
+    // Any other status with that code stays the generic failure.
+    let http = FakeHttp::answering(vec![Ok((429, r#"{"error":"background-check"}"#.into()))]);
+    assert_eq!(
+        reword_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &plain(),
+            &connected(),
+            &names,
+            &http,
+            &hosted
+        )
+        .err(),
+        Some(ModelError::ProviderFailure)
+    );
+}
+
+#[test]
+fn a_note_with_a_hidden_character_is_refused_before_any_key_budget_or_request_and_emoji_still_go() {
+    // Review B2 M-1: rewording had no hidden-character rule, so an invisible blank inside a position
+    // name went to the AI. The page now sends such a name as [Role]; this is the backstop.
+    let with = |extra: &str| {
+        draft(
+            SYSTEM,
+            &user(
+                "Make it warmer.",
+                &NOTE.replace("one more person", &format!("one more person{extra}")),
+            ),
+            120,
+        )
+    };
+    for hidden in [
+        "\u{2800}",
+        "\u{3164}",
+        "\u{115f}",
+        "\u{ffa0}",
+        "\u{200b}",
+        "\u{ad}",
+        "\u{2065}",
+        "\u{e0080}",
+        "\u{feff}",
+        "\u{2028}",
+        "\u{7}",
+        "\r",
+        "\u{e000}",
+        "\u{200d}x",
+        "x\u{fe0f}",
+    ] {
+        for (route, config, hosted, connected_mac) in background_routes() {
+            let dir = TempDir::new("reword-hidden");
+            let http = FakeHttp::default();
+            let (plain_keys, memory) = (keys(), connected());
+            let keys: &dyn ModelKeys = if connected_mac { &memory } else { &plain_keys };
+            let names = NameGuard::default();
+            let request = with(&format!(" {hidden}"));
+            let error = reword_with(
+                &config,
+                &dir.ledger(),
+                &request,
+                keys,
+                &names,
+                &http,
+                &hosted,
+            )
+            .err();
+            assert_eq!(
+                error,
+                Some(ModelError::HiddenCharacter),
+                "{route}: {hidden:?}"
+            );
+            assert_eq!(http.count(), 0);
+            assert!(!dir.ledger().exists());
+        }
+    }
+    assert_eq!(
+        serde_json::to_string(&ModelError::HiddenCharacter).unwrap(),
+        "\"hidden-character\""
+    );
+    // Accents and emoji, with the joiners and selectors they are spelled with, still reword.
+    for ordinary in [
+        " (caf\u{e9})",
+        " \u{1f64f}",
+        " \u{2764}\u{fe0f}",
+        " \u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+        " 1\u{fe0f}\u{20e3}",
+        " \u{1f44d}\u{1f3fd}",
+        " \u{1f469}\u{1f3fd}\u{200d}\u{1f4bb}",
+        " \u{2764}\u{fe0f}\u{200d}\u{1f525}",
+        " \u{1f1fa}\u{1f1f8}",
+    ] {
+        let dir = TempDir::new("reword-emoji");
+        let http = FakeHttp::default();
+        assert!(
+            send(
+                &RouteConfig::managed(),
+                &dir.ledger(),
+                &with(ordinary),
+                &keys(),
+                &http
+            )
+            .is_ok(),
+            "{ordinary:?}"
+        );
+        assert_eq!(http.count(), 1, "{ordinary:?}");
+    }
+    // ozzie.church's own refusal is the same code.
+    let dir = TempDir::new("hosted-hidden");
+    let http = FakeHttp::answering(vec![Ok((400, r#"{"error":"hidden-character"}"#.into()))]);
+    assert_eq!(
+        reword_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &plain(),
+            &connected(),
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(false, None)
+        )
+        .err(),
+        Some(ModelError::HiddenCharacter)
+    );
+}

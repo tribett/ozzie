@@ -771,6 +771,34 @@ fn ozzie_church_refusals_and_connect_errors_are_closed_vocabularies() {
         refusal(400, br#"{"error":"contact-detail"}"#),
         Some(ContactDetail)
     );
+    // ozzie.church found background-check wording before the AI (web/ background.ts).
+    assert_eq!(
+        refusal(400, br#"{"error":"background-check"}"#),
+        Some(BackgroundCheck)
+    );
+    assert_eq!(
+        refusal(400, br#"{"error":"hidden-character"}"#),
+        Some(HiddenCharacter)
+    );
+    assert_eq!(
+        refusal(429, br#"{"error":"hidden-character"}"#),
+        Some(ProviderFailure)
+    );
+    for status in [402, 403, 429, 502] {
+        assert_eq!(
+            refusal(status, br#"{"error":"background-check"}"#),
+            Some(ProviderFailure),
+            "{status}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&BackgroundCheck).unwrap(),
+        "\"background-check\""
+    );
+    assert_eq!(
+        serde_json::to_string(&crate::agent::AgentError::from(BackgroundCheck)).unwrap(),
+        "\"background-check\""
+    );
     assert_eq!(
         refusal(400, br#"{"error":"invalid-request"}"#),
         Some(ProviderFailure)

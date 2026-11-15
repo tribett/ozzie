@@ -1,0 +1,26 @@
+{
+  "about": "The differential for background-check wording (review B2 L-2): every Unicode scalar value in ranges (start, end and step, in decimal; surrogates skipped), placed between \"a\" and \"b\", split into words under each folding. One line per code point: its upper-case hex, \":\", then the words under join, split and v010, each joined with a space and the three joined with \"/\", ending in a line feed. digest is the sha-256 of all the lines: the page (core/test/harness/background-wording-differential.test.ts), native (background.rs tests) and ozzie.church (hosted-parity.test.ts) must all reach it, so they split every character the same way. A different digest on one side means its Unicode data differs from the others': add the characters to newer_unicode in background-wording.json.",
+  "ranges": [
+    [
+      0,
+      196607,
+      1
+    ],
+    [
+      917504,
+      921599,
+      1
+    ],
+    [
+      196608,
+      917503,
+      257
+    ],
+    [
+      921600,
+      1114111,
+      257
+    ]
+  ],
+  "digest": "74fab765e21635afd77b06f72b105be26c97e72e8a85b74960eb0a750f80c38b"
+}

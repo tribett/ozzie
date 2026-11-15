@@ -50,8 +50,10 @@ export interface CardsUi {
   /** How many prepared follow-ups the copied list held (a count only). */
   followUps: number;
   copyProblem: boolean;
+  /** Why the Mac refused the photos just chosen; cleared by the next choice. */
+  refused: PickProblem | null;
 }
-export const emptyUi: CardsUi = { reading: {}, source: {}, recognizer: "unknown", ended: null, copied: 0, followUps: 0, copyProblem: false };
+export const emptyUi: CardsUi = { reading: {}, source: {}, recognizer: "unknown", ended: null, copied: 0, followUps: 0, copyProblem: false, refused: null };
 
 const LABEL: Record<FieldName, string> = { name: "Name", phone: "Phone", email: "Email", request: "Request — their exact words" };
 const SHORT: Record<FieldName, string> = { name: "Name", phone: "Phone", email: "Email", request: "Request" };
@@ -60,22 +62,67 @@ const LIMIT: Record<FieldName, number> = { name: 256, phone: 256, email: 256, re
 export const readingFor = (text: string, hard: boolean): Reading => hard ? "unclear" : text ? "typed" : "blank";
 
 /**
- * What the file picker offers: PNG and JPEG, by type and by name. The Mac app's file panel may still
- * list other files; anything else chosen is refused by the review with the same message.
+ * Native, on this Mac: Ozzie's own photo window, offering only PNG and JPEG (the two kinds the reader opens). It takes
+ * nothing from the page, so the page can never name a file to read; the Mac checks every chosen file (a plain file, a
+ * PNG or JPEG by its bytes, within the limits) and replies with the photos only: no names, no paths
+ * (src-tauri/src/card_picker.rs).
  */
-export const CARD_PHOTO_ACCEPT = "image/png,image/jpeg,.png,.jpg,.jpeg";
+export const cardPhotos = { choose: () => invoke<unknown>("choose_card_photos") };
 
-/** A fresh picker per choice, as in the shared card review; the chosen files are handed to `onFiles` once. */
-function pickCards(controller: CardReviewController, doc: Document, onFiles: (ticket: number, files: File[]) => void): number | null {
-  const input = doc.createElement("input");
-  input.type = "file"; input.multiple = true; input.accept = CARD_PHOTO_ACCEPT; input.hidden = true;
-  const reset = () => { input.value = ""; input.onchange = null; input.oncancel = null; input.remove(); };
-  const ticket = controller.choose(reset);
+/** Why the Mac refused a choice. Closed codes only; never a file name. */
+export type PickProblem = "not-a-photo" | "too-large" | "too-much-together" | "too-many" | "unreadable" | "unavailable";
+export const PICK_PROBLEM: Record<PickProblem, string> = {
+  "not-a-photo": "That isn't a photo Ozzie can read. Choose a PNG or JPEG picture of each card.",
+  "too-large": "That photo is over 8 MB. Choose PNG or JPEG photos of 8 MB or less.",
+  "too-much-together": "Those photos are over 24 MB together. Choose fewer at a time.",
+  "too-many": "That's more than 8 photos. Choose up to 8 at a time.",
+  unreadable: "Those photos couldn't be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each.",
+  unavailable: "The window for choosing photos couldn't open. Try again.",
+};
+const pickProblem = (code: unknown): PickProblem =>
+  typeof code === "string" && Object.hasOwn(PICK_PROBLEM, code) ? code as PickProblem : "unreadable";
+
+const MAX_PHOTOS = 8;
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+/**
+ * The photos in the Mac's reply, in the order chosen: per photo a kind byte (1 PNG, 2 JPEG), its length in 4 bytes and
+ * its bytes. Files are named only "Card 1" and so on. Empty when nothing was chosen; null for a reply that isn't that.
+ */
+export function cardPhotoFiles(reply: unknown): File[] | null {
+  const bytes = reply instanceof Uint8Array ? reply : reply instanceof ArrayBuffer ? new Uint8Array(reply) : null;
+  if (!bytes) return null;
+  const files: File[] = [];
+  for (let at = 0; at < bytes.length;) {
+    if (files.length === MAX_PHOTOS || at + 5 > bytes.length) return null;
+    const kind = bytes[at]!;
+    const length = new DataView(bytes.buffer, bytes.byteOffset + at + 1, 4).getUint32(0);
+    at += 5;
+    if ((kind !== 1 && kind !== 2) || length < 1 || length > MAX_PHOTO_BYTES || at + length > bytes.length) return null;
+    files.push(new File([bytes.slice(at, at + length)], `Card ${files.length + 1}.${kind === 1 ? "png" : "jpg"}`,
+      { type: kind === 1 ? "image/png" : "image/jpeg" }));
+    at += length;
+  }
+  return files;
+}
+
+/**
+ * "Choose card photos": opens the Mac's photo window for a new review. The chosen photos go to `onFiles` once;
+ * cancelling closes the review quietly; a refusal closes it and goes to `onRefused`.
+ */
+export function pickCards(controller: CardReviewController, choose: () => Promise<unknown>,
+  onFiles: (ticket: number, files: File[]) => void, onRefused: (problem: PickProblem) => void): number | null {
+  const ticket = controller.choose(() => {});
   if (ticket === null) return null;
-  input.onchange = () => onFiles(ticket, Array.from(input.files ?? []));
-  input.oncancel = () => { controller.discard(ticket); };
-  doc.body.append(input);
-  try { input.click(); } catch { controller.discard(ticket); }
+  choose().then(reply => {
+    const files = cardPhotoFiles(reply);
+    if (files?.length) { onFiles(ticket, files); return; }
+    controller.discard(ticket);
+    if (files === null) onRefused("unreadable");
+  }, (code: unknown) => {
+    controller.discard(ticket);
+    // Another photo window is already open: that one carries on.
+    if (code !== "busy") onRefused(pickProblem(code));
+  });
   return ticket;
 }
 /** The Mac's file panel briefly takes focus; wait for the window to come back before the review starts. */
@@ -288,7 +335,8 @@ function CardsHost({ people, workspace }: { people: Readonly<Record<string, stri
   const start = () => {
     recognized.current.clear();
     setUi(u => ({ ...emptyUi, recognizer: u.recognizer }));
-    const t = pickCards(controller, document, (t, chosen) => { void begin(t, chosen); });
+    const t = pickCards(controller, cardPhotos.choose, (t, chosen) => { void begin(t, chosen); },
+      problem => setUi(u => ({ ...u, refused: problem })));
     current.current = t;
     setTicket(t);
   };
@@ -347,6 +395,7 @@ export function CardsReview({ controller, ticket, ui, people, lines, onChoose, o
         : active && reading > 0 ? `Reading card ${Math.min(total - reading + 1, total)} of ${total} on this Mac…`
           : active ? `${cards.length} ${cards.length === 1 ? "card" : "cards"} open for checking.` : ""}</p>
     {status === "error" && <p role="alert" className="problem">Those photos couldn't be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each.</p>}
+    {ui.refused && !open && status !== "error" && <p role="alert" className="problem">{PICK_PROBLEM[ui.refused]}</p>}
     {ui.ended === "copied" && !open && <div className="panel-ok" role="status"><Icon name="check" />
       <p><strong>Reviewed here; nothing saved to your church's tools.</strong> Copied {ui.copied === 1 ? "1 card" : `${ui.copied} cards`}. Paste the list where your church keeps visitor records.{ui.followUps > 0 && ` The list includes ${ui.followUps === 1 ? "1 prepared follow-up" : `${ui.followUps} prepared follow-ups`}. Choose who will follow up in your church tools; Ozzie won't contact anyone.`} This review is closed and nothing from it was kept in Ozzie. The list is on this Mac's clipboard until you copy something else; if you use Universal Clipboard or a clipboard history app, it may be there too.</p></div>}
     {status === "closed" && ui.ended !== "copied" && (ui.ended === "discarded" || total > 0) && <p className="panel-sunken">{ui.ended === "discarded" ? "Discarded. Nothing from these cards was kept." : "This review is closed and nothing from it was kept. Switching away from Ozzie or leaving this page closes it."} Choose the photos again to start over.</p>}

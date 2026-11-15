@@ -15,6 +15,7 @@ import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
 import { ADDED_HOW, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, HELP, LOCAL_HOW, LOCAL_NOTE } from "./harness-words.js";
 import { Icon } from "./icons.js";
+import { DraftActions, type OpenDraft } from "./draft-actions.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { isVoiceShortcut, listenInto, LISTENING_NOTE, nativeVoice, VOICE_HINT, VOICE_SHORTCUT, voiceOff, type Voice, type VoiceStatus } from "./voice.js";
 
@@ -72,13 +73,15 @@ function MicIcon() {
 }
 const BasedOn = ({ text }: { text: string }) => <p className="ask-based"><Icon name="check" small />{text}</p>;
 
-function DraftCard({ text }: { text: string }) {
+/** A drafted note in an answer: copy it, or open it unsent in Mail or Messages for the person to send. */
+export function DraftCard({ text, open }: { text: string; open?: OpenDraft | undefined }) {
   const [copied, setCopied] = useState(false);
   return <div className="draft ask-draft" role="region" aria-label="Draft note">
     <span className="badge b-draft">Draft only. Nothing has been sent.</span>
     <div className="draft-body">{text.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}</div>
-    <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => { void navigator.clipboard?.writeText(text).then(() => setCopied(true)); }}>
-      {copied ? "Copied — send it yourself" : "Copy draft"}</button></div>
+    <DraftActions text={text} small split open={open}
+      copy={<button type="button" className="btn btn-secondary btn-sm" onClick={() => { void navigator.clipboard?.writeText(text).then(() => setCopied(true)); }}>
+        {copied ? "Copied — send it yourself" : "Copy draft"}</button>} />
   </div>;
 }
 

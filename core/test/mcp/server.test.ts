@@ -270,6 +270,10 @@ describe("the shared file is refused whole when anything in it is off", () => {
     ["an hour of 24", o => { (o["tasks"] as SharedTask[])[0]!.updated_at = "2026-11-20T24:00:00Z"; }],
     ["an offset of 24 hours", o => { (o["tasks"] as SharedTask[])[0]!.events[0]!.at = "2026-11-20T15:00:00+24:00"; }],
     ["a time in a fixed sentence on February 30", o => { (payload(o, 4)["services"] as string[]).push("2026-02-30"); }],
+    // Background-check wording that fixed words can still spell never goes to another AI app (owner decision 2026-11-14;
+    // review B L3), even when the grammar lets it through.
+    ["background-check wording in fixed words", o => { (payload(o, 4)["services"] as string[]).push("The check is out of date."); }],
+    ["records check in fixed words", o => { (payload(o, 4)["services"] as string[]).push("Some records check out."); }],
   ];
   it.each(cases)("%s", async (_label, change) => {
     const text = await tamper(change);
@@ -278,6 +282,10 @@ describe("the shared file is refused whole when anything in it is off", () => {
     // Refused whole, and said exactly as when nothing is shared: a file that isn't Ozzie's tells the other app nothing.
     expect(out).toBe(allText(serverOver(() => null)));
     expect(out).not.toMatch(/Avery|555/u);
+  });
+  it("Ozzie's own out-of-date line, exactly as it writes it, is still shared", async () => {
+    const own = "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.";
+    expect(parseSharedCheck(await tamper(o => { (payload(o, 4)["services"] as string[]).push(own); }))).not.toBeNull();
   });
   it("a real February 29 is a real date", async () => {
     expect(parseSharedCheck(await tamper(o => { o["shared_at"] = "2028-02-29T15:06:00Z"; }))).not.toBeNull();

@@ -1,5 +1,5 @@
 import { OtherAiAppsSetup } from "./other-ai-apps-setup.js";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
@@ -66,8 +66,8 @@ export function YourNameField({ store = yourName }: { store?: { get(): string; s
   </div>;
 }
 
-/** Settings: Planning Center, AI help, your name on notes, automatic checks, other AI apps, saved recordings and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, oneClick, nameStore }: {
+/** Settings: Planning Center, AI help, your name on notes, automatic checks, the closed window, updates, other AI apps, saved recordings and guided setup, in that order. */
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, oneClick, nameStore, updates }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** The automatic-check schedule, summarized here and changed under What runs automatically. */
@@ -82,6 +82,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   oneClick?: boolean;
   /** Tests only: where "Your name for notes" is kept, instead of this Mac's storage. */
   nameStore?: { get(): string; set(name: string): void };
+  /** New versions of Ozzie (updates-view.tsx `UpdatesSection`), shown after the closed-window section. */
+  updates?: ReactNode;
 }) {
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
@@ -141,6 +143,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
         <AutostartToggle autostart={autostart} />
       </div>
     </section>}
+
+    {updates}
 
     {sharing && <section className="settings-sec" aria-labelledby="other-ai-title">
       <h2 id="other-ai-title" className="h3">Other AI apps</h2>

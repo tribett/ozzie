@@ -440,3 +440,41 @@ fn kids_counts_are_shared_as_placeholders_and_a_background_check_never_is() {
         );
     }
 }
+
+/// A not-checked result holding `line` among what wasn't checked.
+fn not_checked_with(line: &str) -> String {
+    format!(
+        r#"{{"tool":"sunday.not_checked","source":"Planning Center Services","check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{{"fact":"f1","reads":26,"reads_not_completed":0,"too_old_to_treat_as_current":true,"services":[],"rooms_follow_ups_groups":["{line}"]}}}}"#
+    )
+}
+
+#[test]
+fn background_check_wording_the_grammar_could_form_is_never_written_to_the_shared_copy() {
+    // Review B L3 (owner decision 2026-11-14: "never in the copy shared with other AI apps"). Fixed
+    // words alone can still spell "the check is out of date" or "records check": the grammar lets
+    // them through, the wording check refuses the share whole, and nothing is written.
+    let names = roster();
+    for line in ["The check is out of date.", "Some records check out."] {
+        let envelope = not_checked_with(line);
+        assert!(
+            tool_message_ok(&envelope, "sunday.not_checked", &names),
+            "{line}: only the wording check refuses it"
+        );
+        assert_eq!(
+            checked_envelopes(std::slice::from_ref(&envelope), &names),
+            Err(ShareError::Invalid),
+            "{line}"
+        );
+        let dir = on("share-background");
+        assert_eq!(
+            share(&dir.0, &[envelope], &[], &names, COPY, NOW),
+            Err(ShareError::Invalid)
+        );
+        assert!(!dir.0.join(SHARED_FILE).exists(), "{line}");
+    }
+    // Ozzie's own out-of-date line, exactly as it writes it, is shared as before.
+    let own = not_checked_with(
+        "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    );
+    assert!(checked_envelopes(&[own], &names).is_ok());
+}

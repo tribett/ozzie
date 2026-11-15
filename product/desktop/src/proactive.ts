@@ -18,14 +18,15 @@ import { sundayOperations } from "../../../core/src/operations-capture.js";
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
  * Shared by "Check Planning Center now" and the schedule so both behave the same.
  */
-export async function verifiedSundayCheck(ctx: { settings: Settings; status: ConnectionStatus | null }, onStatus: (s: ConnectionStatus) => void): Promise<SundayCapture> {
+export async function verifiedSundayCheck(ctx: { settings: Settings; status: ConnectionStatus | null; rules?: SundayRules }, onStatus: (s: ConnectionStatus) => void): Promise<SundayCapture> {
   // Tokens last about two hours, and a saved connection must be re-verified after restart.
   if (ctx.status?.state !== "connected") {
     const verified = await connection.refresh(ctx.settings.clientId, ctx.settings.organization, true);
     onStatus(verified);
     if (verified.state !== "connected") throw "not-connected";
   }
-  return sundaySource.check(ctx.settings.serviceTypeId, ctx.settings.planId);
+  // The rules in use for this church (App's, never another church's kids teams), else this Mac's saved ones.
+  return sundaySource.check(ctx.settings.serviceTypeId, ctx.settings.planId, ctx.rules);
 }
 
 /** Lock-screen privacy: the title and body are fixed in native code; the webview passes no text at all. */

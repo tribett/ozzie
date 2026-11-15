@@ -11,11 +11,12 @@
 // and the open decisions a decision question's answer left out (decisionsLeftOut). Both run the same read-only tools on
 // this Mac and add background checks from the brief itself, so nothing about one is ever in any request. Their names
 // are looked up on this Mac with labels of their own (KeptNames), never minted in the session shared with the AI.
-import { BACKGROUND_WORDING, DRAFT_ASK, NOT_COVERED } from "../ask.js";
+import { DRAFT_ASK, mentionsBackgroundCheck, NOT_COVERED } from "../ask.js";
 import { fold } from "../draft-request.js";
 import { BACKGROUND_CHECKS, BACKGROUND_LINE, backgroundChecksOn, forModels, kidsTeams } from "../kids-rules.js";
 import type { Finding } from "../sunday-brief.js";
 import { applyDecisions, type DecidedItem } from "../sunday-decisions.js";
+import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
 import { FACT_LISTS, localIso, type HarnessData, type HarnessTools } from "./tools.js";
@@ -440,7 +441,14 @@ const stem = (w: string) => w.replace(/ies$/u, "y").replace(/s$/u, "");
 const teamWords = (text: string) => [...new Set(fold(text).split(/[^\p{L}\p{N}]+/u).filter(w => w.length >= 3 && !GENERIC_WORDS.has(w)).map(stem))];
 /** Whether a question's own words are about kids or background checks (and not a request for a note): those are answered
  *  on this Mac, so they need no AI model. kidsQuestion then decides which teams, from what the check read. */
-export const kidsWording = (typed: string) => { const text = fold(typed); return !DRAFT_ASK.test(text) && (KIDS_WORDS.test(text) || BACKGROUND_WORDING.test(text)); };
+export const kidsWording = (typed: string) => { const text = fold(typed); return !DRAFT_ASK.test(text) && (KIDS_WORDS.test(text) || mentionsBackgroundCheck(typed)); };
+/**
+ * For text the background-check list stopped: whether it names a check (namesACheck) or kids, so the Sunday page's
+ * background checks, or that no kids team is marked, answer it (review B3 L-2). Otherwise it holds only wording that
+ * also names other things ("the Safe Sanctuaries team", "a sex offender policy") and gets the plain refusal, with
+ * nothing beside it that could read as an answer (reviews B2 L-3, B3 N-2). Never decides what is sent.
+ */
+export const asksAboutChecksOrKids = (typed: string) => namesACheck(typed) || KIDS_WORDS.test(fold(typed));
 
 export interface KidsQuestion {
   /** The teams asked about: kids teams in the order the Church rules mark them, or, with none marked, the teams named. */
@@ -467,7 +475,7 @@ export function kidsQuestion(typed: string, data: HarnessData): KidsQuestion | n
   if (!brief) return null;
   const text = fold(typed);
   if (DRAFT_ASK.test(text)) return null;
-  const kids = KIDS_WORDS.test(text), background = BACKGROUND_WORDING.test(text), who = WHO_WORDS.test(text);
+  const kids = KIDS_WORDS.test(text), background = mentionsBackgroundCheck(typed), who = WHO_WORDS.test(text);
   const marked = kidsTeams(data.rules), kidsIds = marked.map(t => t.team_id);
   const asked = new Set(teamWords(typed));
   const names = new Map<string, string[][]>();

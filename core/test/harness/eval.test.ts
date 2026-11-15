@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { containsNameWord, hasContactDetail, NOT_COVERED, REFUSALS } from "../../src/ask.js";
 import { NATIVE_TOOL_ALLOWLIST, type AgentStepReply, type AgentStepRequest, type AgentToolCall, type ModelStep, type TaskOutcome } from "../../src/harness/contract.js";
+import { backgroundInToolResult, backgroundWording } from "../../src/harness/background-wording.js";
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
 import { ASK_SKILL, composeAnswer, Harness } from "../../src/harness/index.js";
 import { LABEL_PATTERN } from "../../src/harness/session.js";
@@ -338,6 +339,10 @@ describe("every request a model could receive holds no name, contact detail or s
           for (const message of request.messages) {
             const strings = [message.content, ...("tool_calls" in message && message.tool_calls ? message.tool_calls.map((c: AgentToolCall) => c.arguments) : [])];
             for (const s of strings) expect(containsNameWord(s, names), `${label} / ${skill}`).toBe(false);
+            // What native and ozzie.church scan for background-check wording (everything but the pinned system
+            // message): an ordinary task is never refused by them, out-of-date checks and kids teams included.
+            if (message.role === "tool") expect(backgroundInToolResult(message.content), `${label} / ${skill}`).toBe(false);
+            else if (message.role !== "system") for (const s of strings) expect(backgroundWording(s), `${label} / ${skill}`).toBe(false);
           }
         }
       }

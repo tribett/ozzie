@@ -41,7 +41,13 @@
 //!    messages get the hidden-character, escape and contact checks raw, the name check on their
 //!    label and time strings, and a check that their sentences of fixed words spell no run of two or
 //!    more of a name's parts (`NameGuard::present_as_phrase`);
-//!  - max_tokens at most 700; the model id holds no remembered name.
+//!  - max_tokens at most 700; the model id holds no remembered name;
+//!  - no background-check wording in anything that varies: the question, the model's words, tool
+//!    arguments and tool results (background.rs, the page's own list; owner decision 2026-11-14:
+//!    background-check facts never go to any model route, even as placeholders). Checked right after
+//!    the sizes and refused as `background-check`, so the page shows its own refusal. Tool results are
+//!    read one string at a time. A reply's own words that hold it are dropped when the reply arrives
+//!    (`read_reply`), so they are never echoed and never refuse an ordinary task.
 //!
 //! A step then reads the route's key, looks at the same per-route call cap as rewording and Ask
 //! and at the route's agent steps per UTC day (model.json `agent_steps_per_day`, local route
@@ -81,6 +87,7 @@
 //!
 //! Errors are a closed vocabulary (`AgentError`); nothing from a request, a reply or a key is ever
 //! carried, and keys stay inside model.rs.
+use crate::background::{self, background_wording};
 use crate::fixed;
 use crate::hosted::{self, HostedConfig};
 use crate::ledger::{StepRefusal, StepView, TaskKind, TaskLedger, task_id_ok};
@@ -204,6 +211,11 @@ pub enum AgentError {
     /// Ozzie managed: ozzie.church refused the step as holding a phone number or email address.
     /// Nothing went to the AI; the loop fails the task as `egress`.
     ContactDetail,
+    /// Background-check wording in what varies (the question, the model's own words, tool arguments
+    /// or tool results; background.rs, owner decision 2026-11-14), found here before any key, budget,
+    /// step or network, or by ozzie.church before the AI. Nothing went to the AI; the loop fails the
+    /// task as `egress`, the only thing the ledger records of it.
+    BackgroundCheck,
 }
 impl From<ModelError> for AgentError {
     fn from(error: ModelError) -> Self {
@@ -218,6 +230,9 @@ impl From<ModelError> for AgentError {
             ModelError::NamePresent => Self::Egress,
             ModelError::AllowancePaused => Self::AllowancePaused,
             ModelError::ContactDetail => Self::ContactDetail,
+            ModelError::BackgroundCheck => Self::BackgroundCheck,
+            // Rewording's alone; an agent step's hidden characters are refused as `egress`.
+            ModelError::HiddenCharacter => Self::Egress,
             // ozzie.church counts the task's steps too: the same limit the ledger keeps here.
             ModelError::StepLimit => Self::Limit,
         }
@@ -326,9 +341,12 @@ fn nfkc(text: &str) -> String {
 /// Line breaks other than `\n`, controls other than `\t`, format, private-use and surrogate
 /// characters (Ask's question rule, `not_in_a_question`, with ordinary newlines and tabs allowed),
 /// and every invisible character: Default_Ignorable_Code_Point (Hangul fillers U+115F, U+1160,
-/// U+3164, U+FFA0, variation selectors, …) and the blank braille pattern U+2800.
+/// U+3164, U+FFA0, variation selectors, …) and the blank braille pattern U+2800; and the
+/// background-check list's newer characters (`background::newer`, review B3 L-1).
 fn hidden(c: char) -> bool {
-    c != '\n' && c != '\t' && (model::not_in_a_question(c) || name_guard::invisible(c))
+    c != '\n'
+        && c != '\t'
+        && (model::not_in_a_question(c) || name_guard::invisible(c) || background::newer(c))
 }
 /// `\u…`, `\x…`, `&#…`, a named HTML entity (`&shy;`, `&nbsp;`) or a percent-escape (`%69`): text
 /// a model could decode into characters the checks never saw.
@@ -531,15 +549,20 @@ fn question_labels_ok(text: &str) -> bool {
     }
     model::ask_labels_standalone(text, &labels)
 }
+/// A character no Ask question may hold: a line break, control, format, private-use or invisible
+/// character, or one of the background-check list's newer characters (review B3 L-1). The page
+/// refuses the same before anything is sent (core/src/ask.ts `hiddenInQuestion`).
+pub(crate) fn hidden_in_question(text: &str) -> bool {
+    text.chars()
+        .any(|c| model::not_in_a_question(c) || name_guard::invisible(c) || background::newer(c))
+}
 /// An Ask task's user message: one question line under Ask's question rules (model.rs `check_ask`):
-/// at most MAX_ASK_QUESTION_CHARS, no line break, control, format, private-use or invisible
-/// character, every square bracket a placeholder label standing alone (raw and NFKC), and the text
-/// checks under the "capitalized only" name rule.
+/// at most MAX_ASK_QUESTION_CHARS, no hidden character (`hidden_in_question`), every square
+/// bracket a placeholder label standing alone (raw and NFKC), and the text checks under the
+/// "capitalized only" name rule.
 fn question_ok(text: &str, names: &NameGuard) -> bool {
     chars_within(text, 1, model::MAX_ASK_QUESTION_CHARS)
-        && !text
-            .chars()
-            .any(|c| model::not_in_a_question(c) || name_guard::invisible(c))
+        && !hidden_in_question(text)
         && question_labels_ok(text)
         && question_labels_ok(&nfkc(text))
         && prose_ok(text, names)
@@ -755,6 +778,29 @@ fn messages_ok(
     // Every reply echoed, and every call answered.
     ok && replies.next().is_none() && calls.values().all(|(answered, _)| *answered)
 }
+/// Whether anything that varies holds background-check wording (background.rs): the user message,
+/// the model's own words and tool-call arguments, and every tool message, one string at a time. The
+/// system message and the tool specs are Ozzie's own words, pinned byte for byte by `messages_ok` and
+/// `tools_ok` in the same check (a request whose system message isn't the procedure's exact text is
+/// refused as `egress`), so they are not scanned; a test shows none of them holds the wording. The
+/// model's own words can only be here if a reply carried them, and `read_reply` drops those first
+/// (review B M1), so an ordinary task is never refused for what the model wrote.
+fn background_in(messages: &[AgentMessage]) -> bool {
+    messages.iter().any(|message| match message {
+        AgentMessage::System { .. } => false,
+        AgentMessage::User { content } => background_wording(content),
+        AgentMessage::Tool { content, .. } => background::in_tool_result(content),
+        AgentMessage::Assistant {
+            content,
+            tool_calls,
+        } => {
+            background_wording(content)
+                || tool_calls
+                    .iter()
+                    .any(|call| background_wording(&call.arguments))
+        }
+    })
+}
 /// Every native check on a request against the task as the ledger holds it (see the module
 /// comment). Runs before any key, budget or network.
 pub fn check_step(
@@ -767,6 +813,11 @@ pub fn check_step(
     // Sizes first, so the text checks never run over an oversized request (C7: `limit`).
     if !size_ok(&request.messages, &request.tools) {
         return Err(AgentError::Limit);
+    }
+    // Background-check wording before the other checks, so it is refused as itself wherever it is
+    // (owner decision 2026-11-14), even in a request that would fail another check too.
+    if background_in(&request.messages) {
+        return Err(AgentError::BackgroundCheck);
     }
     let expected = Expected {
         system: &system,
@@ -905,7 +956,14 @@ fn read_reply(
     if !chars_within(content, 0, MAX_REPLY_CHARS) || !prose_ok(content, names) {
         return Err(AgentError::Egress);
     }
+    // The model's own words with background-check wording ("The check is out of date, so I'll read
+    // Planning Center again.") are never kept, so no later request echoes them and no ordinary task is
+    // refused for them (owner decision 2026-11-14; review B M1): beside tool calls they are dropped and
+    // the calls go on; a reply of words alone is no answer Ozzie can use (`invalid-answer`). ozzie.church
+    // digests the reply the same way (web gatewayReplyDigest), so the echo still binds.
+    let wording = background_wording(content);
     match reason {
+        Some("length") if wording => return Err(AgentError::InvalidAnswer),
         Some("length") => {
             return Ok(AgentStepReply {
                 content: content.to_owned(),
@@ -958,6 +1016,11 @@ fn read_reply(
             arguments: arguments.to_owned(),
         });
     }
+    let content = if wording && !tool_calls.is_empty() {
+        ""
+    } else {
+        content
+    };
     if content.is_empty() && tool_calls.is_empty() {
         return Err(malformed);
     }
@@ -1057,7 +1120,9 @@ fn outcome(reply: &Result<AgentStepReply, AgentError>) -> &'static str {
             Finish::ToolCalls => "tool_calls",
             Finish::Length => "length",
         },
-        Err(AgentError::Egress | AgentError::ContactDetail) => "egress",
+        Err(AgentError::Egress | AgentError::ContactDetail | AgentError::BackgroundCheck) => {
+            "egress"
+        }
         Err(AgentError::Denied) => "denied",
         Err(
             AgentError::Limit

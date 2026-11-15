@@ -4,6 +4,7 @@ import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { roomRules } from "../../../core/src/operations-capture.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import { Icon } from "./icons.js";
+import { churchList } from "./connection.js";
 import { KidsTeamsRules } from "./kids-rules-section.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import { FromYourCards, useFeedback } from "./finding-feedback.js";
@@ -39,7 +40,7 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
 }
 
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
-export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null }: {
+export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [] }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
   /** Team leaders Planning Center lists, by team (null when that read didn't complete). Names resolve on this Mac. */
   leaders?: Record<string, string[] | null>; names?: Record<string, string>;
@@ -49,6 +50,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   procedures?: readonly Skill[] | null;
   /** A procedure to open and bring into view (from a Sunday card's "See how this works"). */
   focus?: string | null;
+  /** Churches whose rules for their own teams and rooms are kept aside while Ozzie uses another church. */
+  keptElsewhere?: { organization: string; name?: string }[];
 }) {
   // What the person told Ozzie on finding cards, kept with these rules; deleting one says so, with Undo.
   const { controls, notice } = useFeedback({ entries: feedbackOf(rules), onEntries: next => onChange({ ...rules, feedback: next }) }, names);
@@ -74,6 +77,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     <p className="eyebrow">Church rules</p>
     <h1 className="h1">How your church wants Sunday checked</h1>
     <p className="lede">These are your church's choices. Changing one updates the Sunday view right away using what was already read. Nothing in Planning Center changes.</p>
+    {keptElsewhere.length > 0 && <p className="banner"><Icon name="info" small /><span>Rules you set for the teams and rooms of {churchList(keptElsewhere)} are kept for {keptElsewhere.length === 1 ? "that church" : "those churches"} and don't apply here. They come back if Ozzie uses {keptElsewhere.length === 1 ? "that church" : "one of them"} again.</span></p>}
     <section className="find">
       <h2 className="h3">Check in after Sundays in a row</h2>
       <p className="find-body">Flag anyone confirmed this many Sundays in a row, so a person can check in. It's about care, not performance.</p>

@@ -7,12 +7,21 @@ import { CardReviewController } from "../../src/card-review/controller.js";
 import type { CardView } from "../../../core/src/card-review/lifecycle.js";
 import { readLines, reviewedList, type ReadLine } from "../../../core/src/card-fields.js";
 import {
-  CARD_PHOTO_ACCEPT, CardsReview, checkCard, emptyUi, escapeCloses, listFor, lookFirst, placeLine, readCardsLocally, readingFor,
+  cardPhotoFiles, CardsReview, checkCard, emptyUi, escapeCloses, listFor, lookFirst, pickCards, PICK_PROBLEM, placeLine, readCardsLocally, readingFor,
   type CardsUi, type CardTextResult, type FieldSource, type ReadState,
 } from "../src/cards-page.js";
 
 // Invented people and synthetic printed-card text only. No real card or photo is used.
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+/** The Mac's reply to "Choose card photos" (src-tauri/src/card_picker.rs `frame`): kind, 4-byte length, bytes. */
+const frameOf = (...photos: [number, Uint8Array][]) => {
+  const out = new Uint8Array(photos.reduce((n, [, b]) => n + 5 + b.byteLength, 0));
+  let at = 0;
+  for (const [kind, bytes] of photos) {
+    out[at] = kind; new DataView(out.buffer).setUint32(at + 1, bytes.byteLength); out.set(bytes, at + 5); at += 5 + bytes.byteLength;
+  }
+  return out;
+};
 const people = { "511": "Riley Thornbury", "512": "Sam Whitcombe" };
 const CARD_A = "Name: Riley Thornbury\nPhone: (555) 014-2290\nEmail: riley.t@example.com\n\nPrayer request: Please pray for my\nnew job starting Monday.\n";
 const CARD_B = "Name: Jordan Quillfeather\nPhone: 555 O1Z 77\nEmail:\n\nHow can we pray for you?\nFor my mom, who is in the hospital.\n";
@@ -350,8 +359,76 @@ describe("prepared follow-ups and the copied list", () => {
 });
 
 describe("photos, controls and what is announced", () => {
-  it("asks the picker for PNG and JPEG only, and still refuses anything else with the same message", async () => {
-    expect(CARD_PHOTO_ACCEPT).toBe("image/png,image/jpeg,.png,.jpg,.jpeg");
+  it("chooses photos only through Ozzie's own photo window, which the page can't hand a file name or path", () => {
+    const source = readFileSync(new URL("../src/cards-page.tsx", import.meta.url), "utf8");
+    // No browser file input is left to bypass the Mac's own checks.
+    expect(source).not.toMatch(/type\s*=\s*["']file["']|createElement\(["']input["']\)|accept\s*=/u);
+    expect(source).toContain('invoke<unknown>("choose_card_photos")');
+    expect(source).not.toMatch(/invoke<[^>]*>\("choose_card_photos",/u);
+  });
+
+  it("opens the photos the Mac checked, in the order chosen, named only by card number", async () => {
+    const jpeg = new Uint8Array([255, 216, 255, 224, 0, 16]);
+    const reply = frameOf([1, PNG], [2, jpeg]);
+    const files = cardPhotoFiles(reply.buffer)!;
+    expect(files.map(f => [f.name, f.type, f.size])).toEqual([["Card 1.png", "image/png", PNG.byteLength], ["Card 2.jpg", "image/jpeg", jpeg.byteLength]]);
+    expect(new Uint8Array(await files[1]!.arrayBuffer())).toEqual(jpeg);
+    expect(cardPhotoFiles(reply)).toHaveLength(2);
+    expect(cardPhotoFiles(new ArrayBuffer(0))).toEqual([]);
+    // Anything that isn't the Mac's reply opens nothing.
+    for (const bad of [
+      frameOf([3, PNG]), frameOf([0, PNG]), frameOf([1, new Uint8Array(0)]), frameOf([1, PNG]).slice(0, 9), new Uint8Array([1, 0, 0]),
+      frameOf(...Array.from({ length: 9 }, () => [1, PNG] as [number, Uint8Array])), new Uint8Array([1, 0x00, 0x80, 0x00, 0x01, 137]),
+    ]) expect(cardPhotoFiles(bad.buffer.slice(bad.byteOffset, bad.byteOffset + bad.byteLength)), String(bad.slice(0, 6))).toBeNull();
+    for (const bad of [null, undefined, "photos", [1, 2, 3], { 0: 1 }]) expect(cardPhotoFiles(bad)).toBeNull();
+  });
+
+  it("hands the chosen photos to the review once, closes quietly on Cancel and says plainly why photos were refused", async () => {
+    const make = () => new CardReviewController("fictional-test", { foreground: () => true, createURL: () => "blob:x", revokeURL() {}, decode: async () => true });
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    const run = async (reply: () => Promise<unknown>) => {
+      const controller = make();
+      const chosen: File[][] = [];
+      const refused: string[] = [];
+      const calls: unknown[][] = [];
+      const ticket = pickCards(controller, (...args: unknown[]) => { calls.push(args); return reply(); },
+        (t, files) => { expect(t).toBe(ticket); chosen.push(files); }, p => { refused.push(p); });
+      expect(controller.status).toBe("choosing");
+      await settle();
+      // The page asks for the window and passes nothing to it.
+      expect(calls).toEqual([[]]);
+      return { controller, ticket: ticket!, chosen, refused };
+    };
+    const picked = await run(async () => frameOf([1, PNG], [1, PNG]).buffer);
+    expect([picked.chosen.length, picked.chosen[0]!.length, picked.refused]).toEqual([1, 2, []]);
+    expect(await picked.controller.select(picked.ticket, picked.chosen[0]!)).toBe("ok");
+    const cancelled = await run(async () => new ArrayBuffer(0));
+    expect([cancelled.controller.status, cancelled.chosen, cancelled.refused]).toEqual(["closed", [], []]);
+    for (const [code, words] of [
+      ["not-a-photo", "That isn&#x27;t a photo Ozzie can read. Choose a PNG or JPEG picture of each card."],
+      ["too-large", "That photo is over 8 MB. Choose PNG or JPEG photos of 8 MB or less."],
+      ["too-much-together", "Those photos are over 24 MB together. Choose fewer at a time."],
+      ["too-many", "That&#x27;s more than 8 photos. Choose up to 8 at a time."],
+      ["unavailable", "The window for choosing photos couldn&#x27;t open. Try again."],
+      ["something-new", "Those photos couldn&#x27;t be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each."],
+    ] as const) {
+      const r = await run(() => Promise.reject(code));
+      const problem = code === "something-new" ? "unreadable" : code;
+      expect([r.controller.status, r.chosen, r.refused]).toEqual(["closed", [], [problem]]);
+      expect(PICK_PROBLEM[problem]).toBe(words.replaceAll("&#x27;", "'"));
+      const html = renderPage(r.controller, null, { refused: problem });
+      expect(html).toContain(`<p role="alert" class="problem">${words}</p>`);
+      expect(html).toContain("Choose card photos");
+    }
+    // A reply that isn't photos is refused, not opened.
+    const garbled = await run(async () => "not photos");
+    expect([garbled.controller.status, garbled.refused]).toEqual(["closed", ["unreadable"]]);
+    // Another photo window already open carries on; nothing is said.
+    const busy = await run(() => Promise.reject("busy"));
+    expect([busy.controller.status, busy.refused]).toEqual(["closed", []]);
+  });
+
+  it("still refuses anything but PNG and JPEG in the review itself, with the same message", async () => {
     for (const file of [new File(["# notes"], "README.md", { type: "text/markdown" }), new File(["<svg/>"], "visitor-a.svg", { type: "image/svg+xml" })]) {
       const controller = new CardReviewController("fictional-test", { foreground: () => true, createURL: () => "blob:x", revokeURL() {}, decode: async () => true });
       const ticket = controller.choose(() => {})!;

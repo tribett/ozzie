@@ -14,9 +14,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 import { AiSettings, ManagedActions, ManagedDetails } from "../src/ai-settings.js";
 import {
-  answersLeft, managedNotice, managedProblem, model, modelProblem, offlineLine, PAUSED_TEXT, planName, resetDay, STEPS_PER_ANSWER, usageLine,
+  answersLeft, BACKGROUND_NOTE_TEXT, HIDDEN_NOTE_TEXT, managedNotice, managedProblem, model, modelProblem, offlineLine, PAUSED_TEXT, planName, resetDay, STEPS_PER_ANSWER, usageLine,
   type ManagedAccount, type ModelStatus,
 } from "../src/model.js";
+import { REFUSALS } from "../../../core/src/ask.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
 
 const account = (over: Partial<ManagedAccount> = {}): ManagedAccount => ({
@@ -137,6 +138,13 @@ describe("Ozzie managed: the Settings row", () => {
       "This note looks like it holds a phone number or email address, so Ozzie managed didn't send it to the AI. Your draft is unchanged.",
     );
     expect(modelProblem("rate-limited")).toBe("The AI service asked Ozzie to slow down. Try again in a minute.");
+    // A note with background-check wording, stopped on this Mac or by ozzie.church: the page's own words for a note about one.
+    expect(modelProblem("background-check")).toBe(BACKGROUND_NOTE_TEXT);
+    expect(BACKGROUND_NOTE_TEXT).toBe("Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. Your draft is unchanged.");
+    expect(REFUSALS.backgroundNote.startsWith(BACKGROUND_NOTE_TEXT.replace(" Your draft is unchanged.", ""))).toBe(true);
+    // A note holding a hidden character, stopped on this Mac or by ozzie.church (review B2 M-1).
+    expect(modelProblem("hidden-character")).toBe(HIDDEN_NOTE_TEXT);
+    expect(HIDDEN_NOTE_TEXT).toBe("This note has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Your draft is unchanged.");
     expect(PAUSED_TEXT).toBe("Your church's AI help is paused until the allowance resets or your church changes plan. Checks, lists, Church rules and briefings keep working.");
   });
 });

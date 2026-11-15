@@ -132,6 +132,13 @@ export function routeProblem(error: unknown): string {
   if (known.includes("not-configured") || known.includes("invalid")) return "Ozzie couldn't use that address. It needs an https address for the provider (not Planning Center), or a model on this Mac.";
   return "Ozzie couldn't save that choice. Try again.";
 }
+/**
+ * A note with background-check wording, stopped on this Mac or by ozzie.church before the AI (native `background-check`;
+ * owner decision 2026-11-14): the page's own words for a note about one (ask.ts REFUSALS.backgroundNote), then the draft.
+ */
+export const BACKGROUND_NOTE_TEXT = "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. Your draft is unchanged.";
+/** A note holding a hidden or invisible character, stopped on this Mac or by ozzie.church before the AI (native `hidden-character`). */
+export const HIDDEN_NOTE_TEXT = "This note has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Your draft is unchanged.";
 /** Ozzie managed's allowance is spent (native `allowance-paused`): the same words wherever AI help was asked for. */
 export const PAUSED_TEXT = "Your church's AI help is paused until the allowance resets or your church changes plan. Checks, lists, Church rules and briefings keep working.";
 export function modelProblem(error: unknown): string {
@@ -143,5 +150,7 @@ export function modelProblem(error: unknown): string {
   if (known.includes("budget")) return "The AI spending cap for this Mac has been reached. Your draft is unchanged.";
   if (known.includes("rate-limited")) return "The AI service asked Ozzie to slow down. Try again in a minute.";
   if (known.includes("contact-detail")) return "This note looks like it holds a phone number or email address, so Ozzie managed didn't send it to the AI. Your draft is unchanged.";
+  if (known.includes("background-check")) return BACKGROUND_NOTE_TEXT;
+  if (known.includes("hidden-character")) return HIDDEN_NOTE_TEXT;
   return "The AI model couldn't be reached. Your draft is unchanged.";
 }

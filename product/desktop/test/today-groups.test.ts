@@ -225,7 +225,7 @@ describe("Sunday's decisions show once", () => {
     const attention = page.slice(page.indexOf("Needs your attention"), page.indexOf("Ready to review"));
     const review = page.slice(page.indexOf("Ready to review"), page.indexOf("In progress"));
     expect(attention).toMatch(/Needs a decision Overnight Planning Center Services .*Sunday has 2 things to decide\. Ozzie noticed this at .+ while keeping an eye on Sunday\. Notes ready Ozzie has a note ready for these on the Sunday page\. Nothing has been sent\. Open Sunday/u);
-    expect(review).toMatch(/Ready to review 1 item Ready Ozzie prepared · Keep Sunday covered .*Ozzie drafted a note for Sunday\. Draft only\. Nothing has been sent\. Hi Avery, Could you greet on Sunday\? Copy draft Open Sunday/u);
+    expect(review).toMatch(/Ready to review 1 item Ready Ozzie prepared · Keep Sunday covered .*Ozzie drafted a note for Sunday\. Draft only\. Nothing has been sent\. Hi Avery, Could you greet on Sunday\? Copy draft Open in Mail Open in Messages Opens a new message in this Mac's email app or Messages, with no one in To: you choose who it goes to, check it and send it yourself\. Open Sunday/u);
     expect(review).not.toMatch(/decide|need a decision|notes? (?:is|are) ready/u);
     // Across the three groups (the spoken briefing below them is a summary of everything, read aloud).
     expect(page.slice(0, page.indexOf("Listen to today")).match(/2 things (?:to decide|need a decision)/gu)).toHaveLength(1);

@@ -1,9 +1,12 @@
 //! Read-only native authentication; Sunday production issuance remains unavailable.
 pub mod agent;
+pub mod background;
 pub mod callback;
+pub mod connections;
 pub mod credentials;
 pub mod fixed;
 pub mod hosted;
+pub mod in_use;
 pub mod ledger;
 pub mod lifetime;
 pub mod model;

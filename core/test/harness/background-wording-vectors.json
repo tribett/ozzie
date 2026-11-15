@@ -1,0 +1,810 @@
+{
+  "about": "Shared vectors for the background-check wording list (core/src/harness/fixed/background-wording.json), run by the page (core/test/harness/background-wording.test.ts), the native check (core/native-auth/src/background.rs tests) and ozzie.church (web/test/hosted-parity.test.ts). match: text every side refuses (reviews B and B2 included: possessives, \"is the check in\", invisible blanks between words, Ozzie's own sentence inside other text, characters newer than the page's Unicode data). refused_on_purpose: ordinary text every side refuses anyway because it reads exactly like a background-check question, as v0.1.0 did; on the page it gets the refusal or an answer written on this Mac. pass: text no side may refuse (Ozzie's own sentence as a whole string included). known_misses: wording the list does not catch, kept so the limits stay written down and tested. hidden: wording no folding reads (its invisible or newer characters must be deleted at one point and read as a word break at another), which every route refuses anyway because it holds a character no question may hold: the page (prepareAsk), the native Ask check (agent.rs `hidden_in_question`) and ozzie.church's (`questionCharactersOk`) (review B3 L-1). tool_match and tool_pass: tool results, scanned one string at a time. tokens: [text, folding, words] for each folding (join, split, v010). Fictional names only.",
+  "match": [
+    "Any background check problems?",
+    "Is Riley's clearance current?",
+    "Is [Person 1]'s clearance current?",
+    "Has Casey been screened?",
+    "Does Sam have a DBS?",
+    "Has Riley's enhanced DBS come back?",
+    "Is the safeguarding check done for Morgan?",
+    "Has Drew been vetted?",
+    "Garda vetting for the youth team",
+    "Was Riley fingerprinted?",
+    "Was [Person 3] finger printed?",
+    "Is Riley cleared to serve in the nursery?",
+    "Is [Person 2] cleared to serve?",
+    "Is Morgan cleared for childcare?",
+    "Is Casey cleared to teach?",
+    "Is Sam cleared to be with kids?",
+    "Is Drew cleared for the nursery?",
+    "Riley's check expired, who else can cover?",
+    "[Person 1]'s check expired",
+    "Is his check overdue?",
+    "Her checks were out of date",
+    "The check has lapsed",
+    "Has her clearance expired?",
+    "Background-check status for the greeters?",
+    "Is Casey not cleared yet?",
+    "Is Casey not yet cleared?",
+    "Drew was never cleared",
+    "Two volunteers are uncleared",
+    "Does Sam have a criminal record check?",
+    "Any criminal history for Drew?",
+    "Run a criminal background check",
+    "Did the police check come back for Morgan?",
+    "Is the disclosure check back?",
+    "Whose certificate has run out?",
+    "Has her certificate expired?",
+    "What about the CRB for Drew?",
+    "PVG scheme membership",
+    "What is Riley's WWCC number?",
+    "Has Riley done the working with children check?",
+    "Is anyone on the sex offender registry?",
+    "Draft a note to Riley saying his background check expired",
+    "Draft a note to [Person 7] saying his background check expired and he can't serve in the [Role 2]",
+    "Write a message to Casey about her clearance",
+    "background screening for new volunteers",
+    "Who is background-screened?",
+    "bg check",
+    "BG checks for the kids team",
+    "BGcheck done?",
+    "backgroundcheck",
+    "Background-Checked volunteers",
+    "background checker",
+    "back ground check",
+    "Is Blake's backround check done?",
+    "Is Blake's MinistrySafe done?",
+    "Has the background's check come back for Blake?",
+    "Is Blake's BG check in?",
+    "Is Blake Ashgrove's bg check in yet?",
+    "BG check in?",
+    "Did Blake's police check in March come back clear?",
+    "Is the police check in for the new greeters?",
+    "Are the police checks in for the greeters?",
+    "Has the disclosure check in the binder been signed for Blake?",
+    "Records check in progress for Blake?",
+    "Blake's last check expired, who else can cover Greeter?",
+    "Has Blake's last check expired?",
+    "Blake's latest check is overdue, who can cover?",
+    "Is Blake's latest check overdue?",
+    "last check expired",
+    "latest check is overdue",
+    "Blake's last check expired",
+    "his latest check is overdue for nursery",
+    "Blake's Sunday check expired",
+    "Has [Person 7]'s last check expired?",
+    "What's the bg check's status for Blake?",
+    "Has Blake's DBS's renewal come back?",
+    "Has Blake\u2019s DBS\u2019s renewal come back?",
+    "When is Blake's clearance's renewal due?",
+    "Is the police check's result back for Blake?",
+    "Is Blake's WWCC's renewal done?",
+    "What's the vetting's status for Blake?",
+    "Is the safeguarding's paperwork done for Blake?",
+    "Blake's CRB's expiry",
+    "Is Blake's disclosure check's date current?",
+    "Blake's DBS'",
+    "o'dbs",
+    "x'clearance",
+    "the screened' list",
+    "BACKGROUND CHECK",
+    "\uff22\uff21\uff23\uff2b\uff27\uff32\uff2f\uff35\uff2e\uff24 \uff23\uff28\uff25\uff23\uff2b",
+    "\ud835\udc1b\ud835\udc1a\ud835\udc1c\ud835\udc24\ud835\udc20\ud835\udc2b\ud835\udc28\ud835\udc2e\ud835\udc27\ud835\udc1d \ud835\udc1c\ud835\udc21\ud835\udc1e\ud835\udc1c\ud835\udc24",
+    "back\u200bground check",
+    "back\u00adground check",
+    "b\u00e4ckgr\u00f6und ch\u00e9ck",
+    "background\u2014check",
+    "background\u2010check",
+    "background \t\n   check",
+    "background...check",
+    "background_check",
+    "Has Blake been scr\u2800eened?",
+    "Has Blake been scr\u3164eened?",
+    "Has Blake been scr\u115feened?",
+    "Has Blake been scr\u1160eened?",
+    "Has Blake been scr\uffa0eened?",
+    "Has Blake been scr\u2065eened?",
+    "Has Blake been scr\ufff0eened?",
+    "Has Blake been scr\udb40\udc80eened?",
+    "Has Blake been scr\udb40\uddf0eened?",
+    "Has Blake been scr\u180eeened?",
+    "Is Blake's clear\u200dance current?",
+    "Is Blake's clear\u2060ance current?",
+    "Is Blake's clear\ufeffance current?",
+    "Is Blake's clear\u061cance current?",
+    "Is Blake's clear\u17b4ance current?",
+    "Is the Sunday Greeter check overdue?",
+    "Is the Sunday [Role 1] check overdue?",
+    "Blake's DBS\u3164renewal?",
+    "Is Blake's DBS\u2800done?",
+    "Is Blake's clearance\u2800up to date?",
+    "Has Blake been screened\u115fyet?",
+    "Is Blake's DBS\uffa0renewal done?",
+    "Is Blake's DBS\u2065done?",
+    "Is Blake's DBS\ufff0done?",
+    "Is Blake's DBS\udb40\udc80done?",
+    "Blake's\u3164DBS\u3164renewal",
+    "DBS\u3164Team",
+    "Security\u2800Screening",
+    "police Use it at most once, and only when the last check is out of date.",
+    "Blake's background Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    "Has the If the last check is out of date and Planning Center can be checked again, check again first. expired",
+    "Has Blake's background Use it at most once, and only when the last check is out of date.",
+    "Blake: Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    "Is Blake's Use it at most once, and only when the last check is out of date. Who else can cover Greeter?",
+    "Blake's police Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    "use it at most once, and only when the last check is out of date.",
+    "Use it at most once, and only when the last check is out of date",
+    "Use it at most once, and only when the last check is out of date.Has Blake's check expired?",
+    "rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown. ",
+    " Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    "Has Blake been scr\u05c8eened?",
+    "Has Blake been scr\u0b53eened?",
+    "Has Blake been scr\u1adeeened?",
+    "Has Blake been scr\u1aeceened?",
+    "Has Blake been scr\ud803\udecbeened?",
+    "Has Blake been scr\ud803\udef0eened?",
+    "Has Blake been scr\ud807\uddf0eened?",
+    "Has Blake been scr\ud834\udd27eened?",
+    "Has Blake been scr\ud834\ude50eened?",
+    "Has Blake been scr\ud834\ude5beened?",
+    "Has Blake been scr\ud834\ude5feened?",
+    "Has Blake been scr\ud834\ude80eened?",
+    "BG\u209dCHECK",
+    "Blake's Bkgd\u1adecheck expired",
+    "police\ud834\udd27check",
+    "DBS\u05c8renewal",
+    "clearance\ud834\ude80up to date",
+    "Is Blake's DBS\u200bdone?",
+    "Blake's DBS\u200dstatus",
+    "Is Blake's DBS\u2060done?",
+    "Is Blake's DBS\u180edone?",
+    "Is Blake's DBS\u00addone?",
+    "Who will run the bg-check table?",
+    "Blake's bg_check status",
+    "Is Riley cleared to teach?",
+    "Is anyone on the sex offender registry?",
+    "Blake is on the offender registry",
+    "Has Riley been finger printed?",
+    "Is Blake a registered sex offender?",
+    "Is Blake a registered offender?",
+    "Is Blake on the sex offender list?",
+    "Blake's sex offender status",
+    "registered offenders",
+    "Any sex offenders on the team?",
+    "Blake is a sex offender",
+    "Did Blake's background come back?",
+    "Did Blake's background come back clean?",
+    "Has the background come back for Blake?",
+    "Blake's background came back",
+    "When does the background come back?",
+    "Riley's finger prints",
+    "finger print",
+    "Riley's finger-printing appointment",
+    "Is Blake Safe Sanctuaries certified?",
+    "Has Riley done Safe Sanctuaries training?",
+    "Safe Sanctuaries",
+    "Safe Sanctuaries' paperwork for Riley"
+  ],
+  "refused_on_purpose": [
+    "Is this check out of date?",
+    "Is the Sunday check out of date?",
+    "Is Sunday's check out of date?",
+    "Is the last check overdue?",
+    "The check is out of date, so I'll read Planning Center again.",
+    "Who will record check-in numbers?",
+    "Can you record check-ins for the kids?",
+    "Is the movie screening on Friday covered?",
+    "Who is hosting the film screening?",
+    "Health screening table volunteers",
+    "Who could cover the security screening at the door?",
+    "Does Riley have clearance to park in the lot?",
+    "Who is on the Safeguarding team this Sunday?",
+    "Is the background check-in slide ready?",
+    "Can you fix the background screen on the projector?",
+    "Use it at most once, and only when the last check is out of date.",
+    "If the last check is out of date and Planning Center can be checked again, check again first.",
+    "Who is on the Safe Sanctuaries team?",
+    "Is there a sex offender policy for Sunday?",
+    "Where is our registered offender policy?",
+    "Who is leading the finger print art craft?",
+    "Has the background come back from the printer?"
+  ],
+  "pass": [
+    "Who could cover Greeter?",
+    "Is the projection screen booked?",
+    "Who checked in?",
+    "Who checks in the kids?",
+    "Is the kids check-in desk covered?",
+    "Is everyone checked in for the nursery?",
+    "Check-In station volunteers",
+    "check-in suggested",
+    "Is the screen team covered?",
+    "Who runs the screens on Sunday?",
+    "Who will screen-share the slides?",
+    "Has the room been cleared?",
+    "Clear the stage after the service",
+    "Is the hallway clear?",
+    "Is the background music covered?",
+    "Is the background slide ready?",
+    "Who could cover the nursery?",
+    "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.",
+    "The last check is current",
+    "not needed; the last check is current",
+    "Has the check for this Sunday finished?",
+    "This check is more than 30 minutes old, so it may not be current.",
+    "no unowned overdue follow-ups found",
+    "The criminal justice ministry meets Tuesday",
+    "The van has been checked",
+    "What still needs a decision this Sunday?",
+    "Who could help in the nursery?",
+    "Is the nursery ready for Sunday?",
+    "Is the kids ministry safe for Sunday?",
+    "Who is on the safety team?",
+    "Who leads the clean-up crew?",
+    "Draft a note to [Person 1] about [Role 1]",
+    "a schedule fact for a person to look at; about care, not performance",
+    "confirmed people counted; ages not checked",
+    "Who cleared the stage?",
+    "Did the coffee order run out?",
+    "Is the screen-share ready?"
+  ],
+  "known_misses": [
+    "b\u0430ckground check",
+    "b a c k g r o u n d check",
+    "b4ckground check",
+    "backgrounds checked",
+    "Has Riley been checked by the police?",
+    "Is Riley allowed near the kids?",
+    "Has Ozzie's check on Blake expired?",
+    "Has Blake done Protect My Ministry yet?",
+    "Has Blake passed his check?",
+    "Is Blake cleared?",
+    "Is Blake screen ed?",
+    "Has Blake's BGC come back?",
+    "Blake's D.B.S. status",
+    "Blake's d-b-s status"
+  ],
+  "hidden": [
+    "Is Blake's crim\u2800inal\u209drecord clean?",
+    "Is Blake not\u209dyet clear\u2800ed?",
+    "Is Blake not\u200bclear\u2800ed?",
+    "Is Blake's crim\u05c8inal\u05c8record clean?",
+    "clearanc\uffa0e\u1adeout\"of\u2014DA\u209dTE",
+    "Has Riley had a sa\u2800fe\ud835\udea6SANCTUARIES yet",
+    "Wo\u00adrking\u2019W\u00edth\ud835\udea6cHIldREn\ud834\udd27C\u2800HECKS",
+    "offenderers lapsed\ud807\uddf0backgroundc\u1160heckings\udb40\uddf0volun\uff54eerers",
+    "REGISTERE\u034fD\u209dof\udb40\udc80fenders list",
+    "background&cam\ufe0fe\u0b53bac\u1160k list",
+    "this\u200fpr\u2170nts\u0b53bgche\uffa0ck",
+    "Is Blake's bk\u1160Gd\u0b53check?",
+    "servingss'\u2069WORKINGING\tchildcarex\ud837\udfd3pv\u1160g",
+    "Who is on the CLEARANC\u1160ES\ud837\udfd3out)ofdate team?",
+    "n\udb40\udc80ot\ud807\uddf0cleared list",
+    "CE\u3164RTIFICATE are/ou\u0165)\u00f8f\ud837\udfd3date",
+    "Blake no\ufff0t)Yet\u05c8cleared",
+    "Who is on the s\u0301afe\ud807\uddf0SANCTUAR\ufff0IES team?",
+    "REG\ufff0ISTEREd\u1adeOFFENDER",
+    "Blake cRImIn\udb40\udc41aL\u1adeHIST\u2065ORYS",
+    "Riley's worki\u034fng \uff57ith\ud83c\uddec\ud83c\udde7Kids\u0b53Che\u2065ck",
+    "OFFENDERINGS\ud807\uddf0VETT\u3164ED?disclosure",
+    "Riley's background\u0b53co\u1160mes BacK",
+    "offender\u2065ers\u1adeBACKGROUNDCLEARANC\u1160E",
+    "Who is on the ChecK\ud807\uddf0exp\u1160ir team?",
+    "Any not\u0b53ye\u115ft\u3000c\u1160leared problems?",
+    "Is Blake's Bkg\u1160d\ud837\udfd3check?",
+    "d\u3164bs\u1adeservingings",
+    "Any No\u115ft\ud837\udfd3cleared problems?",
+    "Any S\u00aafe\ud834\udd27Sanctu\udb40\udc80aries problems?",
+    "Who is on the neve\u2065r\u1adecleared team?",
+    "Blake n\u00bat\ud834\udd27YE\uff54 cleare\u2800d",
+    "Any WORKING_With\u0b53KI\u2065Ds\ud83c\uddec\ud83c\udde7checks problems?",
+    "c\ufff0rb\u05c8screenings1cl\u212fared",
+    "Is Blake's N\u2800OT\u0b53YET c\u2800LeAred?",
+    "Any police\u209dCh\udb40\uddf0ecks problems?",
+    "Ba\uffa0ckground\u209dcame\nBack list",
+    "never\u1adeclear\udb40\udc80ed list",
+    "Any back.gro\ufff0und\u0b53checking problems?",
+    "Did n\u1160ot\u0b53cleared come back?",
+    "Is there a \uff43LEArEd\ud807\uddf0TO\u02bcse\uffa0rve policy for Sunday?",
+    "Who is on the cleared\u2013F\u00bar\u0b53be\u02bcwi\u3164th team?",
+    "Did BACKGROUND\ud83c\uddec\ud83c\udde7come\ud807\uddf0BAC\udb40\udc80K come back?",
+    "Any backrou\u2065nd\ud837\udfd3checKing problems?",
+    "check?have\u2010o\u1160ut\ud834\udd27\uff4ff\u2014dat\u212f",
+    "Is Blake's neve\u3164r\ud834\udd27cleared?",
+    "Who is on the c\u115fhecks WaS\ud834\udd27r\u180eun out'\udb40\udc41s team?",
+    "not\ud837\udfd3ye\uff54\u02bcC\u1160leared list",
+    "Is Blake's che\u200ecks\nHA\ufe00D_ru\u3164n\ud835\udea6Out?",
+    "Did b\u200cackround\u1adecH\udb40\uddf0ECK's come back?",
+    "Is Blake's SE\u3164X\u209doffenders?",
+    "Is Blake's ba\udb40\udc80CkRoUnd\u05c8check?",
+    "nev\u1160er\u1adeCLEARED",
+    "N\u00f8T\u209dyet'clear\u2800ed",
+    "OFFENDERERS\ud837\udfd3fi\udb40\uddf0ngerprinting\u0b53PRINTI\u200fNGS\u2010Teach",
+    "Riley's RECORDS\ud837\udfd3chEC\u2800k",
+    "n\u00bat\ud834\udd27ye\u3164t(cleared",
+    "Is Blake's CERTIFICATE\ud807\uddf0run.ou\u3164t?",
+    "Riley's Background\u1adecomes\nBA\u2065CK",
+    "Is there a Ch\u212fcks\u1ader\u2800un out policy for Sunday?",
+    "working\u1adew\u115fith  children\u2010checks",
+    "Did RE\uff47iStErEd\ud837\udfd3OFF\ufff0ENDER come back?",
+    "Did CLEARED\ud835\udea6TO\u05c8n\u3164ursery come back?",
+    "o\u200euted\udb40\udc01laps\u1160eding\ud807\uddf0w\u115fwcc\ud835\udea6BAC\u2060K",
+    "Riley's BA\uffa0CK\ud837\udfd3ground\u2014S\uff43reen",
+    "bgchec\uffa0k\u05c8NURSERYERS",
+    "Is there a CertiFi\u2060cate\ud807\uddf0wa\uffa0s)RUN/OUTING policy for Sunday?",
+    "no\u3164t\ud834\udd27YE\u0165\u0b53CL\udb40\udc80EARED list",
+    "back\u200fround\ud834\udd27ch\ufff0ecked",
+    "Is Blake's CLEARE\u180bD to\u05c8Th\u1160e\u209dNu\uff52sery?",
+    "Who is on the ne\u3164ver\u209dCLEARED team?",
+    "backg\u115fround\ud807\uddf0\u017f Checkers",
+    "back\ud835\udea6G\u2800ROUND: SCRE\u115fENS list",
+    "CERTIFICATES\ud835\udea6lap\u115fsed list",
+    "Who is on the certificates\ud807\uddf0RUN\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67Ou\u115ft team?",
+    "Did backgr\u2065ound\ud834\udd27s\u2013\u00e7HECKS come back?",
+    "se\u115fx\ud807\uddf0\u00f8ffender",
+    "Is Blake's Background\u05c8\u017f\u3000CHEC\u2065KING?",
+    "no\u1160t\u2011Y\u2060et\ud807\uddf0CLeaREd list",
+    "Riley's crim\u115final\u1adeB\uff41ckground",
+    "Is there a bac\udb40\udc80kround\u209dsc\u0159een policy for Sunday?",
+    "Any \u0111ISCLOSURE\u209dCHE\u3164CKS problems?",
+    "OFF\u0119NDERED\u2011wither SEX\ud837\udfd3backgroundch\ufff0ecked",
+    "Has Riley had a C\u217cEARED\u2764\ufe0ffo\uff52.th\u3164e\u1adenursery yet",
+    "vol\u00adunteerings\ud807\uddf0Backgroundsc\u2800reens",
+    "Is there a working\u2014with Chil\udb40\udc80dren\u209dcheck policy for Sunday?",
+    "Any n\u2065ot\u05c8cleared problems?",
+    "childrening\ud834\udd27backgro\ufff0undchecked0c\u1160heck",
+    "NEVE\u115fR\u1adec\ufeffleared",
+    "Is there a ch\udb40\udc80eck\u05c8lA\uff50SEDEd policy for Sunday?",
+    "Riley's DISCLOSU\u0159E\u05c8CHE\u2800CK",
+    "Blake wo\u0159king\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67w\udb40\uddf0ith cHilDReN\ud837\udfd3CH\udb40\udc80ECKS",
+    "Is Blake's certi\ufff0ficates\u2764\ufe0fRun\u209dOut?",
+    "no\uffa0t\ud807\uddf0cleared list",
+    "Is Blake's Cleared\u2011Fo\u0159\u0b53t\udb40\udc80he(NURSERY?",
+    "SCREENX\u200cbAcKGRouND\u05c8BAC\udb40\udc80KGROUNDCHECKS\ud835\udea6A\ud834\udd27RE",
+    "Any neve\uffa0r\ud807\uddf0Cleare\u217e problems?",
+    "Is Blake's Backgroun\udb40\uddf0d\u2013comes\ud807\uddf0BAck?",
+    "Is Blake's not\ud834\udd27cleare\u2065d?",
+    "vettx\ud834\udd27backgr\udb40\udc80oundchecking\uffa0Exp\uff49rer\u17b4expirers",
+    "Blake ClEa\u2065raNCe\u1adeweres'-run\nOUT",
+    "ba\u00e7kground com\u2065e\ud807\uddf0bac\uff4b list",
+    "Blake working\ud834\udd27Wi\u3164th\r\n\uff4bids \u00e7hecks",
+    "Blake BackgROund(Came\ud837\udfd3ba\uffa0ck",
+    "Any bac\uffa0kground\u02bcs\u0b53Checked problems?",
+    "cRI\ufff0Minal\ud807\uddf0record list",
+    "scre\u1160ened\u05c8Kidser\u1160Sunday\u3000childcareer",
+    "Lapse\uff44ers registries\ud807\uddf0cle\u2065arances",
+    "Is there a clearanc\u3164es\u209dLAPSEDERS policy for Sunday?",
+    "Blake safe\ud834\udd27sanctuar\udb40\uddf0ies",
+    "checks R\udb40\uddf0UN\ud835\udea6out",
+    "Blake s\u115fex\ud837\udfd3off\u0119nder",
+    "BACKG\udb40\uddf0ROUND\ud837\udfd3S_checkers list",
+    "Who is on the neve\u2800r\u0b53CLEARED team?",
+    "Did Ce\u2800rTIFicates\ud807\uddf0ARE  expir come back?",
+    "Riley's not Y\u115fet\u1ade\u217dleared",
+    "saf\uffa0e\u0b53sanctuaries list",
+    "helping\u200cchec\u180bks\u200dservingin\ud835\udea6g\u209dvette\u2065d",
+    "te\u00e1m\u0b53screenin\u115fgs\u2019teach\ue000childcare\u1160ers",
+    "Riley's sAf\uffa0e\u05c8sanctuaries",
+    "back\ud837\udfd3gro\udb40\udc80und C\ufeffHECKERS",
+    "cr\udb40\uddf0b\ud837\udfd3OFFENDE\u0159X CHILDRENER",
+    "Back\uffa0round\ud807\uddf0SCREEN'S list",
+    "Who is on the background\ud83d\ude42Cam\u2065e\u05c8back team?",
+    "Blake Not\tYe\udb40\udc80t\u1adecleared",
+    "Riley's record\uffa0s\u0b53\uff43heck",
+    "printx\u05c8backgroun\uffa0dchecks\ue000FO\u180bR",
+    "Blake CHECKS'HAVE\u0b53ou\u1160t&OF\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67dates\u2019s",
+    "Is Blake's cleared\u05c8for\u2010childcar\u2800e?",
+    "WO\udb40\udc41RKINGED\u115fOutings\u0b53backgro\udb40\uddf0undscreen",
+    "Is Blake's bkg\u2800d\ud837\udfd3check'S?",
+    "Did certif\u180eicate&RU\u115fN\ud807\uddf0out come back?",
+    "Riley's C\u1160ertIfiCatEs,out\u0b53\u00f4f\ud835\udea6Date",
+    "Blake BACKG\u0159OUND\u209dche\udb40\uddf0ck",
+    "Any re\udb40\udc80cord\u05c8Checks problems?",
+    "Is there a WORKING'W\ufff0ITH  VULNERABLE\u209dCHEC\uff4bS policy for Sunday?",
+    "Is there a ce\u1160rtificate ha\ufe00d\ud834\udd27R\u1160un\u02bcOUt policy for Sunday?",
+    "b\udb40\uddf0kgd\u0b53c\u200dheckers list",
+    "CHECKS\ud835\udea6l\ufff0APSeD list",
+    "Is there a Background comes\ud837\udfd3BAC\u3164K policy for Sunday?",
+    "childcarein\uff47\ud834\udd27fingerp\u115frintings",
+    "Blake no\udb40\uddf0t\u1adecleare\u217e",
+    "Did n\ue000ever\ud834\udd27Cl\u2800eared come back?",
+    "Any C\u200checks(HAS\ud834\udd27OU\u115fT: of d\u00e1te problems?",
+    "Backr\u00f8und\u0b53s\u2065creening",
+    "Any CertI\u180bfICATe,had!O\udb40\uddf0UT(\u00f4f\u1adeDate problems?",
+    "Riley's ClEa\u3164RAnces\ud837\udfd3is RUN\u200couted",
+    "Sex.S\u1160CREENING\u0b53overduex",
+    "Who is on the B\u115fACK\ud835\udea6ground\u05c8screen\udb40\uddf0ed team?",
+    "kids\u200dof\u05c8fenders!kids\u180bs\ud807\uddf0backgrou\u2065ndvetter",
+    "certif\ufefficate)We\u00adre\u05c8lapse\uffa0d's",
+    "Riley's Sa\udb40\uddf0fe\u209dsanctuaries",
+    "Riley's wOrk\u2800iNg\ud807\uddf0WITH\u1adechi\ufe0fldren_ch\u00e9cks",
+    "not\u1adey\u212ft: clear\u2065ed",
+    "Who is on the N\u2065ot\"yet\ud834\udd27CLEAR\u2800ED team?",
+    "Who is on the Cle\u115fared\u05c8t\u00f8\ud837\udfd3be\ud807\uddf0withed team?",
+    "Did bkgd\u05c8C\u115fheck come back?",
+    "\u015berveers\ud837\udfd3backgr\u2800oundclearanceer expirer\u3164CHECKX",
+    "ce\uff52tificates\ud835\udea6la\ufff0psed",
+    "Any background\ud834\udd27S&C\u2065HECK problems?",
+    "Did C\u2800leared(t\u00f8\ud834\udd27be\ud83c\uddec\ud83c\udde7W\u2170THS come back?",
+    "SCREENE\u2065D\ud834\udd27CLEARANCEINGS\u2014OV\udb40\uddf0ERDUEINGS\ufe0fserv\ud835\udea6eed",
+    "Did clea\u2800rances\ud835\udea6out\ud83c\uddec\ud83c\udde7of\u02bcs\u2014dat\u212f come back?",
+    "offender\u00adx\u2013SCRE\u115fENER\ud807\uddf0CLE\udb40\udc80ARANCE",
+    "back\u2800round\u209dscreen's",
+    "childr\u1160en\ud837\udfd3Backgroundscree\u2800ns",
+    "Is Blake's cleared\"f\uffa0or\ud835\udea6SERVI\u00f1GS?",
+    "Did bac\uff4bround\u209dSC\u115fREEN come back?",
+    "Is Blake's worKing\u209dwit\u2065h\u1adeVulNe\uff52AbLE\ud807\uddf0check?",
+    "Has Riley had a \u217dhecks\ud837\udfd3r\ufff0un)ou\ue000T yet",
+    "Did bkgd\ud837\udfd3C\udb40\uddf0HECKED come back?",
+    "Is Blake's work\u3164ing\u209dw\udb40\udc80ith: \u2174ulnerable\u0b53c\ue000hecks?",
+    "Riley's CERTIFICATES\ud807\uddf0Had'ru\u1160n\ud807\uddf0\uff4futers",
+    "Riley's rec\u115ford\u05c8c\u115fhecks",
+    "Riley's cle\u2065arance\u05c8w\u0119re\u209dout\u2014of Date's",
+    "Is there a criminal\ud807\uddf0Ch\u2800eck policy for Sunday?",
+    "Did safe\ud835\udea6sanctuarie\udb40\uddf0s come back?",
+    "Is there a ce\u3164rtificates\u209dlapsedi\ufe0fng policy for Sunday?",
+    "Blake certificates?WERE\u209dR\udb40\uddf0UN,out",
+    "Is Blake's background\ud835\udea6c\u200bome\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67bac\ufff0k?",
+    "Did ch\u1160ecks\u1adeexpire\u061cd come back?",
+    "Is there a bkg\u115fd\ud835\udea6che\u2065ck's policy for Sunday?",
+    "Any fin\uff47er\ud835\udea6pr\udb40\udc80int problems?",
+    "Did Back\u1160round\u1adeCHEC\uff4b come back?",
+    "Is there a n\u2065oT\u209dyet\u2010cleare\uff44 policy for Sunday?",
+    "Has Riley had a background\ud834\udd27C\u3164OME(BACK yet"
+  ],
+  "tool_match": [
+    "{\"tool\":\"sunday.not_checked\",\"payload\":{\"order\":\"background check\"}}",
+    "{\"answer\":\"facts\",\"note\":\"clearance\"}",
+    "{\"payload\":{\"order\":\"x\",\"order\":\"DBS\"}}",
+    "{\"payload\":{\"services\":[\"Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown. Her check expired.\"]}}",
+    "background check, not JSON",
+    "{\"payload\": {\"rooms_follow_ups_groups\": [\"police Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.\"]}}",
+    "{\"payload\": {\"services\": [\"rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.\"]}}",
+    "{\"payload\":{\"order\":\"background\\ncheck\"},\"x\":\"\\ud800\"}"
+  ],
+  "tool_pass": [
+    "{\"payload\":{\"import\":\"invented example records\",\"check_time\":\"2026-11-20T15:00:00Z\"}}",
+    "{\"payload\":{\"rooms_follow_ups_groups\":[\"Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown.\"]}}",
+    "{\"error\":\"denied\"}",
+    "{\"kind\":\"check-in suggested\",\"check_in_after_sundays_in_a_row\":3}"
+  ],
+  "tokens": [
+    [
+      "Sunday\u2019s check-in",
+      "join",
+      [
+        "sunday",
+        "s",
+        "check",
+        "in"
+      ]
+    ],
+    [
+      "[Person 1]'s check",
+      "join",
+      [
+        "person",
+        "1",
+        "s",
+        "check"
+      ]
+    ],
+    [
+      "\uff22\uff27  Checks",
+      "join",
+      [
+        "bg",
+        "checks"
+      ]
+    ],
+    [
+      "back\u200bground",
+      "join",
+      [
+        "background"
+      ]
+    ],
+    [
+      "o''clock",
+      "join",
+      [
+        "o",
+        "clock"
+      ]
+    ],
+    [
+      "kids' room",
+      "join",
+      [
+        "kids",
+        "room"
+      ]
+    ],
+    [
+      "isn't it",
+      "join",
+      [
+        "isn",
+        "t",
+        "it"
+      ]
+    ],
+    [
+      "DBS's",
+      "join",
+      [
+        "dbs",
+        "s"
+      ]
+    ],
+    [
+      "caf\u00e9_au-lait",
+      "join",
+      [
+        "cafe",
+        "au",
+        "lait"
+      ]
+    ],
+    [
+      "\ud835\udc03\ud835\udc01\ud835\udc12",
+      "join",
+      [
+        "dbs"
+      ]
+    ],
+    [
+      "\u00c6r\u00f8",
+      "join",
+      [
+        "aero"
+      ]
+    ],
+    [
+      "9:30 AM",
+      "join",
+      [
+        "9",
+        "30",
+        "am"
+      ]
+    ],
+    [
+      "scr\u2800een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u3164een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u115feen",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u1160een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\uffa0een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u2065een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\ufff0een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\udb40\udc80een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\udb40\uddf0een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u180eeen",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "\u0130s",
+      "join",
+      [
+        "is"
+      ]
+    ],
+    [
+      "",
+      "join",
+      []
+    ],
+    [
+      "DBS\u3164Team",
+      "join",
+      [
+        "dbsteam"
+      ]
+    ],
+    [
+      "DBS\u3164Team",
+      "split",
+      [
+        "dbs",
+        "team"
+      ]
+    ],
+    [
+      "DBS\u3164Team",
+      "v010",
+      [
+        "dbs",
+        "team"
+      ]
+    ],
+    [
+      "DBS\u200bdone",
+      "join",
+      [
+        "dbsdone"
+      ]
+    ],
+    [
+      "DBS\u200bdone",
+      "split",
+      [
+        "dbs",
+        "done"
+      ]
+    ],
+    [
+      "DBS\u200bdone",
+      "v010",
+      [
+        "dbsdone"
+      ]
+    ],
+    [
+      "scr\ufe0feen",
+      "v010",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\ufe0feen",
+      "split",
+      [
+        "scr",
+        "een"
+      ]
+    ],
+    [
+      "scr\u17b4een",
+      "v010",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u17b4een",
+      "split",
+      [
+        "scr",
+        "een"
+      ]
+    ],
+    [
+      "D\ufe0fBS\u3164renewal",
+      "v010",
+      [
+        "dbs",
+        "renewal"
+      ]
+    ],
+    [
+      "D\ufe0fBS\u3164renewal",
+      "join",
+      [
+        "dbsrenewal"
+      ]
+    ],
+    [
+      "BG\u209dCHECK",
+      "join",
+      [
+        "bgwcheck"
+      ]
+    ],
+    [
+      "BG\u209dCHECK",
+      "split",
+      [
+        "bg",
+        "check"
+      ]
+    ],
+    [
+      "BG\u209dCHECK",
+      "v010",
+      [
+        "bg",
+        "check"
+      ]
+    ],
+    [
+      "scr\u05c8een",
+      "join",
+      [
+        "screen"
+      ]
+    ],
+    [
+      "scr\u05c8een",
+      "split",
+      [
+        "scr",
+        "een"
+      ]
+    ],
+    [
+      "scr\u05c8een",
+      "v010",
+      [
+        "scr",
+        "een"
+      ]
+    ],
+    [
+      "\u0130s DBS\u2019s",
+      "split",
+      [
+        "is",
+        "dbs",
+        "s"
+      ]
+    ],
+    [
+      "Stra\u00dfe",
+      "split",
+      [
+        "strasse"
+      ]
+    ]
+  ]
+}

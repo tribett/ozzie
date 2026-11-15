@@ -19,6 +19,7 @@ import { zoneLabel } from "./proactive-page.js";
 import { dateText, weekRollup } from "./responsibility-words.js";
 import { KeptForBriefing } from "./sunday-ready.js";
 import { signNote, yourName } from "./connection.js";
+import { DraftActions, type OpenDraft } from "./draft-actions.js";
 
 export const useRunnerView = (runner: Runner) => useSyncExternalStore(runner.subscribe, runner.view, runner.view);
 
@@ -427,13 +428,17 @@ export async function copyText(text: string, clipboard: Clipboard = systemClipbo
   try { await clipboard.writeText(text); return true; } catch { return false; }
 }
 
-/** "Copy draft". A copy that didn't work says so and is never shown as copied. */
-export function CopyDraft({ text, describedBy }: { text: string; describedBy?: string | undefined }) {
+/**
+ * "Copy draft", with Open in Mail and Open in Messages for the same words. A copy that didn't work says so and is never
+ * shown as copied.
+ */
+export function CopyDraft({ text, describedBy, open }: { text: string; describedBy?: string | undefined; open?: OpenDraft | undefined }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const copy = async () => setState(await copyText(text) ? "copied" : "failed");
   return <div className="stack-tight copy-draft">
-    <div><button type="button" className="btn btn-secondary btn-sm" aria-describedby={describedBy} onClick={() => { void copy(); }}>
-      {state === "copied" ? "Copied — send it yourself" : "Copy draft"}</button></div>
+    <DraftActions text={text} small describedBy={describedBy} open={open}
+      copy={<button type="button" className="btn btn-secondary btn-sm" aria-describedby={describedBy} onClick={() => { void copy(); }}>
+        {state === "copied" ? "Copied — send it yourself" : "Copy draft"}</button>} />
     {state === "failed" && <p role="alert" className="problem">The draft couldn't be copied. Select its text and copy it yourself.</p>}
   </div>;
 }

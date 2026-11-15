@@ -96,7 +96,7 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
       // One-click connect: Ozzie's own registration; Planning Center names the organization.
       await log(`one-click: built_in=${await connection.appAvailable()} browser sign-in opened`);
       status = await connection.connectApp(operations);
-      for (let i = 0; i < 150 && !(status?.state === "connected" && status.found) && status?.state !== "failed" && status?.state !== "expired" && status?.state !== "cancelled"; i++) {
+      for (let i = 0; i < 150 && !(status?.state === "connected" && status.found) && status?.state !== "failed" && status?.state !== "expired" && status?.state !== "cancelled" && !status?.last_attempt; i++) {
         await wait(2000);
         status = await connection.status();
       }
@@ -110,7 +110,7 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
     if (status?.state !== "connected") {
       await log("connecting: browser sign-in opened");
       await connection.connect(settings.clientId, settings.organization, true);
-      for (let i = 0; i < 150 && status?.state !== "connected" && status?.state !== "failed" && status?.state !== "expired"; i++) {
+      for (let i = 0; i < 150 && status?.state !== "connected" && status?.state !== "failed" && status?.state !== "expired" && !status?.last_attempt; i++) {
         await wait(2000);
         status = await connection.status();
       }
@@ -119,7 +119,7 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
       await log("connecting with rooms, follow-ups and group events: browser sign-in opened");
       await connection.connect(settings.clientId, settings.organization, true, true);
       status = await connection.status();
-      for (let i = 0; i < 150 && status?.state !== "connected" && status?.state !== "failed" && status?.state !== "expired"; i++) {
+      for (let i = 0; i < 150 && status?.state !== "connected" && status?.state !== "failed" && status?.state !== "expired" && !status?.last_attempt; i++) {
         await wait(2000);
         status = await connection.status();
       }

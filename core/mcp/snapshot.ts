@@ -14,6 +14,7 @@
 // parseSharedCheck refuses the whole file when anything in it falls outside that shape (fail closed).
 import { hasContactDetail } from "../src/ask.js";
 import { ToolFailure } from "../src/broker.js";
+import { backgroundInToolResult } from "../src/harness/background-wording.js";
 import type { TaskEvent, ToolEnvelope } from "../src/harness/contract.js";
 import { envelopeProblems, isoMillis } from "../src/harness/fixed.js";
 import { FAILURE_CODES, ledgerDetailOk } from "../src/harness/ledger-events.js";
@@ -103,12 +104,16 @@ const FAILURES: ReadonlySet<string> = new Set(FAILURE_CODES);
 /** A bundled procedure id's shape; which ids exist is checked where titles are known (render.ts). */
 const SKILL_ID = /^[a-z][a-z-]{0,47}$/u;
 
-/** Whether one ToolEnvelope from a shared tool fits the closed grammar, with no contact detail anywhere in it. */
+/**
+ * Whether one ToolEnvelope from a shared tool fits the closed grammar, with no contact detail anywhere in it and no
+ * background-check wording in any of its strings (owner decision 2026-11-14: never in the shared copy; shared_check.rs
+ * refuses the same before writing).
+ */
 export function sharedEnvelopeOk(envelope: unknown): envelope is ToolEnvelope {
   if (!plain(envelope) || typeof envelope["tool"] !== "string" || !SHARED.has(envelope["tool"])) return false;
   if (envelopeProblems(envelope).length) return false;
   const text = JSON.stringify(envelope);
-  return !hasContactDetail(text) && !hasContactDetail(text.normalize("NFKC"));
+  return !hasContactDetail(text) && !hasContactDetail(text.normalize("NFKC")) && !backgroundInToolResult(text);
 }
 
 function taskOk(t: unknown): t is SharedTask {

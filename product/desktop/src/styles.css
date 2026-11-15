@@ -56,6 +56,13 @@ body { background: #FAF6EE; }
 .oz .find-quote { overflow-wrap: anywhere; }
 .oz .draft-head { flex-wrap: nowrap; }
 .oz .draft-to { margin: 2px 0 12px; }
+/* Open in Mail / Open in Messages (draft-actions.tsx): their own row under Copy draft on the Sunday drafts, then what
+   happened (an empty live line takes no space) and who sends. */
+.oz .draft-actions > .find-next.draft-open { margin-top: 10px; }
+.oz .draft-actions > .draft-opened:not(:empty) { margin-top: 10px; color: var(--ink-2); }
+.oz .draft-actions > .problem { margin-top: 10px; }
+.oz .draft-actions > .draft-note { margin-top: 8px; }
+.oz .ask-draft .draft-actions > .find-next:first-child, .oz .copy-draft .draft-actions > .find-next:first-child { margin-top: 0; }
 .oz .rule-team { display: flex; flex-direction: column; }
 .oz .rule-note { margin: 4px 0 0 192px; }
 .oz .rule-kids .rule-team { margin-top: 12px; }
@@ -209,6 +216,11 @@ body { background: #FAF6EE; }
 .oz .runs-list .log li li { grid-template-columns: 124px minmax(0, 1fr); }
 .oz .banner { align-items: flex-start; }
 .oz .banner > .ic { flex: none; margin-top: 3px; }
+/* "Switch Ozzie to this church?" waiting: the button keeps its words and drops below the sentence when narrow. */
+.oz .switch-waiting { flex-wrap: wrap; }
+.oz .switch-waiting > span { flex: 1 1 280px; }
+.oz .switch-waiting > .btn { flex: none; }
+.oz .left-behind > p + p { margin-top: 10px; }
 .oz .granted { margin: 10px 0 4px; }
 .oz .find-body + p.small { margin-top: 8px; }
 .oz .col > section.stack > h2.h3 { margin-top: 12px; }
@@ -380,3 +392,8 @@ body { background: #FAF6EE; }
 .oz .cards-followup { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px; border-left: 3px solid var(--accent); background: var(--accent-tint); color: var(--ink); }
 .oz .cards-followup h3 { font-size: 15px; line-height: 1.3; margin: 0; }
 .oz .cards-quote { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-style: italic; }
+/* A newer version of Ozzie is ready (updates-view.tsx): one calm line above Today, the width of its column. */
+.oz .update-line { width: 100%; max-width: 716px; margin: 0 auto; }
+.oz .update-line .update-line-t { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600; color: var(--accent-ink); }
+.oz .update-line .small { color: var(--ink-2); }
+.oz .update-line .find-next { flex-wrap: wrap; gap: 8px; }

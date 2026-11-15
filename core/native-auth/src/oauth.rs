@@ -25,6 +25,9 @@ pub enum AuthError {
     /// Planning Center's token response granted a scope this request did not ask for, or did
     /// not grant Services. Nothing is saved; the refused credential is revoked when possible.
     ScopeMismatch,
+    /// Planning Center answered a revoke with a refusal (400, 401 or 403), as for a registration
+    /// it no longer has: trying again won't help, unlike an unreachable Planning Center.
+    RevokeRefused,
 }
 
 /// Deliberately has no Debug implementation; never sent over IPC or logged.
@@ -111,9 +114,47 @@ pub struct OrganizationFailure {
     pub error: AuthError,
     pub diagnostic: OrganizationDiagnostic,
 }
+/// The organization a credential belongs to, and the church's name when userinfo states one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedOrganization {
+    pub id: String,
+    pub name: Option<String>,
+}
+/// A church's name as Planning Center's userinfo states it (`organization_name`), kept only to
+/// show the person which church a connection is for: never a person's name, never sent to a
+/// model. Display text only, by the one rule the page applies too (core/test/church-name-parity.json,
+/// run by both sides' tests): control, space and line or paragraph separator characters become one
+/// space; format characters (bidirectional, zero-width, soft hyphen, tags), private-use and
+/// surrogate characters are dropped; spaces collapse and trim; at most 120 code points. Nothing left
+/// is no name, and the organization number is shown instead (review S2, M1).
+pub fn church_name(raw: &str) -> Option<String> {
+    use icu_properties::{CodePointMapData, props::GeneralCategory as G};
+    let categories = CodePointMapData::<G>::new();
+    let mut cleaned = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match categories.get(c) {
+            G::Control | G::SpaceSeparator | G::LineSeparator | G::ParagraphSeparator => {
+                if !cleaned.is_empty() && !cleaned.ends_with(' ') {
+                    cleaned.push(' ');
+                }
+            }
+            G::Format | G::PrivateUse | G::Surrogate => {}
+            _ => cleaned.push(c),
+        }
+    }
+    let name: String = cleaned.trim_end_matches(' ').chars().take(120).collect();
+    let name = name.trim_end_matches(' ');
+    (!name.is_empty()).then(|| name.to_string())
+}
 pub trait Provider: Send + Sync {
     fn exchange(&self, client: &str, code: &str, verifier: &str) -> Result<Tokens, AuthError>;
     fn organization(&self, access: &str) -> Result<String, AuthError>;
+    /// `organization_detailed` plus the church's name from the same userinfo response. Providers
+    /// that can't see a name keep this default: no name.
+    fn organization_named(&self, access: &str) -> Result<NamedOrganization, OrganizationFailure> {
+        self.organization_detailed(access)
+            .map(|id| NamedOrganization { id, name: None })
+    }
     /// Legacy providers preserve their exact outer error without inventing an origin.
     fn organization_detailed(&self, access: &str) -> Result<String, OrganizationFailure> {
         self.organization(access)
@@ -229,6 +270,10 @@ pub struct ConnectionStatus {
     /// Center named this organization at sign-in, so the app can remember it. Omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub found: bool,
+    /// The church's name as Planning Center's userinfo stated it at this connection's last
+    /// sign-in or check (`church_name`), when it did. Shown to the person only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_name: Option<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredConnection {
@@ -240,6 +285,118 @@ struct StoredConnection {
     /// decode and the record is refused.
     #[serde(default, skip_serializing_if = "Scopes::is_default")]
     scopes: Scopes,
+    /// Non-secret: the church's name from the userinfo read the save already made. Omitted when
+    /// unknown, so records without one keep their original bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    organization_name: Option<String>,
+}
+/// The church name a saved record carries, checked again as display text.
+fn stored_name(bytes: &[u8]) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Named {
+        organization_name: Option<String>,
+    }
+    serde_json::from_slice::<Named>(bytes)
+        .ok()?
+        .organization_name
+        .as_deref()
+        .and_then(church_name)
+}
+/// Just enough of a saved record to sign out of it: the registration it was issued to and its
+/// tokens. Reads records of any registration or scope set, unlike `decode_stored`.
+#[derive(serde::Deserialize)]
+struct Revocable {
+    client_id: String,
+    tokens: Tokens,
+}
+impl Revocable {
+    fn read(bytes: &[u8]) -> Option<Self> {
+        let record: Self = serde_json::from_slice(bytes).ok()?;
+        (!record.client_id.is_empty() && record.tokens.validate().is_ok()).then_some(record)
+    }
+}
+/// A one-way fingerprint (SHA-256) of a saved record's bytes: which credential a sign-in left
+/// behind was, so a retry or removal acts on that record and never on a newer sign-in saved in the
+/// same slot since. Kept in memory only; never shown, logged or sent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RecordFingerprint([u8; 32]);
+impl RecordFingerprint {
+    fn of(bytes: &[u8]) -> Self {
+        use sha2::Digest;
+        Self(sha2::Sha256::digest(bytes).into())
+    }
+}
+impl std::fmt::Debug for RecordFingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordFingerprint")
+    }
+}
+/// What signing out of a saved sign-in found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retired {
+    /// Signed out and removed, or nothing was saved there.
+    Done,
+    /// The slot holds another record than the one expected (a newer sign-in): left untouched.
+    Changed,
+}
+/// A sign-in still saved: why, which record it is, and the registration it was saved with (a
+/// public client ID), when those could be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotRetired {
+    pub error: AuthError,
+    pub record: Option<RecordFingerprint>,
+    pub client: Option<String>,
+}
+/// Removes a saved sign-in from this Mac without a revoke, only if the slot still holds `expected`:
+/// for a sign-in Planning Center refused to sign out of, on the person's request.
+pub fn remove_saved_record(
+    store: &dyn CredentialStore,
+    prefix: &str,
+    organization: &str,
+    expected: RecordFingerprint,
+) -> Result<Retired, AuthError> {
+    if prefix.is_empty() || !numeric_id(organization) {
+        return Err(AuthError::InvalidConfiguration);
+    }
+    let workspace = format!("{prefix}{organization}");
+    let Some(bytes) = read_private(store, &workspace, organization).map_err(AuthError::Store)?
+    else {
+        return Ok(Retired::Done);
+    };
+    if RecordFingerprint::of(&bytes) != expected {
+        return Ok(Retired::Changed);
+    }
+    store
+        .delete(&workspace, organization)
+        .map(|()| Retired::Done)
+        .map_err(AuthError::Store)
+}
+/// Which record is saved for `organization` now, if any: its fingerprint, the bytes read only to
+/// make it and then dropped. What a leftover from before this launch is tied to (review S3, L1).
+pub fn saved_record_fingerprint(
+    store: &dyn CredentialStore,
+    prefix: &str,
+    organization: &str,
+) -> Result<Option<RecordFingerprint>, AuthError> {
+    if prefix.is_empty() || !numeric_id(organization) {
+        return Err(AuthError::InvalidConfiguration);
+    }
+    let workspace = format!("{prefix}{organization}");
+    Ok(read_private(store, &workspace, organization)
+        .map_err(AuthError::Store)?
+        .map(|bytes| RecordFingerprint::of(&bytes)))
+}
+/// Planning Center may hand back an existing token: the same access token, or the same refresh token.
+fn same_credential(a: &Tokens, b: &Tokens) -> bool {
+    a.access_token == b.access_token
+        || (a.refresh_token.is_some() && a.refresh_token == b.refresh_token)
+}
+/// What a revoke request sends for `tokens`: the refresh token when there is one.
+fn revocation(tokens: &Tokens) -> (&str, &str) {
+    match tokens.refresh_token.as_deref() {
+        Some(refresh) => (refresh, "refresh_token"),
+        None => (tokens.access_token.as_str(), "access_token"),
+    }
 }
 struct Attempt {
     state: String,
@@ -320,9 +477,9 @@ impl AuthController {
         {
             return Err(AuthError::InvalidConfiguration);
         }
-        let present = read_private(store.as_ref(), &binding.workspace, &binding.organization)
-            .map_err(AuthError::Store)?
-            .is_some();
+        let saved = read_private(store.as_ref(), &binding.workspace, &binding.organization)
+            .map_err(AuthError::Store)?;
+        let present = saved.is_some();
         let status = ConnectionStatus {
             state: if present {
                 ConnectionState::StoredUnchecked
@@ -336,7 +493,9 @@ impl AuthController {
             organization_diagnostic: None,
             scopes: None,
             found: false,
+            organization_name: saved.as_deref().and_then(|bytes| stored_name(bytes)),
         };
+        drop(saved);
         Ok(Self {
             binding,
             finding: None,
@@ -415,6 +574,7 @@ impl AuthController {
                     organization_diagnostic: None,
                     scopes: None,
                     found: false,
+                    organization_name: None,
                 },
                 unchecked_save: None,
                 nothing_stored: true,
@@ -432,6 +592,11 @@ impl AuthController {
     /// is retired. Every later read still re-verifies the organization with Planning Center.
     pub fn adopt_found(&self) -> Result<AuthController, AuthError> {
         let prefix = self.finding.ok_or(AuthError::InvalidConfiguration)?;
+        // A finder interrupted after its save (Cancel, Quit, another sign-in) is never handed over,
+        // even before its status says so.
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(AuthError::Cancelled);
+        }
         let _operation = self.operation()?;
         let status = self.lock()?.status.clone();
         let scopes = status.scopes.ok_or(AuthError::InvalidToken)?;
@@ -542,6 +707,9 @@ impl AuthController {
     }
     pub fn status(&self) -> Result<ConnectionStatus, AuthError> {
         let mut state = self.lock()?;
+        Ok(self.status_of(&mut state))
+    }
+    fn status_of(&self, state: &mut State) -> ConnectionStatus {
         if state
             .pending
             .as_ref()
@@ -552,7 +720,39 @@ impl AuthController {
             state.status.organization_diagnostic = None;
             state.status.scopes = None;
         }
-        Ok(state.status.clone())
+        state.status.clone()
+    }
+    /// `status` without waiting: while an operation holds this controller's state (its Keychain
+    /// write mid-sign-in or mid-check), it answers `checking` at once, which is what it is doing,
+    /// so status polling and reads never queue behind the Keychain (review S, L1).
+    pub fn status_or_busy(&self) -> Result<ConnectionStatus, AuthError> {
+        match self.state.try_lock() {
+            Ok(mut state) => Ok(self.status_of(&mut state)),
+            Err(std::sync::TryLockError::WouldBlock) => Ok(ConnectionStatus {
+                state: ConnectionState::Checking,
+                organization: self.binding.organization.clone(),
+                checked_at_ms: None,
+                source: "Planning Center /oauth/userinfo",
+                problem: None,
+                organization_diagnostic: None,
+                scopes: None,
+                found: false,
+                organization_name: None,
+            }),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(AuthError::ProviderFailure),
+        }
+    }
+    /// The atomic half of `cancel`: from now on every operation of this controller fails its next
+    /// check and a finder is never handed over. Takes no lock, so a caller holding its own lock can
+    /// stop a controller without waiting for that controller's Keychain write; `cancel` afterwards
+    /// updates the status.
+    pub fn interrupt(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+    /// Whether this controller was cancelled or interrupted.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
     }
     /// Starts the default, least-privilege sign-in (`Scopes::Services`).
     pub fn begin(&self) -> Result<String, AuthError> {
@@ -656,6 +856,9 @@ impl AuthController {
         }
         result
     }
+    /// `rotating`: a refresh, after which Planning Center no longer accepts the credential it was
+    /// refreshed from; otherwise a sign-in.
+    #[allow(clippy::too_many_arguments)]
     fn save(
         &self,
         tokens: Tokens,
@@ -664,13 +867,25 @@ impl AuthController {
         expires: Option<u64>,
         diagnostic: &mut Option<OrganizationDiagnostic>,
         writer: Option<&RetiredTag>,
+        rotating: bool,
     ) -> Result<ConnectionStatus, AuthError> {
         tokens.validate()?;
         self.check_writer(generation, expires, writer)?;
-        let organization = self.provider.organization_detailed(&tokens.access_token);
+        // The same userinfo read as always; its church name is kept for the person to see.
+        let organization = self
+            .provider
+            .organization_named(&tokens.access_token)
+            .map(|named| {
+                let name = named.name.as_deref().and_then(church_name);
+                (named.id, name)
+            });
         if writer.is_some() {
             self.check_writer(generation, expires, writer)?;
         }
+        let (organization, name) = match organization {
+            Ok((id, name)) => (Ok(id), name),
+            Err(failure) => (Err(failure), None),
+        };
         // Preserve original outer errors; only a still-live operation may retain details.
         // A one-click finder (never on the Sunday writer path) takes the organization named.
         let (workspace, bound_organization) = match (organization, self.finding) {
@@ -704,26 +919,32 @@ impl AuthController {
             ),
         };
         self.check_writer(generation, expires, writer)?;
-        // A finder learns only now which saved connection a sign-in replaces.
-        // An unreadable slot fails closed rather than orphaning a credential it can't see.
-        let previous = match self.finding {
-            Some(_) => read_private(self.store.as_ref(), &workspace, &bound_organization)
-                .map_err(AuthError::Store)?,
-            None => None,
+        // The saved connection a sign-in replaces, to put back if the sign-in is cancelled after
+        // its write and to revoke once it succeeded, as the registration it was issued to (which
+        // may differ: Ozzie's own, or one typed under Advanced; review R, L2c). A finder learns
+        // only now which slot that is, and an unreadable slot fails closed rather than orphaning a
+        // credential it can't see. A bound sign-in reads its own slot best effort, as before.
+        // A refresh replaces nothing it could put back: the old credential no longer works.
+        let previous = if self.finding.is_some() {
+            read_private(self.store.as_ref(), &workspace, &bound_organization)
+                .map_err(AuthError::Store)?
+        } else if rotating || writer.is_some() || self.lock()?.nothing_stored {
+            None
+        } else {
+            read_private(self.store.as_ref(), &workspace, &bound_organization)
+                .ok()
+                .flatten()
         };
         let replaced = previous
-            .as_ref()
-            .and_then(|bytes| serde_json::from_slice::<StoredConnection>(bytes).ok())
-            .filter(|old| {
-                old.tokens.access_token != tokens.access_token
-                    && (old.tokens.refresh_token.is_none()
-                        || old.tokens.refresh_token != tokens.refresh_token)
-            });
+            .as_deref()
+            .and_then(|bytes| Revocable::read(bytes))
+            .filter(|old| !same_credential(&old.tokens, &tokens));
         let record = StoredConnection {
             client_id: self.binding.client_id.clone(),
             organization: bound_organization.clone(),
             tokens,
             scopes,
+            organization_name: name.clone(),
         };
         let bytes =
             Zeroizing::new(serde_json::to_vec(&record).map_err(|_| AuthError::InvalidToken)?);
@@ -748,25 +969,38 @@ impl AuthController {
                 self.compensate_sunday_save(
                     &bytes, generation, expires, writer, &failure, &mut state,
                 );
-            } else if let (Some(_), Some(old)) = (self.finding, previous.as_ref()) {
-                // A one-click sign-in cancelled after its write puts back the connection it
-                // replaced, and revokes its own new credential, which nothing will hold.
-                self.store
-                    .put(&workspace, &bound_organization, old)
-                    .map_err(AuthError::Store)?;
-                // Unless Planning Center handed back the very credential just put back.
-                let undecodable = serde_json::from_slice::<StoredConnection>(old).is_err();
-                if replaced.is_some() || undecodable {
-                    self.discard(&record.tokens);
+                return Err(failure.authentication());
+            }
+            if rotating {
+                // A refresh cancelled after its write keeps what it wrote: Planning Center already
+                // stopped accepting the credential it replaced, so this is the only one that works
+                // (review S, L2). The cancel still ends the operation.
+                return Err(failure.authentication());
+            }
+            // A sign-in cancelled after its write puts back the connection it replaced, or
+            // removes its own when it replaced nothing, and revokes its own new credential, which
+            // nothing will hold.
+            let discard = match previous.as_ref() {
+                Some(old) => {
+                    self.store
+                        .put(&workspace, &bound_organization, old)
+                        .map_err(AuthError::Store)?;
+                    // Unless Planning Center handed back the very credential just put back.
+                    replaced.is_some() || Revocable::read(old).is_none()
                 }
-            } else {
-                self.store
-                    .delete(&workspace, &bound_organization)
-                    .map_err(AuthError::Store)?;
-                state.nothing_stored = true;
-                if self.finding.is_some() {
-                    self.discard(&record.tokens);
+                None => {
+                    self.store
+                        .delete(&workspace, &bound_organization)
+                        .map_err(AuthError::Store)?;
+                    state.nothing_stored = true;
+                    true
                 }
+            };
+            // Revoked after this controller's state is released, so its status never waits on
+            // Planning Center (review S, L1).
+            drop(state);
+            if discard {
+                self.discard(&record.tokens);
             }
             return Err(failure.authentication());
         }
@@ -814,6 +1048,7 @@ impl AuthController {
         state.status.problem = None;
         state.status.organization_diagnostic = None;
         state.status.scopes = Some(scopes);
+        state.status.organization_name = name;
         if self.finding.is_some() {
             state.status.organization = bound_organization;
         }
@@ -875,28 +1110,81 @@ impl AuthController {
         if self.sunday.is_some() {
             return;
         }
-        let (token, hint) = match tokens.refresh_token.as_deref() {
-            Some(refresh) => (refresh, "refresh_token"),
-            None => (tokens.access_token.as_str(), "access_token"),
-        };
+        let (token, hint) = revocation(tokens);
         let _ = self.provider.revoke(client, token, hint);
-    }
-    /// The saved connection a sign-in for `new` is about to replace, unless it is that same
-    /// credential (Planning Center may hand back an existing token). Unreadable records are
-    /// left alone: the save that follows reports any store failure itself.
-    fn displaced(&self, new: &Tokens) -> Option<StoredConnection> {
-        if self.lock().ok()?.nothing_stored {
-            return None;
-        }
-        let old = self.stored().ok()?;
-        let same = old.tokens.access_token == new.access_token
-            || (old.tokens.refresh_token.is_some()
-                && old.tokens.refresh_token == new.refresh_token);
-        (!same).then_some(old)
     }
     /// Identity only (workspace, organization, client id); never credentials.
     pub(crate) fn binding(&self) -> &Binding {
         &self.binding
+    }
+    /// The registration (a public client ID, not a secret) and organization this controller is
+    /// bound to; a one-click finder's organization is empty until it hands over.
+    pub fn bound_to(&self) -> (&str, &str) {
+        (&self.binding.client_id, &self.binding.organization)
+    }
+    /// Signs Ozzie out of another organization's saved connection, keeping this controller's own:
+    /// only for a church switch the person answered (`connections`), with the organization chosen
+    /// natively, never by the page. Planning Center revokes it first, as the registration it was
+    /// issued to, and the item is deleted only once that succeeded (review R, L1). A revoke that
+    /// fails, or a slot (this one or the kept one) that can't be read, leaves the item for a retry.
+    /// Never revokes this controller's own credential: a slot holding that same credential is only
+    /// deleted (N1). Bytes that aren't a usable connection are deleted: there is nothing to revoke.
+    /// `expected`: act only if the slot still holds that record, so a retry never touches a newer
+    /// sign-in saved there since (review S2, M2); a different record is `Retired::Changed`.
+    pub fn retire_saved(
+        &self,
+        prefix: &str,
+        organization: &str,
+        expected: Option<RecordFingerprint>,
+    ) -> Result<Retired, NotRetired> {
+        let failed = |error, record, client| NotRetired {
+            error,
+            record,
+            client,
+        };
+        if self.finding.is_some()
+            || self.sunday.is_some()
+            || prefix.is_empty()
+            || !numeric_id(organization)
+            || organization == self.binding.organization
+        {
+            return Err(failed(AuthError::InvalidConfiguration, None, None));
+        }
+        let workspace = format!("{prefix}{organization}");
+        let Some(bytes) = read_private(self.store.as_ref(), &workspace, organization)
+            .map_err(|e| failed(AuthError::Store(e), None, None))?
+        else {
+            return Ok(Retired::Done);
+        };
+        let record = RecordFingerprint::of(&bytes);
+        if expected.is_some_and(|expected| expected != record) {
+            return Ok(Retired::Changed);
+        }
+        let mut client = None;
+        if let Some(old) = Revocable::read(&bytes) {
+            client = Some(old.client_id.clone());
+            let kept = read_private(
+                self.store.as_ref(),
+                &self.binding.workspace,
+                &self.binding.organization,
+            )
+            .map_err(|e| failed(AuthError::Store(e), Some(record), client.clone()))?;
+            let same = kept
+                .as_deref()
+                .map(Vec::as_slice)
+                .and_then(Revocable::read)
+                .is_some_and(|kept| same_credential(&kept.tokens, &old.tokens));
+            if !same {
+                let (token, hint) = revocation(&old.tokens);
+                self.provider
+                    .revoke(&old.client_id, token, hint)
+                    .map_err(|e| failed(e, Some(record), client.clone()))?;
+            }
+        }
+        self.store
+            .delete(&workspace, organization)
+            .map(|()| Retired::Done)
+            .map_err(|e| failed(AuthError::Store(e), Some(record), client))
     }
     fn stored(&self) -> Result<StoredConnection, AuthError> {
         // A finder has no saved connection of its own; it hands over through `adopt_found`.
@@ -1241,6 +1529,7 @@ impl AuthController {
                 None,
                 &mut diagnostic,
                 writer.as_ref(),
+                true,
             )
         })();
         self.record(generation, result, diagnostic, None)
@@ -1421,6 +1710,7 @@ impl AuthController {
                 Some(attempt.expires),
                 &mut diagnostic,
                 writer.as_ref(),
+                false,
             )
         })();
         self.record(generation, result, diagnostic, Some(attempt.expires))
@@ -1533,20 +1823,16 @@ impl AuthController {
                 }
             };
             // A new sign-in replaces the saved credential; once the new one is saved and
-            // verified, the old one (possibly wider) is revoked rather than left valid.
-            let displaced = self.displaced(&tokens);
-            let status = self.save(
+            // verified, the old one (possibly wider) is revoked rather than left valid (`save`).
+            self.save(
                 tokens,
                 scopes,
                 attempt.generation,
                 Some(attempt.expires),
                 &mut diagnostic,
                 None,
-            )?;
-            if let Some(old) = displaced {
-                self.discard(&old.tokens);
-            }
-            Ok(status)
+                false,
+            )
         })();
         self.record(
             attempt.generation,

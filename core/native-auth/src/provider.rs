@@ -1,6 +1,6 @@
 use crate::oauth::{
-    AuthError, Grant, OrganizationDiagnostic, OrganizationFailure, Provider, REDIRECT_URI, Tokens,
-    UserInfoReason, numeric_id,
+    AuthError, Grant, NamedOrganization, OrganizationDiagnostic, OrganizationFailure, Provider,
+    REDIRECT_URI, Tokens, UserInfoReason, church_name, numeric_id,
 };
 use std::{io::Read, time::Duration};
 use zeroize::Zeroizing;
@@ -128,6 +128,12 @@ impl<H: Http> Provider for PcoProvider<H> {
             .map_err(|failure| failure.error)
     }
     fn organization_detailed(&self, access: &str) -> Result<String, OrganizationFailure> {
+        self.organization_named(access).map(|named| named.id)
+    }
+    /// One userinfo read, as always. Besides `organization_id` it keeps only `organization_name`,
+    /// the church's name (display text, `church_name`); the person's own name and email in the
+    /// same response are never read.
+    fn organization_named(&self, access: &str) -> Result<NamedOrganization, OrganizationFailure> {
         let failure = |reason| OrganizationFailure {
             error: AuthError::OrganizationUnverified,
             diagnostic: OrganizationDiagnostic::userinfo(reason),
@@ -174,7 +180,25 @@ impl<H: Http> Provider for PcoProvider<H> {
         if !numeric_id(&id) {
             return Err(failure(UserInfoReason::OrganizationIdInvalid));
         }
-        Ok(id)
+        // Separately, so the projection above stays exactly as it was: the church's name, only
+        // from an object, only as display text. Every other field (the person's own name and email
+        // among them) is skipped by the deserializer without being read into a value (review S2, N4).
+        #[derive(serde::Deserialize)]
+        struct Church {
+            #[serde(default)]
+            organization_name: Option<String>,
+        }
+        let object = response
+            .body
+            .iter()
+            .find(|b| !b.is_ascii_whitespace())
+            .is_some_and(|b| *b == b'{');
+        let name = object
+            .then(|| serde_json::from_slice::<Church>(&response.body).ok())
+            .flatten()
+            .and_then(|church| church.organization_name)
+            .and_then(|name| church_name(&name));
+        Ok(NamedOrganization { id, name })
     }
     fn refresh(&self, client: &str, refresh: &str) -> Result<Tokens, AuthError> {
         self.refresh_grant(client, refresh)
@@ -197,9 +221,12 @@ impl<H: Http> Provider for PcoProvider<H> {
                 ])
                 .finish(),
         );
-        if self.0.send(Endpoint::Revoke, Some(&form), None)?.status != 200 {
-            return Err(AuthError::ProviderFailure);
+        match self.0.send(Endpoint::Revoke, Some(&form), None)?.status {
+            200 => Ok(()),
+            // Reached, and refused (RFC 7009 answers 200 even for a token that is already
+            // invalid, so this is the registration itself): trying again won't help.
+            400 | 401 | 403 => Err(AuthError::RevokeRefused),
+            _ => Err(AuthError::ProviderFailure),
         }
-        Ok(())
     }
 }

@@ -182,6 +182,8 @@ fn spawn_timer(app: tauri::AppHandle, timer: Arc<Timer>, tick: Duration) {
         let mut watchdog = Watchdog::default();
         while let Some(event) = timer.next(tick) {
             sweep_ledger(&mut watchdog, &app.state::<Ledger>());
+            // An automatic check for a new version of Ozzie, when one is due (updater.rs). Never waits.
+            crate::updater::on_wake(&app, event.at_ms);
             if let Some(ms) = event.slept_ms {
                 let _ = app.emit(
                     "ozzie:wake",
@@ -359,6 +361,13 @@ impl Responsibilities {
             .flatten()
             .ok_or(ResponsibilityError::Unavailable)
     }
+}
+/// Whether a responsibility run is under way: updater.rs waits for it to end before reopening Ozzie.
+pub fn run_under_way(app: &tauri::AppHandle) -> bool {
+    app.state::<Responsibilities>()
+        .get()
+        .and_then(|store| store.list())
+        .is_ok_and(|listing| listing.items.iter().any(|r| r.open_run.is_some()))
 }
 #[derive(Default)]
 pub struct Background {

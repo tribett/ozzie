@@ -16,6 +16,7 @@ import { alwaysFor, briefTarget, followUpTarget, groupTarget, roomTarget } from 
 import { canRemind, reminderDraft, restoreReminder } from "../../../core/src/reminder-draft.js";
 import { FindingFeedback, SetAside, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
 import { yourName } from "./connection.js";
+import { DraftActions, type OpenDraft } from "./draft-actions.js";
 
 type Names = Record<string, string>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -169,11 +170,16 @@ function Draft({ finding, person, names, sender, sunday, canReword, onClose }: {
   </DraftBox>;
 }
 
-/** The shared draft frame: never a send button, only copy and change the wording. */
-export function DraftBox({ label, to, body, onBody, onClose, footer, children, startEditing = false }: {
+/**
+ * The shared draft frame: never a send button. Copy it, open it unsent in Mail or Messages for the person to send, or
+ * change the wording.
+ */
+export function DraftBox({ label, to, body, onBody, onClose, footer, children, startEditing = false, open }: {
   label: string; to?: string; body: string; onBody: (b: string) => void; onClose: () => void; footer: string; children?: ReactNode;
   /** Start with the wording open to change (tests). */
   startEditing?: boolean;
+  /** Opens the draft in Mail or Messages (tests replace the Mac's). */
+  open?: OpenDraft | undefined;
 }) {
   const [editing, setEditing] = useState(startEditing);
   const [copied, setCopied] = useState(false);
@@ -187,11 +193,10 @@ export function DraftBox({ label, to, body, onBody, onClose, footer, children, s
         {/* Opened by "Change the wording", so the words to change get the focus. */}
         <textarea id={editId} className="draft-edit" value={body} onChange={e => { onBody(e.target.value); setCopied(false); }} rows={9} autoFocus /></>
       : <div className="draft-body">{body.split("\n\n").map((para, i) => <p key={i}>{para}</p>)}</div>}
-    <div className="find-next">
-      <button type="button" className="btn btn-primary" onClick={() => { void navigator.clipboard?.writeText(body).then(() => setCopied(true)); }}>
-        {copied ? "Copied — send it yourself" : "Copy draft"}</button>
-      <button type="button" className="btn btn-secondary" onClick={() => setEditing(!editing)}>{editing ? "Done changing" : "Change the wording"}</button>
-    </div>
+    <DraftActions text={body} open={open} split
+      copy={<button type="button" className="btn btn-primary" onClick={() => { void navigator.clipboard?.writeText(body).then(() => setCopied(true)); }}>
+        {copied ? "Copied — send it yourself" : "Copy draft"}</button>}
+      after={<button type="button" className="btn btn-secondary" onClick={() => setEditing(!editing)}>{editing ? "Done changing" : "Change the wording"}</button>} />
     {children}
     <p className="small">{footer}</p>
   </div>;

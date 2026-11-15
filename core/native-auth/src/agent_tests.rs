@@ -1836,6 +1836,10 @@ fn contact_details_hidden_characters_and_escapes_are_refused() {
         "\u{3164}",
         "\u{ffa0}",
         "\u{2800}",
+        // The background-check list's newer characters, a mark and a letter (review B3 L-1).
+        "\u{5c8}",
+        "\u{209d}",
+        "\u{1d6a6}",
     ] {
         let text = format!("Is anyone{hidden}free?");
         let why = format!("{hidden:?}");
@@ -3025,5 +3029,349 @@ fn a_managed_step_reaches_the_fake_ozzie_church_end_to_end() {
     assert_eq!(
         agent_step_using(&env, &parse_request(base()).unwrap(), &http).err(),
         Some(AgentError::NotConfigured)
+    );
+}
+
+// ---- Background-check wording (background.rs; owner decision 2026-11-14) ------------------------------
+
+/// Background-check wording as a page bug, a new caller or a later change could let it into a step: the
+/// review's usual names, a note about one, and look-alike forms.
+const BACKGROUND_PHRASINGS: [&str; 10] = [
+    "Any background check problems?",
+    "Is [Person 1]'s clearance current?",
+    "Has [Person 1] been screened?",
+    "Does [Person 1] have a DBS?",
+    "Is the safeguarding check done for [Role 1]?",
+    "Was [Person 1] fingerprinted?",
+    "Is [Person 1] cleared to serve in [Role 1]?",
+    "Draft a note to [Person 7] saying his background check expired and he can't serve in [Role 2]",
+    "Any \u{ff22}\u{ff21}\u{ff23}\u{ff2b}\u{ff27}\u{ff32}\u{ff2f}\u{ff35}\u{ff2e}\u{ff24}-check problems?",
+    "Is the back\u{200b}ground check done?",
+];
+/// Every place in a step that varies: the question, the model's own words, a tool result and tool
+/// arguments.
+fn background_places(text: &str) -> Vec<(&'static str, Value)> {
+    vec![
+        ("question", with_user(text)),
+        ("the model's words", with_assistant(text)),
+        ("tool result", with_tool_content(&envelope_with(text))),
+        (
+            "tool arguments",
+            with_arguments(&json!({ "role": text }).to_string()),
+        ),
+    ]
+}
+/// Refused as `background-check` with nothing spent: no request, no key looked at, no usage and no
+/// step in the ledger, after any assistant messages in `value` were taken as earlier replies.
+fn kept_on_this_mac(value: Value, config: &RouteConfig, why: &str) {
+    let bench = Bench::new("background").echo(&value);
+    let error = bench.step_on(config, value, &roster()).err();
+    assert_eq!(error, Some(AgentError::BackgroundCheck), "{why}");
+    assert!(bench.untouched(), "{why}");
+    // The fixed code only: nothing of the text travels in it.
+    assert_eq!(
+        serde_json::to_string(&error).unwrap(),
+        "\"background-check\""
+    );
+}
+/// A room check (a procedure, as regular jobs run) that read what wasn't checked once.
+fn room_check(task: &str, tool_content: &str) -> Value {
+    json!({
+        "task_id": task,
+        "messages": [
+            {"role": "system", "content": system_for("room-check")},
+            {"role": "user", "content": fixed::procedure_prompt()},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1_0", "name": "sunday.not_checked", "arguments": "{}"}
+            ]},
+            {"role": "tool", "tool_call_id": "call_1_0", "content": tool_content},
+        ],
+        "tools": [spec("rooms.conflicts"), spec("rules.current"), spec("sunday.not_checked")],
+        "max_tokens": 600,
+    })
+}
+/// What wasn't checked when the check is out of date, in Ozzie's own words (operations-capture.ts).
+fn stale_not_checked() -> String {
+    let mut envelope: Value = serde_json::from_str(fixed::SAMPLE_ENVELOPES[4]).unwrap();
+    assert_eq!(envelope["tool"], "sunday.not_checked");
+    envelope["payload"]["too_old_to_treat_as_current"] = json!(true);
+    envelope["payload"]["rooms_follow_ups_groups"] = json!([
+        "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown."
+    ]);
+    envelope.to_string()
+}
+
+#[test]
+fn background_check_wording_anywhere_that_varies_is_refused_before_any_key_budget_step_or_request()
+{
+    let routes = [
+        ("managed", RouteConfig::managed()),
+        (
+            "own",
+            RouteConfig::new(
+                Route::Own,
+                Some("https://api.example.invalid/v1"),
+                Some("vendor/model-1"),
+            )
+            .unwrap(),
+        ),
+        ("local", RouteConfig::new(Route::Local, None, None).unwrap()),
+    ];
+    for text in BACKGROUND_PHRASINGS {
+        for (place, value) in background_places(text) {
+            for (route, config) in &routes {
+                kept_on_this_mac(
+                    value.clone(),
+                    config,
+                    &format!("{route} / {place}: {text:?}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn background_check_wording_never_reaches_ozzie_church_and_its_own_refusal_is_the_same_code() {
+    let names = roster();
+    let config = RouteConfig::managed();
+    let hosted = HostedConfig::from_env(false, None);
+    for text in BACKGROUND_PHRASINGS {
+        for (place, value) in background_places(text) {
+            let keys = connected_keys();
+            let bench = Bench::new("hosted-background").echo(&value);
+            let env = StepEnv {
+                keys: &keys,
+                hosted: &hosted,
+                ..bench.env(&config, &names)
+            };
+            let error = agent_step_using(&env, &parse_request(value).unwrap(), &bench.http).err();
+            assert_eq!(
+                error,
+                Some(AgentError::BackgroundCheck),
+                "{place}: {text:?}"
+            );
+            assert_eq!(bench.sent(), 0, "{place}: {text:?}");
+            assert_eq!(
+                keys.lookups.load(Ordering::SeqCst),
+                0,
+                "no device token read"
+            );
+            assert!(!bench.usage.exists());
+            assert_eq!(bench.model_events(TASK), bench.setup);
+        }
+    }
+    // ozzie.church's own refusal, had this Mac missed it: sent, so recorded as a step, as egress.
+    let keys = connected_keys();
+    let bench = Bench::new("hosted-background-refusal")
+        .answering(vec![(400, r#"{"error":"background-check"}"#.into())]);
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    let error = agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).err();
+    assert_eq!(error, Some(AgentError::BackgroundCheck));
+    assert_eq!(
+        bench.model_events(TASK),
+        ["1".to_owned(), "1 egress".to_owned()]
+    );
+    assert_eq!(
+        serde_json::to_string(&error).unwrap(),
+        "\"background-check\""
+    );
+}
+
+#[test]
+fn a_procedure_run_with_background_check_wording_in_a_tool_result_is_refused_before_it_is_paid_for()
+{
+    let names = roster();
+    let task = "00000000-0000-4000-8000-0000000000aa";
+    let wording = envelope_with("background check expired");
+    // Regular jobs check the step with check_step before the run's grant pays (always_on.rs).
+    let bench = Bench::new("procedure-background");
+    run(&bench.ledger, task, "skill", "room-check");
+    let value = room_check(task, &wording);
+    let bench = bench.echo(&value);
+    let request = parse_request(value).unwrap();
+    let view = bench.ledger.step_view(task).unwrap();
+    assert_eq!(
+        check_step(&request, &names, &view).err(),
+        Some(AgentError::BackgroundCheck)
+    );
+    let before = bench.model_events(task);
+    assert_eq!(
+        agent_step_using(
+            &bench.env(&RouteConfig::managed(), &names),
+            &request,
+            &bench.http
+        )
+        .err(),
+        Some(AgentError::BackgroundCheck)
+    );
+    assert_eq!((bench.sent(), bench.lookups()), (0, 0));
+    assert_eq!(bench.model_events(task), before);
+    // Ozzie's own "this check is out of date" in what wasn't checked is not an expired background check.
+    let bench = Bench::new("procedure-stale");
+    run(&bench.ledger, task, "skill", "room-check");
+    let value = room_check(task, &stale_not_checked());
+    let bench = bench.echo(&value);
+    let request = parse_request(value).unwrap();
+    let view = bench.ledger.step_view(task).unwrap();
+    assert_eq!(check_step(&request, &names, &view).err(), None);
+    agent_step_using(
+        &bench.env(&RouteConfig::managed(), &names),
+        &request,
+        &bench.http,
+    )
+    .unwrap();
+    assert_eq!(bench.sent(), 1);
+}
+
+#[test]
+fn ozzies_pinned_words_are_compared_not_scanned_and_ordinary_sunday_words_go_out() {
+    let names = roster();
+    // Wording added to the system message or a tool spec makes it not Ozzie's own: refused as any
+    // change to them is (egress), never sent.
+    let mut value = base();
+    value["messages"][0]["content"] = json!(format!(
+        "{} Never mention background checks.",
+        system_for(fixed::ASK_SKILL)
+    ));
+    refused(Bench::new("background-system"), value, &names, "system");
+    let mut value = base();
+    value["tools"][0]["description"] = json!("Background checks for the kids teams.");
+    refused(Bench::new("background-spec"), value, &names, "tool spec");
+    // Every procedure's own request goes out: its system message is compared, never scanned, though
+    // sunday-ready's says "If the last check is out of date and Planning Center can be checked again,
+    // check again first." (review B2 L-1: no run-time exemption covers that sentence).
+    for skill in fixed::skills() {
+        let system = fixed::system_text(skill).unwrap();
+        let messages = vec![
+            AgentMessage::System { content: system },
+            AgentMessage::User {
+                content: fixed::procedure_prompt().to_owned(),
+            },
+        ];
+        assert!(!background_in(&messages), "{}", skill.id);
+    }
+    for question in [
+        "Who could cover [Role 1]?",
+        "Is the projection screen booked?",
+        "Who checked in?",
+        "Is the kids check-in desk covered?",
+    ] {
+        let bench = Bench::new("ordinary");
+        bench.step(with_user(question), &names).unwrap();
+        assert_eq!(bench.sent(), 1, "{question}");
+    }
+}
+
+/// A reply with the model's own words beside one tool call (or truncated, with `finish`).
+fn words_beside(text: &str, name: &str, arguments: &str, finish: &str) -> String {
+    json!({"choices":[{"message":{"role":"assistant","content":text,"tool_calls":[call(name, arguments)],"provider_metadata":confirmed()},"finish_reason":finish}],"usage":{"prompt_tokens":50,"completion_tokens":12}}).to_string()
+}
+const OUT_OF_DATE: &str = "The check is out of date, so I'll read Planning Center again.";
+
+#[test]
+fn the_models_own_wording_beside_a_tool_call_is_dropped_when_it_arrives_so_the_task_goes_on() {
+    // Review B M1: words such as "The check is out of date" beside a tool call used to be kept, then
+    // refused when the next step echoed them, failing an ordinary question with the background-check
+    // message (and a regular job as egress). Now they are dropped when the reply arrives: the calls go
+    // on, nothing holding the wording is ever sent, and the next step goes out.
+    let names = roster();
+    let config = RouteConfig::managed();
+    let connected = connected_keys();
+    let release = HostedConfig::from_env(false, None);
+    for hosted in [false, true] {
+        let bench = Bench::new("m1").answering(vec![(
+            200,
+            words_beside(
+                OUT_OF_DATE,
+                "sunday__who_could_help",
+                ROLE_ARGUMENT,
+                "tool_calls",
+            ),
+        )]);
+        let env = if hosted {
+            StepEnv {
+                keys: &connected,
+                hosted: &release,
+                ..bench.env(&config, &names)
+            }
+        } else {
+            bench.env(&config, &names)
+        };
+        let reply = agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).unwrap();
+        assert_eq!(reply.content, "", "hosted: {hosted}");
+        assert_eq!(reply.finish, Finish::ToolCalls);
+        assert_eq!(reply.tool_calls[0].name, "sunday.who_could_help");
+        assert_eq!(
+            bench.model_events(TASK),
+            ["1".to_owned(), "1 tool_calls".to_owned()]
+        );
+        // The loop echoes exactly what came back; the next step goes out.
+        let next = agent_step_using(
+            &env,
+            &parse_request(after_tool_round()).unwrap(),
+            &bench.http,
+        );
+        assert!(next.is_ok(), "hosted: {hosted}: {:?}", next.err());
+        let sent = bench.http.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert!(!sent[1].body.to_string().contains("out of date"));
+    }
+    // A regular job's procedure step the same way: never ended as egress for the model's words.
+    let bench = Bench::new("m1-procedure").answering(vec![(
+        200,
+        words_beside(OUT_OF_DATE, "sunday__not_checked", "{}", "tool_calls"),
+    )]);
+    let task = "00000000-0000-4000-8000-0000000000bb";
+    run(&bench.ledger, task, "skill", "room-check");
+    let value = json!({
+        "task_id": task,
+        "messages": [
+            {"role": "system", "content": system_for("room-check")},
+            {"role": "user", "content": fixed::procedure_prompt()},
+        ],
+        "tools": [spec("rooms.conflicts"), spec("rules.current"), spec("sunday.not_checked")],
+        "max_tokens": 600,
+    });
+    let reply = bench.step(value, &names).unwrap();
+    assert_eq!((reply.content.as_str(), reply.tool_calls.len()), ("", 1));
+    assert_eq!(
+        bench.model_events(task),
+        ["1".to_owned(), "1 tool_calls".to_owned()]
+    );
+    // A truncated reply is only words: with the wording it is no usable answer, never echoed.
+    let bench = Bench::new("m1-length").answering(vec![(
+        200,
+        words_beside(
+            OUT_OF_DATE,
+            "sunday__who_could_help",
+            ROLE_ARGUMENT,
+            "length",
+        ),
+    )]);
+    assert_eq!(
+        bench.step(base(), &names).err(),
+        Some(AgentError::InvalidAnswer)
+    );
+    assert_eq!(
+        bench.model_events(TASK),
+        ["1".to_owned(), "1 fidelity".to_owned()]
+    );
+    // Words without the wording beside a call are kept as before.
+    let bench = Bench::new("m1-plain").answering(vec![(
+        200,
+        words_beside(
+            "Let me look that up.",
+            "sunday__who_could_help",
+            ROLE_ARGUMENT,
+            "tool_calls",
+        ),
+    )]);
+    assert_eq!(
+        bench.step(base(), &names).unwrap().content,
+        "Let me look that up."
     );
 }

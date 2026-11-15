@@ -206,6 +206,10 @@ pub(crate) fn refusal(status: u16, body: &[u8]) -> Option<ModelError> {
         429 if is("rate-limited") => Some(ModelError::RateLimited),
         429 if is("step-limit") => Some(ModelError::StepLimit),
         400 if is("contact-detail") => Some(ModelError::ContactDetail),
+        // ozzie.church found background-check wording before the AI (web/ background.ts).
+        400 if is("background-check") => Some(ModelError::BackgroundCheck),
+        // ozzie.church found a hidden character in a note before the AI (web/ requests.ts).
+        400 if is("hidden-character") => Some(ModelError::HiddenCharacter),
         _ => Some(ModelError::ProviderFailure),
     }
 }

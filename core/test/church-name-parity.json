@@ -1,0 +1,110 @@
+{
+  "about": "Church names as display text: the same filter runs natively (core/native-auth oauth.rs church_name) and in the desktop page (product/desktop/src/connection.ts churchName). Control, space and line/paragraph separator characters become one space; format (including bidirectional, zero-width, soft hyphen and tag characters), private-use and surrogate characters are dropped; spaces collapse and trim; at most 120 code points. Nothing left means no name: the organization number is shown instead. Both sides' tests run every case; expected null is no name.",
+  "cases": [
+    {
+      "label": "plain",
+      "input": "Fictional Grace Church",
+      "expected": "Fictional Grace Church"
+    },
+    {
+      "label": "spaces collapse and trim",
+      "input": "  Fictional   Grace\tChurch  ",
+      "expected": "Fictional Grace Church"
+    },
+    {
+      "label": "soft hyphen",
+      "input": "Fictional\u00adGrace",
+      "expected": "FictionalGrace"
+    },
+    {
+      "label": "arabic letter mark",
+      "input": "Fictional \u061cGrace",
+      "expected": "Fictional Grace"
+    },
+    {
+      "label": "deprecated format controls U+206A to U+206F",
+      "input": "A\u206a\u206b\u206c\u206d\u206e\u206fB",
+      "expected": "AB"
+    },
+    {
+      "label": "mongolian vowel separator",
+      "input": "Fictional\u180eGrace",
+      "expected": "FictionalGrace"
+    },
+    {
+      "label": "subdivision flag tag sequence",
+      "input": "St Andrew's \ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc73\udb40\udc63\udb40\udc74\udb40\udc7f",
+      "expected": "St Andrew's \ud83c\udff4"
+    },
+    {
+      "label": "bidi embedding, override and isolate controls",
+      "input": "\u202eFictional\u202c Grace\u2066x\u2069\u202a",
+      "expected": "Fictional Gracex"
+    },
+    {
+      "label": "control characters",
+      "input": "Fictional\u0007\nGrace\r\u0085Church\u0000",
+      "expected": "Fictional Grace Church"
+    },
+    {
+      "label": "line and paragraph separators",
+      "input": "Fictional\u2028Grace\u2029Church",
+      "expected": "Fictional Grace Church"
+    },
+    {
+      "label": "no-break and ideographic spaces",
+      "input": "Fictional\u00a0Grace\u3000Church",
+      "expected": "Fictional Grace Church"
+    },
+    {
+      "label": "byte order mark and zero-width characters",
+      "input": "\ufeffFictional\u200bGrace\u200c\u200d",
+      "expected": "FictionalGrace"
+    },
+    {
+      "label": "private use",
+      "input": "Fictional\ue000Grace",
+      "expected": "FictionalGrace"
+    },
+    {
+      "label": "family emoji loses its joiners",
+      "input": "Fictional \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67",
+      "expected": "Fictional \ud83d\udc68\ud83d\udc69\ud83d\udc67"
+    },
+    {
+      "label": "accents and other scripts",
+      "input": "\u00c9glise Saint-\u00c9tienne \uad50\ud68c \u0643\u0646\u064a\u0633\u0629",
+      "expected": "\u00c9glise Saint-\u00c9tienne \uad50\ud68c \u0643\u0646\u064a\u0633\u0629"
+    },
+    {
+      "label": "120 code points including emoji (130 UTF-16 units)",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a\ud83d\udd4a"
+    },
+    {
+      "label": "over 120 code points is cut at 120",
+      "input": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "label": "a cut that ends on a space is trimmed",
+      "input": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc dd",
+      "expected": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "label": "only zero-width characters",
+      "input": "\u200b\u200c\u200d\u2060",
+      "expected": null
+    },
+    {
+      "label": "only spaces",
+      "input": "   ",
+      "expected": null
+    },
+    {
+      "label": "empty",
+      "input": "",
+      "expected": null
+    }
+  ]
+}

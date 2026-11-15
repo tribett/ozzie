@@ -16,6 +16,7 @@
 //! placeholder boundary in the webview and passes the native checks here. Keys and the device
 //! token are read from the Keychain here and in hosted.rs and never leave them: not in errors,
 //! status or IPC.
+use crate::background::background_wording;
 use crate::credentials::{StoreError, classify_status};
 use crate::hosted::{self, HostedConfig};
 use crate::name_guard::NameGuard;
@@ -106,6 +107,15 @@ pub enum ModelError {
     /// Ozzie managed, agent steps only: ozzie.church says the task has taken its model steps
     /// (HTTP 429 `step-limit`).
     StepLimit,
+    /// Background-check wording in what the request would carry (background.rs; owner decision
+    /// 2026-11-14): refused here before any key, budget or network, or by ozzie.church (HTTP 400
+    /// `background-check`) before the AI. Nothing was sent to the AI, and nothing of the text is kept.
+    BackgroundCheck,
+    /// Rewording only: the note holds a hidden character (a control, format, private-use or
+    /// default-ignorable character, the blank braille pattern or a line separator other than a line
+    /// break; `hidden_in_note`), found here or by ozzie.church (HTTP 400 `hidden-character`). Nothing
+    /// was sent to the AI (review B2 M-1).
+    HiddenCharacter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,8 +525,40 @@ fn labels_standalone(text: &str) -> bool {
         })
     })
 }
+/// A character a note may not hold: the question rule's (`not_in_a_question`, `invisible`) apart from
+/// a line break, and apart from the joiners an emoji is spelled with: a variation selector after a
+/// pictograph, a digit, `#` or `*` (a keycap), and a zero-width joiner between pictographs (an emoji
+/// sequence; a skin-tone modifier or a variation selector may come first). The background-check
+/// list's newer characters count as hidden too (review B3 L-1). Mirrored by ozzie.church (web
+/// requests.ts `hiddenInNote`) and the page (core/src/draft-request.ts `hiddenInNote`).
+pub(crate) fn hidden_in_note(note: &str) -> bool {
+    use icu_properties::{CodePointSetData, props::ExtendedPictographic};
+    let pictographs = CodePointSetData::new::<ExtendedPictographic>();
+    let pictograph = |c: Option<char>| {
+        c.is_some_and(|c| pictographs.contains(c) || ('\u{1f3fb}'..='\u{1f3ff}').contains(&c))
+    };
+    let chars: Vec<char> = note.chars().collect();
+    chars.iter().enumerate().any(|(at, &c)| {
+        let before = at.checked_sub(1).map(|i| chars[i]);
+        let after = chars.get(at + 1).copied();
+        let joiner = match c {
+            '\u{fe0e}' | '\u{fe0f}' => {
+                pictograph(before)
+                    || before.is_some_and(|b| b.is_ascii_digit() || b == '#' || b == '*')
+            }
+            '\u{200d}' => (pictograph(before) || before == Some('\u{fe0f}')) && pictograph(after),
+            _ => false,
+        };
+        c != '\n'
+            && !joiner
+            && (not_in_a_question(c)
+                || crate::name_guard::invisible(c)
+                || crate::background::newer(c))
+    })
+}
 /// Native defense in depth behind the webview's placeholder boundary: the exact request
-/// shape the app produces, and no name this session has shown.
+/// shape the app produces, no background-check wording and no hidden character in the note, and no
+/// name this session has shown.
 pub fn check_draft(request: &DraftRequest, names: &NameGuard) -> Result<(), ModelError> {
     if request.system != SYSTEM {
         return Err(ModelError::InvalidRequest);
@@ -530,6 +572,11 @@ pub fn check_draft(request: &DraftRequest, names: &NameGuard) -> Result<(), Mode
                 .and_then(|rest| rest.strip_prefix(NOTE_PREFIX))
         })
         .ok_or(ModelError::InvalidRequest)?;
+    // The system text and the choice are pinned above; the note is what varies (a position name
+    // can carry anything a church typed into Planning Center).
+    if background_wording(note) {
+        return Err(ModelError::BackgroundCheck);
+    }
     // Compatibility forms (fullwidth brackets and the like) count as brackets too, so every
     // structural and name check runs on both the raw text and its NFKC form.
     let compat = icu_normalizer::ComposingNormalizerBorrowed::new_nfkc().normalize(&request.user);
@@ -562,6 +609,12 @@ pub fn check_draft(request: &DraftRequest, names: &NameGuard) -> Result<(), Mode
     {
         return Err(ModelError::NamePresent);
     }
+    // No hidden character either, as a question may hold none (review B2 M-1); after the name check,
+    // so a name split by an invisible character is still refused as a name. The page sends a position
+    // name holding one as [Role], so only something else could put one here.
+    if hidden_in_note(note) {
+        return Err(ModelError::HiddenCharacter);
+    }
     Ok(())
 }
 
@@ -578,6 +631,8 @@ pub fn check_draft(request: &DraftRequest, names: &NameGuard) -> Result<(), Mode
 //    character. Free text cannot follow a valid code;
 //  - every square bracket is an Ask label ([Person N], [Role N], [Your name], [a team member])
 //    that stands alone;
+//  - no background-check wording anywhere in the user text, fact lines and question alike
+//    (background.rs, owner decision 2026-11-14), checked first so it is refused as itself;
 //  - no email address or phone number anywhere in the user text, raw or NFKC (`contact_detail`:
 //    any decimal digits, groups separated by one to three of anything but letters, numbers and
 //    line breaks, dates and times set aside; "x@y");
@@ -1132,6 +1187,10 @@ pub fn check_ask(request: &AskRequest, names: &NameGuard) -> Result<(), ModelErr
     let (facts, question) = user
         .rsplit_once(QUESTION_PREFIX)
         .ok_or(ModelError::InvalidRequest)?;
+    // The system text is pinned above; everything else varies.
+    if background_wording(user) {
+        return Err(ModelError::BackgroundCheck);
+    }
     let question_chars = question.chars().count();
     let nfkc = |text: &str| {
         icu_normalizer::ComposingNormalizerBorrowed::new_nfkc()

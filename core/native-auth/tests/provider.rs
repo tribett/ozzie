@@ -116,3 +116,54 @@ fn revoke_prefers_refresh_token_and_has_no_client_secret() {
     assert!(form.contains("token_type_hint=refresh_token"));
     assert!(!form.contains("client_secret"));
 }
+fn with_status(status: u16, response: &str) -> PcoProvider<Scripted> {
+    PcoProvider(Scripted {
+        response: response.into(),
+        status,
+        calls: Mutex::new(vec![]),
+    })
+}
+#[test]
+fn a_refused_revoke_is_told_apart_from_an_unreachable_planning_center() {
+    for (status, error) in [
+        (400, AuthError::RevokeRefused),
+        (401, AuthError::RevokeRefused),
+        (403, AuthError::RevokeRefused),
+        (429, AuthError::ProviderFailure),
+        (503, AuthError::ProviderFailure),
+    ] {
+        assert_eq!(
+            with_status(status, "{}")
+                .revoke("client", "fictional-refresh", "refresh_token")
+                .err(),
+            Some(error),
+            "{status}"
+        );
+    }
+}
+#[test]
+fn userinfo_keeps_the_churchs_name_and_never_the_persons() {
+    // The same single userinfo read as before: one request, the church's name kept as display
+    // text; the signed-in person's own name and email are never read.
+    let body = format!(
+        r#"{{"sub":"1","name":"fictional-person-canary","email":"fictional-email-canary","organization_id":1001,"organization_name":" Fictional Grace{} Church "}}"#,
+        '\u{202E}'
+    );
+    let provider = scripted(&body);
+    let named = provider.organization_named("fictional-access").unwrap();
+    assert_eq!(named.id, "1001");
+    assert_eq!(named.name.as_deref(), Some("Fictional Grace Church"));
+    assert_eq!(provider.0.calls.lock().unwrap().len(), 1);
+    assert_eq!(provider.0.calls.lock().unwrap()[0].0, Endpoint::UserInfo);
+    for body in [
+        r#"{"organization_id":1001}"#,
+        r#"{"organization_id":1001,"organization_name":7}"#,
+        r#"{"organization_id":1001,"organization_name":"   "}"#,
+        "[1001]",
+    ] {
+        let named = scripted(body)
+            .organization_named("fictional-access")
+            .unwrap();
+        assert_eq!((named.id.as_str(), named.name), ("1001", None), "{body}");
+    }
+}
