@@ -15,6 +15,9 @@ if (process.versions.node !== pinned) {
 
 export default defineConfig({
   test: {
+    // Half the cores: with a worker on every core, the runner's own process starved and a worker's report timed out
+    // ("Timeout calling onTaskUpdate", every test passed but the run failed on CI and this Mac). Faster this way too.
+    maxWorkers: "50%",
     include: ["core", "product"].flatMap(root =>
       configDefaults.include.map(pattern => `${root}/${pattern}`)),
   },
