@@ -1,18 +1,19 @@
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { REFUSALS } from "../../../core/src/ask.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import { Answer, ASK_NOTE, AskPanel, HowItWorks, isCardsRequest, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
+import { Answer, ASK_NOTE, AskPanel, HowItWorks, isCardsRequest, isHelpRequest, routeQuestion, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
+import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import { App } from "../src/App.js";
 import { askOzzie, createAppHarness, type AskTurn, type ShownAnswer } from "../src/harness-bridge.js";
-import { ASK_FAILURES } from "../src/harness-words.js";
-import { draftTurns, fictionalData, greeterTurns, HIDDEN_WORDS, scripted, text } from "./harness-fakes.js";
+import { ASK_FAILURES, ASK_START } from "../src/harness-words.js";
+import { BACKGROUND_IN_REQUEST, draftTurns, everyRequest, fictionalData, greeterTurns, HIDDEN_WORDS, scripted, text } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
 const capture = nov22Capture();
@@ -33,13 +34,15 @@ async function shown(turns = greeterTurns): Promise<ShownAnswer> {
 const body = (turn: Turn) => renderToStaticMarkup(React.createElement(TurnBody, { turn, onOpen: () => {} }));
 
 describe("Ask Ozzie panel", () => {
-  it("is disabled with plain explanations when nothing is checked and no AI model is set up", async () => {
+  it("explains plainly when nothing is checked and no AI model is set up, and can still be asked what Ozzie can do (owner: useful before accounts are connected)", async () => {
     const html = panel({ brief: null, modelReady: false });
     expect(html).toContain("Nothing has been checked yet.");
+    expect(text(html)).toContain("Connect Planning Center in Settings");
     expect(html).toContain("Ask Ozzie needs an AI model. Set one up under Settings.");
-    expect(html).toMatch(/<textarea[^>]*disabled=""/);
+    expect(html).not.toMatch(/<textarea[^>]*disabled=""/);
     expect(html).toContain(note);
-    expect(html).not.toContain("class=\"chip\"");
+    // The one suggestion before anything is checked: what Ozzie can do, answered here.
+    expect([...html.matchAll(/class="chip"[^>]*>([^<]*)</gu)].map(m => m[1])).toEqual(["What can you do?"]);
     const { invoke } = await import("@tauri-apps/api/core");
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -52,8 +55,9 @@ describe("Ask Ozzie panel", () => {
     expect(html).toContain("Draft a note to someone who could cover Greeter");
     expect(html).not.toMatch(/<textarea[^>]*disabled=""/);
     expect(html).toContain(note);
-    expect(panel({ modelReady: false })).toMatch(/<textarea[^>]*disabled=""/);
-    // Until Ozzie's procedures are loaded there is nothing to run questions through.
+    // Without an AI model it can still be asked what Ozzie can do.
+    expect(panel({ modelReady: false })).not.toMatch(/<textarea[^>]*disabled=""/);
+    // Until Ozzie's procedures are loaded, with nothing else to take a question, there is nothing to run questions through.
     expect(panel({ ask: null })).toMatch(/<textarea[^>]*disabled=""/);
   });
 
@@ -179,9 +183,9 @@ describe("speaking a question in Ask", () => {
     const refused = panel({ initialVoice: { status: "no-permission", what: "microphone" } });
     expect(mic(refused)).toContain('disabled=""');
     expect(refused).toContain("System Settings › Privacy &amp; Security › Microphone");
-    // Before the check, and when nothing can be asked yet, the button is off too.
+    // Before the check the button is off; with nothing checked yet a question can still be spoken (what Ozzie can do).
     expect(mic(panel())).toContain('disabled=""');
-    expect(mic(panel({ initialVoice: { status: "ready" }, brief: null, modelReady: false }))).toContain('disabled=""');
+    expect(mic(panel({ initialVoice: { status: "ready" }, brief: null, modelReady: false }))).not.toContain('disabled=""');
   });
 
   it("points visitor-card requests to the Visitor cards page without asking any AI model", () => {
@@ -206,4 +210,77 @@ describe("speaking a question in Ask", () => {
     const { invoke } = await import("@tauri-apps/api/core");
     expect(invoke).not.toHaveBeenCalled();
   });
+});
+
+describe("Ask before anything is connected, and what Ozzie can do (owner decisions, Nov 15)", () => {
+  it("knows a help question from a question that mentions help", () => {
+    for (const q of ["What can you do?", "help", "Help!", "How do you work?", "what do you do", "Ozzie, what can you do?", "What can I ask?", "How can you help me?"]) {
+      expect(isHelpRequest(q), q).toBe(true);
+    }
+    for (const q of ["Who could help with Greeter?", "Help me find someone for the nursery", "What do you do when someone declines?", "Can you help cover Greeter?"]) {
+      expect(isHelpRequest(q), q).toBe(false);
+    }
+  });
+
+  it("answers help, cards and plans without any AI; before anything is checked it says what to do next", () => {
+    const plan = { kind: "plan" } as unknown as Exclude<Parsed, { kind: "none" }>;
+    const parse = (t: string): Parsed => /keep an eye/iu.test(t) ? plan : { kind: "none" } as Parsed;
+    const none = { brief: null, modelReady: false, canAsk: false, parse };
+    expect(routeQuestion("What can you do?", none)).toEqual({ kind: "help" });
+    expect(routeQuestion("Read these visitor cards", none)).toEqual({ kind: "cards" });
+    expect(routeQuestion("Keep an eye on Sunday", none)).toEqual({ kind: "plan", parsed: plan });
+    expect(routeQuestion("Is the nursery ready?", { ...none, modelReady: true, canAsk: true })).toEqual({ kind: "start" });
+    expect(routeQuestion("Is the nursery ready?", { ...none, brief: fictional })).toEqual({ kind: "no-model" });
+    // Kids teams and background checks are answered on this Mac, so they need no AI model.
+    expect(routeQuestion("Is the nursery ready?", { ...none, brief: fictional, canAsk: true })).toEqual({ kind: "ask" });
+    expect(routeQuestion("Who could cover Greeter?", { ...none, brief: fictional, canAsk: true })).toEqual({ kind: "no-model" });
+    expect(routeQuestion("Has Blake been screened?", { ...none, brief: fictional, canAsk: true })).toEqual({ kind: "ask" });
+    expect(routeQuestion("Is the nursery ready?", { ...none, brief: fictional, modelReady: true })).toEqual({ kind: "loading" });
+    expect(routeQuestion("Is the nursery ready?", { ...none, brief: fictional, modelReady: true, canAsk: true })).toEqual({ kind: "ask" });
+  });
+
+  it("lists what Ozzie can do here and what it never does, with nothing sent", () => {
+    const t = text(body({ id: 1, question: "What can you do?", state: "help", checked: true }));
+    for (const s of ["Check Sunday", "who on a team could help", "Prepare a note", "copy", "Keep an eye on Sunday", "room bookings", "follow-ups", "group meetings",
+      "morning briefing", "visitor cards", "never sends messages", "never changes anything in Planning Center", "prayers", "sermons", "Nothing was sent."]) expect(t, s).toContain(s);
+    expect(t).not.toMatch(HIDDEN_WORDS);
+    // Before anything is checked: what to do first, and the way there.
+    const first = body({ id: 1, question: "help", state: "help", checked: false });
+    expect(text(first)).toContain("connect Planning Center in Settings");
+    expect(first).toContain(">Open Settings</button>");
+    expect(turnAnnouncement({ id: 1, question: "help", state: "help", checked: true })).toBe("Ozzie listed what it can do here. Nothing was sent.");
+  });
+
+  it("answers a question before anything is checked with what to do next, never an error", () => {
+    const html = body({ id: 1, question: "Is the nursery ready?", state: "start" });
+    expect(text(html)).toContain(ASK_START);
+    expect(text(html)).toContain("Nothing was sent.");
+    expect(html).toContain(">Open Settings</button>");
+    expect(html).toContain(">Open Sunday</button>");
+    expect(html).not.toMatch(/role="alert"/u);
+    expect(text(html)).not.toMatch(HIDDEN_WORDS);
+  });
+
+  it("refuses sermons, prayers and scripture here, saying nothing was sent", () => {
+    expect(text(body({ id: 1, question: "Write a sermon", state: "refused", text: REFUSALS.religious }))).toContain("Nothing was sent.");
+  });
+
+  it("marks an answer written on this Mac: nothing was sent, where it came from, and how it was made", () => {
+    const answer: ShownAnswer = { body: "Needs a decision: Blake Ashgrove has no current background check on file.", draft: null, notCovered: false,
+      basedOn: "Based on: Planning Center Services, checked Fri", gaps: [], procedure: null, steps: ["Looked at background checks, kept on this Mac"], aiSteps: 0, page: "sunday", local: true };
+    const html = text(renderToStaticMarkup(React.createElement(Answer, { answer, onOpen: () => {} })));
+    expect(html).toContain("Answered on this Mac without the AI. Nothing was sent.");
+    expect(html).toContain("Based on: Planning Center Services, checked Fri");
+    const how = text(renderToStaticMarkup(React.createElement(HowItWorks, { answer })));
+    expect(how).toContain("Ozzie answered this on this Mac from its last check, without asking the AI.");
+    expect(how).toContain("Looked at background checks, kept on this Mac");
+    expect(how).not.toContain("Ozzie asked the AI");
+    expect(how).not.toMatch(HIDDEN_WORDS);
+  });
+});
+
+afterAll(() => {
+  // No question this file asked through a model carried background-check wording (review Q H2).
+  expect(everyRequest.length).toBeGreaterThan(0);
+  for (const r of everyRequest) expect(JSON.stringify(r)).not.toMatch(BACKGROUND_IN_REQUEST);
 });

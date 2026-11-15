@@ -1,8 +1,8 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConnectionPage } from "../src/connection-page.js";
-import { connectionProblem, foundOrganization, type ConnectionStatus } from "../src/connection.js";
+import { cleanYourName, connectionProblem, foundOrganization, organizationDiagnosticProblem, signNote, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "../src/connection.js";
 
 describe("private consumer status-only presentation", () => {
   it("starts disconnected with connection actions disabled until Public registration is confirmed", () => {
@@ -19,6 +19,35 @@ describe("private consumer status-only presentation", () => {
     expect(connectionProblem({ authentication: { store: "unavailable" } })).toContain("unavailable");
     expect(connectionProblem("fictional-secret-material")).not.toContain("fictional-secret-material");
     expect(connectionProblem(undefined)).toContain("could not be checked");
+  });
+});
+
+describe("wording for a real church", () => {
+  it("a different organization is said plainly, with what to do, and never calls the church a test organization", () => {
+    const t = organizationDiagnosticProblem({ version: 1, stage: "organization-binding", reason: "organization-mismatch" });
+    expect(t).toBe("You signed in to a different Planning Center organization than the one in Ozzie's settings. Sign in to your church's organization, or check the organization ID under Advanced. Nothing new was saved.");
+    expect(t).not.toMatch(/\btest\b|expected/iu);
+  });
+});
+
+describe("Your name for notes", () => {
+  it("is tidied to one short line, and signs a finished note on this Mac, or leaves [Your name]", () => {
+    expect(cleanYourName("  Pat \n Example\u200b ")).toBe("Pat Example");
+    expect(cleanYourName("x".repeat(100))).toHaveLength(YOUR_NAME_MAX);
+    expect(signNote("Thank you,\n[Your name]", " Pat ")).toBe("Thank you,\nPat");
+    expect(signNote("Thank you,\n[Your name]", "  ")).toBe("Thank you,\n[Your name]");
+  });
+  it("is kept on this Mac in its own place, apart from the Church rules", () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => { stored.set(k, v); }, removeItem: (k: string) => { stored.delete(k); } });
+    try {
+      expect(yourName.get()).toBe("");
+      yourName.set(" Pat  Example ");
+      expect([...stored]).toEqual([["ozzie.your-name.v1", "Pat Example"]]);
+      expect(yourName.get()).toBe("Pat Example");
+      yourName.set("   ");
+      expect(stored.size).toBe(0);
+    } finally { vi.unstubAllGlobals(); }
   });
 });
 

@@ -10,7 +10,8 @@ import type { Finding } from "./sunday-brief.js";
 
 export const REWORDINGS = { warmer: "Make it warmer.", shorter: "Make it shorter.", casual: "Make it more casual.", formal: "Make it a little more formal." } as const;
 export type Rewording = keyof typeof REWORDINGS;
-export interface DraftContext { finding: Finding; person_id: string }
+/** `sunday`: the church-local date (YYYY-MM-DD) of the Sunday checked, named when the service time wasn't read. */
+export interface DraftContext { finding: Finding; person_id: string; sunday?: string | null }
 export interface DraftModelRequest { system: string; user: string; max_tokens: number }
 /** Text in placeholder form that this module produced. Leader-typed text cannot become one. */
 export interface PlaceholderDraft { readonly text: string; readonly role: { readonly sent: string; readonly original: string } }
@@ -71,16 +72,27 @@ const roleUnfit = (name: string) =>
   name.length > 300 ||
   [name, name.normalize("NFKC")].some(text => /\p{Nd}{3}/u.test(text) || (text.match(/\p{Nd}/gu) ?? []).length >= 7 || text.includes("@"));
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/u;
+/**
+ * When the role is, in a note's words: the service time Planning Center gave ("Sunday, November 29 at 9:30 AM"),
+ * else the Sunday's own date ("Sunday, November 29"), else just "Sunday". Never relative to today.
+ */
+export function serviceWhen(finding: Finding, sunday?: string | null): string {
+  const interval = finding.position?.interval;
+  if (interval) return new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const day = sunday && DATE.test(sunday) ? new Date(`${sunday}T12:00:00Z`) : null;
+  return day && !Number.isNaN(day.getTime()) ? day.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }) : "Sunday";
+}
+
 /** Ozzie's own first wording, already in placeholder form. */
 export function templateDraft(ctx: DraftContext, names: Record<string, string>): PlaceholderDraft {
   const original = ctx.finding.position?.name ?? "a Sunday role";
   // [Role] is restored to the exact role name on this Mac.
   const role = containsName(original, names) || roleUnfit(original) ? "[Role]" : original;
-  const interval = ctx.finding.position?.interval;
-  const when = interval ? new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }) : "this Sunday";
   return mint([
     "Hi [Volunteer A],",
-    `We still need one more person for ${role} on ${when}. Would you be able to help this week?`,
+    // The service's own date, never "this week" or "this Sunday": the note may go out weeks before it.
+    `We still need one more person for ${role} on ${serviceWhen(ctx.finding, ctx.sunday)}. Would you be able to help?`,
     "It's completely fine to say no. Just let me know either way so we can plan.",
     "Thank you,\n[Your name]",
   ].join("\n\n"), { sent: role, original });

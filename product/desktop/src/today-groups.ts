@@ -25,8 +25,9 @@
 // leave Today.
 //
 // Sunday's count is one number wherever it shows (the sidebar, the Sunday card, the Sunday page): things
-// to decide, meaning findings that need a decision, not resolved by the person and not set aside by Church
-// rules. Worth a look is counted and labeled apart, never added in.
+// to decide as the Sunday page shows them (core sunday-brief `sundayShownCount`), meaning Services findings,
+// confirmed room overlaps and follow-ups without an owner that need a decision, not resolved by the person
+// and not set aside by Church rules. Worth a look is counted and labeled apart, never added in.
 import type { AttentionFinding, Message } from "../../../core/src/attention-import/index.js";
 import type { Responsibility } from "../../../core/src/harness/responsibilities.js";
 import { addDays, DAY_MS, weekdayOf } from "../../../core/src/harness/responsibilities.js";
@@ -242,7 +243,10 @@ export function backText(until: string, now: string, zone: string): string {
 /** The count beside a group's heading: items, never people. */
 export const countText = (n: number) => `${n} ${n === 1 ? "item" : "items"}`;
 
-/** Sunday's count wherever it shows (the sidebar, the Sunday card): things to decide. Worth a look is never added in. */
+/**
+ * Sunday's count wherever it shows (the sidebar, the Sunday card): things to decide, from `sundayShownCount` so it
+ * matches the Sunday page. Worth a look is never added in.
+ */
 export const sundayCount = (open: { decisions: number } | null) => open?.decisions ?? 0;
 export const sundayCountText = (n: number) => `${n} ${n === 1 ? "thing" : "things"} to decide`;
 

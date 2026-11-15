@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import type { BriefPerson, Finding, SundayBrief } from "../../../core/src/sunday-brief.js";
+import { shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { FollowUpFinding, OperationsResult, RoomFinding } from "../../../core/src/operations-findings/index.js";
@@ -8,13 +8,14 @@ import { Icon } from "./icons.js";
 import { acceptModelReply, buildRewordRequest, restoreDraft, templateDraft, REWORDINGS, type PlaceholderDraft, type Rewording } from "../../../core/src/draft-request.js";
 import { canEscalate, escalationDraft, restoreEscalation } from "../../../core/src/escalation-draft.js";
 import {
-  applyDecisions, changeText, decide, decisionsStorageKey, loadDecisions, openCount, REASON_MAX, saveDecisions, withDecision, withoutDecision,
+  applyDecisions, changeText, decide, decisionsStorageKey, loadDecisions, REASON_MAX, saveDecisions, withDecision, withoutDecision,
   type DecidedItem, type DecisionChoice, type DecisionHistory, type SundayDecision,
 } from "../../../core/src/sunday-decisions.js";
 import { model, modelProblem } from "./model.js";
 import { alwaysFor, briefTarget, followUpTarget, groupTarget, roomTarget } from "../../../core/src/finding-feedback.js";
 import { canRemind, reminderDraft, restoreReminder } from "../../../core/src/reminder-draft.js";
 import { FindingFeedback, SetAside, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
+import { yourName } from "./connection.js";
 
 type Names = Record<string, string>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -72,17 +73,24 @@ function HowLink({ onHow }: { onHow: (() => void) | undefined }) {
   return <div className="why-how"><button type="button" className="btn btn-quiet btn-sm" onClick={onHow}><Icon name="rules" small /> See how this works</button></div>;
 }
 
-export function Why({ finding, checkedAt, onHow, defaultOpen = false }: { finding: Finding; checkedAt: string | null; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
+/** Every card's source row: "Why I flagged this" (the rule and facts), where the facts came from and when they were read. */
+function SourceWhy({ sources, at, why, onHow, defaultOpen = false }: {
+  sources: readonly string[]; at: string | null; why: readonly string[]; onHow?: (() => void) | undefined; defaultOpen?: boolean;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   return <div className="find-src">
     <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}>
       <Icon name="info" small /> Why I flagged this
     </button>
-    <span className="badge b-muted">{finding.source ?? "Planning Center"}</span>
-    {(finding.checked_at ?? checkedAt) && <span>Checked {time(finding.checked_at ?? checkedAt!)}</span>}
-    {open && <ul className="list why">{finding.why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
+    {sources.map(s => <span key={s} className="badge b-muted">{s}</span>)}
+    {at && <span>Checked {time(at)}</span>}
+    {open && <ul className="list why">{why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
     {open && <HowLink onHow={onHow} />}
   </div>;
+}
+
+export function Why({ finding, checkedAt, onHow, defaultOpen = false }: { finding: Finding; checkedAt: string | null; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
+  return <SourceWhy sources={[finding.source ?? "Planning Center"]} at={finding.checked_at ?? checkedAt} why={finding.why} onHow={onHow} defaultOpen={defaultOpen} />;
 }
 
 /** When no one on the team can be listed: who else could help find someone. */
@@ -127,10 +135,10 @@ function PeopleList({ finding, names, onDraft }: { finding: Finding; names: Name
 
 const REWORD_LABEL: Record<Rewording, string> = { warmer: "Warmer", shorter: "Shorter", casual: "More casual", formal: "More formal" };
 
-function Draft({ finding, person, names, sender, canReword, onClose }: {
-  finding: Finding; person: string; names: Names; sender: string; canReword: boolean; onClose: () => void;
+function Draft({ finding, person, names, sender, sunday, canReword, onClose }: {
+  finding: Finding; person: string; names: Names; sender: string; sunday: string | null; canReword: boolean; onClose: () => void;
 }) {
-  const ctx = { finding, person_id: person };
+  const ctx = { finding, person_id: person, sunday };
   const [version, setVersion] = useState<PlaceholderDraft>(() => templateDraft(ctx, names));
   const [body, setBody] = useState(() => restoreDraft(version, ctx, names, sender));
   const [edited, setEdited] = useState(false);
@@ -162,17 +170,22 @@ function Draft({ finding, person, names, sender, canReword, onClose }: {
 }
 
 /** The shared draft frame: never a send button, only copy and change the wording. */
-function DraftBox({ label, to, body, onBody, onClose, footer, children }: {
+export function DraftBox({ label, to, body, onBody, onClose, footer, children, startEditing = false }: {
   label: string; to?: string; body: string; onBody: (b: string) => void; onClose: () => void; footer: string; children?: ReactNode;
+  /** Start with the wording open to change (tests). */
+  startEditing?: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(startEditing);
   const [copied, setCopied] = useState(false);
+  const editId = useId();
   return <div className="draft" role="region" aria-label={label}>
     <div className="row draft-head"><span className="badge b-draft">Draft only. Nothing has been sent.</span><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close the draft" onClick={onClose}><Icon name="x" /></button></div>
     {to && <p className="small draft-to">To {to}</p>}
     {editing
-      ? <textarea className="draft-edit" value={body} onChange={e => { onBody(e.target.value); setCopied(false); }} rows={9} autoFocus />
+      ? <><label className="sr-only" htmlFor={editId}>{`${label}: change the wording`}</label>
+        {/* Opened by "Change the wording", so the words to change get the focus. */}
+        <textarea id={editId} className="draft-edit" value={body} onChange={e => { onBody(e.target.value); setCopied(false); }} rows={9} autoFocus /></>
       : <div className="draft-body">{body.split("\n\n").map((para, i) => <p key={i}>{para}</p>)}</div>}
     <div className="find-next">
       <button type="button" className="btn btn-primary" onClick={() => { void navigator.clipboard?.writeText(body).then(() => setCopied(true)); }}>
@@ -185,8 +198,10 @@ function DraftBox({ label, to, body, onBody, onClose, footer, children }: {
 }
 
 /** A note to the team's leader. Written on this Mac in placeholder form and never offered for AI rewording. */
-export function LeaderNote({ finding, leader, names, sender, onClose }: { finding: Finding; leader: string; names: Names; sender: string; onClose: () => void }) {
-  const ctx = { finding, leader_id: leader };
+export function LeaderNote({ finding, leader, names, sender, sunday = null, onClose }: {
+  finding: Finding; leader: string; names: Names; sender: string; sunday?: string | null; onClose: () => void;
+}) {
+  const ctx = { finding, leader_id: leader, sunday };
   const [body, setBody] = useState(() => restoreEscalation(escalationDraft(ctx), ctx, names, sender));
   return <DraftBox label="Draft note to the team's leader" to={`${nameOf(names, leader)} (team leader in Planning Center)`} body={body} onBody={setBody} onClose={onClose}
     footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
@@ -262,8 +277,8 @@ export function backgroundTitle(name: string, check: Finding["check"]): string {
 /** The Sunday a finding belongs to, for "This isn't right" (that Sunday only). */
 export interface Occurrence { id: string; label: string | null }
 
-function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHow, feedback = null, occurrence }: {
-  item: DecidedItem; names: Names; checkedAt: string | null; sender: string; canReword: boolean;
+function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDecide, onHow, feedback = null, occurrence }: {
+  item: DecidedItem; names: Names; checkedAt: string | null; sender: string; sunday: string | null; canReword: boolean;
   onDecide: (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) => void;
   onHow?: ((procedure: string) => void) | undefined;
   feedback?: FeedbackControls | null;
@@ -353,7 +368,7 @@ function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHo
         <LeaderButtons finding={finding} names={names} label="Prepare a note to the team's leader" onPick={l => { setLeaderFor(l); setDraftFor(null); }} />
       </div>}
       {hasPeople && open && <PeopleList finding={finding} names={names} onDraft={p => { setDraftFor(p); setLeaderFor(null); }} />}
-      {draftFor && <Draft key={draftFor} finding={finding} person={draftFor} names={names} sender={sender} canReword={canReword} onClose={() => setDraftFor(null)} />}
+      {draftFor && <Draft key={draftFor} finding={finding} person={draftFor} names={names} sender={sender} sunday={sunday} canReword={canReword} onClose={() => setDraftFor(null)} />}
     </>}
     {choices.length > 0 && !choosing && <div className="find-next">
       {finding.kind === "needs-people" && <span className="find-next-l">Or, for this Sunday only:</span>}
@@ -365,7 +380,7 @@ function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHo
     {canRemind(finding) && !reminding && <div className="find-next">
       <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReminding(true)}>Prepare a reminder</button></div>}
     {reminding && <ReminderNote finding={finding} names={names} sender={sender} onClose={() => setReminding(false)} />}
-    {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} onClose={() => setLeaderFor(null)} />}
+    {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} sunday={sunday} onClose={() => setLeaderFor(null)} />}
     <Why finding={finding} checkedAt={checkedAt} onHow={onHow ? () => onHow(procedureFor(finding)) : undefined} />
     <FindingFeedback target={target} feedback={feedback} />
   </article>;
@@ -421,16 +436,10 @@ const uncertaintyText: Partial<Record<string, string>> = {
 };
 
 export function OpsWhy({ evidence, why, onHow, defaultOpen = false }: { evidence: OperationsResult["checked_scopes"]; why: string[]; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
   // Only Planning Center reads have a check time; Church rules are the church's own settings.
-  const at = evidence.filter(e => e.source !== "church-rule").map(e => e.check_time).sort()[0];
+  const at = evidence.filter(e => e.source !== "church-rule").map(e => e.check_time).sort()[0] ?? null;
   const sources = [...new Set(evidence.map(e => e.source === "church-rule" ? "Church rules" : e.source === "normalized-calendar" ? "Calendar" : "People follow-ups"))];
-  return <div className="find-src">
-    <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}><Icon name="info" small /> Why I flagged this</button>
-    {sources.map(s => <span key={s} className="badge b-muted">{s}</span>)}{at && <span>Checked {time(at)}</span>}
-    {open && <ul className="list why">{why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
-    {open && <HowLink onHow={onHow} />}
-  </div>;
+  return <SourceWhy sources={sources} at={at} why={why} onHow={onHow} defaultOpen={defaultOpen} />;
 }
 
 const CLEAR: Record<string, string> = {
@@ -446,8 +455,10 @@ export const hasOperationsSection = (operations: SundayOperations | null): opera
  * "nothing found" line appears only when the operations check says every part was fully read, and
  * names only those parts, with the time Planning Center was read (never a Church-rules time).
  */
-export function OperationsSection({ operations, onHow, whyOpen = false, feedback = null, occurrence = "" }: {
+export function OperationsSection({ operations, onHow, whyOpen = false, feedback = null, occurrence = "", checkedAt = null }: {
   operations: SundayOperations; onHow?: ((procedure: string) => void) | undefined;
+  /** When the Sunday check behind these was read (an out-of-date one has no rooms time of its own). */
+  checkedAt?: string | null;
   /** Start with every Why I flagged this open (tests). */
   whyOpen?: boolean;
   /** The person's Church rules for these cards, and the Sunday's plan id they belong to. */
@@ -461,12 +472,13 @@ export function OperationsSection({ operations, onHow, whyOpen = false, feedback
       <div className="find-top"><span className="badge b-look"><Icon name="clock" small />Out of date</span></div>
       <h3 className="find-title">Rooms, follow-ups and group meetings aren't shown.</h3>
       <p className="find-body">This check was read more than 30 minutes ago, so Ozzie doesn't treat it as current. Check Planning Center again to see them.</p>
+      <SourceWhy sources={["Planning Center"]} at={checkedAt} defaultOpen={whyOpen}
+        why={["This check was read more than 30 minutes ago, so Ozzie doesn't treat its rooms, follow-ups or group meetings as current.", "Anything changed in Planning Center since then isn't shown."]} />
     </article>
   </section>;
   const label = (id: string, fallback: string) => (Object.hasOwn(labels, id) && labels[id]) || fallback;
   // Parts that couldn't be read are listed under What I didn't check; only open questions about what was read show here.
-  const unchecked = new Set(result?.unchecked_scope_ids ?? []);
-  const uncertainties = (result?.uncertainties ?? []).filter(u => u.scope_id === null || !unchecked.has(u.scope_id));
+  const uncertainties = shownUncertainties(result);
   const clear = CLEAR[operations.clear.join(",")];
   const room = (f: RoomFinding) => {
     const [a, b] = f.bookings;
@@ -506,6 +518,9 @@ export function OperationsSection({ operations, onHow, whyOpen = false, feedback
       <h3 className="find-title">Some room or follow-up details couldn't be confirmed.</h3>
       <ul className="list unread">{[...new Set(uncertainties.map(u => uncertaintyText[u.code] ?? "Part of the room and follow-up check couldn't be read."))]
         .map(t => <li key={t}><Icon name="question" small />{t}</li>)}</ul>
+      {/* About rooms or follow-ups, so no one procedure to point to. */}
+      <OpsWhy evidence={result?.checked_scopes ?? []} defaultOpen={whyOpen}
+        why={["Ozzie doesn't treat something it couldn't confirm as clear, so it asks a person to look.", "Nothing about it changed in Planning Center."]} />
     </article>}
     {clear && <p className="small">{clear}{operations.checked_at ? ` (checked ${time(operations.checked_at)})` : ""}.</p>}
   </section>;
@@ -563,12 +578,15 @@ export function SundayPage(props: {
   feedback?: FeedbackSource | null;
 }) {
   const { brief, names, decisions, onDecisions } = props;
+  // "Your name for notes" from Settings, put in on this Mac after any rewording; [Your name] when none is set.
+  const sender = props.sender.trim() || yourName.get();
   const { controls, notice } = useFeedback(props.feedback, names);
   const occurrence: Occurrence = { id: brief?.plan.id ?? "", label: brief?.plan.dates ?? null };
   const setAside = [...(brief?.hidden ?? []).map(h => h.entry), ...(props.operations?.hidden ?? []).map(h => h.entry)];
-  const stamp = useMemo(() => brief?.checked_at ? time(brief.checked_at) : null, [brief]);
+  const stamp = useMemo(() => brief ? time(brief.checked_at ?? brief.completed_at) : null, [brief]);
   const view = useMemo(() => brief ? applyDecisions(brief, decisions) : null, [brief, decisions]);
-  const counts = view ? openCount(view) : { decisions: 0, looks: 0, resolved: 0 };
+  // Everything the page shows, counted as items: Services, rooms, follow-ups and group meetings (the sidebar and Today use the same count).
+  const counts = view ? sundayShownCount(view, props.operations) : { decisions: 0, looks: 0, resolved: 0 };
   const incomplete = Boolean(brief && (brief.stale || brief.findings.some(f => f.kind === "worth-a-look")));
   // Incomplete checks first, then anything that came back, then Planning Center's order.
   const rank = (i: DecidedItem) => i.finding.kind === "worth-a-look" ? 0 : i.state === "reopened" ? 1 : 2;
@@ -586,13 +604,14 @@ export function SundayPage(props: {
       {brief.stale ? "This check is out of date, so it isn't a current picture. " : incomplete ? "Part of this Sunday couldn't be checked, so this isn't a full picture. " : ""}
       {brief.status === "checked-scope-clear" ? "Everything Ozzie checked is covered. " :
         `${counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision` : incomplete ? "Nothing in what was read needs a decision" : "Nothing needs a decision"}${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `}
-      {counts.resolved + history.length > 0 && `You resolved ${counts.resolved + history.length} yourself. `}
+      {counts.resolved > 0 && `You resolved ${counts.resolved} yourself. `}
       {setAside.length > 0 && `${setAside.length === 1 ? "One finding is" : `${setAside.length} findings are`} set aside by your Church rules. `}
       {brief.plan.title && <span className="muted">{brief.plan.title}.</span>}
     </p>}
     {!brief && <p className="lede">Sunday hasn't been checked yet. Check Planning Center now, or look around the fictional example first.</p>}
-    {stamp && <p className="checkline"><Icon name="check" small />{brief!.mode === "fictional" ? "Fictional example data" : brief!.mode === "recording" ? "Recorded from Planning Center Services" : "Read from Planning Center Services"} · {brief!.sources.reads} reads · {stamp}{brief!.sources.failed.length ? ` · ${brief!.sources.failed.length} didn't complete` : ""}</p>}
-    <div className="row">
+    {/* Always says what this is: a live read, a saved recording or the fictional example. */}
+    {brief && <p className="checkline evidence"><Icon name="check" small />{brief.mode === "fictional" ? "Fictional example data" : brief.mode === "recording" ? "Saved recording of Planning Center Services" : "Live read from Planning Center Services"} · {brief.sources.reads} reads · {stamp}{brief.sources.failed.length ? ` · ${brief.sources.failed.length} didn't complete` : ""}</p>}
+    <div className="row" role="group" aria-label="What Sunday shows: a live check, the saved recording or the fictional example">
       <button type="button" className="btn btn-primary" disabled={props.busy || !props.connected || !props.configured} onClick={props.onCheck}>
         {props.busy ? <><Icon name="spinner" small spin />Checking Planning Center…</> : "Check Planning Center now"}</button>
       {props.hasRecording && <button type="button" className="btn btn-secondary" disabled={props.busy} onClick={props.onRecording}>Use the saved recording</button>}
@@ -606,7 +625,7 @@ export function SundayPage(props: {
     {brief && <section className="stack" aria-labelledby="sunday-open-title">
       <h2 id="sunday-open-title" className="sr-only">Open for this Sunday</h2>
       {notice}
-      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={props.sender} canReword={props.canReword} onDecide={onDecide} onHow={props.onHow}
+      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword} onDecide={onDecide} onHow={props.onHow}
         feedback={controls} occurrence={occurrence} />)}
       {brief.findings.length === 0 && <p className="lede">{brief.hidden?.length ? "Nothing open in what was read, apart from what your Church rules set aside below."
         : "No open needs, pending requests or Church-rule check-ins in what was read."}</p>}
@@ -618,7 +637,8 @@ export function SundayPage(props: {
       {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => onDecisions(withoutDecision(decisions, i.finding.key))} />)}
       {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => onDecisions(withoutDecision(decisions, h.decision.key))} />)}
     </section>}
-    {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} onHow={props.onHow} feedback={controls} occurrence={occurrence.id} />}
+    {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} onHow={props.onHow} feedback={controls} occurrence={occurrence.id}
+      checkedAt={brief.checked_at ?? brief.completed_at} />}
     {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names} onHow={props.onHow}
       feedback={controls} occurrence={occurrence.id} />}
     {brief && <SetAside entries={setAside} feedback={controls} />}

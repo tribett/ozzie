@@ -18,11 +18,16 @@ export const calls = (...list: [string, Record<string, unknown>?][]): AgentStepR
 /** The newest result of one tool the model has seen. */
 export const payloadOf = (r: AgentStepRequest, tool: string) => r.messages.flatMap(m => m.role === "tool" ? [JSON.parse(m.content) as { tool?: string; payload?: Record<string, unknown> }] : [])
   .filter(x => x.tool === tool).at(-1)?.payload;
+/** Every request any scripted model in this test file received, for checks over the whole file (review Q H2). */
+export const everyRequest: AgentStepRequest[] = [];
+/** Background-check wording and its usual names, which no model request may ever hold (owner decision 2026-11-14). */
+export const BACKGROUND_IN_REQUEST = /background|clearance|screened|screening|safeguard|\bdbs\b|\bcrb\b|vetted|vetting|fingerprint|criminal record|police check|cleared to serve|check expired/iu;
 /** Each step answers from the conversation so far; every request is kept exactly as sent. */
 export function scripted(turns: Turn[]) {
   const requests: AgentStepRequest[] = [];
   const model: ModelStep = async request => {
     requests.push(structuredClone(request));
+    everyRequest.push(structuredClone(request));
     const turn = turns[requests.length - 1];
     if (!turn) throw new StepFailure("transport");
     const reply = turn(request);

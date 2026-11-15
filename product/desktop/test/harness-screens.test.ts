@@ -10,7 +10,7 @@ import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import { ActivityPage, LEDGER_UNAVAILABLE, RecentWork } from "../src/activity-page.js";
+import { ActivityPage, byDay, dayLabel, LEDGER_UNAVAILABLE, RECENT_SHOWN, RecentWork } from "../src/activity-page.js";
 import { PROCEDURE_ORDER } from "../src/harness-bridge.js";
 import { taskLine, taskSteps, type TaskEventRow } from "../src/harness-words.js";
 import { HowOzzieChecks, RulesPage } from "../src/rules-page.js";
@@ -43,7 +43,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(taskLine({ ...automatic, events: [...automatic.events.slice(0, 2), ev(2, "tool", "planning_center.refresh partial"), ev(3, "verified")] }, { now }))
       .toMatch(/^Sunday check · part of this couldn't be read · /u);
     expect(taskLine(failed, { now })).toBe(`A question · Couldn't finish: the answer couldn't be backed up by what Ozzie read · ${clock}`);
-    expect(taskLine(interrupted, { now, procedures: skills })).toBe(`Sunday ready · Couldn't finish: Ozzie closed before it finished · ${clock}`);
+    expect(taskLine(interrupted, { now, procedures: skills })).toBe(`Sunday ready · Couldn't finish: it was stopped before it finished · ${clock}`);
     expect(taskLine(row({ kind: "ask", state: "cancelled" }), { now })).toBe(`A question · You stopped it · ${clock}`);
     expect(taskLine(row({ kind: "skill", skill_id: "room-check", state: "running" }), { now, procedures: skills })).toBe(`Room check · Still running · ${clock}`);
     // Another day shows the day too.
@@ -76,6 +76,24 @@ describe("What happened: the task ledger in plain words", () => {
     expect(t).toContain("Read this Sunday's plan");
     expect(t).not.toMatch(HIDDEN_WORDS);
     expect(t).not.toMatch(/sunday\.|planning_center|tool_calls|fidelity|egress|answer-from/u);
+  });
+
+  it("groups recent work by day under Today, Yesterday or the date, and shows the newest 10 with Show earlier work", () => {
+    const local = (day: number, hour: number) => new Date(2026, 10, day, hour, 0).toISOString();
+    const here = new Date(2026, 10, 20, 18, 0);
+    expect(dayLabel(local(20, 9), here)).toBe("Today");
+    expect(dayLabel(local(19, 23), here)).toBe("Yesterday");
+    expect(dayLabel(local(17, 9), here)).toBe(new Date(2026, 10, 17).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }));
+    const tasks = Array.from({ length: 14 }, (_, i) => row({ task_id: `00000000-0000-4000-8000-${String(100 + i).padStart(12, "0")}`, kind: "check", state: "verified",
+      created_at: local(20 - Math.floor(i / 5), 17 - (i % 5)), events: [ev(0, "admitted"), ev(1, "verified")] }));
+    expect(byDay(tasks, here).map(d => [d.day, d.tasks.length])).toEqual([["Today", 5], ["Yesterday", 5], [dayLabel(local(18, 9), here), 4]]);
+    const html = renderToStaticMarkup(React.createElement(RecentWork, { tasks, now: here }));
+    expect(html.match(/<details class="recent-task">/g)).toHaveLength(RECENT_SHOWN);
+    expect(html.match(/<h3 [^>]*class="recent-day-h">/g)).toHaveLength(2);
+    expect(text(html)).toMatch(/Today .* Yesterday .* Show earlier work \(4 more\)/u);
+    expect(html).toMatch(/<button type="button" class="btn btn-quiet btn-sm btn-flush" aria-expanded="false" aria-controls="[^"]+">/u);
+    // Ten or fewer: no button.
+    expect(renderToStaticMarkup(React.createElement(RecentWork, { tasks: tasks.slice(0, 10), now: here }))).not.toContain("Show earlier work");
   });
 
   it("says so quietly when the list isn't available, and nothing while loading", () => {

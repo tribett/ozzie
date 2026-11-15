@@ -377,6 +377,254 @@ fn recover_fails_tasks_an_earlier_launch_left_running() {
     );
 }
 
+// ---- The watchdog while the app runs --------------------------------------------------------
+
+/// Each watchdog test's own wall clock: it moves only when that test moves it.
+static SWEEP_NOW: AtomicU64 = AtomicU64::new(1_795_000_000_000);
+fn sweep_clock() -> u64 {
+    SWEEP_NOW.load(Ordering::SeqCst)
+}
+static JUMP_NOW: AtomicU64 = AtomicU64::new(1_795_000_000_000);
+fn jump_clock() -> u64 {
+    JUMP_NOW.load(Ordering::SeqCst)
+}
+static BAD_NOW: AtomicU64 = AtomicU64::new(1_795_000_000_000);
+fn bad_clock() -> u64 {
+    BAD_NOW.load(Ordering::SeqCst)
+}
+/// A watchdog whose awake time (monotonic, not counting sleep) the test moves.
+fn watchdog() -> (Arc<AtomicU64>, Watchdog) {
+    let awake = Arc::new(AtomicU64::new(0));
+    let read = awake.clone();
+    (
+        awake,
+        Watchdog::with_clock(move || read.load(Ordering::SeqCst)),
+    )
+}
+fn rows_by_id(ledger: &TaskLedger) -> BTreeMap<String, TaskRow> {
+    ledger
+        .list(usize::MAX)
+        .into_iter()
+        .map(|r| (r.task_id.clone(), r))
+        .collect()
+}
+
+#[test]
+fn the_watchdog_ends_only_tasks_past_their_ceiling_once_and_refuses_their_late_work() {
+    let dir = TempDir::new("sweep");
+    let start = SWEEP_NOW.load(Ordering::SeqCst);
+    let (awake, mut watchdog) = watchdog();
+    // The Mac stays awake: wall-clock and awake time move together.
+    let at = |ms: u64| {
+        SWEEP_NOW.store(start + ms, Ordering::SeqCst);
+        awake.store(ms, Ordering::SeqCst);
+    };
+    let ledger = TaskLedger::open_with(&dir.0, sweep_clock, COMPACT_AFTER_LINES).unwrap();
+    // A question left admitted, and one left running with a model step in flight (its page reloaded).
+    admit(&ledger, 1);
+    admit(&ledger, 2);
+    ledger.transition(&task(2), "running", None).unwrap();
+    assert_eq!(ledger.reserve_step(&task(2)), Ok(1));
+    // Tasks that finished: verified, cancelled, failed.
+    admit(&ledger, 3);
+    ledger.transition(&task(3), "running", None).unwrap();
+    ledger.transition(&task(3), "verified", None).unwrap();
+    admit(&ledger, 4);
+    ledger.transition(&task(4), "cancelled", None).unwrap();
+    admit(&ledger, 5);
+    ledger.transition(&task(5), "running", None).unwrap();
+    ledger
+        .transition(&task(5), "failed", Some("timeout"))
+        .unwrap();
+    // Every wake, the watchdog notes what is unfinished.
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    // A procedure admitted five minutes later, still running.
+    at(5 * 60_000);
+    admit(&ledger, 6);
+    ledger.transition(&task(6), "running", None).unwrap();
+    ledger
+        .event(&task(6), "tool", "rooms.conflicts complete")
+        .unwrap();
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    let before = rows_by_id(&ledger);
+    // A wall clock set back before admission, and exactly the ceiling: nothing has run longer.
+    at(STALE_AFTER_MS + 1);
+    SWEEP_NOW.store(start - 3_600_000, Ordering::SeqCst);
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    at(STALE_AFTER_MS);
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    assert_eq!(rows_by_id(&ledger), before);
+    // Past it: the two left behind are failed `interrupted`, as recovery at start would.
+    at(STALE_AFTER_MS + 1);
+    assert_eq!(watchdog.sweep(&ledger), Some(2));
+    let after = rows_by_id(&ledger);
+    for n in [1, 2] {
+        let row = &after[&task(n)];
+        assert_eq!(
+            (row.state, row.failure),
+            (RunState::Failed, Some(FailureCode::Interrupted))
+        );
+        assert_eq!(
+            states(row).last().unwrap(),
+            &(EventType::Failed, "interrupted".into())
+        );
+        assert_eq!(row.updated_at, rfc3339(start + STALE_AFTER_MS + 1));
+    }
+    // Terminal tasks and the one still inside its ceiling are untouched.
+    for n in [3, 4, 5, 6] {
+        assert_eq!(after[&task(n)], before[&task(n)], "task {n}");
+    }
+    // Idempotent, and finished tasks are no longer watched.
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    assert_eq!(rows_by_id(&ledger), after);
+    assert_eq!(watchdog.seen.keys().collect::<Vec<_>>(), [&task(6)]);
+    // Late work from the worker that lost them is refused, as for any terminal task.
+    assert_eq!(
+        ledger.finish_step(&task(2), 1, "stop", 0, REPLY),
+        Err(StepRefusal::Task)
+    );
+    assert_eq!(ledger.reserve_step(&task(2)), Err(StepRefusal::Task));
+    for (n, to, code) in [
+        (2, "verified", None),
+        (2, "failed", Some("timeout")),
+        (2, "cancelled", None),
+        (1, "running", None),
+    ] {
+        assert_eq!(
+            ledger.transition(&task(n), to, code).err(),
+            Some(LedgerError::Transition),
+            "{n} {to}"
+        );
+    }
+    assert_eq!(
+        ledger.event(&task(2), "tool", "denied").err(),
+        Some(LedgerError::Transition)
+    );
+    assert_eq!(rows_by_id(&ledger), after);
+    // The later task's own ceiling, measured from its own admission and first sighting.
+    at(5 * 60_000 + STALE_AFTER_MS);
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    at(5 * 60_000 + STALE_AFTER_MS + 1);
+    assert_eq!(watchdog.sweep(&ledger), Some(1));
+    assert_eq!(
+        ledger.list(1)[0].failure,
+        Some(FailureCode::Interrupted),
+        "task 6"
+    );
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    assert!(watchdog.seen.is_empty());
+    // On disk: read back the same, and recovery at the next start has nothing left to end.
+    let swept = rows_by_id(&ledger);
+    drop(ledger);
+    let ledger = TaskLedger::open_with(&dir.0, sweep_clock, COMPACT_AFTER_LINES).unwrap();
+    assert_eq!(ledger.recover(), Ok(0));
+    assert_eq!(rows_by_id(&ledger), swept);
+}
+
+#[test]
+fn a_clock_jump_or_a_long_sleep_never_ends_a_task_the_watchdog_has_not_seen_stuck_while_awake() {
+    let dir = TempDir::new("sweep-awake");
+    let start = JUMP_NOW.load(Ordering::SeqCst);
+    let (awake, mut watchdog) = watchdog();
+    let ledger = TaskLedger::open_with(&dir.0, jump_clock, COMPACT_AFTER_LINES).unwrap();
+    admit(&ledger, 1);
+    ledger.transition(&task(1), "running", None).unwrap();
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    // The wall clock jumps two ceilings forward (set by hand, or corrected) within a minute.
+    JUMP_NOW.store(start + 2 * STALE_AFTER_MS, Ordering::SeqCst);
+    awake.store(60_000, Ordering::SeqCst);
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    // The Mac sleeps three hours with the task in flight: thirty seconds more of awake time.
+    JUMP_NOW.store(start + 3 * 3_600_000, Ordering::SeqCst);
+    awake.store(90_000, Ordering::SeqCst);
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    assert_eq!(ledger.list(1)[0].state, RunState::Running);
+    // Seen unfinished for the whole ceiling of awake time: ended, once.
+    awake.store(STALE_AFTER_MS - 1, Ordering::SeqCst);
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    awake.store(STALE_AFTER_MS, Ordering::SeqCst);
+    assert_eq!(watchdog.sweep(&ledger), Some(1));
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    let row = &ledger.list(1)[0];
+    assert_eq!(
+        (row.state, row.failure),
+        (RunState::Failed, Some(FailureCode::Interrupted))
+    );
+}
+
+#[test]
+fn the_watchdog_skips_a_wake_while_the_ledger_is_busy_rather_than_waiting() {
+    let dir = TempDir::new("sweep-busy");
+    let ledger = open(&dir);
+    admit(&ledger, 1);
+    let (_awake, mut watchdog) = watchdog();
+    let held = ledger.lock();
+    std::thread::scope(|scope| {
+        let (sent, swept) = std::sync::mpsc::channel();
+        let (watchdog, ledger) = (&mut watchdog, &ledger);
+        scope.spawn(move || sent.send(watchdog.sweep(ledger)).unwrap());
+        assert_eq!(
+            swept.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(None),
+            "skipped at once, not waited for"
+        );
+        drop(held);
+    });
+    assert!(watchdog.seen.is_empty());
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    assert_eq!(watchdog.seen.len(), 1);
+}
+
+#[test]
+fn one_task_that_cannot_be_ended_never_keeps_the_rest_from_being_ended() {
+    let dir = TempDir::new("sweep-bad");
+    let start = BAD_NOW.load(Ordering::SeqCst);
+    let ledger = TaskLedger::open_with(&dir.0, bad_clock, COMPACT_AFTER_LINES).unwrap();
+    for n in 1..=3 {
+        admit(&ledger, n);
+    }
+    // Task 1 as a future bug might leave it in memory: no change to it passes `record_ok`.
+    ledger.lock().tasks[0].skill_id = "not-bundled".into();
+    // Recovery at start ends the others and reports the one it couldn't.
+    assert_eq!(ledger.recover(), Err(LedgerError::Invalid));
+    let rows = rows_by_id(&ledger);
+    assert_eq!(rows[&task(1)].state, RunState::Admitted);
+    for n in [2, 3] {
+        assert_eq!(rows[&task(n)].failure, Some(FailureCode::Interrupted));
+    }
+    // And the watchdog, on every wake.
+    admit(&ledger, 4);
+    let (awake, mut watchdog) = watchdog();
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+    BAD_NOW.store(start + STALE_AFTER_MS + 1, Ordering::SeqCst);
+    awake.store(STALE_AFTER_MS, Ordering::SeqCst);
+    assert_eq!(watchdog.sweep(&ledger), Some(1));
+    assert_eq!(
+        rows_by_id(&ledger)[&task(4)].failure,
+        Some(FailureCode::Interrupted)
+    );
+    assert_eq!(watchdog.sweep(&ledger), Some(0));
+}
+
+#[test]
+fn the_watchdog_ceiling_is_safely_above_every_limit_a_worker_holds_a_task_to() {
+    // A question or procedure's whole run (core/src/harness/contract.ts HARNESS_LIMITS.runMs).
+    let contract = core_file("src/harness/contract.ts");
+    let run_ms: u64 = between(&contract, "runMs:", ",")
+        .trim()
+        .replace('_', "")
+        .parse()
+        .unwrap();
+    // A responsibility run, and the automatic Sunday check's whole budget.
+    for limit in [
+        run_ms,
+        crate::responsibilities::RUN_TIMEOUT_MS,
+        crate::sunday_check::BUDGET_MS,
+    ] {
+        assert!(STALE_AFTER_MS >= 2 * limit, "{limit} ms");
+    }
+}
+
 // ---- Name-free ------------------------------------------------------------------------------
 
 #[test]

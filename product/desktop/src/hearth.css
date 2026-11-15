@@ -94,7 +94,10 @@
 .oz a.btn-secondary{color:var(--ink)}
 .btn-quiet{background:transparent;color:var(--accent);padding:0 10px}
 .btn-quiet:hover{background:var(--accent-tint)}
-.btn-sm{height:36px;padding:0 14px;font-size:14px;border-radius:8px}
+.btn-sm{height:36px;min-width:44px;padding:0 14px;font-size:14px;border-radius:8px;position:relative}
+/* A 36px small button looks the same but takes clicks over 44px, the minimum target size: 4px above and below its
+   border (the ::after is placed from inside the 1px border, hence 5px). */
+.btn-sm::after{content:"";position:absolute;inset:-5px -1px}
 .btn.is-disabled,.btn[disabled]{background:var(--stone-tint);color:var(--ink-3);border-color:var(--line);cursor:not-allowed}
 .btn-busy{background:var(--stone-tint);color:var(--ink-2);border-color:var(--line)}
 .ibtn{width:44px;height:44px;border-radius:50%;border:1px solid transparent;background:transparent;color:var(--ink-2);display:grid;place-items:center;cursor:pointer}
@@ -170,7 +173,8 @@ ul.quiet-list{padding:0;margin:0}
 .av img{width:100%;height:100%;display:block;object-fit:contain}
 .msg-sys{align-self:center;font-size:13px;color:var(--ink-3);text-align:center;padding:2px 8px}
 .quick{display:flex;gap:8px;flex-wrap:wrap}
-.chip{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--control);background:var(--surface);color:var(--ink);font:600 14px/1 var(--f-ui);cursor:pointer;text-decoration:none}
+.chip{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--control);background:var(--surface);color:var(--ink);font:600 14px/1 var(--f-ui);cursor:pointer;text-decoration:none;position:relative}
+.chip::after{content:"";position:absolute;inset:-5px -1px}
 .chip:hover{background:var(--stone-tint)}
 .composer{margin:0 16px 16px;border:1px solid var(--control);border-radius:16px;background:var(--paper);padding:12px 8px 8px 16px}
 .composer-in{color:var(--ink-3);font-size:15.5px;min-height:26px;padding-right:8px}

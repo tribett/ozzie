@@ -17,8 +17,10 @@
 //     breaks and controls turned into spaces, square brackets turned into parentheses so a leader
 //     can't forge a label); position names and roster names are replaced by their labels.
 //     Questions with an email address or phone number, or asking for prayers, sermons, scripture,
-//     a Bible verse or devotionals, to send or change anything, or to rank or describe people, are
-//     refused here with a plain message.
+//     a Bible verse or devotionals, for pastoral comfort or counsel, to send or change anything, or to
+//     rank or describe people, are refused here with a plain message. So is any question naming a
+//     background check (or its usual names): those are never prepared for a model, even as
+//     placeholders, and the app answers them on this Mac instead (owner decision 2026-11-14).
 //  4. Names in the question are matched as whole words (coordinator decision 2026-11-13, after
 //     substring matching refused ordinary words: "same" for Sam, "time" for Tim, "willing" for
 //     Will): every roster name term (full name, each part, each part with its punctuation removed,
@@ -492,6 +494,10 @@ export const REFUSALS = {
   nothing: "Nothing has been checked yet, so there's nothing to ask about.",
   contact: "Ozzie doesn't send email addresses or phone numbers to the AI. Ask again without them.",
   religious: "Ozzie doesn't write prayers, sermons, scripture or devotionals. That work stays with people.",
+  care: "Ozzie doesn't give pastoral care, comfort or counsel. That stays with people.",
+  /** Background checks stay on this Mac (owner decision 2026-11-14); the app answers these here instead (harness-bridge.ts). */
+  background: "Ozzie keeps background checks on this Mac and never sends them to the AI. Ask about them on their own, such as “Any background check problems?”, and Ozzie answers here from the Sunday page.",
+  backgroundNote: "Ozzie doesn't use AI help for notes about background checks, so nothing was sent. Here is what the Sunday page shows; you can write that note yourself.",
   send: "Ozzie can't send messages or change Planning Center. It can draft a note for you to send yourself.",
   rank: "Ozzie doesn't rank, score or label people. Ask who has no overlap found; people are listed in no particular order.",
   name: "Something in your question could be part of a name in Planning Center. Nothing was sent. Try different wording.",
@@ -523,13 +529,44 @@ const SCRIPTURE_QUOTES = [
 ].join("|");
 const RELIGIOUS_ASK = new RegExp([
   "\\b(?:pray|praying)\\s+(?:for|with|over)\\b",
-  `\\b(?:write|draft|compose|create|make|give|suggest|prepare|outline|plan|share|find|pick|choose|recommend|read|say|offer|need|want|end|close|finish|add|include|quote|cite|use|insert|attach|append|sign\\s+off|help\\s+(?:me\\s+)?(?:write|with)|come\\s+up\\s+with)\\b[^.?!]{0,60}?\\b(?:${RELIGIOUS_NOUN})\\b(?!\\s+${MINISTRY})`,
+  `\\b(?:write|draft|compose|create|make|give|suggest|prepare|outline|plan|share|find|pick|choose|recommend|read|say|offer|need|want|end|close|finish|add|include|quote|cite|use|insert|attach|append|sign\\s+off|help\\s+(?:me\\s+)?(?:write|with)|come\\s+up\\s+with|summari[sz]e|turn|rewrite|condense|paraphrase|explain|interpret|expand|adapt|reword|translate|break\\s+down)\\b[^.?!]{0,60}?\\b(?:${RELIGIOUS_NOUN})\\b(?!\\s+${MINISTRY})`,
   `\\b(?:a|an|some|any|short|quick|closing|opening|encouraging)\\s+(?:${RELIGIOUS_NOUN})\\b(?!\\s+${MINISTRY})`,
+  // Asking which one to use ("What verse should we read?", "Which psalm …?").
+  `\\b(?:what|which)\\s+(?:${RELIGIOUS_NOUN})\\b(?!\\s+${MINISTRY})`,
   `\\b(?:words?|passages?|quotes?|verses?|lines?|encouragement|encouraging\\s+words?|promises?|readings?|thoughts?)\\s+(?:from|out\\s+of|of)\\s+(?:the\\s+)?(?:book\\s+of\\s+)?(?:bible|scriptures?|gospels?|psalms?|(?:[1-3]\\s?)?(?:${FULL_BOOKS}))\\b`,
   `\\b(?:${FULL_BOOKS})'s?\\s+(?:encouragement|exhortation|charge|promise|blessing|command)\\b`,
   SCRIPTURE_REFERENCE,
   `\\b(?:${SCRIPTURE_QUOTES})\\b`,
 ].join("|"), "u");
+// The only allowances (review Q M1, 2026-11-15), each narrow and explicit; everything else falls to RELIGIOUS_ASK.
+/** A schedule question: who reads, preaches or leads, at the start of the first sentence only ("Who is scheduled to read
+ *  scripture on Sunday?"). Only that frame is set aside, so "Who will read me a psalm?" is still a request for a psalm. */
+const SCHEDULE_VERB = /^((?:who(?:'s|\s+is|\s+are|\s+was|\s+will(?:\s+be)?|\s+should)?|whose\s+turn(?:\s+is\s+it)?|(?:is|are)\s+(?:there\s+)?(?:anyone|someone|anybody|somebody))\s+(?:(?:scheduled|signed\s+up|assigned|lined\s+up|set|down|due|on\s+the\s+schedule)\s+to\s+|going\s+to\s+|to\s+)?)(?:read(?:s|ing)?|preach(?:es|ing)?|lead(?:s|ing)?)\b/u;
+/** Passing on a chosen item that someone else made: a pass-on verb, then "the", "this", "our" or "the pastor's", then the
+ *  item ("Add the sermon title to the bulletin note"). A bare compound ("sermon titles") is never an allowance. */
+const CHOSEN_ITEM = /\b(share|add|include|attach|insert|append|send|forward|put|paste|copy)\s+(?:the|this|sunday's|this\s+week's|our|(?:the\s+)?pastor's)\s+(?:sermon|scripture|bible|gospel)\s+(?:titles?|readings?|slides?|recordings?|audio|video)\b/gu;
+/** A request for religious content, on the folded placeholder form. */
+const religiousAsk = (plain: string) => RELIGIOUS_ASK.test(plain.replace(SCHEDULE_VERB, "who ").replace(CHOSEN_ITEM, "$1 the item"));
+/** Pastoral comfort or counsel (never-list 3): Ozzie never offers either, so it isn't asked for. */
+const CARE_ASK = new RegExp([
+  "\\b(?:comfort|console|consoling|counsel|counselling|counseling)\\b(?!\\s+(?:station|room|area|team|desk|kits?)\\b)",
+  "\\b(?:what|how)\\b[^.?!]{0,40}\\b(?:say|tell|write|support|encourage)\\b[^.?!]{0,60}\\b(?:griev\\w*|grief|bereave\\w*|mourn\\w*|hurting|passed\\s+away|died|funeral|diagnos\\w*|cancer|divorce|depress\\w*|miscarriage)",
+].join("|"), "u");
+/**
+ * Background checks and their usual names (owner decision 2026-11-14: never sent to any model, even as placeholders;
+ * review Q H2). On folded text. Questions with one are answered on this Mac (harness-bridge.ts), never prepared here.
+ */
+export const BACKGROUND_WORDING = new RegExp([
+  "\\bbackground[\\s-]*(?:checks?|checked|checking|screen\\w*|clearances?|vett\\w*)",
+  "\\bbg\\s+checks?\\b", "\\bclearances?\\b", "\\b(?:un|not\\s+(?:yet\\s+)?|never\\s+)cleared\\b",
+  "\\bcleared\\s+(?:to|for)\\s+(?:serve|serving|work|working|volunteer\\w*|help\\w*|be\\s+with|kids|children|the\\s+nursery|nursery|childcare)",
+  "\\bscreened\\b", "\\bscreenings?\\b", "\\b(?:dbs|crb|pvg|wwcc)\\b", "\\bsafeguarding\\b", "\\bvett(?:ed|ing)\\b", "\\bfingerprint\\w*",
+  "\\bcriminal\\s+(?:records?|history|background|checks?)", "\\b(?:police|record|records|disclosure|sex\\s+offender\\w*)\\s+checks?\\b",
+  "\\bworking\\s+with\\s+(?:children|kids|vulnerable)\\s+checks?\\b",
+  "\\b(?:checks?|certificates?|clearances?)\\s+(?:has\\s+|have\\s+|had\\s+|is\\s+|was\\s+|are\\s+|were\\s+)?(?:expir\\w*|lapsed|out\\s+of\\s+date|run\\s+out|overdue)",
+].join("|"), "u");
+/** Whether typed text names a background check (review Q H2), as prepareAsk reads it. */
+export const mentionsBackgroundCheck = (typed: string) => BACKGROUND_WORDING.test(fold(typed));
 // Requests to contact people or change records (review 2026-11-14, question side), matched on the folded
 // placeholder form with every person label as \u0001 and every role label as \u0002, so they are refused only as
 // actual requests: a verb said to Ozzie (at the start of a sentence, after "can you", "please", "I need you to",
@@ -562,7 +599,8 @@ const SEND_OR_CHANGE = new RegExp([
 const RANKING = /\b(?:rank\w*|scor(?:e|es|ed|ing)|rate|rating|ratings|grade|(?:most|least|more|less)\s+(?:reliable|faithful|committed|dependable|likely|consistent)|best\s+(?:person|people|volunteers?|choice|fit|option|one|pick|candidate)|who(?:'s|\s+is)\s+(?:the\s+)?(?:best|better|worst|strongest|weakest)|better\s+(?:choice|fit|volunteer|person)|top\s+(?:picks?|choices?|candidates?)|strongest|weakest|likeliest)\b/u;
 /** Evaluative words about a person (never-list 4), refused in questions and answers alike. */
 export const CHARACTER = /(?<![\p{L}\p{N}])(?:(?:un)?reliable|(?:un)?dependable|(?:un)?faithful|uncommitted|flak(?:y|ey)|lazy|laziness|slack(?:er|ers|ing)|fall(?:ing|en|s)?\s+away|backslid\w*|drift(?:ing|ed|s)?(?:\s+away)?|at[\s-]risk|disengag\w*|lukewarm|apathetic|careless|irresponsible|(?:un)?trustworthy|burn(?:ed|t|ing)?[\s-]?out|unmotivated|uninterested|(?:losing|lost)\s+interest|not\s+pulling|let(?:s|ting)?\s+(?:the\s+team|us|everyone|people)\s+down|can(?:'t|not)?\s+be\s+counted\s+on|wayward|lapsed)(?![\p{L}\p{N}])/u;
-const DRAFT_ASK = /\b(?:draft|write|compose|prepare|word)\b[^.?!]{0,60}\b(?:note|message|email|e-mail|text|reply|letter|invite|invitation)\b/u;
+/** A request for a note to be drafted, on folded text. Also read by the answers written on this Mac (harness/compose.ts). */
+export const DRAFT_ASK = /\b(?:draft|write|compose|prepare|word)\b[^.?!]{0,60}\b(?:note|message|email|e-mail|text|reply|letter|invite|invitation)\b/u;
 
 /** A symbol (not a letter) that NFKC turns into two or more letters ("™" → "TM") is kept as its own word, so it
  *  stays the boundary it was as typed. One-letter forms ("Ⓡ" → "R") stay joined to their word. */
@@ -827,9 +865,12 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   // Person labels as \u0001 and role labels as \u0002, for "Text [Person 1]" or "Add [Person 1] to [Role 1]".
   const marked = fold(sent.replace(LABEL, l => l.startsWith("[Person ") || l === TEAM_MEMBER ? " \u0001 " : l.startsWith("[Role ") ? " \u0002 " : " "))
     .replace(/\s+/gu, " ").trim();
-  if (RELIGIOUS_ASK.test(plain)) return refuse(REFUSALS.religious);
+  if (religiousAsk(plain)) return refuse(REFUSALS.religious);
+  if (CARE_ASK.test(plain)) return refuse(REFUSALS.care);
   if (SEND_OR_CHANGE.test(marked)) return refuse(REFUSALS.send);
   if (RANKING.test(plain) || CHARACTER.test(plain)) return refuse(REFUSALS.rank);
+  // Nothing about a background check is ever prepared for a model, even as placeholders (review Q H2).
+  if (BACKGROUND_WORDING.test(plain)) return refuse(DRAFT_ASK.test(plain) ? REFUSALS.backgroundNote : REFUSALS.background);
   // Fail closed: no roster name may remain as a whole word (header, point 5).
   if (containsNameWord(unprotected(sent), names, match)) return refuse(REFUSALS.name);
   if (sent.length > MAX_SENT_QUESTION_CHARS) return refuse(REFUSALS.long);

@@ -6,7 +6,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSundayCheck, verifySavedOnLaunch, type KeyValueStore, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
 import { sundayProblem, type Settings } from "../src/sunday-source.js";
 import type { ConnectionStatus } from "../src/connection.js";
-import { nov22Capture } from "../../../core/src/fictional-sunday.js";
+import { nov22Capture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
+import { BACKGROUND_CHECKS } from "../../../core/src/kids-rules.js";
+import { describeChange } from "../../../core/src/sunday-changes.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 
 const settings: Settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" };
@@ -132,6 +134,57 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     expect(h.notify).toHaveBeenCalledTimes(1);
   });
 
+  it("a held notice is rechecked when quiet hours end: a decline restored overnight brings no notice", async () => {
+    // 02:30Z is 8:30 PM in Chicago. Greeter is declined at 10:00 PM and restored before 7:00 AM; other roles stay open.
+    const h = harness("2026-11-21T02:30:00Z");
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-21T04:00:00Z");
+    await h.p.tick();
+    expect(h.p.view().history[0]).toMatchObject({ kind: "changes", notice: "held" });
+    h.changeTo(undefined);
+    h.set("2026-11-21T12:50:00Z"); // 6:50 AM, still quiet: the overdue check reads it restored
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.p.view().latest["1001:92902197"]!.status).not.toBe("checked-scope-clear");
+    h.set("2026-11-21T13:01:00Z"); // 7:01 AM: nothing held still holds, so nothing is sent
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.p.view().schedule.held).toBeNull();
+    expect(h.p.view().history.find(e => e.kind === "changes" && e.changes!.some(c => c.kind === "confirmed-declined"))!.notice).toBe("none");
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("a held notice is rechecked against the latest saved check: still declined there, it goes out once", async () => {
+    const h = harness("2026-11-21T02:30:00Z");
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-21T04:00:00Z");
+    await h.p.tick();
+    h.set("2026-11-21T12:50:00Z"); // 6:50 AM: a newer check still reads the decline
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    h.set("2026-11-21T13:01:00Z");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.p.view().history.find(e => e.kind === "changes")!.notice).toBe("sent-later");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a held notice is rechecked against the person's Church rules too: a kind kept for the briefing overnight sends none", async () => {
+    const h = harness("2026-11-21T02:30:00Z");
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-21T04:00:00Z");
+    await h.p.tick();
+    h.context.rules = { ...rules, feedback: [{ type: "urgency", id: "u", kind: "needs-people", at: "2026-11-21T05:00:00Z", level: "briefing" }] };
+    h.set("2026-11-21T13:01:00Z");
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
   it("Pause everything pauses this check too, drops a held notice, and lifting it restores each to its own state", async () => {
     const h = harness("2026-11-21T03:00:00Z");
     await h.launch();
@@ -179,6 +232,28 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     expect(m.p.view().schedule.paused).toBe(false);
   });
 
+  it("Worth a look never sends a notice: a declined request or a check that couldn't be completed shows in Ozzie, with no notice", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    await h.launch();
+    // The pending Lyrics request is declined: Worth a look on its Sunday card.
+    const declined = (c: SundayCapture) => { rows(c, "team_members").find(m => m.id === "403")!.attributes.status = "D"; };
+    h.changeTo(declined);
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.p.view().history[0]).toMatchObject({ kind: "changes", trigger: "scheduled", notice: "none" });
+    expect(h.p.view().history[0]!.changes!.map(c => c.kind)).toEqual(["pending-declined"]);
+    // It still shows as new in Ozzie.
+    expect(h.p.view().unseen).toBe(1);
+    // A Planning Center read that didn't complete: the check isn't a full picture, Worth a look too.
+    h.changeTo(c => { declined(c); c.reads.find(r => r.collection === "needed_positions")!.outcome = "provider_failure"; });
+    h.set("2026-11-20T17:00:00Z");
+    await h.p.tick();
+    expect(h.p.view().history[0]!.changes!.map(c => c.kind)).toEqual(["coverage-unverified"]);
+    expect(h.p.view().history[0]!.notice).toBe("none");
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
   it("lets an urgent change through quiet hours only when the person chose that", async () => {
     const h = harness("2026-11-21T03:00:00Z");
     h.p.setPrefs({ ...h.p.view().prefs, urgentDuringQuiet: true });
@@ -221,6 +296,37 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     h.set("2026-11-21T04:00:00Z");
     await h.p.tick();
     expect(h.p.view().history[0]!.notice).toBe("held");
+  });
+
+  it("Always tell me right away about a kind the Sunday comparison doesn't follow: a background check newly found missing brings a notice", async () => {
+    /** Planning Center People's background check for the Nursery volunteer, expiring on `expires`. */
+    const onFile = (expires: string) => (c: SundayCapture) => {
+      c.reads.push({ collection: BACKGROUND_CHECKS, people_person_id: PEOPLE.nurseryConfirmed, offset: 0, checked_at: c.completed_at, outcome: "ok", body: {
+        data: [{ type: "BackgroundCheck", id: "901", attributes: { status: "complete_clear", current: true, expires_on: expires }, relationships: { person: { data: { type: "Person", id: PEOPLE.nurseryConfirmed } } } }],
+        meta: { count: 1, total_count: 1 } } });
+    };
+    for (const told of [false, true]) {
+      const h = harness("2026-11-20T15:00:00Z");
+      h.context.rules = { ...rules, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 1 }],
+        feedback: told ? [{ type: "urgency", id: "r", kind: "background-check", at: "2026-11-20T14:00:00Z", level: "right-away" }] : [] };
+      h.changeTo(onFile("2027-06-01"));
+      await h.launch();
+      // An hour later the check on file has expired. Nothing about who serves changed.
+      h.changeTo(onFile("2026-11-01"));
+      h.set("2026-11-20T16:00:00Z");
+      await h.p.tick();
+      expect(h.notify).toHaveBeenCalledTimes(told ? 1 : 0);
+      const entry = h.p.view().history[0]!;
+      if (!told) { expect(entry.kind).toBe("first-check"); continue; }
+      expect(entry).toMatchObject({ kind: "changes", notice: "sent" });
+      expect(entry.changes!.map(c => describeChange(c, () => undefined))).toEqual([
+        "New since the last check: missing or expiring background checks. Your Church rules say to tell you right away."]);
+      // The same finding an hour later is not new: no second notice.
+      h.set("2026-11-20T17:00:00Z");
+      await h.p.tick();
+      expect(h.notify).toHaveBeenCalledTimes(1);
+      for (const name of names) expect(h.store.dump()).not.toContain(name);
+    }
   });
 
   it("moves saved quiet hours still on the earlier default to 9:00 PM to 7:00 AM, once, and never changes a person's own", () => {

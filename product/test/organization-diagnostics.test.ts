@@ -7,7 +7,7 @@ const mismatch = { version: 1, stage: "organization-binding", reason: "organizat
 describe("organization check diagnostics", () => {
   it("uses only exact version/stage/reason pairs to choose fixed local copy", () => {
     expect(parseOrganizationDiagnostic(mismatch)).toEqual(mismatch);
-    expect(organizationDiagnosticProblem(mismatch)).toBe("The signed-in organization did not match the expected test organization. Nothing new was saved.");
+    expect(organizationDiagnosticProblem(mismatch)).toBe("You signed in to a different Planning Center organization than the one in Ozzie's settings. Sign in to your church's organization, or check the organization ID under Advanced. Nothing new was saved.");
     for (const invalid of [null, {}, { ...mismatch, version: 2 }, { ...mismatch, stage: "userinfo" }, { ...mismatch, reason: "fictional-secret-canary" }, { ...mismatch, body: "fictional-body-canary" }]) {
       expect(parseOrganizationDiagnostic(invalid)).toBeUndefined();
       expect(organizationDiagnosticProblem(invalid)).toBe(generic);
@@ -73,10 +73,10 @@ describe("fixed organization copy and exact schema", () => {
   it("uses metadata only for failed organization checks and never as success proof", () => {
     // IPC copy inputs only; native final states are independently produced by AuthController tests.
     const status: ConnectionStatus = { state: "failed", organization: "1001", checked_at_ms: null, source: "Planning Center", problem: "organization-unverified", organization_diagnostic: { version: 1, stage: "organization-binding", reason: "organization-mismatch" } };
-    expect(connectionStatusProblem(status)).toContain("did not match");
+    expect(connectionStatusProblem(status)).toContain("a different Planning Center organization");
     expect(connectionStatusProblem({ ...status, problem: "provider-failure", organization_diagnostic: { version: 1, stage: "userinfo", reason: "transport-failure" } })).toContain("could not finish");
     for (const state of ["waiting", "checking", "cancelled", "expired", "connected", "stored-unchecked", "disconnected"] as const) {
-      expect(connectionStatusProblem({ ...status, state })).not.toContain("did not match");
+      expect(connectionStatusProblem({ ...status, state })).not.toContain("a different Planning Center organization");
     }
     expect(connectionStatusProblem({ ...status, problem: "invalid-token" })).toBe(generic);
     expect(connectionStatusProblem({ ...status, organization_diagnostic: { ...status.organization_diagnostic, version: 2 } as unknown as ConnectionStatus["organization_diagnostic"] } as ConnectionStatus)).toBe(generic);

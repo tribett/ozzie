@@ -402,9 +402,12 @@ pub struct CardLines {
 
 /// Puts the Vision reader's pieces of text back into lines, top to bottom and left to right, so a
 /// printed label and the handwriting beside it read as one line ("Name: Alex Harbor") the way the
-/// card-field suggestions (core/src/card-fields.ts) expect. Two pieces share a line when their
-/// heights overlap by at least half of the shorter one. A line is unclear when any of its pieces
-/// is. Nothing is repaired or reworded; malformed output from the reader is a failure, never a guess.
+/// card-field suggestions (core/src/card-fields.ts) expect. A piece joins a line when its height
+/// overlaps every piece already on it by at least half of the shorter one, so one tall piece can't
+/// pull in the row below. A gap of more than twice the taller line's height before the next line
+/// is kept as an empty line, so printed words far below a request never read as more of it. A
+/// line is unclear when any of its pieces is. Nothing is repaired or reworded; malformed output
+/// from the reader is a failure, never a guess.
 pub fn card_lines(out: &[u8]) -> Result<CardLines, LocalToolError> {
     let mut pieces = Vec::new();
     for line in out.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
@@ -422,14 +425,13 @@ pub fn card_lines(out: &[u8]) -> Result<CardLines, LocalToolError> {
         }
     }
     pieces.sort_by(|a, b| (a.y + a.h / 2.0).total_cmp(&(b.y + b.h / 2.0)));
+    let same_row =
+        |a: &Piece, b: &Piece| (a.y + a.h).min(b.y + b.h) - a.y.max(b.y) >= 0.5 * a.h.min(b.h);
     let mut rows: Vec<(f64, f64, Vec<Piece>)> = Vec::new();
     for piece in pieces {
         let (top, bottom) = (piece.y, piece.y + piece.h);
         match rows.last_mut() {
-            Some((row_top, row_bottom, row))
-                if bottom.min(*row_bottom) - top.max(*row_top)
-                    >= 0.5 * piece.h.min(*row_bottom - *row_top) =>
-            {
+            Some((row_top, row_bottom, row)) if row.iter().all(|p| same_row(p, &piece)) => {
                 *row_top = row_top.min(top);
                 *row_bottom = row_bottom.max(bottom);
                 row.push(piece);
@@ -437,19 +439,23 @@ pub fn card_lines(out: &[u8]) -> Result<CardLines, LocalToolError> {
             _ => rows.push((top, bottom, vec![piece])),
         }
     }
+    let mut lines: Vec<String> = Vec::new();
     let mut unclear = Vec::new();
-    let text = rows
-        .into_iter()
-        .enumerate()
-        .map(|(number, (_, _, mut row))| {
-            if row.iter().any(|p| p.c <= UNCLEAR_AT_OR_BELOW) {
-                unclear.push(number);
-            }
-            row.sort_by(|a, b| a.x.total_cmp(&b.x));
-            row.into_iter().map(|p| p.t).collect::<Vec<_>>().join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut above: Option<(f64, f64)> = None;
+    for (top, bottom, mut row) in rows {
+        if let Some((above_bottom, above_height)) = above
+            && top - above_bottom > 2.0 * above_height.max(bottom - top)
+        {
+            lines.push(String::new());
+        }
+        above = Some((bottom, bottom - top));
+        if row.iter().any(|p| p.c <= UNCLEAR_AT_OR_BELOW) {
+            unclear.push(lines.len());
+        }
+        row.sort_by(|a, b| a.x.total_cmp(&b.x));
+        lines.push(row.into_iter().map(|p| p.t).collect::<Vec<_>>().join(" "));
+    }
+    let text = lines.join("\n");
     if text.len() > MAX_TEXT_BYTES {
         return Err(LocalToolError::TooMuchText);
     }
@@ -1746,6 +1752,7 @@ mod tests {
         assert_eq!(
             text_of(out.as_bytes()),
             Ok("VISITOR CARD - FICTIONAL TEST SAMPLE C\n\
+                \n\
                 Name: Alex Harbor\n\
                 Phone: 202-555-0142\n\
                 Email: alex.harbor@example.org\n\
@@ -1754,9 +1761,101 @@ mod tests {
         );
     }
 
+    /// Exactly what Ozzie's release card reader printed for the fictional sample cards
+    /// docs/prep/card-samples/visitor-d.png and visitor-a.png on 2026-11-15 (invented people,
+    /// example.org addresses, 202-555-01xx numbers). core/test/card-fields.test.ts uses the text
+    /// these become.
+    const SAMPLE_D: &str = r#"{"t":"WELCOME CARD - FICTIONAL TEST SAMPLE D","h":0.029999999999999916,"y":0.05333333311904764,"c":1,"w":0.5833333333333333,"x":0.05833333723809517}
+{"h":0.016666666666666607,"y":0.10166666666301172,"w":0.405,"x":0.05666666657858187,"c":1,"t":"Synthetic lettering; not a photograph or real human handwriting."}
+{"t":"Name: Casey Brook","h":0.02833333333333332,"y":0.17166666665709462,"c":1,"w":0.25833333333333336,"x":0.07499999991385138}
+{"h":0.020961511929829868,"y":0.23618591063637506,"w":0.0785732905069987,"x":0.07488002117957838,"c":1,"t":"Phone:"}
+{"t":"Email:","h":0.02358987967173254,"y":0.3022928977484609,"c":1,"w":0.06888889948527019,"x":0.07477852316918016}
+{"h":0.023310052553812688,"y":0.23562092486265007,"w":0.1803892135620117,"x":0.186447819062647,"c":1,"t":"202-555-0163"}
+{"t":"casey.brook@example.org","h":0.0345891030629476,"y":0.29943987504720404,"c":1,"w":0.29704284667968744,"x":0.18150478196129127}
+{"h":0.023333333333333206,"y":0.36999999997916677,"w":0.09666666666666668,"x":0.07499999991666667,"c":1,"t":"Request:"}
+{"t":"I would like to help with the food pantry.","h":0.036756350199381504,"y":0.36358919734390627,"c":1,"w":0.4772941080729167,"x":0.21967052125362366}
+{"h":0.018333333333333313,"y":0.5383333333285341,"w":0.435,"x":0.05999999988787086,"c":1,"t":"No real person or church is represented. Do not send messages."}"#;
+    const SAMPLE_A: &str = r#"{"h":0.023333333333333317,"c":1,"x":0.05666666658333327,"t":"VISITOR CARD — FICTIONAL TEST SAMPLE A","y":0.05666666666306586,"w":0.5533333333333333}
+{"h":0.023383557001749655,"c":1,"x":0.05658787554028512,"t":"Synthetic lettering; not a photograph or real human handwriting.","y":0.09670295925612593,"w":0.40678871154785157}
+{"h":0.025000000000000022,"c":1,"x":0.08500000052380954,"t":"Alex Harbor","y":0.14833333315476194,"w":0.15333333333333335}
+{"h":0.026705525716145817,"c":1,"x":0.08479020870776183,"t":"202-555-0142","y":0.20228512727701908,"w":0.19374809265136717}
+{"h":0.03240307490030925,"c":1,"x":0.08640660784731892,"t":"alex.harbor@example.org","y":0.25527555188738926,"w":0.3005670928955078}
+{"h":0.03002091089884429,"c":1,"x":0.08660386804040016,"t":"Please call me about the volunteer orientation.","y":0.3200158587485833,"w":0.5668079121907552}
+{"h":0.014999999999999902,"c":1,"x":0.06333333769444427,"t":"No real person or church is represented. Do not send messages.","y":0.45499999975000005,"w":0.43166666666666664}
+{"h":0.015000000000000013,"c":1,"x":0.06333333323359071,"t":"Sample B has a deliberately ambiguous contact character. Ask; do not guess.","y":0.4849999999971042,"w":0.5166666666666667}"#;
+
+    #[test]
+    fn the_release_readers_pieces_of_sample_d_become_one_line_per_label() {
+        // The reader returns "Phone:", "Email:" and then their values as separate pieces, out of
+        // order. Each label joins the value on its own row, never the row below; the wide gap above
+        // the printed footer stays an empty line, so the footer can't read as more of the request.
+        assert_eq!(
+            card_lines(SAMPLE_D.as_bytes()),
+            Ok(CardLines {
+                text: "WELCOME CARD - FICTIONAL TEST SAMPLE D\n\
+                       Synthetic lettering; not a photograph or real human handwriting.\n\
+                       Name: Casey Brook\n\
+                       Phone: 202-555-0163\n\
+                       Email: casey.brook@example.org\n\
+                       Request: I would like to help with the food pantry.\n\
+                       \n\
+                       No real person or church is represented. Do not send messages."
+                    .into(),
+                unclear: vec![],
+            })
+        );
+        assert_eq!(
+            text_of(SAMPLE_A.as_bytes()),
+            Ok("VISITOR CARD \u{2014} FICTIONAL TEST SAMPLE A\n\
+                Synthetic lettering; not a photograph or real human handwriting.\n\
+                Alex Harbor\n\
+                202-555-0142\n\
+                alex.harbor@example.org\n\
+                Please call me about the volunteer orientation.\n\
+                \n\
+                No real person or church is represented. Do not send messages.\n\
+                Sample B has a deliberately ambiguous contact character. Ask; do not guess."
+                .into())
+        );
+    }
+
+    #[test]
+    fn a_tall_piece_never_pulls_the_next_row_into_its_line() {
+        // Big loops make "Alex Harbor" twice as tall as its label and reach down toward the phone
+        // row. "Phone:" overlaps that tall piece but not the "Name:" label, so it starts its own line.
+        let out = [
+            piece("Name:", 0.05, 0.200, 0.10, 0.03),
+            piece("Alex Harbor", 0.30, 0.190, 0.20, 0.07),
+            piece("Phone:", 0.05, 0.243, 0.10, 0.03),
+            piece_read("202-555-0142", 0.3, 0.30, 0.245, 0.20, 0.03),
+        ]
+        .join("\n");
+        assert_eq!(
+            card_lines(out.as_bytes()),
+            Ok(CardLines {
+                text: "Name: Alex Harbor\nPhone: 202-555-0142".into(),
+                unclear: vec![1],
+            })
+        );
+        // An unclear piece below a wide gap keeps its own line number, counting the empty line.
+        let gap = [
+            piece("Request:", 0.05, 0.20, 0.10, 0.03),
+            piece_read("faint words", 0.5, 0.05, 0.40, 0.20, 0.03),
+        ]
+        .join("\n");
+        assert_eq!(
+            card_lines(gap.as_bytes()),
+            Ok(CardLines {
+                text: "Request:\n\nfaint words".into(),
+                unclear: vec![2],
+            })
+        );
+    }
+
     #[test]
     fn lines_follow_the_card_top_to_bottom_and_left_to_right() {
-        // Two lines close together stay two lines; pieces of one line join left to right.
+        // Two lines close together stay two lines; pieces of one line join left to right; a wide gap
+        // before the next line is kept as an empty line.
         let out = [
             piece("for my mom", 0.30, 0.205, 0.20, 0.04),
             piece("Please pray", 0.05, 0.20, 0.20, 0.04),
@@ -1767,7 +1866,7 @@ mod tests {
         .join("\n");
         assert_eq!(
             text_of(out.as_bytes()),
-            Ok("Please pray for my mom\nwho is in the hospital.\nspaced out".into())
+            Ok("Please pray for my mom\nwho is in the hospital.\n\nspaced out".into())
         );
         assert_eq!(text_of(b""), Ok(String::new()));
         assert_eq!(text_of(b"\n\n"), Ok(String::new()));

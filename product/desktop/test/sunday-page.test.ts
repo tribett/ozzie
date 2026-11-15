@@ -1,12 +1,13 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { DecisionForm, LeaderNote, OperationsSection, SundayPage } from "../src/sunday-page.js";
+import { DecisionForm, DraftBox, LeaderNote, OperationsSection, SundayPage } from "../src/sunday-page.js";
 import { RulesPage } from "../src/rules-page.js";
 import { buildSundayBrief, teamLeaders, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
-import { fictionalOperations } from "../../../core/src/fictional-operations.js";
+import { fictionalOperations, withFictionalOperations } from "../../../core/src/fictional-operations.js";
+import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { decide, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 
 const rules: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
@@ -14,7 +15,7 @@ const leadRules: SundayRules = { ...rules, sundayLeads: [{ team_id: TEAMS.nurser
 const AT = "2026-11-20T15:10:00Z";
 const brief = (capture: SundayCapture = nov22Capture(), r = rules, now = capture.completed_at) => buildSundayBrief(capture, r, now, true);
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replaceAll("&#x27;", "'").replaceAll("&quot;", "\"").replace(/\s+/g, " ");
-function page(b: SundayBrief, decisions: SundayDecision[] = [], operations: ReturnType<typeof fictionalOperations> | null = null) {
+function page(b: SundayBrief, decisions: SundayDecision[] = [], operations: SundayOperations | null = null) {
   return renderToStaticMarkup(React.createElement(SundayPage, {
     brief: b, names: nov22Capture().names, busy: false, problem: "", sender: "Pat", connected: false, hasRecording: false, configured: false,
     canReword: false, decisions, onDecisions: () => undefined, operations, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
@@ -128,6 +129,72 @@ describe("Sunday page", () => {
   });
 });
 
+describe("one count for what the page shows, and what it is showing", () => {
+  const example = withFictionalOperations(nov22Capture());
+  const exampleBrief = buildSundayBrief(example, rules, example.completed_at, true);
+  const exampleOps = sundayOperations(example, rules, {})!;
+
+  it("the headline counts every card the page shows: Services, rooms, follow-ups and group meetings", () => {
+    const html = page(exampleBrief, [], exampleOps);
+    const t = text(html);
+    // Two open roles and the follow-up without an owner need a decision; the pending request, the streak, the unconfirmed room
+    // overlap, the card saying why it can't be confirmed and the group meeting are worth a look.
+    expect(t).toContain("3 things need a decision and 5 are worth a look.");
+    const tags = (h: string, tone: string) => h.match(new RegExp(`<div class="find-top"><span class="badge ${tone}">`, "gu"))?.length ?? 0;
+    expect([tags(html, "b-attn"), tags(html, "b-look")]).toEqual([3, 5]);
+    // A room the Church rules say isn't shared: its overlap needs a decision too.
+    const ruled = page(brief(), [], fictionalOperations());
+    expect(text(ruled)).toContain("4 things need a decision and 2 are worth a look.");
+    expect([tags(ruled, "b-attn"), tags(ruled, "b-look")]).toEqual([4, 2]);
+    // What the person resolved leaves the count and is said apart.
+    expect(text(page(exampleBrief, [nurseryDecision(exampleBrief)], exampleOps))).toContain("2 things need a decision and 5 are worth a look. You resolved 1 yourself.");
+  });
+
+  it("always says whether it shows a live read, a saved recording or the fictional example, and labels the switch", () => {
+    const live = buildSundayBrief(nov22Capture(), rules, nov22Capture().completed_at);
+    const recording = buildSundayBrief({ ...nov22Capture(), kind: "recording" }, rules, nov22Capture().completed_at);
+    const modes: [SundayBrief, string, string | null][] = [
+      [live, "Live read from Planning Center Services", null],
+      // A live check with no Services read time still says what it is, at the time it finished.
+      [{ ...live, checked_at: null }, "Live read from Planning Center Services", null],
+      [recording, "Saved recording of Planning Center Services", "This is not a current check."],
+      [brief(), "Fictional example data", "Fictional example. No church data is shown."],
+    ];
+    for (const [b, line, banner] of modes) {
+      const html = page(b);
+      expect(text(html)).toMatch(new RegExp(`${line} · \\d+ reads · `, "u"));
+      if (banner) expect(text(html)).toContain(banner);
+      expect(html).toContain('role="group" aria-label="What Sunday shows: a live check, the saved recording or the fictional example"');
+    }
+  });
+
+  it("every card has where its facts came from, when they were read, and Why I flagged this", () => {
+    const html = page(exampleBrief, [], exampleOps);
+    const cards = html.split(/<article class="find/u).slice(1);
+    expect(cards.length).toBeGreaterThanOrEqual(8);
+    for (const card of cards) {
+      expect(card).toContain("Why I flagged this");
+      expect(card).toMatch(/class="badge b-muted">[^<]+<\/span>/u);
+      expect(text(card)).toMatch(/Checked [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, /u);
+    }
+    // The card about room details that couldn't be confirmed, and the out-of-date rooms card, have them too.
+    const unconfirmed = text(cards.find(c => c.includes("Some room or follow-up details couldn&#x27;t be confirmed."))!);
+    expect(unconfirmed).toMatch(/Why I flagged this Calendar Church rules People follow-ups Checked /u);
+    const stale = text(renderToStaticMarkup(React.createElement(OperationsSection, {
+      operations: { ...exampleOps, result: null, group_meetings: [], stale: true, checked_at: null, clear: [] }, checkedAt: exampleBrief.checked_at, whyOpen: true,
+    })));
+    expect(stale).toMatch(/Out of date .* Why I flagged this Planning Center Checked /u);
+    expect(stale).toContain("doesn't treat its rooms, follow-ups or group meetings as current");
+  });
+
+  it("Resolved by you looks neutral, never like confirmed coverage", () => {
+    const html = page(brief(), [nurseryDecision()]);
+    const resolved = html.slice(html.indexOf('aria-label="Resolved by you"'));
+    expect(resolved).toContain('class="badge b-you"');
+    expect(resolved).not.toMatch(/b-ok|b-confirm|panel-ok/u);
+  });
+});
+
 describe("rooms and follow-ups slot", () => {
   it("renders the operations findings with their labels, next steps and check times", () => {
     const t = text(renderToStaticMarkup(React.createElement(OperationsSection, { operations: fictionalOperations() })));
@@ -163,6 +230,21 @@ describe("drafts and decision form", () => {
     expect(t).toContain("Change the wording");
     expect(t).not.toMatch(/\bSend\b|Ask Ozzie to reword/);
   });
+  it("the wording, open to change, is a labelled text box", () => {
+    const html = renderToStaticMarkup(React.createElement(DraftBox, { label: "Draft note", body: "Hi Riley,", onBody: () => undefined, onClose: () => undefined, footer: "", startEditing: true }));
+    const id = /<textarea id="([^"]+)"/u.exec(html)?.[1];
+    expect(id).toBeTruthy();
+    expect(html).toContain(`<label class="sr-only" for="${id}">Draft note: change the wording</label>`);
+    expect(text(html)).toContain("Done changing");
+  });
+  it("names the Sunday's own date when the service time wasn't read, and is signed with the sender", () => {
+    const nursery = brief().findings.find(f => f.kind === "needs-people" && f.position!.name === "Nursery")!;
+    const untimed = { ...nursery, position: { ...nursery.position!, interval: null } };
+    const t = text(renderToStaticMarkup(React.createElement(LeaderNote, { finding: untimed, leader: PEOPLE.nurseryLeader, names: nov22Capture().names, sender: "Pat", sunday: "2026-11-29", onClose: () => undefined })));
+    expect(t).toContain("Nursery on Sunday, November 29 still needs one more person.");
+    expect(t).toContain("Thank you, Pat");
+    expect(t).not.toMatch(/this week|this Sunday/u);
+  });
   it("a decision needs a reason before it can be saved", () => {
     const html = renderToStaticMarkup(React.createElement(DecisionForm, { choice: "covered-outside", onSave: () => undefined, onCancel: () => undefined }));
     expect(html).toMatch(/<button type="submit"[^>]*disabled[^>]*>Mark it covered for this Sunday<\/button>/);
@@ -177,5 +259,12 @@ describe("Church rules page", () => {
     const t = text(renderToStaticMarkup(React.createElement(RulesPage, { rules: leadRules, onChange: () => undefined, positions, leaders: teamLeaders(capture), names: capture.names })));
     expect(t).toContain("Planning Center lists Jordan Ashdown as this team's leader. That's oversight, not someone scheduled to lead on Sunday.");
     expect(t).toContain("Planning Center doesn't list a leader for this team.");
+  });
+  it("offers the team's position names for its Sunday lead, and typing another still works", () => {
+    const positions = [{ position_id: "p2", team_id: TEAMS.nursery, name: "Nursery", interval: null }, { position_id: "p3", team_id: TEAMS.nursery, name: "Nursery Lead", interval: null }];
+    const html = renderToStaticMarkup(React.createElement(RulesPage, { rules: leadRules, onChange: () => undefined, positions }));
+    expect(html).toMatch(new RegExp(`<input id="lead-${TEAMS.nursery}" list="lead-options-${TEAMS.nursery}"[^>]*value="Nursery Lead"`, "u"));
+    expect(html).toContain(`<datalist id="lead-options-${TEAMS.nursery}"><option value="Nursery"></option><option value="Nursery Lead"></option></datalist>`);
+    expect(text(html)).toContain("choose the lead's position from the team's positions, or type its name as it appears in Planning Center");
   });
 });

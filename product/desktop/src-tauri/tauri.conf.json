@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "church.ozzie.desktop",
   "build": {
-    "beforeBuildCommand": "pnpm build:desktop-ui",
+    "beforeBuildCommand": "pnpm build:share && pnpm build:desktop-ui",
     "frontendDist": "../dist"
   },
   "app": {
@@ -35,7 +35,8 @@
     ],
     "externalBin": [
       "binaries/ozzie-card-reader",
-      "binaries/ozzie-listen"
+      "binaries/ozzie-listen",
+      "binaries/ozzie-share"
     ],
     "macOS": {
       "minimumSystemVersion": "14.0",

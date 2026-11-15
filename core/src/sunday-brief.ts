@@ -5,6 +5,9 @@ import { churchTimeZone, planDate, planStart } from "./church-time.js";
 import { applyFeedback, briefTarget, feedbackOf, type CorrectionEntry, type StopEntry } from "./finding-feedback.js";
 import { kidsFindings } from "./kids-rules.js";
 import { captureToCoverage, isKidsRead, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
+import type { DecidedBrief } from "./sunday-decisions.js";
+import type { SundayOperations } from "./operations-capture.js";
+import type { OperationsResult } from "./operations-findings/index.js";
 
 export interface BriefPerson { person_id: string; reasons: string[] }
 export interface Finding {
@@ -271,5 +274,35 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       ...(failed.length ? ["Some Planning Center reads didn't complete; see What happened."] : []),
       ...(stale ? ["Anything changed in Planning Center since this check isn't shown. Check again before relying on it."] : []),
     ],
+  };
+}
+
+/**
+ * The open questions about rooms and follow-ups the Sunday page shows. A part that couldn't be read is listed
+ * under What I didn't check instead, so it isn't an open question here too.
+ */
+export function shownUncertainties(result: OperationsResult | null): OperationsResult["uncertainties"] {
+  const unchecked = new Set(result?.unchecked_scope_ids ?? []);
+  return (result?.uncertainties ?? []).filter(u => u.scope_id === null || !unchecked.has(u.scope_id));
+}
+
+/**
+ * What the Sunday page shows, counted as items (never people), so its headline, the sidebar's Sunday count and
+ * Today say the same numbers. Decisions: Services findings that need a decision and are still open after the
+ * person's own decisions, confirmed room overlaps (Room use needs review) and follow-ups without an owner.
+ * Worth a look: the other open Services findings, room overlaps no Church rule confirms, one item for room or
+ * follow-up details that couldn't be confirmed, and each group meeting at the same time as serving. An
+ * out-of-date rooms check shows none of its findings. What Church rules set aside is already out of both.
+ */
+export function sundayShownCount(view: Pick<DecidedBrief, "items" | "history">, operations: SundayOperations | null): { decisions: number; looks: number; resolved: number } {
+  const open = view.items.filter(i => i.state !== "resolved");
+  const ops = operations && !operations.stale ? operations : null;
+  const found = ops?.result?.findings ?? [];
+  const confirmed = found.filter(f => f.kind !== "room-overlap" || f.certainty === "confirmed").length;
+  return {
+    decisions: open.filter(i => i.finding.tone === "decision").length + confirmed,
+    looks: open.filter(i => i.finding.tone === "look").length + (found.length - confirmed)
+      + (shownUncertainties(ops?.result ?? null).length ? 1 : 0) + (ops?.group_meetings.length ?? 0),
+    resolved: view.items.length - open.length + view.history.length,
   };
 }

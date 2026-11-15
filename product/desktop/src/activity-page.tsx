@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { taskLine, taskSteps, type CheckTrigger, type TaskRow } from "./harness-words.js";
@@ -26,7 +27,30 @@ export const activityLabel = (collection: string) => Object.hasOwn(what, collect
 
 export const LEDGER_UNAVAILABLE = "Ozzie's list of recent work isn't available right now. Every Planning Center read in the latest check is still listed below.";
 
-/** Recent work, newest first: one plain line per task, opening to its steps. Name-free: the list holds no question, answer or source text. */
+/** How many tasks Recent work shows before "Show earlier work". */
+export const RECENT_SHOWN = 10;
+/** A day heading on this Mac's clock: "Today", "Yesterday", or the date ("Thursday, November 19"). */
+export function dayLabel(iso: string, now: Date): string {
+  const d = new Date(iso), yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) });
+}
+/** Tasks newest first, in runs of the same day, each with its heading. */
+export function byDay(tasks: readonly TaskRow[], now: Date): { day: string; tasks: TaskRow[] }[] {
+  const out: { day: string; tasks: TaskRow[] }[] = [];
+  for (const row of [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at))) {
+    const day = dayLabel(row.created_at, now);
+    if (out.at(-1)?.day === day) out.at(-1)!.tasks.push(row); else out.push({ day, tasks: [row] });
+  }
+  return out;
+}
+
+/**
+ * Recent work, newest first and grouped by day: one plain line per task, opening to its steps. The newest
+ * RECENT_SHOWN show; "Show earlier work" lists the rest. Name-free: the list holds no question, answer or source text.
+ */
 export function RecentWork({ tasks, procedures = null, trigger = () => undefined, now }: {
   /** undefined while loading; null when the list isn't available. */
   tasks: TaskRow[] | null | undefined;
@@ -35,11 +59,14 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   trigger?: (taskId: string) => CheckTrigger | undefined;
   now?: Date;
 }) {
+  const [all, setAll] = useState(false);
+  const id = useId();
   if (tasks === undefined) return null;
   if (tasks === null) return <p className="small recent-quiet"><Icon name="info" small />{LEDGER_UNAVAILABLE}</p>;
   if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each Sunday check appear here.</p>;
   const sorted = [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at));
-  return <ol className="log recent">{sorted.map(row => {
+  const earlier = sorted.length - RECENT_SHOWN;
+  const item = (row: TaskRow) => {
     const steps = taskSteps(row);
     const line = taskLine(row, { procedures, ...(trigger(row.task_id) ? { trigger: trigger(row.task_id)! } : {}), ...(now ? { now } : {}) });
     return <li key={row.task_id} className={row.state === "failed" ? "is-problem" : ""}>
@@ -49,7 +76,17 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
           : <p className="small">No steps were recorded.</p>}
       </details>
     </li>;
-  })}</ol>;
+  };
+  return <>
+    <div className="recent-days" id={`${id}-list`}>
+      {byDay(all ? sorted : sorted.slice(0, RECENT_SHOWN), now ?? new Date()).map((d, i) => <section key={d.day} className="recent-day" aria-labelledby={`${id}-day-${i}`}>
+        <h3 id={`${id}-day-${i}`} className="recent-day-h">{d.day}</h3>
+        <ol className="log recent">{d.tasks.map(item)}</ol>
+      </section>)}
+    </div>
+    {earlier > 0 && <div><button type="button" className="btn btn-quiet btn-sm btn-flush" aria-expanded={all} aria-controls={`${id}-list`} onClick={() => setAll(!all)}>
+      {all ? `Show only the newest ${RECENT_SHOWN}` : `Show earlier work (${earlier} more)`}</button></div>}
+  </>;
 }
 
 /** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */

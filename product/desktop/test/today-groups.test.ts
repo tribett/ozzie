@@ -9,6 +9,8 @@ import { harborAttentionImport } from "../../../core/src/fictional-attention.js"
 import { defaultPlan, TEMPLATES, type Responsibility } from "../../../core/src/harness/responsibilities.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
+import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, openCount } from "../../../core/src/sunday-decisions.js";
 import type { NoticedItem, RunnerView } from "../src/responsibility-runner.js";
 import { copyText, NoticedCard } from "../src/responsibility-views.js";
@@ -328,6 +330,14 @@ describe("Today on screen", () => {
   const render = (props: Partial<React.ComponentProps<typeof TodayPage>> = {}) => text(renderToStaticMarkup(React.createElement(TodayPage, {
     brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), ...props,
   })));
+
+  it("says Sunday's things to decide with the Sunday page's own count, rooms and follow-ups included", () => {
+    const example = withFictionalOperations(capture);
+    const operations = sundayOperations(example, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, {});
+    // Two open roles and the follow-up without an owner; the unconfirmed room overlap and the group meeting are Worth a look, not added in.
+    expect(render({ operations })).toContain("Sunday has 3 things to decide.");
+    expect(render()).toContain("Sunday has 2 things to decide.");
+  });
 
   it("shows the three groups in order, each with a count of items, never people", () => {
     const page = render();

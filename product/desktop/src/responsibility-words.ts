@@ -6,6 +6,7 @@ import {
   nearDeadlineTimes, TEMPLATES, type Lifetime, type Plan, type ReportPolicy, type Responsibility, type RunRow, type RunTrigger, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import { describeChange } from "../../../core/src/sunday-changes.js";
+import { kindWords } from "../../../core/src/finding-feedback.js";
 import type { NoticedItem } from "./responsibility-runner.js";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -157,6 +158,7 @@ export function foundText(item: Pick<NoticedItem, "template" | "decisions" | "lo
   // A group night clash is that template's Worth a look: counted once, by what it is.
   if (item.looks && item.template !== "group-night-clashes") parts.push(`${item.looks} worth a look`);
   if (item.findings?.rooms) parts.push(count(item.findings.rooms, "room booking overlap", "room booking overlaps"));
+  if (item.findings?.rooms_uncertain) parts.push(`${count(item.findings.rooms_uncertain, "room booking overlap", "room booking overlaps")} worth a look`);
   if (item.findings?.follow_ups) parts.push(count(item.findings.follow_ups, "follow-up without an owner", "follow-ups without an owner"));
   if (item.findings?.groups) parts.push(count(item.findings.groups, "group meeting clash", "group meeting clashes"));
   return list(parts);
@@ -227,14 +229,18 @@ export function noticedTitle(item: NoticedItem, now?: string): string {
       if (item.findings?.rooms) parts.push(`${count(item.findings.rooms, "room booking overlap needs", "room booking overlaps need")} review`);
       if (item.findings?.follow_ups) parts.push(`${count(item.findings.follow_ups, "follow-up is", "follow-ups are")} overdue with no owner`);
       if (item.findings?.groups) parts.push(`${count(item.findings.groups, "group meeting clashes", "group meetings clash")} with serving`);
+      // An overlap no room rule confirms is Worth a look, as the Sunday page labels it.
+      if (item.findings?.rooms_uncertain) parts.push(`${count(item.findings.rooms_uncertain, "room booking overlap is", "room booking overlaps are")} worth a look`);
       if (item.looks && !parts.length) parts.push(`${count(item.looks, "thing is", "things are")} worth a look`);
       return `${title}: ${parts.length ? list(parts) : "something changed"}.`;
     }
     case "clear": return `${title}: checked at ${AT_TIME(item.at, now)}. Nothing new needs a decision.`;
     case "briefing": {
       const n = item.overnight_count ?? 0;
+      const kept = (item.kept ?? []).reduce((sum, k) => sum + k.count, 0);
       return `Your morning briefing is ready.${item.sunday_ready ? " Today it includes the full Sunday Ready brief." : ""}${n
-        ? ` ${n === 1 ? "One thing" : `${n} things`} came up overnight; ${n === 1 ? "it's" : "they're"} marked Overnight.` : ""}`;
+        ? ` ${n === 1 ? "One thing" : `${n} things`} came up overnight; ${n === 1 ? "it's" : "they're"} marked Overnight.` : ""}${kept
+        ? ` It includes ${kept === 1 ? "one thing" : `${kept} things`} your Church rules keep for the briefing.` : ""}`;
     }
     case "couldnt-check": {
       const at = AT_TIME(item.scheduled_for ?? item.at, now);
@@ -266,12 +272,43 @@ export function noticedTitle(item: NoticedItem, now?: string): string {
       : `${title} has ended.`;
   }
 }
+/**
+ * The morning briefing's "Kept for your briefing" lines: each kind the person's Church rules keep for it, with
+ * how many its check showed ("Open roles: 2"). Kinds and counts only; no names.
+ */
+export function keptLines(item: Pick<NoticedItem, "kind" | "kept">): string[] {
+  if (item.kind !== "briefing") return [];
+  return (item.kept ?? []).filter(k => k.count > 0).map(k => { const words = kindWords(k.kind); return `${words.charAt(0).toUpperCase()}${words.slice(1)}: ${k.count}`; });
+}
+const WEEK_MS = 7 * 86_400_000;
+/**
+ * The briefing's weekly line about regular jobs (owner decision, October 26: quiet success, loud problems),
+ * from each job's run history over the seven days before `now`. When every check finished: "3 regular jobs
+ * ran this week. All finished." Otherwise the line says how many jobs couldn't finish every check, and each
+ * such job gets its own plain sentence. A run paused part-way isn't a problem, and one still running isn't
+ * counted yet. Nothing ran this week: nothing to say (null). Job titles are fixed; no names.
+ */
+export function weekRollup(jobs: readonly Pick<Responsibility, "title" | "runs">[], now: string): { line: string | null; problems: string[] } {
+  const since = Date.parse(now) - WEEK_MS;
+  const ran = jobs.map(j => ({ title: j.title, runs: j.runs.filter(r => r.outcome !== null && Date.parse(r.started_at) > since && Date.parse(r.started_at) <= Date.parse(now)) }))
+    .filter(j => j.runs.length > 0);
+  if (!ran.length) return { line: null, problems: [] };
+  const problems = ran.map(j => ({ title: j.title, total: j.runs.length, failed: j.runs.filter(r => r.outcome !== "ok" && r.code !== "cancelled").length }))
+    .filter(j => j.failed > 0);
+  const head = `${count(ran.length, "regular job", "regular jobs")} ran this week.`;
+  if (!problems.length) return { line: `${head} All finished.`, problems: [] };
+  return {
+    line: `${head} ${problems.length} couldn't finish every check.`,
+    problems: problems.map(j => `${j.title} couldn't finish ${j.failed} of ${count(j.total, "check", "checks")} this week.`),
+  };
+}
 /** What changed since the last run, one sentence each, names resolved locally. */
 export function noticedChanges(item: NoticedItem, names: Readonly<Record<string, string>>): string[] {
   return (item.changes ?? []).filter(c => c.effect === "worse").slice(0, 5).map(c => describeChange(c, id => names[id]));
 }
 export function noticedBadge(item: NoticedItem): { label: string; tone: "attn" | "look" | "ok" | "muted" } {
   switch (item.kind) {
+    // Only what needs a decision on the Sunday page does here: a confirmed room overlap, never an uncertain one.
     case "found": return item.decisions || item.findings?.rooms || item.findings?.follow_ups ? { label: "Needs a decision", tone: "attn" } : { label: "Worth a look", tone: "look" };
     case "briefing": return { label: "Ready", tone: "ok" };
     case "clear": return { label: "Checked", tone: "ok" };

@@ -24,7 +24,7 @@ export const INSTRUCTIONS = "Read-only access to Ozzie's last saved Sunday readi
   + "a person decides what to do. Don't rank or score people, and don't describe anyone as unreliable or at risk.";
 
 interface ToolDef { name: string; title: string; description: string; run: (read: Reading) => string }
-interface Reading { check: SharedCheck | null; unreadable: boolean; skills: ReadonlyMap<string, Skill> }
+interface Reading { check: SharedCheck | null; skills: ReadonlyMap<string, Skill> }
 const SUNDAY: readonly SharedTool[] = ["sunday.overview", "sunday.open_needs", "sunday.pending_requests", "sunday.rule_checkins", "sunday.not_checked"];
 const OPERATIONS: readonly SharedTool[] = ["rooms.conflicts", "followups.unowned", "groups.clashes"];
 
@@ -32,22 +32,22 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
   {
     name: "sunday_readiness", title: "Sunday readiness",
     description: "Where the church's coming Sunday stands in Ozzie's last saved check: roles that still need people, requests without an answer, suggested check-ins and what the check couldn't cover, each with its source and check time. People appear as labels, never names.",
-    run: r => checkText(r.check, SUNDAY, r.unreadable),
+    run: r => checkText(r.check, SUNDAY),
   },
   {
     name: "rooms_follow_ups_groups", title: "Rooms, follow-ups and group meetings",
     description: "From Ozzie's last saved check: room bookings that overlap, overdue follow-ups without an owner, and group meetings at the same time as someone's serving, when the church's connection includes them. Labels, never names.",
-    run: r => checkText(r.check, OPERATIONS, r.unreadable),
+    run: r => checkText(r.check, OPERATIONS),
   },
   {
     name: "church_rules", title: "Church rules",
     description: "The church's rules Ozzie checks against (check-ins, scheduled leads, rooms that aren't shared), in words, and the written procedures Ozzie follows.",
-    run: r => rulesText(r.check, r.skills, r.unreadable),
+    run: r => rulesText(r.check, r.skills),
   },
   {
     name: "what_happened", title: "What happened",
     description: "What Ozzie did recently on the leader's Mac: checks, questions and procedures, when they ran and how they ended. Never what was asked or answered.",
-    run: r => happenedText(r.check, r.skills, r.unreadable),
+    run: r => happenedText(r.check, r.skills),
   },
 ]);
 
@@ -118,8 +118,8 @@ export class McpServer {
     }
     let text: string | null = null;
     try { text = this.#deps.read(); } catch { text = null; }
-    const check = text === null ? null : parseSharedCheck(text);
-    const reading: Reading = { check, unreadable: text !== null && check === null, skills: this.#deps.skills };
+    // A file outside the format reads exactly as no file (render.ts NOT_SHARED).
+    const reading: Reading = { check: text === null ? null : parseSharedCheck(text), skills: this.#deps.skills };
     let out: string;
     try { out = tool.run(reading); } catch { return error(id, -32603, "Internal error"); }
     return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: out }], isError: false } };

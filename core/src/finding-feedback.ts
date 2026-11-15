@@ -10,8 +10,8 @@
 // are resolved on this Mac at render time. A correction's note is typed by a person; it stays on this
 // Mac and is never part of anything sent to an AI model (rules.current reads fixed fields only).
 import type { SundayChange } from "./sunday-changes.js";
-import type { Finding } from "./sunday-brief.js";
-import type { GroupMeeting } from "./operations-capture.js";
+import type { Finding, SundayBrief } from "./sunday-brief.js";
+import type { GroupMeeting, SundayOperations } from "./operations-capture.js";
 import type { FollowUpFinding, RoomFinding } from "./operations-findings/types.js";
 import { canEscalate } from "./escalation-draft.js";
 import { canRemind } from "./reminder-draft.js";
@@ -80,11 +80,14 @@ export function scopeMatches(entry: FeedbackScope, finding: FeedbackScope): bool
 const sameScope = (a: FeedbackScope, b: FeedbackScope) => SCOPE_KEYS.every(k => a[k] === b[k]);
 
 export const canCorrect = (t: Pick<FeedbackTarget, "kind">) => !NEVER_HIDDEN.has(t.kind);
-/** Kinds whose changes between checks can bring a notice (changeFindingKind), whatever their card's tone. */
+/** Kinds the Sunday comparison follows as changes (changeFindingKind), whatever their card's tone. */
 const NOTIFYING_KINDS: ReadonlySet<string> = new Set(["needs-people", "pending", "lead-missing"]);
 /** Telling right away is only for solid findings that need a decision; Worth a look never interrupts. */
 export const canPromote = (t: Pick<FeedbackTarget, "kind" | "tone">) => t.tone === "decision" && !NEVER_HIDDEN.has(t.kind);
-/** Keeping a kind for the briefing is offered only where it changes something: kinds that can bring a notice. */
+/**
+ * Keeping a kind for the briefing is offered where it changes something: kinds that can bring a notice, and
+ * the kinds the Sunday comparison follows, which the morning briefing then lists under "Kept for your briefing".
+ */
 export const canDemote = (t: Pick<FeedbackTarget, "kind" | "tone">) => !NEVER_HIDDEN.has(t.kind) && (t.tone === "decision" || NOTIFYING_KINDS.has(t.kind));
 /**
  * The scopes "Stop flagging this" offers, narrowest first: exactly what the finding is about, then one
@@ -198,43 +201,96 @@ export function changeFindingKind(kind: SundayChange["kind"]): string | null {
     default: return null;
   }
 }
+/**
+ * The tone of the card a change is about, as the Sunday page shows it (sunday-brief.ts): an open role is a
+ * decision; a declined request, a missing Sunday lead and a check that couldn't be completed are Worth a look.
+ */
+const CHANGE_TONE: Readonly<Record<string, "decision" | "look">> = { "needs-people": "decision", pending: "look", "lead-missing": "look", "worth-a-look": "look" };
+/** A new finding told right away carries its card's own tone. */
+export const changeTone = (c: Pick<SundayChange, "kind" | "finding">): "decision" | "look" => c.finding?.tone ?? CHANGE_TONE[changeFindingKind(c.kind) ?? ""] ?? "look";
 const changeScope = (c: SundayChange): FeedbackScope => ({
   ...(c.team_id ? { team_id: c.team_id } : {}), ...(c.position && c.kind !== "lead-missing" ? { position: c.position } : {}), ...(c.person_id ? { person_id: c.person_id } : {}),
 });
 export interface RoutedChanges {
   /** Worse changes that may still bring a notice. */
   notify: SundayChange[];
-  /** One of them is urgent: inside the church's window, or a kind the person asked to hear about right away. */
+  /** One of them is urgent: a solid fact inside the church's window, or a kind the person asked to hear about right away. */
   urgent: boolean;
   /** Worse changes kept for the briefing instead of a notice. */
   briefing: SundayChange[];
   /** Worse changes about something the person asked Ozzie to stop flagging. */
   stopped: SundayChange[];
+  /** Worse changes that are Worth a look: they show in Ozzie and never bring a notice. */
+  look: SundayChange[];
 }
 /**
- * The person's entries applied to one check's changes. "Put this in the briefing" keeps a kind out of
- * notices; "Always tell me right away" marks it urgent (quiet hours still hold it unless the person let
- * urgent notices through). A change that couldn't be verified is never routed away.
+ * The person's entries applied to one check's changes (owner decision, October 26: the three-part urgency
+ * test). Worth a look never interrupts, however close to Sunday: it shows in Ozzie without a notice. "Put
+ * this in the briefing" keeps a kind out of notices; "Always tell me right away" marks it urgent (quiet
+ * hours still hold it unless the person let urgent notices through) and is the one way a Worth a look kind
+ * brings a notice, never an urgent one. A change that couldn't be verified is never kept for the briefing
+ * or stopped: it always shows.
  */
 export function routeChanges(changes: readonly SundayChange[], entries: readonly FeedbackEntry[]): RoutedChanges {
-  const out: RoutedChanges = { notify: [], urgent: false, briefing: [], stopped: [] };
+  const out: RoutedChanges = { notify: [], urgent: false, briefing: [], stopped: [], look: [] };
   for (const c of changes) {
     if (c.effect !== "worse") continue;
-    const kind = changeFindingKind(c.kind);
+    const kind = c.finding?.kind ?? changeFindingKind(c.kind);
     if (kind && stopFor(entries, { kind, scope: changeScope(c) })) { out.stopped.push(c); continue; }
     const level = kind ? urgencyFor(entries, kind) : null;
     if (level === "briefing") { out.briefing.push(c); continue; }
+    const look = changeTone(c) === "look";
+    if (look && level !== "right-away") { out.look.push(c); continue; }
     out.notify.push(c);
-    if (c.urgency === "urgent" || (level === "right-away" && kind === "needs-people")) out.urgent = true;
+    if (!look && (c.urgency === "urgent" || level === "right-away")) out.urgent = true;
   }
   return out;
 }
-/** New findings by kind, routed the same way: which still bring a notice, and whether any was asked for right away. */
-export function routeFindings(found: readonly { key: string; kind: string; tone: "decision" | "look" }[], entries: readonly FeedbackEntry[]): { notify: string[]; urgent: boolean; briefing: string[] } {
-  const out = { notify: [] as string[], urgent: false, briefing: [] as string[] };
+/** One finding a check shows, as notices see it: its stable key, kind and tone. Ids only. */
+export interface FoundKey { key: string; kind: string; tone: "decision" | "look" }
+/**
+ * Every finding one check shows (the Sunday brief, then rooms, follow-ups and group meetings), with the tone
+ * its card shows. What the person's Church rules set aside is already left out. Nothing from an out-of-date
+ * operations check, which shows nothing either.
+ */
+export function foundOf(brief: Pick<SundayBrief, "findings">, ops: Pick<SundayOperations, "result" | "group_meetings" | "stale"> | null): FoundKey[] {
+  const fresh = ops && !ops.stale ? ops : null;
+  return [
+    ...brief.findings.map((f): FoundKey => ({ key: f.key, kind: f.kind, tone: f.tone })),
+    ...(fresh?.result?.findings ?? []).map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: f.kind === "room-overlap" && f.certainty !== "confirmed" ? "look" : "decision" })),
+    ...(fresh?.group_meetings ?? []).map((m): FoundKey => ({ key: `group:${m.person_id}`, kind: "group-meeting", tone: "look" })),
+  ];
+}
+/** Kinds whose changes the Sunday comparison follows itself (sunday-changes.ts). */
+const COMPARED_KINDS: ReadonlySet<string> = new Set(["needs-people", "pending", "lead-missing", "worth-a-look"]);
+/**
+ * "Always tell me right away" for kinds the Sunday comparison doesn't follow (kids teams, background checks,
+ * rooms, follow-ups, group meetings): each finding of a kind the person asked about that is new since the
+ * last check of the same Sunday (`before`: that check's finding keys), as a change routeChanges can send.
+ * Nothing on a first check, which is only a baseline. Ids and kinds only.
+ */
+export function rightAwayChanges(found: readonly FoundKey[], before: readonly string[] | null, entries: readonly FeedbackEntry[]): SundayChange[] {
+  if (!before) return [];
+  const seen = new Set(before);
+  return found.filter(f => !seen.has(f.key) && !COMPARED_KINDS.has(f.kind) && urgencyFor(entries, f.kind) === "right-away")
+    .map(f => ({ id: `finding-new:${f.key}`, kind: "finding-new", effect: "worse", urgency: "attention", finding: { kind: f.kind, key: f.key, tone: f.tone } }));
+}
+/** What the morning briefing lists under "Kept for your briefing": each kind the person keeps for it, and how many this check shows. */
+export function keptForBriefing(found: readonly FoundKey[], entries: readonly FeedbackEntry[]): { kind: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const f of found) if (urgencyFor(entries, f.kind) === "briefing") counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
+  return [...counts].map(([kind, count]) => ({ kind, count }));
+}
+/**
+ * New findings by kind, routed the same way: which still bring a notice, whether any was asked for right
+ * away, which are kept for the briefing, and which are Worth a look (shown, never a notice).
+ */
+export function routeFindings(found: readonly FoundKey[], entries: readonly FeedbackEntry[]): { notify: string[]; urgent: boolean; briefing: string[]; look: string[] } {
+  const out = { notify: [] as string[], urgent: false, briefing: [] as string[], look: [] as string[] };
   for (const f of found) {
     const level = urgencyFor(entries, f.kind);
     if (level === "briefing") { out.briefing.push(f.key); continue; }
+    if (f.tone === "look" && level !== "right-away") { out.look.push(f.key); continue; }
     out.notify.push(f.key);
     if (level === "right-away" && f.tone === "decision") out.urgent = true;
   }

@@ -118,7 +118,8 @@ function ConnectStep({ status, settings, onSettings, onStatus }: {
     <p className="lede">You'll sign in to Planning Center in your browser. The connection is kept in this Mac's Keychain.</p>
     <div className="two setup-two">
       <div className="panel-sunken"><p className="bold">What Ozzie will read</p>
-        <p className="small">For the Sunday you choose: the plan and its service times, open roles, who is scheduled and whether they've accepted, each team's members and leaders, and those people's blockouts and other schedules around that Sunday.</p></div>
+        <p className="small">For the Sunday you choose: the plan and its service times, open roles, who is scheduled and whether they've accepted, each team's members and leaders, and those people's blockouts and other schedules around that Sunday.</p>
+        <p className="small">Background checks, only if you ask for them: when you mark kids teams and turn on the background-check rule in Church rules, and your connection includes People, Ozzie reads whether each person scheduled on those teams has a current cleared background check, never its details. That stays on this Mac and never goes to an AI.</p></div>
       <div className="panel-sunken"><p className="bold">What it can't do</p>
         <p className="small">Change anything in Planning Center or send messages. Planning Center may show a broader permission at sign-in; Ozzie still only reads.</p></div>
     </div>

@@ -557,6 +557,49 @@ describe("review regressions (coordinator decisions 2026-11-13)", () => {
       "Can you share a passage from Psalms?"]) expect(refusal(q), q).toBe(REFUSALS.religious);
     for (const q of ["Who leads Bible study this week?", "Is the gospel choir covered?", "Who's on the prayer team?"]) expect(refusal(q), q).toBeNull();
   });
+  // Review Q (2026-11-15) M1 and L5: the stricter earlier rule, with only a narrow allowance for schedule questions (who
+  // reads, preaches or leads) and for passing on a chosen item's title, reading or slides.
+  const RELIGIOUS_REFUSED = [
+    // Refused before d1dee14d, then let through (review Q M1).
+    "We need scripture readings for Sunday", "I need sermon titles for the Advent series", "Need sermon series ideas for Advent", "Help me with sermon titles for Advent",
+    "Finish the sermon series outline", "Share sermon title ideas", "Want devotional handouts for the volunteers", "Use scripture readings that fit the theme of hope",
+    "Include scripture readings in the bulletin note", "Add Bible readings to the welcome email", "Close the email with scripture readings", "Read me the psalm readings for Sunday",
+    "Who is reading on Sunday? Read the psalms to me.", "WHO IS READING? READ THE SCRIPTURE TO ME.",
+    // Gaps from before (review Q L5).
+    "What verse should we read on Sunday?", "Which psalm should we read on Sunday?", "Summarize the sermon into talking points", "Turn the sermon into talking points for the small groups",
+    // Always refused.
+    "Write a sermon for Sunday", "Suggest a sermon title", "Write the sermon title", "Pray for the volunteers", "Give me a scripture for the bulletin", "Can you read me a psalm?",
+    "Find a verse for the welcome note", "Add a verse to the note", "Share a short blessing with the team", "Who will read me a psalm?", "Is anyone going to read me a psalm?",
+  ];
+  const SCHEDULE_AND_LOGISTICS = [
+    "Who is scheduled to read scripture on Sunday?", "Who is reading the scripture this Sunday?", "Who reads the Gospel at 11?", "Who's doing the scripture reading?",
+    "Is someone scheduled to read the Bible passage?", "Who is preaching on Sunday?", "Who is preaching the sermon this week?", "Whose turn is it to read scripture?",
+    "Remind me to send the sermon title to the bulletin team", "Add the sermon title to the bulletin note", "Share the sermon slides with the tech team",
+    "When is the sermon recording ready?", "Who leads Bible study this week?", "Is the gospel choir covered?", "Who's on the prayer team?", "Which Bible study meets on Sunday?",
+  ];
+  it("refuses making religious content, with only schedule and logistics questions let through (never-list 2, review Q M1/L5)", () => {
+    for (const q of RELIGIOUS_REFUSED) expect(refusal(q), q).toBe(REFUSALS.religious);
+    for (const q of SCHEDULE_AND_LOGISTICS) expect(refusal(q), q).toBeNull();
+  });
+  it("refuses pastoral comfort and counsel (never-list 3, review Q L5)", () => {
+    for (const q of ["What should I say to comfort a grieving volunteer?", "How do I console Riley after the funeral?", "What can I tell Casey, whose mother passed away?",
+      "Help me counsel a volunteer going through a divorce"]) expect(refusal(q), q).toBe(REFUSALS.care);
+    for (const q of ["Who is the camp counselor this Sunday?", "Is the comfort station covered?", "Who could cover Greeter?"]) expect(refusal(q), q).toBeNull();
+  });
+  it("keeps background checks on this Mac: any question naming one, or its usual names, is never prepared for the AI (owner decision 2026-11-14, review Q H2)", () => {
+    for (const q of ["Any background check problems?", "Is Riley's clearance current?", "Has Casey been screened?", "Does Sam have a DBS?", "Is the safeguarding check done for Morgan?",
+      "Has Drew been vetted?", "Was Riley fingerprinted?", "Is Riley cleared to serve in the nursery?", "Riley's check expired, who else can cover?", "Background-check status for the greeters?",
+      "Is Casey not cleared yet?", "Does Sam have a criminal record check?", "Did the police check come back for Morgan?", "Whose certificate has run out?", "What about the CRB for Drew?"]) {
+      expect(refusal(q), q).toBe(REFUSALS.background);
+    }
+    // A note about one is never drafted with AI help.
+    for (const q of ["Draft a note to Riley saying his background check expired", "Write a message to Casey about her clearance"]) expect(refusal(q), q).toBe(REFUSALS.backgroundNote);
+    // Other refusals still come first; ordinary words that only look alike are questions.
+    expect(refusal("Text Riley that his background check expired")).toBe(REFUSALS.send);
+    for (const q of ["Is the screen team covered?", "Has the room been cleared?", "Who runs the screens on Sunday?", "Is the background music covered?", "Who checks in the kids?"]) {
+      expect(refusal(q), q).toBeNull();
+    }
+  });
   it("refuses questions asking to compare or describe people (M4)", () => {
     for (const q of ["Who is more dependable, Riley or Casey?", "Is Casey unreliable?", "Who is falling away from serving?", "Who's the strongest greeter?"]) {
       expect(refusal(q), q).toBe(REFUSALS.rank);

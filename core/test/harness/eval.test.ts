@@ -103,7 +103,7 @@ describe("each procedure uses its own tools and ends with a verified answer", ()
 
   it("room check, follow-up owners and group night read Calendar, People and Groups", async () => {
     const cases: [string, string, string, string][] = [
-      ["room-check", "rooms.conflicts", "rooms", "Worth a look: Sanctuary (fictional) has bookings that overlap from 10:30 AM on November 22 to 11:00 AM on November 22"],
+      ["room-check", "rooms.conflicts", "rooms", "Room use needs review: Sanctuary (fictional) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM"],
       ["follow-up-owners", "followups.unowned", "follow_ups", "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner."],
       ["group-night", "groups.clashes", "clashes", "Worth a look: "],
     ];

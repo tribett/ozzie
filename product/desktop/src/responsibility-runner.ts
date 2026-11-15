@@ -19,17 +19,19 @@
 // only at render). A written summary and a drafted note live in memory only, for this run of the app.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import {
-  changeEligible, dueNow, includesSundayReady, quietDeferral, refusedUntil, retryAt, scheduledSlots, settledPlan, TEMPLATES, type LocalState, type Plan,
+  changeEligible, checksFreeAt, dueNow, includesSundayReady, quietDeferral, refusedUntil, retryAt, scheduledSlots, settledPlan, TEMPLATES, type LocalState, type Plan,
   type Responsibility, type RunTrigger, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { FailureCode, ModelStep } from "../../../core/src/harness/contract.js";
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { inQuietHours, type QuietHours } from "../../../core/src/schedule.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
-import { compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
+import { isOperationsRead, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
+import { changeStillHolds, compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
-import { alwaysFor, briefTarget, feedbackOf, routeChanges, routeFindings, stableFindingKey } from "../../../core/src/finding-feedback.js";
+import {
+  alwaysFor, briefTarget, feedbackOf, foundOf, keptForBriefing, routeChanges, routeFindings, stableFindingKey, type FoundKey,
+} from "../../../core/src/finding-feedback.js";
 import { checkFailure, retryDenied, StepFailure, stepFailure, type Invoke } from "./harness-bridge.js";
 import type { KeyValueStore } from "./proactive.js";
 
@@ -118,7 +120,8 @@ export interface NoticedItem {
   access?: boolean;
   decisions?: number;
   looks?: number;
-  findings?: { rooms?: number; follow_ups?: number; groups?: number };
+  /** rooms: overlaps a room rule confirms (Needs a decision); rooms_uncertain: the rest (Worth a look), as on the Sunday page. */
+  findings?: { rooms?: number; rooms_uncertain?: number; follow_ups?: number; groups?: number };
   changes?: SundayChange[];
   /** Notes ready to review on the Sunday page, plus any the AI drafted. */
   drafts?: number;
@@ -133,6 +136,11 @@ export interface NoticedItem {
   overnight_count?: number;
   /** briefing: Thursday's, which includes the full Sunday Ready brief. */
   sunday_ready?: boolean;
+  /**
+   * briefing: what the person's Church rules keep for the briefing ("Put this in the briefing"), each kind with
+   * how many its check showed, listed under "Kept for your briefing". Kinds and counts only.
+   */
+  kept?: { kind: string; count: number }[];
   /**
    * "briefing": kept for the briefing by the person's Church rules ("Put this in the briefing").
    * "in-briefing": held for quiet hours, then brought into the morning briefing instead of its own notice.
@@ -253,6 +261,7 @@ const KEYS = {
   settled: "ozzie.responsibilities.settled.v1",
 };
 const NOTICED_KEPT = 30;
+const HELD_KEPT = 30;
 const REPORTED_KEPT = 60;
 const WAKES_KEPT = 10;
 /** A check this recent is shared instead of reading Planning Center again. */
@@ -275,15 +284,25 @@ const CANCELLED = Symbol("cancelled");
 const rateLimited = (value: unknown) => (JSON.stringify(value) ?? "").includes("rate-limited");
 
 /** One finding a run reports, by its stable key and kind (for the person's Church rules on notices). Ids only. */
-export interface FoundKey { key: string; kind: string; tone: "decision" | "look" }
+export type { FoundKey };
+/**
+ * A notice waiting for quiet hours to end, and what brought it: the new findings (ids only; the item keeps its
+ * changes), so it can be rechecked before it goes out. `found` is absent on one held before rechecks were kept.
+ */
+interface Held { kind: NoticeKind; at: string; item: string; found?: FoundKey[] }
+/** `found`/`keys`: what a template reports and announces; `all`: every finding the check shows, for the briefing's kept list. */
+export interface Found { decisions: number; looks: number; findings: NonNullable<NoticedItem["findings"]>; found: FoundKey[]; keys: string[]; drafts: number; all: FoundKey[] }
 /**
  * What one fresh check shows for a template. Counts and keys (ids) only. The person's Church rules
  * already set aside what they asked Ozzie to stop flagging; notes their "Always do this" prepares count as drafts.
+ * A room overlap counts as a decision only when a room rule confirms it, as the Sunday page labels it.
  */
-export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string) {
+export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string): Found {
   const brief = buildSundayBrief(capture, rules, now);
   const ops = TEMPLATES[template].needs.includes("operations") || template === "morning-briefing" ? sundayOperations(capture, rules, { now }) : null;
   const rooms = ops?.result?.findings.filter(f => f.kind === "room-overlap") ?? [];
+  const confirmedRooms = rooms.filter(f => f.certainty === "confirmed").length, uncertainRooms = rooms.length - confirmedRooms;
+  const roomCounts = { ...(confirmedRooms ? { rooms: confirmedRooms } : {}), ...(uncertainRooms ? { rooms_uncertain: uncertainRooms } : {}) };
   const followUps = ops?.result?.findings.filter(f => f.kind === "unowned-overdue") ?? [];
   const groups = ops?.group_meetings ?? [];
   const decisions = brief.findings.filter(f => f.tone === "decision"), looks = brief.findings.filter(f => f.tone === "look");
@@ -293,16 +312,16 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
   const roomKeys = rooms.map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: f.certainty === "confirmed" ? "decision" : "look" }));
   const followUpKeys = followUps.map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: "decision" }));
   const decisionKeys = decisions.map((f): FoundKey => ({ key: f.key, kind: f.kind, tone: f.tone }));
-  const keyed = (found: FoundKey[]) => ({ found, keys: found.map(f => f.key) });
+  const keyed = (found: FoundKey[]) => ({ found, keys: found.map(f => f.key), all: foundOf(brief, ops) });
   switch (template) {
-    case "watch-room-bookings": return { decisions: 0, looks: 0, findings: { rooms: rooms.length }, ...keyed(roomKeys), drafts: 0 };
+    case "watch-room-bookings": return { decisions: 0, looks: 0, findings: roomCounts, ...keyed(roomKeys), drafts: 0 };
     case "follow-ups-without-owner": return { decisions: 0, looks: 0, findings: { follow_ups: followUps.length }, ...keyed(followUpKeys), drafts: 0 };
     case "group-night-clashes": return {
       decisions: 0, looks: groups.length, findings: { groups: groups.length }, drafts: 0,
       ...keyed(groups.map((g): FoundKey => ({ key: `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`, kind: "group-meeting", tone: "look" }))),
     };
     case "morning-briefing": return {
-      decisions: decisions.length, looks: looks.length, findings: { rooms: rooms.length, follow_ups: followUps.length, groups: groups.length },
+      decisions: decisions.length, looks: looks.length, findings: { ...roomCounts, follow_ups: followUps.length, groups: groups.length },
       ...keyed(decisionKeys), drafts,
     };
     default: return { decisions: decisions.length, looks: looks.length, findings: {}, ...keyed(decisionKeys), drafts };
@@ -324,7 +343,7 @@ export function createRunner(deps: RunnerDeps): Runner {
   let available = true;
   const saved: Record<string, Saved> = read<Record<string, Saved>>(deps.store, KEYS.state) ?? {};
   let noticed: NoticedItem[] = read<{ version: 1; items: NoticedItem[] }>(deps.store, KEYS.noticed)?.items ?? [];
-  let held: { kind: NoticeKind; at: string; item: string }[] = read<{ kind: NoticeKind; at: string; item: string }[]>(deps.store, KEYS.held) ?? [];
+  let held: Held[] = read<Held[]>(deps.store, KEYS.held) ?? [];
   let seenAt = read<string>(deps.store, KEYS.seen);
   const prepared: Record<string, { summary: string | null; draft: string | null }> = {};
   const wakes: { from: string; to: string }[] = [];
@@ -440,32 +459,68 @@ export function createRunner(deps: RunnerDeps): Runner {
    * `urgent`: inside the church's window, or a kind the person asked to hear about right away. Quiet hours
    * still hold it unless the person chose to let urgent notices through; Ozzie never widens that itself.
    */
-  async function notice(kind: NoticeKind, item: NoticedItem, trigger: RunTrigger, id: string, urgent = false) {
+  async function notice(kind: NoticeKind, item: NoticedItem, trigger: RunTrigger, id: string, urgent = false, found?: FoundKey[]) {
     // A person who just asked is already looking.
     if (trigger === "start" || trigger === "manual") { patch(item.id, { notice: "in-app" }); return; }
     if (!await stillActive(id)) { patch(item.id, { notice: "none" }); return; }
     const ctx = hooks!.context();
     const decision = urgent && ctx.urgentDuringQuiet === true ? { send: true as const } : quietDeferral(deps.now(), ctx.quiet, ctx.macZone);
     if (!decision.send) {
-      held = [...held.filter(h => h.kind !== kind), { kind, at: decision.at, item: item.id }];
+      // Each one is kept (one notice per kind still goes out), so a cause reversed later never hides an earlier one.
+      held = [...held, { kind, at: decision.at, item: item.id, ...(found ? { found } : {}) }].slice(-HELD_KEPT);
       patch(item.id, { notice: "held" });
       return;
     }
     try { await deps.notify(kind); patch(item.id, { notice: "sent" }); } catch { patch(item.id, { notice: "unavailable" }); }
     if (kind === "briefing-ready") openToday = true;
   }
-  /** Held notices go out once quiet hours end, one per kind, the most important first. */
+  /**
+   * Whether a held notice is still worth sending once quiet hours end (owner decision: a held notice is
+   * rechecked for relevance before it goes out). Rechecked against the newest saved check, with no new
+   * Planning Center read: this job's memory of that Sunday, brought up to date with a newer check when the
+   * app made one. A change reversed meanwhile, or a finding no longer there, no longer counts; neither does
+   * one the person's Church rules now keep out of notices. "Couldn't check" no longer counts once a later
+   * check of the same job finished. A briefing or an every-check notice is the person's own choice: it goes.
+   */
+  function stillRelevant(h: Held): boolean {
+    const item = noticed.find(i => i.id === h.item);
+    if (!item || !hooks) return true;
+    if (h.kind === "couldnt-check") return !noticed.some(i => i.responsibility_id === item.responsibility_id && i.at > item.at && (i.kind === "found" || i.kind === "clear" || i.kind === "briefing"));
+    if (h.kind !== "needs-decision" || !h.found || !item.check) return true;
+    const ctx = hooks.context();
+    const entries = feedbackOf(ctx.rules);
+    const plan = item.check.plan_id;
+    const newer = latest && latest.capture.plan_id === plan && ms(latest.capture.completed_at) > ms(item.check.completed_at) ? latest.capture : null;
+    let memory = stateOf(item.responsibility_id).memory;
+    if (memory && memory.latest.plan_id !== plan) memory = null;
+    if (memory && newer && ms(newer.completed_at) > ms(memory.latest.completed_at)) {
+      memory = compareSundayCheck(memory, recordSundayCheck(newer, ctx.rules, newer.completed_at), { now: deps.now(), urgentWithinHours: ctx.urgentWithinHours }).memory;
+    }
+    const holding = (item.changes ?? []).filter(c => !memory || changeStillHolds(c, memory));
+    if (routeChanges(holding, entries).notify.length) return true;
+    // New findings: still there in a newer check that read what this job reads; otherwise as its own check found them.
+    const answers = newer && (!TEMPLATES[item.template].needs.includes("operations") || newer.reads.some(isOperationsRead));
+    const still = answers ? findingsFor(item.template, newer, ctx.rules, newer.completed_at).found.filter(f => h.found!.some(x => x.key === f.key)) : h.found;
+    return routeFindings(still, entries).notify.length > 0;
+  }
+  /** Held notices go out once quiet hours end, one per kind, the most important first, for what is still so. */
   async function deliverHeld() {
     if (!held.length || !hooks || listing?.paused_all) return;
     const ctx = hooks.context();
     if (!quietDeferral(deps.now(), ctx.quiet, ctx.macZone).send) return;
-    const due = held.filter(h => ms(h.at) <= ms(deps.now())).sort((a, b) => NOTICE_RANK[b.kind] - NOTICE_RANK[a.kind]);
+    const due = held.filter(h => ms(h.at) <= ms(deps.now()));
     held = held.filter(h => ms(h.at) > ms(deps.now()));
+    const kinds = new Map<NoticeKind, Held[]>();
     for (const h of due) {
+      // One that no longer holds says no notice was needed.
+      if (stillRelevant(h)) kinds.set(h.kind, [...kinds.get(h.kind) ?? [], h]);
+      else patch(h.item, { notice: "none" });
+    }
+    for (const [kind, list] of [...kinds].sort(([a], [b]) => NOTICE_RANK[b] - NOTICE_RANK[a])) {
       let outcome: NoticedItem["notice"] = "sent-later";
-      try { await deps.notify(h.kind); } catch { outcome = "unavailable"; }
-      patch(h.item, { notice: outcome });
-      if (h.kind === "briefing-ready") openToday = true;
+      try { await deps.notify(kind); } catch { outcome = "unavailable"; }
+      for (const h of list) patch(h.item, { notice: outcome });
+      if (kind === "briefing-ready") openToday = true;
     }
   }
   /**
@@ -556,7 +611,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       const code = refusalOf(error);
       log(`responsibility: begin refused=${code}`);
       // Never asked again before the store would allow it.
-      const until = refusedUntil(r, code, started, options());
+      // A used-up daily limit counts every job of this kind (a stopped copy too), so wait until one of those checks is a day old.
+      const until = (code === "checks-limit" ? checksFreeAt(r, listing?.items ?? [], started) : null) ?? refusedUntil(r, code, started, options());
       if (code === "too-soon" || code === "busy") { saved[r.id] = { ...s, not_before: until }; return { status: "refused", code }; }
       const day = started.slice(0, 10);
       if (code === "checks-limit" && s.limit_told !== day) {
@@ -626,14 +682,18 @@ export function createRunner(deps: RunnerDeps): Runner {
       const routed = routeChanges(changes, entries);
       const listed = changes.filter(c => !routed.stopped.includes(c));
       const worse = listed.some(c => c.effect === "worse");
-      const count = found.decisions + found.looks + (found.findings.rooms ?? 0) + (found.findings.follow_ups ?? 0) + (r.template === "group-night-clashes" ? 0 : (found.findings.groups ?? 0));
+      const count = found.decisions + found.looks + (found.findings.rooms ?? 0) + (found.findings.rooms_uncertain ?? 0) + (found.findings.follow_ups ?? 0)
+        + (r.template === "group-night-clashes" ? 0 : (found.findings.groups ?? 0));
       const drafts = found.drafts + (ready?.draft ? 1 : 0);
       const briefing = r.template === "morning-briefing";
+      // "Put this in the briefing": the briefing lists what the person's Church rules keep for it.
+      const forBriefing = briefing ? keptForBriefing(found.all, entries) : [];
       const kind: NoticedItem["kind"] = briefing ? "briefing" : count > 0 || worse ? "found" : "clear";
       const item = add({
         responsibility_id: r.id, template: r.template, at: now, kind, trigger, run_id: grant.run_id, check: { plan_id: capture.plan_id, completed_at: capture.completed_at },
         decisions: found.decisions, looks: found.looks, findings: found.findings,
         changes: listed, drafts, summarized: Boolean(ready?.summary), drafted: Boolean(ready?.draft), ...(briefing && includesSundayReady(now, zoneOf(r)) ? { sunday_ready: true } : {}),
+        ...(forBriefing.length ? { kept: forBriefing } : {}),
       });
       if (ready?.summary || ready?.draft) prepared[item.id] = { summary: ready.summary, draft: ready.draft };
       saved[r.id] = { ...stateOf(r.id), failures: 0, retry_at: null, memory, reported: [...new Set([...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
@@ -641,14 +701,17 @@ export function createRunner(deps: RunnerDeps): Runner {
         const n = foldIntoBriefing(item);
         if (n) patch(item.id, { overnight_count: n });
       }
+      // Worth a look never brings a notice (only the person's own "Always tell me right away" does); it shows in Ozzie.
       const fresh = routeFindings(found.found.filter(f => newKeys.includes(f.key)), entries);
       const kept = routeFindings(found.found, entries);
       const urgent = routed.urgent || fresh.urgent;
       const noticeKind: NoticeKind | null = briefing ? "briefing-ready"
-        : r.report === "every-check" ? (count > kept.briefing.length ? "needs-decision" : "checked")
+        : r.report === "every-check" ? (kept.notify.length > 0 || routed.notify.length > 0 ? "needs-decision" : "checked")
           : fresh.notify.length > 0 || routed.notify.length > 0 ? "needs-decision" : null;
       const briefingOnly = fresh.briefing.length + routed.briefing.length > 0 && trigger !== "start" && trigger !== "manual";
-      if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent);
+      // What brought a "needs a decision" notice, so a held one can be rechecked before it goes out.
+      const cause = noticeKind === "needs-decision" ? found.found.filter(f => (r.report === "every-check" ? kept : fresh).notify.includes(f.key)) : undefined;
+      if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent, cause);
       else patch(item.id, { notice: briefingOnly ? "briefing" : "none" });
       await deps.native.end(r.id, grant.run_id, "ok", null, count, drafts).catch(() => undefined);
       log(`responsibility: run status=ok code=- noticed=${count} drafts=${drafts}${ready ? ` summary=${ready.status}` : ""}`);

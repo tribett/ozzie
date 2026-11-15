@@ -1,5 +1,6 @@
+import { OtherAiAppsSetup } from "./other-ai-apps-setup.js";
 import { useState } from "react";
-import type { ConnectionStatus } from "./connection.js";
+import { yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
 import { AiSettings } from "./ai-settings.js";
@@ -22,7 +23,7 @@ export const SHARE_HOW = [
   "While this is on, Ozzie keeps one copy of its last check on this Mac, with every name replaced by a label. Ozzie checks it again for names before saving it.",
   "An AI app set up to use it can read that copy and a list of what Ozzie ran and how it ended. It can't check Planning Center, change anything or send anything.",
   "What that app keeps or does with what it reads is up to that app and its privacy terms, not Ozzie.",
-  "The steps for setting up an AI app are in Ozzie's guide for other AI apps, in Ozzie's open-source files.",
+  "Turning this on shows the setup text for an AI app here.",
 ] as const;
 
 /**
@@ -51,8 +52,22 @@ export function SavedRecordings({ count, onDelete, sharing, confirming = false }
   </>;
 }
 
-/** Settings: Planning Center, AI help, automatic checks, other AI apps, saved recordings and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, oneClick }: {
+/**
+ * "Your name for notes": the name drafted notes end with, kept on this Mac (connection.ts `yourName`). What the
+ * person types stays as typed, so a space between words survives; the saved name is tidied.
+ */
+export function YourNameField({ store = yourName }: { store?: { get(): string; set(name: string): void } }) {
+  const [typed, setTyped] = useState(() => store.get());
+  return <div className="field your-name">
+    <label htmlFor="your-name" className="field-l">Your name for notes</label>
+    <input id="your-name" className="input" value={typed} maxLength={YOUR_NAME_MAX} autoComplete="name" spellCheck={false} placeholder="[Your name]"
+      aria-describedby="your-name-help" onChange={e => { setTyped(e.target.value); store.set(e.target.value); }} />
+    <p id="your-name-help" className="input-help">Notes Ozzie drafts end with this name. It stays on this Mac and goes in after any AI rewording, so it's never sent to an AI. Leave it empty to keep [Your name] for you to fill in.</p>
+  </div>;
+}
+
+/** Settings: Planning Center, AI help, your name on notes, automatic checks, other AI apps, saved recordings and guided setup, in that order. */
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, oneClick, nameStore }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** The automatic-check schedule, summarized here and changed under What runs automatically. */
@@ -65,6 +80,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   sharing?: { on: boolean; onChange: (on: boolean) => void; problem?: string | null } | undefined;
   /** Tests only: whether Ozzie's own registration is built in, instead of asking the app. */
   oneClick?: boolean;
+  /** Tests only: where "Your name for notes" is kept, instead of this Mac's storage. */
+  nameStore?: { get(): string; set(name: string): void };
 }) {
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
@@ -104,6 +121,11 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
       <AiSettings onChange={c => onModel?.(c)} labelledBy="ai-title" />
     </section>
 
+    <section className="settings-sec" aria-labelledby="your-name-title">
+      <h2 id="your-name-title" className="h3">Your name on notes</h2>
+      <div className="find"><YourNameField {...(nameStore ? { store: nameStore } : {})} /></div>
+    </section>
+
     <section className="settings-sec" aria-labelledby="auto-title">
       <h2 id="auto-title" className="h3">Automatic checks</h2>
       <div className="find">
@@ -130,6 +152,7 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
           <p className="small">Off unless you turn it on. Turning it off removes the copy.</p>
           {sharing.problem && <p role="alert" className="problem">{sharing.problem}</p>}
         </div>
+        <OtherAiAppsSetup on={sharing.on} />
         <details className="listen-more">
           <summary>See how this works</summary>
           <ul className="small">{SHARE_HOW.map(line => <li key={line}>{line}</li>)}</ul>

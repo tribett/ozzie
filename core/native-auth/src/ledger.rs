@@ -22,7 +22,8 @@
 //! verified | failed | cancelled, cancel allowed from admitted and running, terminal is terminal.
 //! A task enters the ledger when admitted. The one transition outside that graph belongs to the host,
 //! not the worker: `recover()` at app start fails every task still admitted or running with
-//! `interrupted`, a code the webview cannot set.
+//! `interrupted`, a code the webview cannot set, and a `Watchdog` on the native timer thread does
+//! the same while the app runs to a task stuck past STALE_AFTER_MS (see `Watchdog::sweep`).
 //!
 //! Storage: `task-ledger.jsonl` in the app data folder (file 0600, folder 0700), one JSON object per
 //! line, each a complete snapshot of one task. Every change appends one line and fsyncs it before
@@ -39,11 +40,12 @@ use crate::fixed::{self, ASK_SKILL, CHECK_SKILL};
 use crate::sunday_check::{rfc3339, unix_ms};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, OnceLock, TryLockError},
+    time::Instant,
 };
 
 pub const LEDGER_FILE: &str = "task-ledger.jsonl";
@@ -55,6 +57,13 @@ pub const MAX_STEP_EVENTS: usize = 48;
 /// All events per task: step events plus admitted, running and one terminal event.
 pub const MAX_EVENTS: usize = MAX_STEP_EVENTS + 3;
 pub const COMPACT_AFTER_LINES: usize = 2_000;
+/// The watchdog's ceiling: a task still admitted or running this long, by the wall clock since its
+/// admission and by awake time since the watchdog first saw it, has lost its worker (a page that
+/// reloaded or stopped) and `Watchdog::sweep` ends it. Twice the longest limit a worker
+/// holds a task to: a responsibility run's 10 minutes (responsibilities::RUN_TIMEOUT_MS), above a
+/// question's 90-second run (contract.ts HARNESS_LIMITS.runMs) and a Sunday check's 3-minute budget
+/// (sunday_check::BUDGET_MS). Pinned by a test.
+pub const STALE_AFTER_MS: u64 = 20 * 60_000;
 /// Admission order stays below 2^53, so it is exact as a JavaScript number and can never wrap.
 pub const MAX_ORDER: u64 = 1 << 53;
 const MAX_LINE_BYTES: usize = 16_384;
@@ -772,6 +781,14 @@ impl TaskLedger {
         // never leaves memory half-changed.
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+    /// The lock without waiting (for the watchdog): None while a change holds it.
+    fn try_lock(&self) -> Option<MutexGuard<'_, Inner>> {
+        match self.inner.try_lock() {
+            Ok(inner) => Some(inner),
+            Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
 
     /// Records a new task as admitted. The skill must be a bundled procedure paired with `kind`
     /// (`pairing_ok`) and `skill_hash` the sha-256 of its bundled file, so the id is one of a few
@@ -980,16 +997,32 @@ impl TaskLedger {
     }
 
     /// At app start, before anything can run: every task still admitted or running belonged to an
-    /// earlier launch and is failed `interrupted`. Returns how many.
+    /// earlier launch and is failed `interrupted`. Returns how many, or the first error after
+    /// ending every task it could.
     pub fn recover(&self) -> Result<usize, LedgerError> {
         let now = (self.clock)();
-        let mut inner = self.lock();
-        let mut count = 0;
+        match self.interrupt(&mut self.lock(), now, |_| true) {
+            (_, Some(error)) => Err(error),
+            (count, None) => Ok(count),
+        }
+    }
+
+    /// Fails `interrupted`, at `now`, every admitted or running task `due` picks. A task whose
+    /// change fails its checks or can't be written is skipped, never in the way of the rest; the
+    /// first such error is returned with the count.
+    fn interrupt(
+        &self,
+        inner: &mut Inner,
+        now: u64,
+        due: impl Fn(&Record) -> bool,
+    ) -> (usize, Option<LedgerError>) {
+        let (mut count, mut error) = (0, None);
         for at in 0..inner.tasks.len() {
             if !matches!(
                 inner.tasks[at].state,
                 RunState::Admitted | RunState::Running
-            ) {
+            ) || !due(&inner.tasks[at])
+            {
                 continue;
             }
             let mut record = inner.tasks[at].clone();
@@ -1002,15 +1035,23 @@ impl TaskLedger {
                 FailureCode::Interrupted.as_str().to_owned(),
                 at_ms,
             );
-            if !record_ok(&record) {
-                return Err(LedgerError::Invalid);
+            let written = if record_ok(&record) {
+                inner.append(&record)
+            } else {
+                Err(LedgerError::Invalid)
+            };
+            match written {
+                Ok(()) => {
+                    inner.tasks[at] = record;
+                    count += 1;
+                }
+                Err(e) => {
+                    error.get_or_insert(e);
+                }
             }
-            inner.append(&record)?;
-            inner.tasks[at] = record;
-            count += 1;
         }
         inner.maybe_compact(self.compact_after);
-        Ok(count)
+        (count, error)
     }
 
     /// Up to `limit` tasks, newest first.
@@ -1022,6 +1063,66 @@ impl TaskLedger {
             .take(limit)
             .map(row)
             .collect()
+    }
+}
+
+/// Milliseconds of awake time since the first call: `Instant`, which on macOS doesn't advance
+/// while the Mac sleeps.
+fn awake_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The watchdog while the app runs (build contract §2.4), owned by the native timer thread, never
+/// the page it watches. It ends a task only when the task is past STALE_AFTER_MS by the wall clock
+/// since its admission AND this watchdog has itself seen it unfinished for STALE_AFTER_MS of awake
+/// time, so a wall clock jumping forward or the first wake after a long sleep never ends a task
+/// whose worker is still alive. Tasks from an earlier launch are `recover`'s, at start.
+pub struct Watchdog {
+    /// Each unfinished task's awake time when this watchdog first saw it; pruned of tasks that
+    /// finished or are gone.
+    seen: HashMap<String, u64>,
+    awake: Box<dyn Fn() -> u64 + Send>,
+}
+impl Default for Watchdog {
+    fn default() -> Self {
+        Self::with_clock(awake_ms)
+    }
+}
+impl Watchdog {
+    /// With `awake`, milliseconds of monotonic time that doesn't advance during sleep (tests).
+    pub fn with_clock(awake: impl Fn() -> u64 + Send + 'static) -> Self {
+        Self {
+            seen: HashMap::new(),
+            awake: Box::new(awake),
+        }
+    }
+    /// One wake: notes what is unfinished and fails `interrupted`, as `recover` does, every task
+    /// stuck past the ceiling (see the type). A task inside it, a wall clock set back before its
+    /// admission and a terminal task are untouched; whatever its worker sends later is refused as
+    /// for any terminal task. Returns how many it ended, or None when a change held the ledger: this
+    /// wake is skipped rather than waited for.
+    pub fn sweep(&mut self, ledger: &TaskLedger) -> Option<usize> {
+        let mut inner = ledger.try_lock()?;
+        let (now, awake) = ((ledger.clock)(), (self.awake)());
+        let open: HashSet<&str> = inner
+            .tasks
+            .iter()
+            .filter(|record| matches!(record.state, RunState::Admitted | RunState::Running))
+            .map(|record| record.task_id.as_str())
+            .collect();
+        self.seen.retain(|id, _| open.contains(id.as_str()));
+        for id in open {
+            self.seen.entry(id.to_owned()).or_insert(awake);
+        }
+        let seen = &self.seen;
+        let (count, _) = ledger.interrupt(&mut inner, now, |record| {
+            now.saturating_sub(record.created_ms) > STALE_AFTER_MS
+                && seen
+                    .get(&record.task_id)
+                    .is_some_and(|first| awake.saturating_sub(*first) >= STALE_AFTER_MS)
+        });
+        Some(count)
     }
 }
 

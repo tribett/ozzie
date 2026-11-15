@@ -4,9 +4,9 @@ import type { SundayCapture, SundayRules } from "../src/sunday-capture.js";
 import { nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../src/fictional-sunday.js";
 import { FICTIONAL_ROOM, FICTIONAL_STEP, FICTIONAL_WORKFLOW, withFictionalOperations } from "../src/fictional-operations.js";
 import { sundayOperations } from "../src/operations-capture.js";
-import { compareSundayCheck, recordSundayCheck, type SundayChange } from "../src/sunday-changes.js";
+import { compareSundayCheck, describeChange, recordSundayCheck, type SundayChange } from "../src/sunday-changes.js";
 import {
-  alwaysEntry, alwaysFor, alwaysText, applyFeedback, briefTarget, canDemote, canPromote, correctionEntry, entryText, feedbackOf, kindWords, NOTE_MAX, roomTarget,
+  alwaysEntry, alwaysFor, alwaysText, applyFeedback, briefTarget, canDemote, canPromote, correctionEntry, entryText, feedbackOf, foundOf, keptForBriefing, kindWords, NOTE_MAX, rightAwayChanges, roomTarget,
   routeChanges, routeFindings, stopEntry, stopScopes, stopText, urgencyEntry, urgencyFor, urgencyText, withEntry, withoutEntry,
   type FeedbackEntry, type FeedbackTarget,
 } from "../src/finding-feedback.js";
@@ -168,17 +168,18 @@ describe("Always tell me right away / Put this in the briefing", () => {
     const unverified = change("coverage-unverified");
     const better = { ...change("need-filled"), effect: "better" as const };
     const all = [need, declined, lead, unverified, better];
-    expect(routeChanges(all, [])).toEqual({ notify: [need, declined, lead, unverified], urgent: false, briefing: [], stopped: [] });
+    // A declined request, a missing lead and a partial check are Worth a look on their cards: they show, never as a notice.
+    expect(routeChanges(all, [])).toEqual({ notify: [need], urgent: false, briefing: [], stopped: [], look: [declined, lead, unverified] });
     const briefing = urgencyEntry({ kind: "needs-people", tone: "decision" }, "briefing", AT);
-    expect(routeChanges(all, [briefing])).toMatchObject({ notify: [declined, lead, unverified], briefing: [need], urgent: false });
+    expect(routeChanges(all, [briefing])).toMatchObject({ notify: [], briefing: [need], look: [declined, lead, unverified], urgent: false });
     const rightAway = urgencyEntry({ kind: "needs-people", tone: "decision" }, "right-away", AT);
-    expect(routeChanges(all, [rightAway])).toMatchObject({ notify: [need, declined, lead, unverified], urgent: true });
+    expect(routeChanges(all, [rightAway])).toMatchObject({ notify: [need], look: [declined, lead, unverified], urgent: true });
     const stopLead: FeedbackEntry = { type: "stop", id: "s", kind: "lead-missing", at: AT, scope: { team_id: TEAMS.nursery }, labels: {} };
     const stopPending: FeedbackEntry = { type: "stop", id: "p", kind: "pending", at: AT, scope: { team_id: TEAMS.lyrics, position: "Lyrics", person_id: PEOPLE.lyricsPending }, labels: {} };
-    expect(routeChanges(all, [stopLead, stopPending])).toMatchObject({ notify: [need, unverified], stopped: [declined, lead] });
-    // A change that couldn't be verified is never routed away, whatever is stored.
+    expect(routeChanges(all, [stopLead, stopPending])).toMatchObject({ notify: [need], look: [unverified], stopped: [declined, lead] });
+    // A change that couldn't be verified is never kept for the briefing or stopped, whatever is stored: it always shows.
     const forged = { type: "urgency", id: "u", kind: "worth-a-look", at: AT, level: "briefing" } as FeedbackEntry;
-    expect(routeChanges([unverified], [forged]).notify).toEqual([unverified]);
+    expect(routeChanges([unverified], [forged])).toMatchObject({ notify: [], briefing: [], look: [unverified] });
     // Urgent inside the church's window stays urgent.
     expect(routeChanges([{ ...need, urgency: "urgent" }], []).urgent).toBe(true);
   });
@@ -187,7 +188,68 @@ describe("Always tell me right away / Put this in the briefing", () => {
     const briefing = urgencyEntry({ kind: "room-overlap", tone: "decision" }, "briefing", AT);
     const right = urgencyEntry({ kind: "needs-people", tone: "decision" }, "right-away", AT);
     expect(routeFindings([{ key: "a", kind: "needs-people", tone: "decision" }, { key: "b", kind: "room-overlap", tone: "decision" }], [briefing, right]))
-      .toEqual({ notify: ["a"], urgent: true, briefing: ["b"] });
+      .toEqual({ notify: ["a"], urgent: true, briefing: ["b"], look: [] });
+  });
+
+  it("Worth a look never sends a notice: look changes and findings show in Ozzie, never as a notice, however close to Sunday", () => {
+    // Inside the church's window a missing lead is still Worth a look: no notice, and nothing urgent.
+    const lead = change("lead-missing", { team_id: TEAMS.nursery, position: "Nursery", urgency: "urgent" });
+    const declined = change("pending-declined", { team_id: TEAMS.lyrics, position: "Lyrics", person_id: PEOPLE.lyricsPending });
+    const unverified = change("coverage-unverified");
+    expect(routeChanges([lead, declined, unverified], [])).toEqual({ notify: [], urgent: false, briefing: [], stopped: [], look: [lead, declined, unverified] });
+    const found = [
+      { key: "g", kind: "group-meeting", tone: "look" as const },
+      { key: "r", kind: "room-overlap", tone: "look" as const },
+      { key: "s", kind: "streak", tone: "look" as const },
+    ];
+    expect(routeFindings(found, [])).toEqual({ notify: [], urgent: false, briefing: [], look: ["g", "r", "s"] });
+    // The one exception is the person's own rule: "Always tell me right away" about that kind still tells them,
+    // but an uncertain item is never urgent, so quiet hours always hold it.
+    const rooms = urgencyEntry({ kind: "room-overlap", tone: "decision" }, "right-away", AT);
+    expect(routeFindings(found, [rooms])).toEqual({ notify: ["r"], urgent: false, briefing: [], look: ["g", "s"] });
+    const told = { type: "urgency", id: "p", kind: "pending", at: AT, level: "right-away" } as FeedbackEntry;
+    expect(routeChanges([declined, lead], [told])).toMatchObject({ notify: [declined], urgent: false, look: [lead] });
+  });
+
+  it("Always tell me right away about a kind the Sunday comparison doesn't follow: one newly found becomes a change that brings a notice", () => {
+    const kids: SundayRules = { ...base, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 2 }] };
+    const found = foundOf(brief(nov22Capture(), kids), null);
+    const short = found.find(f => f.kind === "too-few-confirmed")!;
+    expect(short).toMatchObject({ tone: "decision", key: JSON.stringify(["too-few-confirmed", TEAMS.nursery, "2026-11-22T14:30:00Z"]) });
+    const told = urgencyEntry({ kind: "too-few-confirmed", tone: "decision" }, "right-away", AT);
+    const before = found.filter(f => f !== short).map(f => f.key);
+    const [change, ...rest] = rightAwayChanges(found, before, [told]);
+    expect(rest).toEqual([]);
+    expect(change).toMatchObject({ kind: "finding-new", effect: "worse", finding: { kind: "too-few-confirmed", key: short.key, tone: "decision" } });
+    expect(routeChanges([change!], [told])).toMatchObject({ notify: [change], urgent: true });
+    expect(describeChange(change!, nameOf)).toBe("New since the last check: kids teams with fewer confirmed people than your rule asks. Your Church rules say to tell you right away.");
+    // Only kinds the person asked about, only new ones, never on a first check, and never kinds the comparison already follows.
+    expect(rightAwayChanges(found, before, [])).toEqual([]);
+    expect(rightAwayChanges(found, found.map(f => f.key), [told])).toEqual([]);
+    expect(rightAwayChanges(found, null, [told])).toEqual([]);
+    const openRoles = urgencyEntry({ kind: "needs-people", tone: "decision" }, "right-away", AT);
+    expect(rightAwayChanges(found, [], [openRoles])).toEqual([]);
+    // Name-free: ids and kinds only.
+    for (const name of Object.values(names)) expect(JSON.stringify(change)).not.toContain(name);
+  });
+
+  it("rooms, follow-ups and group meetings are found with the tone their card shows; an uncertain one told right away is never urgent", () => {
+    const ops = sundayOperations(withFictionalOperations(nov22Capture()), base)!;
+    const found = foundOf({ findings: [] }, ops);
+    expect(found.map(f => [f.kind, f.tone])).toEqual([["unowned-overdue", "decision"], ["room-overlap", "look"], ["group-meeting", "look"]]);
+    const rooms = urgencyEntry({ kind: "room-overlap", tone: "decision" }, "right-away", AT);
+    const changes = rightAwayChanges(found, [], [rooms]);
+    expect(changes.map(c => c.finding?.kind)).toEqual(["room-overlap"]);
+    expect(routeChanges(changes, [rooms])).toMatchObject({ notify: changes, urgent: false });
+    // An out-of-date operations check shows nothing, so nothing is found from it.
+    expect(foundOf({ findings: [] }, { ...ops, stale: true })).toEqual([]);
+  });
+
+  it("Put this in the briefing: the briefing lists each kind kept for it, with how many this check shows", () => {
+    const found = foundOf(brief(), sundayOperations(withFictionalOperations(nov22Capture()), base));
+    const keep = [urgencyEntry({ kind: "needs-people", tone: "decision" }, "briefing", AT), urgencyEntry({ kind: "unowned-overdue", tone: "decision" }, "briefing", AT)];
+    expect(keptForBriefing(found, keep)).toEqual([{ kind: "needs-people", count: 2 }, { kind: "unowned-overdue", count: 1 }]);
+    expect(keptForBriefing(found, [])).toEqual([]);
   });
 
   it("a stopped lead no longer brings a change notice from the regular check", () => {

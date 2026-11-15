@@ -4,9 +4,9 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { evaluateAttentionImport, type AttentionFinding, type Message, type CalendarEvent } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
-import type { SundayBrief } from "../../../core/src/sunday-brief.js";
+import { sundayShownCount, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
-import { applyDecisions, openCount, type SundayDecision } from "../../../core/src/sunday-decisions.js";
+import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { Icon } from "./icons.js";
 import { BriefingPanel } from "./briefing.js";
 import type { RunnerView } from "./responsibility-runner.js";
@@ -146,10 +146,11 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   const headings = useRef<Partial<Record<GroupId, HTMLHeadingElement | null>>>({});
   const [focusGroup, setFocusGroup] = useState<GroupId | null>(null);
 
+  // The same count as the Sunday page's headline and the sidebar: Services, rooms and follow-ups that need a decision.
   const sunday: TodaySunday | null = useMemo(() => brief && decided ? {
-    plan_id: brief.plan.id, checked_at: brief.completed_at, decisions: openCount(decided).decisions,
+    plan_id: brief.plan.id, checked_at: brief.completed_at, decisions: sundayShownCount(decided, operations).decisions,
     answers: [...new Set(decided.items.filter(i => i.state !== "resolved" && i.finding.notification === "sent").flatMap(i => i.finding.position ? [i.finding.position.name] : []))],
-  } : null, [brief, decided]);
+  } : null, [brief, decided, operations]);
   const items = useMemo(() => todayItems({
     now, sunday, watch: watch?.view ?? null, firstSeen,
     attention: example && report.ok ? { findings: report.findings, messages: report.sources.filter(isMessage), evaluated_at: report.evaluated_at, zone: tz } : null,

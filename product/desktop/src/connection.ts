@@ -24,6 +24,29 @@ export const operationsAsked = {
   get: (): boolean => { try { return typeof localStorage !== "undefined" && localStorage.getItem(ASKED) === "1"; } catch { return false; } },
   set: (asked: boolean) => { try { if (typeof localStorage !== "undefined") localStorage.setItem(ASKED, asked ? "1" : "0"); } catch { /* per-device convenience only */ } },
 };
+const YOUR_NAME = "ozzie.your-name.v1";
+export const YOUR_NAME_MAX = 60;
+const PLACEHOLDER = "[Your name]";
+/** A name as a note can carry it: one line, no invisible or control characters, at most YOUR_NAME_MAX characters. */
+export const cleanYourName = (value: string) => value.normalize("NFKC").replace(/[\p{Cc}\p{Cf}\p{Co}]/gu, " ").replace(/\s+/gu, " ").trim().slice(0, YOUR_NAME_MAX).trim();
+/**
+ * "Your name for notes" (Settings): kept on this Mac only, in its own place (not with the Church rules, which
+ * the AI's facts are built from). It is never sent to an AI: notes are reworded with [Your name] in them, and
+ * the name goes in afterwards on this Mac, the way people's names are restored. Empty keeps [Your name].
+ */
+export const yourName = {
+  get: (): string => { try { return typeof localStorage === "undefined" ? "" : cleanYourName(localStorage.getItem(YOUR_NAME) ?? ""); } catch { return ""; } },
+  set: (name: string) => {
+    try {
+      if (typeof localStorage === "undefined") return;
+      const clean = cleanYourName(name);
+      if (clean) localStorage.setItem(YOUR_NAME, clean); else localStorage.removeItem(YOUR_NAME);
+    } catch { /* per-device convenience only */ }
+  },
+};
+/** Local only, after any rewording: [Your name] in a finished note becomes the person's own name, or stays when none is set. */
+export const signNote = (text: string, name: string) => text.split(PLACEHOLDER).join(cleanYourName(name) || PLACEHOLDER);
+
 export const connection = {
   status: () => invoke<ConnectionStatus | null>("connection_status"),
   /** `operations` asks Planning Center for Calendar, People and Groups too. Ozzie still only reads. */
@@ -94,7 +117,7 @@ export function organizationDiagnosticProblem(value: unknown): string {
     case "invalid-json": return "Planning Center’s reply could not be used to check the organization. Nothing new was saved.";
     case "organization-id-missing": return "Planning Center did not identify an organization. Nothing new was saved.";
     case "organization-id-invalid": return "Planning Center did not provide a usable organization identity. Nothing new was saved.";
-    case "organization-mismatch": return "The signed-in organization did not match the expected test organization. Nothing new was saved.";
+    case "organization-mismatch": return "You signed in to a different Planning Center organization than the one in Ozzie's settings. Sign in to your church's organization, or check the organization ID under Advanced. Nothing new was saved.";
     case "unclassified": return genericOrganizationProblem;
   }
 }

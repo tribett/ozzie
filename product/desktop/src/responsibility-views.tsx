@@ -4,7 +4,7 @@
 // names appear only on this Mac, resolved from the current check.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
-  BRIEFING_WEEKDAYS, defaultPlan, TEMPLATE_IDS, TEMPLATES, untilLifetime, upcomingWeekday, validPlan, addDays, templateLimitsLeft,
+  BRIEFING_WEEKDAYS, checksFreeAt, defaultPlan, sundayAhead, TEMPLATE_IDS, TEMPLATES, untilLifetime, validPlan, addDays, templateLimitsLeft,
   type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type RunRow, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { Autostart } from "./background.js";
@@ -16,7 +16,9 @@ import {
 } from "./responsibility-words.js";
 import { Icon } from "./icons.js";
 import { zoneLabel } from "./proactive-page.js";
-import { dateText } from "./responsibility-words.js";
+import { dateText, weekRollup } from "./responsibility-words.js";
+import { KeptForBriefing } from "./sunday-ready.js";
+import { signNote, yourName } from "./connection.js";
 
 export const useRunnerView = (runner: Runner) => useSyncExternalStore(runner.subscribe, runner.view, runner.view);
 
@@ -71,9 +73,9 @@ const REPORTS = new Set<NoticedItem["kind"]>(["found", "clear", "briefing"]);
 const reportFor = (run: RunRow | undefined, view: RunnerView) => run ? view.noticed.find(i => i.run_id === run.run_id && REPORTS.has(i.kind)) ?? null : null;
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/** The lifetimes offered when changing a plan: its own date, the chosen Sunday, the coming two Sundays, and until stopped. */
+/** The lifetimes offered when changing a plan: its own date, the chosen Sunday, the coming two Sundays (never today), and until stopped. */
 function lifetimeOptions(plan: Plan, context: PlanContext): Lifetime[] {
-  const sunday = upcomingWeekday(context.now(), plan.zone, 0);
+  const sunday = sundayAhead(context.now(), plan.zone);
   const chosen = context.sunday && context.sunday > addDays(sunday, 7) ? [context.sunday] : [];
   const dated = [sunday, addDays(sunday, 7), ...chosen].map(d => untilLifetime(d, plan.zone)).filter((l): l is Lifetime => l !== null);
   const own = plan.lifetime.kind === "until" && !dated.some(l => l.kind === "until" && l.until === (plan.lifetime as { until: string }).until) ? [plan.lifetime] : [];
@@ -263,6 +265,24 @@ export function TemplatePicker({ context, actions, onCancel }: { context: PlanCo
 
 // ---- What runs automatically -------------------------------------------------------------------------
 
+/** On this Mac's clock, as whenText: "at 9:31 AM" today, "tomorrow at 9:31 AM", otherwise "Mon 9:31 AM". */
+export function againText(iso: string, now: string): string {
+  const d = new Date(iso), today = new Date(now);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === today.toDateString() ? `at ${time}` : d.toDateString() === tomorrow.toDateString() ? `tomorrow at ${time}` : whenText(iso, now);
+}
+/**
+ * When a responsibility whose kind has used its checks for the last 24 hours can check again, if that is later
+ * than its next scheduled time (a time it couldn't keep); null otherwise.
+ */
+export function checksBack(r: Responsibility, view: RunnerView, now: string): string | null {
+  const free = checksFreeAt(r, view.items, now);
+  const next = view.next[r.id];
+  return free && (!next || Date.parse(free) > Date.parse(next)) ? free : null;
+}
+
 function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
   r: Responsibility; view: RunnerView; context: PlanContext; runner: Runner;
   /** Its title's heading level: 4 inside the Sunday item. */
@@ -280,6 +300,7 @@ function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
   // As the Mac counts it: this kind's checks in the last 24 hours, including one stopped and set up again.
   const left = templateLimitsLeft(r, view.items, now);
   const next = view.next[r.id];
+  const back = checksBack(r, view, now);
   const running = view.running === r.id;
   const plan = asPlan(r, context);
   const items = view.noticed.filter(i => i.responsibility_id === r.id && (i.kind === "missed" || i.kind === "couldnt-check" || i.kind === "limit")).slice(0, 3);
@@ -297,7 +318,8 @@ function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
         <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now, reportFor(r.runs[0], view)) : "Not yet."}</span></div>
         {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
-          <span>{next ? whenText(next, now) : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
+          <span>{back ? `It has used its checks for now. It can check again ${againText(back, now)}.` : next ? whenText(next, now)
+            : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Today</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} checks used in the last 24 hours.</span></div>
       </div>}
     {items.length > 0 && <ul className="list resp-problems">{items.map(i => <li key={i.id}><Icon name="clock" small />{noticedTitle(i, now)}</li>)}</ul>}
@@ -386,8 +408,10 @@ export function ResponsibilityList({ view, context, runner, actions, sunday }: {
 export function watchLine(r: Responsibility, view: RunnerView, now: string): string {
   const last = r.runs.find(x => x.outcome);
   const next = view.next[r.id];
+  // Its checks for the last 24 hours used: when it can check again, never a scheduled time it can't keep.
+  const back = checksBack(r, view, now);
   const when = r.status === "paused" ? "Paused" : view.paused_all ? "Paused with everything" : view.running === r.id ? "Checking now"
-    : next ? `Next check ${whenText(next, now)}` : "";
+    : back ? `Can check again ${againText(back, now)}` : next ? `Next check ${whenText(next, now)}` : "";
   const report = reportFor(last, view);
   const labeled = report ? foundText(report) : "";
   const found = last ? `last check: ${last.outcome !== "ok" ? "couldn't finish" : labeled || (!report && last.noticed ? `${last.noticed} ${last.noticed === 1 ? "finding" : "findings"}` : "nothing new")}`
@@ -419,6 +443,16 @@ export function CopyDraft({ text, describedBy }: { text: string; describedBy?: s
  * prepared (a summary, and a drafted note to copy), and where to go next. `children` adds Today's own
  * controls under the card's actions.
  */
+/** Quiet success, loud problems: one line for the week's regular jobs in the morning briefing, and each one that couldn't finish. */
+function WeekLine({ view, now }: { view: RunnerView; now: string }) {
+  const week = weekRollup(view.items, now);
+  if (!week.line && !week.problems.length) return null;
+  return <div className="small noticed-week">
+    {week.line && <p>{week.line}</p>}
+    {week.problems.map(p => <p key={p}>{p}</p>)}
+  </div>;
+}
+
 export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prepared = false, written = null, sundayReady = null, children }: {
   item: NoticedItem; view: RunnerView; names: Readonly<Record<string, string>>; now: string;
   onOpen: (page: "sunday" | "automatic" | "connection") => void; titleId?: string;
@@ -438,7 +472,9 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
   const own = written !== null;
   const badge = prepared || own ? { label: "Ready", tone: "ok" as const } : noticedBadge(item);
   const changes = own ? [] : noticedChanges(item, names);
-  const ready = written ?? view.prepared[item.id];
+  const kept = written ?? view.prepared[item.id];
+  // "Your name for notes" goes in here, on this Mac, after the AI wrote the note; [Your name] stays when none is set.
+  const ready = kept?.draft ? { ...kept, draft: signNote(kept.draft, yourName.get()) } : kept;
   const notice = !own && item.notice ? NOTICE_WORDS[item.notice] : null;
   const page = item.kind === "couldnt-check" && item.access ? "connection" : item.kind === "missed" || item.kind === "limit" || item.kind === "couldnt-check" ? "automatic" : "sunday";
   return <article className="find noticed" aria-labelledby={titleId}>
@@ -449,6 +485,8 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
     <h3 id={titleId} className="find-title">{written ? preparedTitle(written) : noticedTitle(item, now)}</h3>
     {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
     {item.kind === "briefing" && item.sunday_ready && sundayReady}
+    {item.kind === "briefing" && !own && <KeptForBriefing item={item} />}
+    {item.kind === "briefing" && !own && <WeekLine view={view} now={now} />}
     {/* A report's write-up restates its findings, so it stays folded; on its own card it's the content itself. */}
     {ready?.summary && (own
       ? <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>

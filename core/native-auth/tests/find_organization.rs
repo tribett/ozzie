@@ -312,6 +312,50 @@ fn disconnecting_a_finder_that_saved_but_was_not_handed_over_revokes_and_deletes
     );
 }
 
+/// Switching organizations needs the person's confirmation and an owner decision first
+/// (independent review R, M1/M2), so a sign-in never revokes or deletes another organization's
+/// saved connection on its own. The connection it leaves behind is an open issue
+/// (recorded in the project's audit notes).
+#[test]
+fn a_sign_in_never_revokes_or_deletes_another_organizations_connection_on_its_own() {
+    let store = Arc::new(MemoryStore::default());
+    let earlier = AuthController::new(
+        Binding {
+            workspace: "local:1001".into(),
+            organization: "1001".into(),
+            client_id: "fictional-own-client".into(),
+        },
+        store.clone(),
+        Arc::new(Church {
+            organization: "1001",
+            access: "fictional-earlier-access",
+            refresh: "fictional-earlier-refresh",
+            revoked: Mutex::default(),
+        }),
+        Arc::new(|| 0),
+    )
+    .unwrap();
+    sign_in(&earlier, Scopes::Services).unwrap();
+    // Planning Center names another organization: that sign-in completes and hands over.
+    let church = Church::new("2002");
+    let auth = finder(store.clone(), church.clone());
+    assert_eq!(
+        sign_in(&auth, Scopes::Services).unwrap().organization,
+        "2002"
+    );
+    assert_eq!(
+        auth.adopt_found().unwrap().status().unwrap().organization,
+        "2002"
+    );
+    // A sign-in that saves nothing.
+    let unusable = Church::new("0");
+    assert!(sign_in(&finder(store.clone(), unusable.clone()), Scopes::Services).is_err());
+    let saved = String::from_utf8(store.get("local:1001", "1001").unwrap().unwrap()).unwrap();
+    assert!(saved.contains("fictional-earlier-access"));
+    assert!(church.revoked.lock().unwrap().is_empty());
+    assert!(unusable.revoked.lock().unwrap().is_empty());
+}
+
 /// Fails every read of the slot, so the finder can't see what it would overwrite.
 struct Unreadable(MemoryStore);
 impl CredentialStore for Unreadable {

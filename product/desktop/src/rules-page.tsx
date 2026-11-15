@@ -86,12 +86,15 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     </section>
     <section className="find">
       <h2 className="h3">Sunday leads</h2>
-      <p className="find-body">If a team should always have a scheduled lead on Sunday, type the lead's position name exactly as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.</p>
+      <p className="find-body">If a team should always have a scheduled lead on Sunday, choose the lead's position from the team's positions, or type its name as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.</p>
       {teams.length === 0 && <p className="small">Check a Sunday first to see its teams.</p>}
       {teams.map(([team, positionNames]) => <div className="rule-team" key={team}>
         <div className="row rule-row">
           <label htmlFor={`lead-${team}`}>{positionNames.join(", ")} team</label>
-          <input id={`lead-${team}`} value={typed[team] ?? leadFor(team)} placeholder="No Sunday lead required" onChange={e => setLead(team, e.target.value)} />
+          {/* The team's position names from the last check, offered as choices; typing another name still works. */}
+          <input id={`lead-${team}`} list={`lead-options-${team}`} autoComplete="off" value={typed[team] ?? leadFor(team)} placeholder="No Sunday lead required"
+            onChange={e => setLead(team, e.target.value)} />
+          <datalist id={`lead-options-${team}`}>{[...new Set(positionNames)].sort((a, b) => a.localeCompare(b)).map(n => <option key={n} value={n} />)}</datalist>
         </div>
         {leaderText(team) && <p className="small rule-note">{leaderText(team)}</p>}
       </div>)}
@@ -105,13 +108,19 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
         const rule = roomRule(room.room_id), name = room.name ?? "Unnamed room";
         return <div className="row rule-row" key={room.room_id}>
           <label htmlFor={`room-${room.room_id}`}>{name}</label>
-          <select id={`room-${room.room_id}`} className="input" value={rule ? "exclusive" : "none"}
-            onChange={e => setRoom(room.room_id, e.target.value === "exclusive" ? { setup_minutes: rule?.setup_minutes ?? 0 } : null)}>
-            <option value="none">No rule set</option><option value="exclusive">Not shared</option>
-          </select>
-          <input type="number" min={0} max={240} aria-label={`Setup minutes for ${name}`} value={rule?.setup_minutes ?? 0} disabled={!rule}
-            onChange={e => setRoom(room.room_id, { setup_minutes: Math.max(0, Math.min(240, Math.round(Number(e.target.value)) || 0)) })} />
-          <span className="small">minutes of setup</span>
+          {/* The rule and its setup time are one group beside the room's name: in a narrow window the setup time wraps
+              under the rule, and the number and its words always stay together. */}
+          <div className="rule-room-controls">
+            <select id={`room-${room.room_id}`} className="input" value={rule ? "exclusive" : "none"}
+              onChange={e => setRoom(room.room_id, e.target.value === "exclusive" ? { setup_minutes: rule?.setup_minutes ?? 0 } : null)}>
+              <option value="none">No rule set</option><option value="exclusive">Not shared</option>
+            </select>
+            <span className="rule-setup">
+              <input type="number" min={0} max={240} aria-label={`Setup minutes for ${name}`} value={rule?.setup_minutes ?? 0} disabled={!rule}
+                onChange={e => setRoom(room.room_id, { setup_minutes: Math.max(0, Math.min(240, Math.round(Number(e.target.value)) || 0)) })} />
+              <span aria-hidden="true">minutes of setup</span>
+            </span>
+          </div>
         </div>;
       })}
       {rooms.length > 0 && <p className="small">For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records: an overlap Calendar lists as not yet resolved shows as Room use needs review. Overlaps in a room with no rule set, or that Ozzie can't confirm, show as Worth a look.</p>}

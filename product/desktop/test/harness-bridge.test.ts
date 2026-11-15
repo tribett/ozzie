@@ -1,23 +1,23 @@
 // The harness in the desktop app: native error mapping, the ledger grammar, a ledger that fails or
 // stalls never breaking a task, HarnessData from app state, Sunday checks as ledger tasks, and Ask
 // Ozzie end to end through the real harness with scripted models. Fictional fixed data; no native calls.
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { REFUSALS } from "../../../core/src/ask.js";
 import { NATIVE_TOOL_ALLOWLIST, type AgentStepReply, type AgentStepRequest, type ModelStep, type TaskEvent } from "../../../core/src/harness/contract.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { Harness } from "../../../core/src/harness/index.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
-import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import { withFictionalOperations, withFictionalOperationsOff } from "../../../core/src/fictional-operations.js";
+import { nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../../core/src/fictional-sunday.js";
+import { FICTIONAL_ROOM, withFictionalOperations, withFictionalOperationsOff } from "../../../core/src/fictional-operations.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import {
   agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, runtimeFor, StepFailure, stepFailure, StepNotes,
   type Invoke,
 } from "../src/harness-bridge.js";
-import { ASK_FAILURES, ledgerDetail } from "../src/harness-words.js";
-import { answer, draftTurns, fakeNative as fakeLedger, fictionalData, greeterTurns, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
+import { ASK_FAILURES, CAN_DO_INSTEAD, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { answer, BACKGROUND_IN_REQUEST, calls, draftTurns, everyRequest, fakeNative as fakeLedger, fictionalData, greeterTurns, payloadOf, row, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
 const status = (over: Partial<ConnectionStatus> = {}): ConnectionStatus =>
@@ -364,7 +364,7 @@ describe("Ask Ozzie as a harness task", () => {
     expect(await run([() => new StepFailure("transport")])).toEqual({ state: "problem", code: "transport", text: ASK_FAILURES.unfinished });
     expect(await run([() => new StepFailure("limit")])).toEqual({ state: "problem", code: "limit", text: ASK_FAILURES.steps });
     expect(ASK_FAILURES.egress).toMatch(/^That question includes details Ozzie keeps on this Mac/u);
-    expect(ASK_FAILURES.fidelity).toBe("Ozzie couldn't back that answer up with what it read, so it isn't shown.");
+    expect(ASK_FAILURES.fidelity).toMatch(/^Ozzie couldn't back that answer up with what it read, so it isn't shown\. /u);
     expect(ASK_FAILURES.unfinished).toBe("Ozzie couldn't finish that just now.");
   });
 
@@ -408,4 +408,189 @@ describe("retrying a reply native dropped as denied", () => {
     await expect(retryDenied(async () => { calls++; throw "denied"; }, c.signal)).rejects.toBe("denied");
     expect(calls).toBe(2);
   });
+});
+
+// ---- Answers written on this Mac (release-app rehearsal, Nov 15) -------------------------------------------------
+
+describe("Ask answers written on this Mac", () => {
+  /** The test organization's shape: Nursery's position is "Nursery volunteer", marked as a kids team with Lyrics; the Sanctuary isn't shared. */
+  const kidsCapture = (): SundayCapture => JSON.parse(JSON.stringify(withFictionalOperations(withFictionalBackgroundChecks(nov22Capture())))
+    .split("\"Nursery\"").join("\"Nursery volunteer\"")) as SundayCapture;
+  const kidsRules = { ...RULES, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 2 }, { team_id: TEAMS.lyrics, min_confirmed: 1 }],
+    rooms: [{ room_id: FICTIONAL_ROOM, exclusive: true, setup_minutes: 15 }] };
+  const kidsData = () => buildHarnessData({ capture: kidsCapture(), fictional: false, rules: kidsRules, decisions: [], status: null, configured: false, now: "2026-11-20T15:05:00Z" });
+
+  it("answers “Is the nursery ready for Sunday?” here, without the AI, with the background check kept on this Mac and where it came from", async () => {
+    const m = scripted([]);
+    const native = fakeLedger();
+    const kept = new Map<string, string>();
+    const rec = recorder(native.invoke, { triggers: { get: id => kept.get(id) as never, set: (id, t) => { kept.set(id, t); } } });
+    const turn = await askOzzie(harness(m.model, undefined, kidsData()), "Is the nursery ready for Sunday?", { skills, recorder: rec });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(m.requests).toHaveLength(0);
+    // Recorded in What happened as a question answered on this Mac: name-free, the same task record as any question (review Q L3).
+    await rec.idle();
+    expect(native.log.map(([c, a]) => [c, a["detail"] ?? a["to"] ?? a["kind"] ?? null])).toEqual([["ledger_admit", "ask"], ["ledger_transition", "running"],
+      ["ledger_event", "sunday.overview complete"], ["ledger_event", "sunday.open_needs complete"], ["ledger_transition", "verified"]]);
+    expect(JSON.stringify(native.log)).not.toMatch(/nursery|Blake|background/iu);
+    expect([...kept.values()]).toEqual(["on-this-mac"]);
+    expect(taskLine(row({ kind: "ask", state: "verified", events: [{ task_id: "x", sequence: 3, at: "2026-11-20T21:42:01Z", type: "tool", detail: "sunday.overview complete" }] }),
+      { trigger: "on-this-mac", now: new Date("2026-11-20T22:00:00Z") })).toMatch(/^Answered on this Mac · checked · 1 thing looked at · /u);
+    const a = turn.answer;
+    expect(a.local).toBe(true);
+    expect(a.aiSteps).toBe(0);
+    expect(a.body.split("\n\n")).toEqual([
+      expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count\. Already confirmed: Blake Ashgrove\./u),
+      expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person, and your Church rules ask for at least 2\./u),
+      expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\. .* From Planning Center People, checked 10:00 AM on November 20\. Kept on this Mac; never sent to an AI\.$/u),
+    ]);
+    expect(a.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center People, checked .+; your Church rules$/u);
+    expect(a.steps).toEqual(["Looked at this Sunday's overview — complete", "Looked at Sunday's open roles — complete", "Looked at background checks, kept on this Mac"]);
+    expect(a.notCovered).toBe(false);
+    expect(a.body).not.toMatch(/\[(?:Person|Role) \d+\]/u);
+  });
+
+  it("still refuses what may not be asked before answering anything here", async () => {
+    const m = scripted([]);
+    const h = harness(m.model, undefined, kidsData());
+    expect(await askOzzie(h, "Rank the nursery volunteers", { skills })).toEqual({ state: "refused", text: REFUSALS.rank });
+    expect(await askOzzie(h, "Write a prayer for the nursery", { skills })).toEqual({ state: "refused", text: REFUSALS.religious });
+    expect(await askOzzie(h, "Text the nursery team", { skills })).toEqual({ state: "refused", text: REFUSALS.send });
+    expect(m.requests).toHaveLength(0);
+  });
+
+  it("adds the open decisions a decision question's answer left out, in fixed words, with their sources; background checks never reach the AI", async () => {
+    const m = scripted([
+      () => ({ content: "", tool_calls: [{ id: "c", name: "sunday.overview", arguments: "{}" }], finish: "tool_calls" }),
+      r => answer(JSON.stringify({ answer: "facts", facts: ((JSON.parse(r.messages.at(-1)!.content) as { payload: { findings: { fact: string; tone: string }[] } }).payload.findings)
+        .filter(f => f.tone === "needs a decision").map(f => f.fact) })),
+    ]);
+    const turn = await askOzzie(harness(m.model, undefined, kidsData()), "What still needs a decision this Sunday?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    const parts = turn.answer.body.split("\n\n");
+    expect(parts.slice(0, 4)).toEqual([
+      expect.stringMatching(/^Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person/u),
+      expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 still needs 1 more person/u),
+      expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person/u),
+      expect.stringMatching(/^Needs a decision: Lyrics at 9:30 AM on November 22 has 0 confirmed people/u),
+    ]);
+    expect(parts.slice(4)).toEqual([
+      "Also on the Sunday page, needing a decision:",
+      expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\..*Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(/^Needs a decision: Cameron Larkspur's background check on file expires before Sunday\..*Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(/^Room use needs review: Sanctuary \(fictional\) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM; the bookings are from /u),
+      "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.",
+    ]);
+    expect(turn.answer.added).toBe(true);
+    expect(turn.answer.basedOn).toMatch(/Planning Center Services, checked .+Planning Center Calendar, checked .+Planning Center People, checked /u);
+    expect(turn.answer.steps).toEqual(["Looked at this Sunday's overview — complete", "Checked the facts it chose against what was read",
+      "Looked at room bookings — complete", "Looked at follow-ups without an owner — complete", "Looked at background checks, kept on this Mac"]);
+    expect(JSON.stringify(m.requests)).not.toMatch(/background/iu);
+  });
+
+  it("never says nothing needs a decision above decisions it adds", async () => {
+    // Every Services role filled, so the overview counts no decision, while the room and the follow-up still need one.
+    const capture = withFictionalOperations(nov22Capture());
+    capture.reads = capture.reads.map(r => r.collection === "needed_positions" ? { ...r, body: { ...r.body!, data: [] } } : r);
+    const data = buildHarnessData({ capture, fictional: false, rules: { ...RULES, rooms: kidsRules.rooms }, decisions: [], status: null, configured: false, now: "2026-11-20T15:05:00Z" });
+    expect(data.brief!.findings.filter(f => f.tone === "decision")).toEqual([]);
+    const m = scripted([() => ({ content: "", tool_calls: [{ id: "c", name: "sunday.overview", arguments: "{}" }], finish: "tool_calls" }), () => answer('{"answer":"nothing-needs-a-decision"}')]);
+    const turn = await askOzzie(harness(m.model, undefined, data), "Is there anything I need to decide?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    const parts = turn.answer.body.split("\n\n");
+    expect(parts[0]).toBe("Also on the Sunday page, needing a decision:");
+    expect(parts.slice(1)).toEqual([expect.stringMatching(/^Room use needs review: /u), expect.stringMatching(/ has no owner\.$/u)]);
+  });
+
+  it("says what Ozzie can do instead when it can't tell, or couldn't back an answer up", async () => {
+    const m = scripted([() => answer('{"answer":"not-covered"}')]);
+    const turn = await askOzzie(harness(m.model), "When is the youth retreat?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body.split("\n\n")).toEqual(["I can't tell from what I read.", CAN_DO_INSTEAD]);
+    expect(ASK_FAILURES.fidelity).toContain("What can you do?");
+  });
+});
+
+describe("background checks never reach the AI, by any Ask path (review Q H2)", () => {
+  const kidsCapture = (): SundayCapture => JSON.parse(JSON.stringify(withFictionalOperations(withFictionalBackgroundChecks(nov22Capture())))
+    .split("\"Nursery\"").join("\"Nursery volunteer\"")) as SundayCapture;
+  const kidsRules = { ...RULES, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 2 }, { team_id: TEAMS.lyrics, min_confirmed: 1 }],
+    rooms: [{ room_id: FICTIONAL_ROOM, exclusive: true, setup_minutes: 15 }] };
+  const kidsData = (now = "2026-11-20T15:05:00Z") => buildHarnessData({ capture: kidsCapture(), fictional: false, rules: kidsRules, decisions: [], status: null, configured: false, now });
+  /** A model that would answer anything: if any of these questions reached it, the test would see the request. */
+  const anyModel = () => scripted([() => calls(["sunday.overview"]), () => answer('{"answer":"not-covered"}')]);
+
+  it("answers questions naming a background check, or its usual names, on this Mac with nothing sent", async () => {
+    for (const q of ["Any background check problems?", "Is Blake Ashgrove's clearance current?", "Has Cameron been screened?", "Does Blake have a DBS?", "Is the safeguarding check done?",
+      "Was Blake fingerprinted?", "Is Blake cleared to serve in the nursery?", "Blake's check expired, who else can cover the nursery?", "Has anyone been vetted for the kids?",
+      "Does Greeter have background checks?"]) {
+      const m = anyModel();
+      const turn = await askOzzie(harness(m.model, undefined, kidsData()), q, { skills });
+      expect(m.requests, q).toHaveLength(0);
+      if (turn.state !== "answered") throw new Error(`${q}: ${turn.state}`);
+      expect(turn.answer.local, q).toBe(true);
+      expect(turn.answer.body, q).toMatch(/background check/u);
+    }
+  });
+
+  it("never drafts a note about a background check with AI help: the facts here, and the note left to the leader", async () => {
+    for (const q of ["Draft a note to Blake Ashgrove saying his background check expired and he can't serve in the nursery", "Write a message to Cameron about her clearance"]) {
+      const m = anyModel();
+      const turn = await askOzzie(harness(m.model, undefined, kidsData()), q, { skills });
+      expect(m.requests, q).toHaveLength(0);
+      if (turn.state !== "answered") throw new Error(`${q}: ${turn.state}`);
+      const parts = turn.answer.body.split("\n\n");
+      expect(parts[0]).toBe(REFUSALS.backgroundNote);
+      expect(parts.slice(1)).toEqual([expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\./u),
+        expect.stringMatching(/^Needs a decision: Cameron Larkspur's background check on file expires before Sunday\./u)]);
+      expect(turn.answer.draft).toBeNull();
+    }
+    // Asking to send one is refused as any send is, and nothing is sent either.
+    const m = anyModel();
+    expect(await askOzzie(harness(m.model, undefined, kidsData()), "Text Blake that his background check expired", { skills })).toEqual({ state: "refused", text: REFUSALS.send });
+    expect(m.requests).toHaveLength(0);
+  });
+
+  it("answers a whole-Sunday decision question that names background checks with every open decision, here", async () => {
+    for (const q of ["What still needs a decision this Sunday? Any background check issues?", "Is everything ready? Any background checks missing?"]) {
+      const m = anyModel();
+      const turn = await askOzzie(harness(m.model, undefined, kidsData()), q, { skills });
+      expect(m.requests, q).toHaveLength(0);
+      if (turn.state !== "answered") throw new Error(turn.state);
+      const parts = turn.answer.body.split("\n\n");
+      expect(parts[0]).toBe("On the Sunday page, needing a decision:");
+      expect(parts.join(" ")).toMatch(/Greeter at 9:30 AM.*Blake Ashgrove has no current background check.*Room use needs review.*has no owner\./su);
+    }
+  });
+
+  it("carries the out-of-date line the rest of Ask uses (review Q H1)", async () => {
+    const turn = await askOzzie(harness(anyModel().model, undefined, kidsData("2026-11-20T17:00:00Z")), "Any background check problems?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.gaps).toContain("Planning Center Services: from a check that's too old to treat as current.");
+    expect(turn.answer.body).not.toContain("found no one confirmed or pending");
+  });
+
+  it("sends a whole-Sunday question that mentions the kids the usual way, and still adds what it left out (review Q M2)", async () => {
+    const m = scripted([() => calls(["sunday.overview"]), r => answer(JSON.stringify({ answer: "facts",
+      facts: (payloadOf(r, "sunday.overview")!["findings"] as { fact: string; tone: string }[]).filter(f => f.tone === "needs a decision").map(f => f.fact) }))]);
+    const turn = await askOzzie(harness(m.model, undefined, kidsData()), "Is everything ready for Sunday, including the kids?", { skills });
+    expect(m.requests.length).toBeGreaterThan(0);
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body).toMatch(/Greeter at 9:30 AM[^]*Also on the Sunday page, needing a decision:[^]*Blake Ashgrove has no current background check/u);
+  });
+
+  it("doesn't offer what it can do below decisions it added", async () => {
+    const m = scripted([() => answer('{"answer":"not-covered"}')]);
+    const turn = await askOzzie(harness(m.model, undefined, kidsData()), "What still needs a decision this Sunday?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body.split("\n\n")[0]).toBe("I can't tell from what I read.");
+    expect(turn.answer.body).toContain("Also on the Sunday page, needing a decision:");
+    expect(turn.answer.body).not.toContain(CAN_DO_INSTEAD);
+  });
+});
+
+afterAll(() => {
+  // Over every question this file asked through a model, none carried background-check wording (review Q H2).
+  expect(everyRequest.length).toBeGreaterThan(10);
+  for (const r of everyRequest) expect(JSON.stringify(r)).not.toMatch(BACKGROUND_IN_REQUEST);
 });

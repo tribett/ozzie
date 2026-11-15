@@ -77,8 +77,26 @@ const TIME_IN_TEXT = /\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?(?:
 const SENTENCE_CHARACTERS = /^[A-Za-z0-9 \n.,;:?!'()-]*$/u;
 const WORD = /[A-Za-z]+(?:'[A-Za-z]+)*/gu;
 
+const ISO_PARTS = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(?:Z|([+-])(\d{2}):(\d{2})))?$/u;
+const daysIn = (year: number, month: number) => month === 2 ? (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31;
+/**
+ * The instant an ISO 8601 date (midnight UTC) or date-time with a zone stands for, in milliseconds, or null unless every
+ * part is in range: month 1–12, a day that month has, hour 0–23, minute and second 0–59 (no leap second), offset up to
+ * 23:59. Worked out here rather than by Date.parse, which V8 and JavaScriptCore answer differently for such strings.
+ */
+export function isoMillis(text: string): number | null {
+  const m = ISO_PARTS.exec(text);
+  if (!m) return null;
+  const [year, month, day, hour, minute, second, offsetHours, offsetMinutes] = [1, 2, 3, 4, 5, 6, 9, 10].map(i => Number(m[i] ?? 0)) as [number, number, number, number, number, number, number, number];
+  if (month < 1 || month > 12 || day < 1 || day > daysIn(year, month) || hour > 23 || minute > 59 || second > 59 || offsetHours > 23 || offsetMinutes > 59) return null;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, Number((m[7] ?? "0").padEnd(3, "0")));
+  return date.getTime() - (m[8] === "-" ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
+}
+
 /** An ISO 8601 date-time or date that is also a real date. */
-export const isIsoTime = (text: string): boolean => (DATETIME.test(text) || DATE.test(text)) && !Number.isNaN(Date.parse(text));
+export const isIsoTime = (text: string): boolean => (DATETIME.test(text) || DATE.test(text)) && isoMillis(text) !== null;
 
 /** A sentence of fixed words: labels and ISO times set aside, only sentence_words and counts remain. */
 function sentenceOk(text: string, yourName: boolean, isLabel: (label: string) => boolean): boolean {
@@ -86,8 +104,9 @@ function sentenceOk(text: string, yourName: boolean, isLabel: (label: string) =>
   let rest = text.replace(ENVELOPE_LABEL, label => { if (!isLabel(label)) unknown = true; return " "; });
   if (yourName) rest = rest.split(YOUR_NAME).join(" ");
   if (unknown || /[[\]]/u.test(rest)) return false;
-  rest = rest.replace(TIME_IN_TEXT, " ");
-  if (!SENTENCE_CHARACTERS.test(rest)) return false;
+  let impossible = false;
+  rest = rest.replace(TIME_IN_TEXT, time => { if (isoMillis(time) === null) impossible = true; return " "; });
+  if (impossible || !SENTENCE_CHARACTERS.test(rest)) return false;
   return (rest.match(WORD) ?? []).every(w => WORDS.has(w.toLowerCase()));
 }
 /** Whether one of Ozzie's own sentences (such as a "not checked" line) is made only of fixed words, counts and times. */
@@ -132,7 +151,7 @@ export function envelopeProblems(envelope: unknown, isLabel: (label: string) => 
   if (typeof e["tool"] !== "string" || !TOOLS.has(e["tool"])) out.push("tool");
   if (typeof e["source"] !== "string" || !SOURCES.has(e["source"])) out.push("source");
   if (typeof e["completeness"] !== "string" || !COMPLETENESS.has(e["completeness"])) out.push("completeness");
-  if (typeof e["check_time"] !== "string" || !DATETIME.test(e["check_time"]) || Number.isNaN(Date.parse(e["check_time"]))) out.push("check_time");
+  if (typeof e["check_time"] !== "string" || !DATETIME.test(e["check_time"]) || isoMillis(e["check_time"]) === null) out.push("check_time");
   const payload = e["payload"];
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) out.push("payload");
   else valueProblems(payload, null, "payload", isLabel, out);

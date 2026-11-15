@@ -8,8 +8,12 @@ import { showTimes } from "../src/harness/session.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../src/harness/contract.js";
 import type { SharedCheck, SharedTask, SharedTool } from "./snapshot.js";
 
-export const NOT_SHARED = "Ozzie hasn't shared a check on this Mac yet. In Ozzie, open Settings, turn on \"Use Ozzie's last check in other AI apps\", then check Sunday.";
-export const UNREADABLE = "Ozzie's shared check couldn't be read, so nothing from it is shown. Checking Sunday again in Ozzie writes a fresh copy.";
+/**
+ * Said whenever there is no copy to show: sharing off in Ozzie, no copy yet, or a file that isn't one Ozzie wrote (missing,
+ * not a regular file, too large, outside the format). One text for all of them, so the other app learns nothing about
+ * which, or about any other file; and nothing urges anyone to turn sharing on, which is the leader's choice.
+ */
+export const NOT_SHARED = "Nothing from Ozzie is shared on this Mac right now: sharing is off in Ozzie, or there's no current check to share. Whether to share is up to the leader, in Ozzie.";
 /** Labels are numbered per copy: the same label in another copy can be someone else. */
 const aboutLabels = (copy: string) => "People, roles, rooms and follow-ups appear as labels such as [Person 1] and [Role 1]. Their names stay in Ozzie on the leader's Mac and are never shared. "
   + `A label means the same thing only within this copy (copy ${copy}); in another copy the same label may refer to a different person, role or room.`;
@@ -61,8 +65,8 @@ function section(envelope: ToolEnvelope): string {
 }
 
 /** The sections for these tools from the shared check, in the given order; those it doesn't hold are left out. */
-export function checkText(check: SharedCheck | null, tools: readonly SharedTool[], unreadable = false): string {
-  if (!check) return unreadable ? UNREADABLE : NOT_SHARED;
+export function checkText(check: SharedCheck | null, tools: readonly SharedTool[]): string {
+  if (!check) return NOT_SHARED;
   const found = tools.flatMap(t => check.envelopes.filter(e => e.tool === t));
   // The facts' own check time, never when the copy was saved: a copy saved today can hold last week's check.
   const intro = `From Ozzie's last saved check, checked ${when(check.checked_at)} (copy ${check.copy_id}). ${aboutLabels(check.copy_id)} ${ONLY_DESCRIBES}`;
@@ -71,8 +75,8 @@ export function checkText(check: SharedCheck | null, tools: readonly SharedTool[
 }
 
 /** The Church rules in words, then the procedures Ozzie follows (their titles and purposes, as shown in Ozzie). */
-export function rulesText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>, unreadable = false): string {
-  const rules = check ? checkText(check, ["rules.current"]) : unreadable ? UNREADABLE : NOT_SHARED;
+export function rulesText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>): string {
+  const rules = checkText(check, ["rules.current"]);
   const procedures = [...skills.values()].sort((a, b) => a.title.localeCompare(b.title)).map(s => `- ${s.title}: ${s.purpose}`);
   const how = ["## How Ozzie works through Sunday", "Ozzie follows these written procedures. Each one only reads what was checked; none of them sends anything or changes Planning Center.", ...procedures];
   return [rules, how.join("\n")].join("\n\n");
@@ -111,8 +115,8 @@ function taskLine(t: SharedTask, skills: ReadonlyMap<string, Skill>): string {
 }
 
 /** Recent tasks from Ozzie's record of what it did, newest first. Never a question, an answer or a name: the record has none. */
-export function happenedText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>, unreadable = false): string {
-  if (!check) return unreadable ? UNREADABLE : NOT_SHARED;
+export function happenedText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>): string {
+  if (!check) return NOT_SHARED;
   const head = `What Ozzie did recently on the leader's Mac, as of ${when(check.shared_at)} when copy ${check.copy_id} was saved, newest first. Ozzie keeps only what ran and how it ended, never what was asked or answered.`;
   if (!check.tasks.length) return `${head}\n\nNothing recorded yet.`;
   return [head, check.tasks.map(t => taskLine(t, skills)).join("\n")].join("\n\n");

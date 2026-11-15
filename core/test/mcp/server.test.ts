@@ -2,7 +2,7 @@
 // kind of check the harness fixtures hold (no name, place name, typed reason or contact detail; the "capitalized
 // only" name rule), the file refused whole when anything in it is off, and nothing written anywhere.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,9 +14,9 @@ import { namedIn } from "../../src/harness/names.js";
 import { HarnessSession, showTimes } from "../../src/harness/session.js";
 import { HarnessTools, type HarnessData } from "../../src/harness/tools.js";
 import { readShared, sharedCheckPath } from "../../mcp/file.js";
-import { NOT_SHARED, UNREADABLE } from "../../mcp/render.js";
+import { NOT_SHARED } from "../../mcp/render.js";
 import { INSTRUCTIONS, MAX_BATCH, MAX_LINE, McpServer, PROTOCOL_VERSIONS, serveStream, TOOLS, type Response } from "../../mcp/server.js";
-import { checkedAtOf, parseSharedCheck, SHARED_TOOLS, sharedCheckText, sharedEnvelopes, type SharedTask } from "../../mcp/snapshot.js";
+import { checkedAtOf, ON_FILE, parseSharedCheck, SHARED_TOOLS, sharedCheckText, sharedEnvelopes, type SharedTask } from "../../mcp/snapshot.js";
 import { FIXTURES, FRESH, harnessData, sourceStrings } from "../harness/fixtures.js";
 
 const skills: ReadonlyMap<string, Skill> = await bundledSkills();
@@ -171,7 +171,7 @@ describe("every tool's words, over every kind of check", () => {
     for (const s of sourceStrings(data)) expect(out, s).not.toContain(s);
     expect(out).not.toMatch(/canary/iu);
     expect(hasContactDetail(out)).toBe(false);
-    expect(out).not.toContain(UNREADABLE);
+    expect(out).not.toContain(NOT_SHARED);
   });
 
   it("says where Sunday stands in Ozzie's sentences, with labels, sources and check times written out", async () => {
@@ -225,9 +225,11 @@ describe("every tool's words, over every kind of check", () => {
     expect(out).not.toMatch(/sunday-ready|answer-from-what-was-read|[0-9a-f]{8}-[0-9a-f]{4}/u);
   });
 
-  it("with no shared check yet, every tool says how to turn it on", () => {
+  it("with nothing shared, every tool says so plainly, without urging anyone to turn sharing on", () => {
     const server = serverOver(() => null);
     for (const t of TOOLS) expect(textOf(call(server, t.name))).toContain(NOT_SHARED);
+    expect(NOT_SHARED).toContain("sharing is off in Ozzie");
+    expect(NOT_SHARED).not.toMatch(/turn (?:it |sharing )?on|open settings|check sunday/iu);
   });
 });
 
@@ -260,13 +262,25 @@ describe("the shared file is refused whole when anything in it is off", () => {
     ["a task with text", o => { (o["tasks"] as Record<string, unknown>[])[0]!["question"] = "Is Avery free?"; }],
     ["a task event outside the ledger grammar", o => { ((o["tasks"] as SharedTask[])[0]!.events[2]!).detail = "Avery Example"; }],
     ["a task with an unknown failure", o => { (o["tasks"] as SharedTask[])[1]!.failure = "avery"; }],
+    // Times are checked part by part, the same in every JavaScript engine: no leap second, no day a month doesn't have.
+    ["a leap second", o => { for (const e of envelopes(o)) e.check_time = "2026-11-20T15:00:60Z"; o["checked_at"] = "2026-11-20T15:01:00.000Z"; }],
+    ["a save time on February 30", o => { o["shared_at"] = "2026-02-30T15:06:00Z"; }],
+    ["a save time on February 29 of a year without one", o => { o["shared_at"] = "2026-02-29T15:06:00Z"; }],
+    ["a task on April 31", o => { (o["tasks"] as SharedTask[])[0]!.created_at = "2026-04-31T15:00:00Z"; }],
+    ["an hour of 24", o => { (o["tasks"] as SharedTask[])[0]!.updated_at = "2026-11-20T24:00:00Z"; }],
+    ["an offset of 24 hours", o => { (o["tasks"] as SharedTask[])[0]!.events[0]!.at = "2026-11-20T15:00:00+24:00"; }],
+    ["a time in a fixed sentence on February 30", o => { (payload(o, 4)["services"] as string[]).push("2026-02-30"); }],
   ];
   it.each(cases)("%s", async (_label, change) => {
     const text = await tamper(change);
     expect(parseSharedCheck(text)).toBeNull();
     const out = allText(serverOver(() => text));
-    expect(out).toContain(UNREADABLE);
+    // Refused whole, and said exactly as when nothing is shared: a file that isn't Ozzie's tells the other app nothing.
+    expect(out).toBe(allText(serverOver(() => null)));
     expect(out).not.toMatch(/Avery|555/u);
+  });
+  it("a real February 29 is a real date", async () => {
+    expect(parseSharedCheck(await tamper(o => { o["shared_at"] = "2028-02-29T15:06:00Z"; }))).not.toBeNull();
   });
   it("not JSON, or too large", () => {
     expect(parseSharedCheck("{")).toBeNull();
@@ -281,11 +295,11 @@ describe("read-only", () => {
       const file = join(dir, "shared-check.json");
       const { text } = await sharedFor(harnessData());
       writeFileSync(file, text, { mode: 0o600 });
+      writeFileSync(join(dir, ON_FILE), "", { mode: 0o600 });
       const before = { list: readdirSync(dir), mtime: statSync(file).mtimeMs, mode: statSync(file).mode, bytes: readFileSync(file, "utf8") };
       const server = serverOver(() => readShared(file));
       const out = allText(server);
       expect(out).not.toContain(NOT_SHARED);
-      expect(out).not.toContain(UNREADABLE);
       expect({ list: readdirSync(dir), mtime: statSync(file).mtimeMs, mode: statSync(file).mode, bytes: readFileSync(file, "utf8") }).toEqual(before);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -294,6 +308,7 @@ describe("read-only", () => {
     const dir = mkdtempSync(join(tmpdir(), "ozzie-mcp-"));
     try {
       writeFileSync(join(dir, "real.json"), "{}");
+      writeFileSync(join(dir, ON_FILE), "");
       symlinkSync(join(dir, "real.json"), join(dir, "link.json"));
       expect(readShared(join(dir, "real.json"))).toBe("{}");
       expect(readShared(join(dir, "link.json"))).toBeNull();
@@ -301,6 +316,9 @@ describe("read-only", () => {
       expect(readShared(join(dir, "missing.json"))).toBeNull();
     } finally { rmSync(dir, { recursive: true, force: true }); }
     expect(sharedCheckPath({ OZZIE_SHARED_CHECK: "/x/y.json" })).toBe("/x/y.json");
+    // String.prototype.trim's white space, which the helper matches: a byte-order mark goes, a next-line mark stays.
+    expect(sharedCheckPath({ OZZIE_SHARED_CHECK: "\uFEFF /x/y.json\u2028" })).toBe("/x/y.json");
+    expect(sharedCheckPath({ OZZIE_SHARED_CHECK: "/x/y.json\u0085" })).toBe("/x/y.json\u0085");
     expect(sharedCheckPath({})).toMatch(/Library\/Application Support\/church\.ozzie\.desktop\/shared-check\.json$/u);
   });
 
@@ -308,6 +326,7 @@ describe("read-only", () => {
     const dir = mkdtempSync(join(tmpdir(), "ozzie-mcp-"));
     try {
       const fifo = join(dir, "shared-check.json");
+      writeFileSync(join(dir, ON_FILE), "");
       execFileSync("mkfifo", [fifo]);
       const started = Date.now();
       expect(readShared(fifo)).toBeNull();
@@ -315,10 +334,34 @@ describe("read-only", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("reads the copy only while sharing is on: the marker native keeps beside it must be a regular file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ozzie-mcp-"));
+    try {
+      const file = join(dir, "shared-check.json"), marker = join(dir, ON_FILE);
+      writeFileSync(file, "{}");
+      expect(readShared(file)).toBeNull();
+      mkdirSync(marker);
+      expect(readShared(file)).toBeNull();
+      rmSync(marker, { recursive: true });
+      writeFileSync(join(dir, "elsewhere"), "");
+      symlinkSync(join(dir, "elsewhere"), marker);
+      expect(readShared(file)).toBeNull();
+      rmSync(marker);
+      writeFileSync(marker, "");
+      expect(readShared(file)).toBe("{}");
+      // Sharing turned off while the copy couldn't be removed: nothing is read.
+      rmSync(marker);
+      expect(readShared(file)).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+    // The marker's name is native's (shared_check.rs ON_FILE).
+    const native = readFileSync(new URL("../../native-auth/src/shared_check.rs", import.meta.url), "utf8");
+    expect(native).toContain(`pub const ON_FILE: &str = "${ON_FILE}";`);
+  });
+
   it("holds no write, network or process call anywhere in its source", () => {
     const dir = new URL("../../mcp/", import.meta.url);
-    const sources = readdirSync(dir).filter(f => f.endsWith(".ts") && f !== "vite.config.ts");
-    expect(sources.sort()).toEqual(["file.ts", "main.ts", "render.ts", "server.ts", "snapshot.ts"]);
+    const sources = readdirSync(dir).filter(f => f.endsWith(".ts") && !/^vite(?:\.\w+)?\.config\.ts$/u.test(f));
+    expect(sources.sort()).toEqual(["embedded.ts", "file.ts", "main.ts", "render.ts", "server.ts", "snapshot.ts"]);
     for (const f of sources) {
       const src = readFileSync(new URL(f, dir), "utf8");
       expect(src, f).not.toMatch(/\b(?:writeFile|writeSync|appendFile|createWriteStream|mkdir|rmSync|unlink|rename|copyFile|truncate|chmod|O_WRONLY|O_RDWR|O_CREAT)\b/u);

@@ -61,6 +61,21 @@ describe("placeholder boundary", () => {
     }
   });
 
+  it("never says this week or this Sunday: it names the service's own date, whenever it is", () => {
+    const text = templateDraft(ctx, capture.names).text;
+    expect(text).toContain(`for Greeter on ${new Date(greeter.position!.interval!.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}.`);
+    expect(text).toContain("Would you be able to help?");
+    // No service time read: the Sunday's own date when it's known, otherwise just Sunday.
+    const untimed = { ...ctx, finding: { ...greeter, position: { ...greeter.position!, interval: null } } };
+    expect(templateDraft({ ...untimed, sunday: "2026-11-29" }, capture.names).text).toContain("for Greeter on Sunday, November 29.");
+    expect(templateDraft(untimed, capture.names).text).toContain("for Greeter on Sunday.");
+    for (const draft of [text, templateDraft(untimed, capture.names).text, templateDraft({ ...untimed, sunday: "2026-11-29" }, capture.names).text]) {
+      expect(draft).not.toMatch(/this week|this Sunday/u);
+    }
+    // The date is no name and no placeholder: it goes for rewording like the time does.
+    expect(buildRewordRequest(templateDraft({ ...untimed, sunday: "2026-11-29" }, capture.names), "warmer", capture.names).user).toContain("Sunday, November 29");
+  });
+
   it("restores only its own three labels, using the trimmed first name", () => {
     const names = { [PEOPLE.riley]: "  Riley Fictional " };
     const out = restoreDraft(templateDraft(ctx, names), ctx, names, "Pat");

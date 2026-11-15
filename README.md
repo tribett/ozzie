@@ -153,6 +153,12 @@ summarise what a job it keeps an eye on found.
   Planning Center can't be reached) keeps the names it showed, in a file only
   your user account can read.
 
+## Download
+
+A signed copy of Ozzie for Mac (Developer ID: FlockConnect LLC, notarized by
+Apple; Apple Silicon, macOS 14 or later) is at https://ozzie.church/download.
+It is an early build with no automatic updates.
+
 ## Build and run
 
 Requirements:
@@ -180,7 +186,8 @@ Settings, Privacy & Security.
 
 ### Connect Planning Center
 
-In the Ozzie for Mac download, connecting is one click: **Settings** →
+In Ozzie for Mac (the signed download from https://ozzie.church/download),
+connecting is one click: **Settings** →
 **Connect Planning Center**, sign in in your browser and choose **Allow**.
 Ozzie finds your organization from the sign-in itself, and the token is
 stored in your Mac's Keychain.

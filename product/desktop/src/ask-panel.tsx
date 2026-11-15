@@ -5,19 +5,23 @@
 // Names appear here because this is the leader's own screen; they are never in a request.
 // Asking Ozzie to take something on ("Keep an eye on Sunday") is read here without any model
 // (core/src/harness/responsibilities.ts parseRequest) and answered with a plan to confirm.
+// Ask is useful before anything is connected (owner decisions, 2026-11-15): "What can you do?" is answered here in
+// fixed words, and a question before anything was read says what to do next, never an error.
 import { useEffect, useRef, useState } from "react";
 import { MAX_QUESTION_CHARS, suggestedQuestions } from "../../../core/src/ask.js";
+import { kidsWording } from "../../../core/src/harness/compose.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
-import { ASK_FAILURES, basedOnBrief } from "./harness-words.js";
+import { ADDED_HOW, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, HELP, LOCAL_HOW, LOCAL_NOTE } from "./harness-words.js";
 import { Icon } from "./icons.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { isVoiceShortcut, listenInto, LISTENING_NOTE, nativeVoice, VOICE_HINT, VOICE_SHORTCUT, voiceOff, type Voice, type VoiceStatus } from "./voice.js";
 
 type Page = "sunday" | "today" | "connection" | "cards";
 type PlanRequest = Exclude<Parsed, { kind: "none" }>;
-export type Turn = { id: number; question: string } & ({ state: "asking" } | AskTurn | { state: "plan"; parsed: PlanRequest } | { state: "cards" });
+type TurnState = { state: "asking" } | AskTurn | { state: "plan"; parsed: PlanRequest } | { state: "cards" } | { state: "help"; checked: boolean } | { state: "start" };
+export type Turn = { id: number; question: string } & TurnState;
 /** Taking something on from Ask: the deterministic reading of a request, and the plan card's needs. */
 export interface PlanHooks { parse: (typed: string) => Parsed; context: PlanContext; actions: PlanActions }
 /** One question, start to finish. Production: askOzzie over the app's Harness. */
@@ -29,6 +33,33 @@ export type AskFn = (typed: string, signal: AbortSignal) => Promise<AskTurn>;
  */
 export const isCardsRequest = (typed: string) => /\b(?:visitor|newcomer|guest|welcome|connect(?:ion)?)\s+cards?\b/i.test(typed);
 export const CARDS_POINTER = "Visitor cards are read on this Mac, on the Visitor cards page: choose the photos there and check each card against its photo. Nothing from them goes to an AI model or into Planning Center.";
+
+/** "What can you do?", "help", "How do you work?" and the like, as the whole question: answered here in fixed words. */
+const HELP_ASK = new RegExp("^(?:(?:hey|hi|ok|okay)[\\s,]+)?(?:ozzie[\\s,:]+)?(?:help|what\\s+can\\s+(?:you|ozzie)\\s+(?:do|help\\s+(?:me\\s+)?with)(?:\\s+for\\s+(?:me|us))?(?:\\s+here)?" +
+  "|what\\s+can\\s+i\\s+ask(?:\\s+(?:you|ozzie))?|what\\s+do\\s+you\\s+do|what\\s+does\\s+ozzie\\s+do|how\\s+do\\s+(?:you|i)\\s+(?:work|use\\s+(?:you|this|ozzie))|how\\s+does\\s+(?:this|ozzie)\\s+work" +
+  "|how\\s+can\\s+you\\s+help(?:\\s+(?:me|us))?|what\\s+are\\s+you|who\\s+are\\s+you)(?:[\\s,]+ozzie)?[\\s?.!]*$", "iu");
+export const isHelpRequest = (typed: string) => HELP_ASK.test(typed.trim());
+export const HELP_CHIP = "What can you do?";
+
+/** Where a typed question goes, decided here without any model. */
+export type Route = { kind: "help" } | { kind: "cards" } | { kind: "plan"; parsed: PlanRequest } | { kind: "start" } | { kind: "no-model" } | { kind: "loading" } | { kind: "ask" };
+export function routeQuestion(typed: string, s: {
+  brief: SundayBrief | null; modelReady: boolean;
+  /** Ozzie's procedures are loaded, so a question can run. */
+  canAsk: boolean;
+  parse?: ((typed: string) => Parsed) | undefined;
+}): Route {
+  if (isHelpRequest(typed)) return { kind: "help" };
+  // Cards are read on their own page, on this Mac.
+  if (isCardsRequest(typed)) return { kind: "cards" };
+  // A request to take something on becomes a plan to confirm.
+  const parsed = s.parse?.(typed) ?? { kind: "none" as const };
+  if (parsed.kind !== "none") return { kind: "plan", parsed };
+  if (!s.brief) return { kind: "start" };
+  // Kids teams and background checks are answered on this Mac (harness-bridge askOzzie), so they need no AI model.
+  if (!s.modelReady) return s.canAsk && kidsWording(typed) ? { kind: "ask" } : { kind: "no-model" };
+  return s.canAsk ? { kind: "ask" } : { kind: "loading" };
+}
 
 export const ASK_NOTE = "Ozzie replaces the names it read from Planning Center with labels before asking the AI. It can't recognise a name it never read, so please don't type other personal details.";
 const time = (iso: string | null) => iso ? new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "an unknown time";
@@ -63,9 +94,11 @@ export function HowItWorks({ answer }: { answer: ShownAnswer }) {
       <p className="bold">What Ozzie did</p>
       <ol className="list ask-steps">{answer.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
     </>}
-    <p className="small">Ozzie asked the AI {times}. The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such
-      as [Person 1] and [Role 1]; Ozzie put them back on this Mac. The AI only chose which facts answer your question: Ozzie wrote every sentence
-      here from those facts, in its own order. Nothing was sent to anyone, and nothing in Planning Center changed.</p>
+    {answer.local ? <p className="small">{LOCAL_HOW}</p>
+      : <p className="small">Ozzie asked the AI {times}. The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such
+        as [Person 1] and [Role 1]; Ozzie put them back on this Mac. The AI only chose which facts answer your question: Ozzie wrote every sentence
+        here from those facts, in its own order. Nothing was sent to anyone, and nothing in Planning Center changed.</p>}
+    {answer.added && <p className="small">{ADDED_HOW}</p>}
   </div>;
 }
 
@@ -77,6 +110,7 @@ export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page:
       {answer.gaps.length > 0 && <ul className="list">{answer.gaps.map(g => <li key={g}><Icon name="dot" small />{g}</li>)}</ul>}
     </div>}
     {answer.body && answer.body.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}
+    {answer.local && <p className="small">{LOCAL_NOTE}</p>}
     {answer.draft && <DraftCard text={answer.draft} />}
     <BasedOn text={answer.basedOn} />
     <div className="row ask-links">
@@ -106,6 +140,8 @@ export function turnAnnouncement(turn: Turn | undefined): string {
     case "asking": return "Reading what Ozzie already has…";
     case "plan": return "Ozzie prepared a plan. Nothing starts until you confirm it.";
     case "cards": return "Visitor cards are read on the Visitor cards page, on this Mac.";
+    case "help": return "Ozzie listed what it can do here. Nothing was sent.";
+    case "start": return ASK_START;
     case "no-model": return "Ask Ozzie needs an AI model. Set one up under Settings.";
     case "refused": case "problem": case "cancelled": return turn.text;
     case "answered": {
@@ -117,12 +153,27 @@ export function turnAnnouncement(turn: Turn | undefined): string {
   }
 }
 
+/** Where to go first when nothing has been read: Settings to connect, Sunday to check. Never a button to the page already on screen. */
+function NextSteps({ page, onOpen }: { page: string | undefined; onOpen: (page: Page) => void }) {
+  return <div className="row">
+    {page !== "connection" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("connection")}>Open Settings</button>}
+    {page !== "sunday" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("sunday")}>Open Sunday</button>}
+  </div>;
+}
+
 /** Ozzie's side of one question. */
 export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined }) {
   switch (turn.state) {
     case "plan": return plans ? <div className="body"><PlanTurn parsed={turn.parsed} context={plans.context} actions={plans.actions} /></div> : null;
     case "cards": return <div className="body"><p>{CARDS_POINTER}</p>
       {page !== "cards" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("cards")}><Icon name="user" small />Open Visitor cards</button></div>}</div>;
+    case "help": return <div className="body stack-tight">
+      <p>{HELP.intro}</p>
+      <ul className="list">{HELP.can.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>
+      <p>{HELP.never}</p>
+      {turn.checked ? <p className="small">{HELP.try}</p> : <><p>{HELP.first}</p><NextSteps page={page} onOpen={onOpen} /></>}
+      <p className="small">Nothing was sent.</p></div>;
+    case "start": return <div className="body stack-tight"><p>{ASK_START}</p><NextSteps page={page} onOpen={onOpen} /><p className="small">Nothing was sent.</p></div>;
     case "asking": return <div className="body"><p className="small"><Icon name="spinner" small spin /> Reading what Ozzie already has…</p></div>;
     case "refused": return <div className="body"><p>{turn.text}</p>{!/nothing was sent/i.test(turn.text) && <p className="small">Nothing was sent.</p>}</div>;
     case "no-model": return <div className="body"><NeedsModel page={page} onOpen={onOpen} /></div>;
@@ -177,7 +228,9 @@ export function AskPanel(props: {
   }, [props.open, voice]);
   useEffect(() => () => { if (listeningRef.current) void voice.cancel().catch(() => undefined); }, [voice]);
   const ready = Boolean(brief && modelReady && props.ask);
-  const canType = ready || Boolean(props.plans);
+  // Something can always be asked once Ozzie is loaded (the app always can take something on): what Ozzie can do, a
+  // plan, or, once something is read, a question about it.
+  const canType = ready || Boolean(props.plans) || Boolean(props.ask);
   const micUsable = canType && !busy && voiceStatus?.status === "ready";
   const update = (id: number, turn: AskTurn) => setTurns(all => all.map(t => t.id === id ? { id, question: t.question, ...turn } as Turn : t));
 
@@ -202,37 +255,36 @@ export function AskPanel(props: {
   const ask = async (typed: string) => {
     if (!canType || busy || listening !== "no" || !typed.trim()) return;
     setVoiceNote(null);
-    // Cards are read on their own page, on this Mac. Nothing is sent anywhere.
-    if (isCardsRequest(typed)) {
+    const question = typed.trim();
+    const route = routeQuestion(typed, { brief, modelReady, canAsk: Boolean(props.ask), parse: props.plans?.parse });
+    // Everything but a question about what was read is answered here, without any model. Nothing is sent anywhere.
+    const local = (turn: TurnState) => {
+      const id = nextId.current++;
       setInput("");
-      setTurns(all => [...all, { id: nextId.current++, question: typed.trim(), state: "cards" }]);
-      return;
+      setTurns(all => [...all, { id, question, ...turn }]);
+    };
+    switch (route.kind) {
+      case "help": return local({ state: "help", checked: Boolean(brief) });
+      case "cards": return local({ state: "cards" });
+      case "plan": return local({ state: "plan", parsed: route.parsed });
+      case "start": return local({ state: "start" });
+      case "no-model": return local({ state: "no-model" });
+      case "loading": return local({ state: "refused", text: ASK_LOADING });
+      case "ask": break;
     }
-    // A request to take something on becomes a plan to confirm. Nothing is sent anywhere.
-    const parsed = props.plans?.parse(typed) ?? { kind: "none" as const };
-    if (parsed.kind !== "none") {
-      setInput("");
-      setTurns(all => [...all, { id: nextId.current++, question: typed.trim(), state: "plan", parsed }]);
-      return;
-    }
-    if (!ready || !props.ask) {
-      setInput("");
-      setTurns(all => [...all, !modelReady ? { id: nextId.current++, question: typed.trim(), state: "no-model" }
-        : { id: nextId.current++, question: typed.trim(), state: "refused", text: "Nothing has been checked yet. Check Planning Center on the Sunday page first. Nothing was sent." }]);
-      return;
-    }
+    if (!props.ask) return;
     const id = nextId.current++;
     const controller = new AbortController();
     running.current = controller;
     setInput("");
-    setTurns(all => [...all, { id, question: typed.trim(), state: "asking" }]);
+    setTurns(all => [...all, { id, question, state: "asking" }]);
     setBusy(true);
     try { update(id, await props.ask(typed, controller.signal)); }
     catch { update(id, { state: "problem", code: null, text: ASK_FAILURES.unfinished }); }
     finally { if (running.current === controller) running.current = null; setBusy(false); }
   };
 
-  const chips = ready && !busy && listening === "no" ? suggestedQuestions(brief) : [];
+  const chips = !canType || busy || listening !== "no" ? [] : ready ? suggestedQuestions(brief) : [HELP_CHIP];
   const off = voiceOff(voiceStatus);
   const voiceLine = listening === "on" ? LISTENING_NOTE : listening === "ending" ? "Finishing the last words…"
     : voiceNote ?? off ?? (voiceStatus?.status === "ready" && canType ? VOICE_HINT : null);
@@ -247,7 +299,7 @@ export function AskPanel(props: {
       <p className="small">Ask about what Ozzie has already read. Ozzie prepares and explains; you decide.</p>
       {/* No button to the page already on screen. */}
       {!brief && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
-        <p>Nothing has been checked yet. Check Planning Center on the Sunday page, or open the fictional example there.</p>
+        <p>Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on the Sunday page. You can also open the fictional example there, or ask what Ozzie can do.</p>
         {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>Open Sunday</button></div>}</div></div>}
       {!modelReady && <NeedsModel page={props.page} onOpen={props.onOpen} />}
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
@@ -263,7 +315,8 @@ export function AskPanel(props: {
       <label htmlFor="ask-input" className="sr-only">Your question</label>
       <textarea id="ask-input" ref={inputRef} className="ask-input" rows={2} maxLength={MAX_QUESTION_CHARS} value={input} disabled={!canType || busy}
         readOnly={listening !== "no"}
-        placeholder={listening !== "no" ? "Listening…" : ready ? "Ask about this Sunday…" : canType ? "Ask Ozzie to keep an eye on something…" : "Ask Ozzie isn't available yet"}
+        placeholder={listening !== "no" ? "Listening…" : ready ? "Ask about this Sunday…" : props.plans ? "Ask Ozzie to keep an eye on something…"
+          : canType ? "Ask what Ozzie can do…" : "Ask Ozzie isn't available yet"}
         onChange={e => { setInput(e.target.value); setVoiceNote(null); }}
         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} />
       <div className="composer-row"><span className="small">{input.length ? `${input.length}/${MAX_QUESTION_CHARS}` : ""}</span><span className="spacer" />

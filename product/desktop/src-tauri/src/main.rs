@@ -27,6 +27,8 @@ use ozzie_native_auth::lifetime;
 // H6: keeps running with the window closed (menu bar, timer, App Nap, open at login, responsibilities).
 mod always_on;
 mod local_tools;
+// The small program another AI app starts to read Ozzie's shared check (helpers/share.swift).
+mod share_helper;
 struct Session {
     auth: Arc<AuthController>,
     receiver: Option<CallbackServer>,
@@ -855,6 +857,7 @@ impl Ledger {
 fn open_ledger(app: &tauri::AppHandle) -> Option<Arc<TaskLedger>> {
     let ledger = TaskLedger::open(&app.path().app_data_dir().ok()?).ok()?;
     // The host is the watchdog: a task still admitted or running belonged to an earlier launch.
+    // While the app runs, the timer thread ends tasks past their ceiling (always_on::sweep_ledger).
     ledger.recover().ok()?;
     Some(Arc::new(ledger))
 }
@@ -1174,6 +1177,7 @@ fn main() {
             local_tools::listen_for_question,
             local_tools::stop_listening,
             local_tools::cancel_listening,
+            share_helper::share_helper_path,
             always_on::background_info,
             always_on::background_next_due,
             always_on::autostart_get,

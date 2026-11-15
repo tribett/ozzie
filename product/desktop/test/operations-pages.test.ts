@@ -76,6 +76,8 @@ describe("Church rules: rooms", () => {
       onChange: () => undefined, positions: [], rooms: captureRooms(capture) }));
     expect(set).toMatch(/<option value="exclusive" selected="">Not shared<\/option>/);
     expect(set).toContain('value="30"');
+    // The setup minutes and their words are one piece, so a narrow row never leaves the words on a line of their own.
+    expect(set).toMatch(/<span class="rule-setup"><input type="number"[^>]*aria-label="Setup minutes for [^"]+"[^>]*\/><span aria-hidden="true">minutes of setup<\/span><\/span>/u);
     // Says what Ozzie does now: setup time and Calendar's own conflict records for not-shared rooms.
     expect(text(set)).toContain("For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records");
     expect(text(set)).not.toContain("can't yet read");

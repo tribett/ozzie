@@ -55,7 +55,7 @@ const URGENCY_SAID: Record<UrgencyEntry["level"], (kind: string) => string> = {
 };
 /** What a per-kind choice means, said on the card while it's on. */
 export const URGENCY_NOW: Record<UrgencyEntry["level"], (kind: string) => string> = {
-  "right-away": kind => `Ozzie tells you right away about ${kindWords(kind)}: a private notice as soon as a check finds a change. Quiet hours still hold it unless you let urgent notices through.`,
+  "right-away": kind => `Ozzie tells you right away about ${kindWords(kind)}: a private notice as soon as a check finds a new one or one gets worse. Quiet hours still hold it unless you let urgent notices through.`,
   briefing: kind => `Ozzie keeps ${kindWords(kind)} for your briefing: no notice, even close to Sunday. They still show here.`,
 };
 

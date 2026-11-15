@@ -51,7 +51,21 @@ describe("note to the team's leader", () => {
     const ctx = { finding: lead, leader_id: PEOPLE.nurseryLeader };
     const text = restoreEscalation(escalationDraft(ctx), ctx, capture.names, "Pat");
     expect(text).toContain("I don't see anyone scheduled to lead the Nursery team on ");
-    expect(text).toContain("Is that expected this week, or should we find someone?");
+    expect(text).toContain("Is that expected, or should we find someone?");
+  });
+
+  it("names the service's own date, never this week or this Sunday", () => {
+    const untimed = (f: Finding): Finding => ({ ...f, position: { ...f.position!, interval: null } });
+    for (const finding of [nursery, lead]) {
+      const ctx = { finding, leader_id: PEOPLE.nurseryLeader };
+      expect(escalationDraft(ctx).text).toContain(` on ${new Date(finding.position!.interval!.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}`);
+      // No service time read: the Sunday's own date when it's known, otherwise just Sunday.
+      expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader, sunday: "2026-11-29" }).text).toContain(" on Sunday, November 29");
+      expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader }).text).toMatch(/ on Sunday (?:still needs|in Planning Center)/u);
+      for (const text of [escalationDraft(ctx).text, escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader }).text]) {
+        expect(text).not.toMatch(/this week|this Sunday/u);
+      }
+    }
   });
 
   it("only addresses a leader Planning Center lists for this team", () => {

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_QUIET_HOURS, inQuietHours } from "../../src/schedule.js";
 import {
-  BRIEFING_WEEKDAYS, CHANGE_GAP_MS, changeEligible, defaultPlan, dueNow, includesSundayReady, settledPlan, FAST_MIN_GAP_MS, FAST_SLOT_MS, lifetimeEnded, limitsLeft, templateLimitsLeft, localInstant, MIN_GAP_MS, MISSED_AFTER_MS,
+  BRIEFING_WEEKDAYS, CHANGE_GAP_MS, changeEligible, checksFreeAt, DAY_MS, defaultPlan, sundayAhead, dueNow, includesSundayReady, settledPlan, FAST_MIN_GAP_MS, FAST_SLOT_MS, lifetimeEnded, limitsLeft, templateLimitsLeft, localInstant, MIN_GAP_MS, MISSED_AFTER_MS,
   nearDeadlineTimes, nextSlot, parseRequest, quietDeferral, RECHECK_MS, refusedUntil, RETRY_MS, retryAt, RUN_TIMEOUT_MS, scheduledSlots, TEMPLATE_IDS, TEMPLATES,
   untilLifetime, upcomingWeekday, usage, validPlan, wallInstant, type LocalState, type Plan, type Responsibility, type RunRow,
 } from "../../src/harness/responsibilities.js";
@@ -300,6 +300,21 @@ describe("daily limits", () => {
     expect(limitsLeft(fresh, SAT).checks).toBe(5);
     expect(templateLimitsLeft(fresh, [stopped, fresh, briefing], SAT).checks).toBe(0);
   });
+  it("say when a kind whose checks are used can check again: when its oldest counted check turns 24 hours old", () => {
+    const stopped = responsibility(sundayPlan(), { status: "ended", runs: [run(-120), run(-90), run(-60), run(-30), run(-20)] });
+    const fresh = responsibility(sundayPlan(), { id: "00000000-0000-4000-8000-000000000002", runs: [run(-5)] });
+    const briefing = responsibility(defaultPlan("morning-briefing", SAT, ZONE), { id: "00000000-0000-4000-8000-000000000003", runs: [run(-3)] });
+    // Six of six used across the stopped one and its replacement: free again when the one from two hours ago is a day old.
+    expect(checksFreeAt(fresh, [stopped, fresh, briefing], SAT)).toBe(at(SAT, -120 + 24 * 60));
+    // With a check left, nothing to wait for.
+    expect(checksFreeAt(fresh, [fresh, briefing], SAT)).toBeNull();
+    expect(checksFreeAt(briefing, [stopped, fresh, briefing], SAT)).toBeNull();
+    // A check older than a day doesn't count; an open run does, once.
+    const older = responsibility(sundayPlan(), { status: "ended", runs: [run(-25 * 60), run(-90), run(-60), run(-30), run(-20)] });
+    expect(checksFreeAt(fresh, [older, fresh], SAT)).toBeNull();
+    const open = { ...fresh, open_run: run(-1), runs: [run(-5), run(-1)] };
+    expect(checksFreeAt(open, [older, open], SAT)).toBe(at(SAT, -90 + 24 * 60));
+  });
 });
 
 describe("quiet hours", () => {
@@ -378,6 +393,59 @@ describe("turning a request into a plan (no model)", () => {
       "Who could cover the open Greeter spot this Sunday?", "What still needs a decision before Sunday?", "Let me know who could cover Greeter",
       "Draft a note to the Nursery team leader", "Find someone to watch the nursery", "When will you check again?", "", "   ",
     ]) expect(parseRequest(text, SAT, ZONE)).toEqual({ kind: "none" });
+  });
+
+  it("until Sunday means the Sunday being watched when one is chosen, but this Sunday is the coming one", () => {
+    // Saturday the 14th, the plan for Sunday the 29th chosen in Settings.
+    expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SAT, ZONE, { sunday: "2026-11-29" })).toMatchObject({ kind: "plan", plan: { lifetime: untilLifetime("2026-11-29", ZONE) } });
+    expect(parseRequest("Keep an eye on Sunday coverage until this Sunday", SAT, ZONE, { sunday: "2026-11-29" })).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
+    // A chosen Saturday-evening plan: until the Sunday after it. One already past: the coming Sunday.
+    expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SAT, ZONE, { sunday: "2026-11-28" })).toMatchObject({ plan: { lifetime: { until: "2026-11-29" } } });
+    expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SAT, ZONE, { sunday: "2026-11-08" })).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
+    expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SAT, ZONE)).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
+  });
+
+  describe("said on a Sunday", () => {
+    // Sunday 15 November 2026, 9:00 in New York.
+    const SUN = "2026-11-15T14:00:00.000Z";
+    it("until Sunday is the Sunday being watched, never today", () => {
+      // The reported case: typed on Sunday the 15th with the plan for the 29th chosen.
+      expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SUN, ZONE, { sunday: "2026-11-29" })).toMatchObject({ kind: "plan", plan: { lifetime: untilLifetime("2026-11-29", ZONE) } });
+      // Nothing chosen, or today's plan chosen: next Sunday.
+      expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SUN, ZONE)).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-22", ZONE) } });
+      expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SUN, ZONE, { sunday: "2026-11-15" })).toMatchObject({ plan: { lifetime: { until: "2026-11-22" } } });
+      expect(parseRequest("Let me know if anyone declines this Sunday", SUN, ZONE)).toMatchObject({ plan: { lifetime: { until: "2026-11-22" } } });
+      expect(defaultPlan("keep-sunday-covered", SUN, ZONE).lifetime).toMatchObject({ until: "2026-11-22" });
+      expect(defaultPlan("keep-sunday-covered", SUN, ZONE, { sunday: "2026-11-15" }).lifetime).toMatchObject({ until: "2026-11-22" });
+      expect(defaultPlan("keep-sunday-covered", SUN, ZONE, { sunday: "2026-11-29" }).lifetime).toMatchObject({ until: "2026-11-29" });
+      // "Next Sunday" asks between the two Sundays after today.
+      expect(parseRequest("Keep an eye on next Sunday", SUN, ZONE)).toEqual({
+        kind: "ask", need: "when", template: "keep-sunday-covered", choices: [untilLifetime("2026-11-22", ZONE), untilLifetime("2026-11-29", ZONE)],
+      });
+      expect(sundayAhead(SUN, ZONE)).toBe("2026-11-22");
+      expect(sundayAhead(SAT, ZONE)).toBe("2026-11-15");
+    });
+
+    it("leaves more than a day, at every hour of the church's Sunday", () => {
+      for (let hour = 0; hour < 24; hour++) {
+        // 00:30 to 23:30 on Sunday the 15th in New York (UTC-5).
+        const now = new Date(Date.parse("2026-11-15T05:30:00.000Z") + hour * 3_600_000).toISOString();
+        for (const text of ["Keep an eye on Sunday coverage until Sunday", "Keep an eye on Sunday for me", "Let me know if anyone declines this Sunday"]) {
+          const p = parseRequest(text, now, ZONE);
+          if (p.kind !== "plan" || p.plan.lifetime.kind !== "until") throw new Error(`${text} at ${now}: ${p.kind}`);
+          expect(Date.parse(p.plan.lifetime.ends_at) - Date.parse(now), `${text} at ${now}`).toBeGreaterThan(DAY_MS);
+        }
+      }
+    });
+
+    it("goes by the church's date, not UTC's", () => {
+      // 03:30 UTC on the 15th is still Saturday evening in New York: until Sunday is tomorrow.
+      expect(parseRequest("Keep an eye on Sunday coverage until Sunday", "2026-11-15T03:30:00.000Z", ZONE)).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-15", ZONE) } });
+      // Noon UTC on Saturday the 14th is already 1:00 on Sunday the 15th in Auckland: next Sunday there.
+      const NZ = "Pacific/Auckland";
+      expect(parseRequest("Keep an eye on Sunday coverage until Sunday", "2026-11-14T12:00:00.000Z", NZ)).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-22", NZ) } });
+      expect(sundayAhead("2026-11-14T12:00:00.000Z", NZ)).toBe("2026-11-22");
+    });
   });
 
   it("never echoes what was typed: a plan holds only fixed fields", () => {

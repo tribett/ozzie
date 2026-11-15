@@ -1,4 +1,5 @@
 // The UI polish pass: what each screen shows, checked on fixed fictional data with static rendering.
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -65,7 +66,7 @@ describe("Settings", () => {
   it("is titled Settings, with its sections in a fixed order", () => {
     expect(html).toContain("<h1 class=\"h1\">Settings</h1>");
     const order = ["Planning Center</h2>", "Sign in</h3>", "Which Sunday</h3>", "Rooms, follow-ups and group events</h3>",
-      "AI help</h2>", "Automatic checks</h2>", "Saved recordings</h2>", "Guided setup</h2>"].map(s => html.indexOf(s));
+      "AI help</h2>", "Your name on notes</h2>", "Automatic checks</h2>", "Saved recordings</h2>", "Guided setup</h2>"].map(s => html.indexOf(s));
     expect(order.every(i => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(text(html)).not.toMatch(/wording help/iu);
@@ -109,6 +110,47 @@ describe("Settings", () => {
     expect(ai.match(/>Use this<\/button>/g)).toHaveLength(2);
     expect(ai).toContain(">Set up</button>");
     expect(ai).not.toContain("own-url");
+  });
+});
+
+describe("click targets: at least 44 by 44 CSS pixels (ui-build-handoff)", () => {
+  const css = ["hearth.css", "styles.css"].map(f => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//gu, "");
+  /** Every declaration given to `selector` (outside media queries' own selectors too), in order. */
+  const decls = (selector: string) => [...css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]
+    .filter(m => m[1]!.split(",").map(x => x.trim().replace(/^\.oz /u, "")).includes(selector)).map(m => m[2]!).join(";");
+  const px = (d: string, prop: string) => { const m = new RegExp(`(?:^|[;\\s])${prop}:\\s*(-?\\d+)px`, "gu"); return [...d.matchAll(m)].map(x => Number(x[1])).at(-1) ?? null; };
+  /**
+   * A visual height plus the hit area its ::after adds above and below ("inset: -Npx ..."). The ::after is placed from
+   * inside the control's 1px border, so each side reaches one pixel less beyond the control than its inset says.
+   */
+  const reach = (selector: string, height: number) => {
+    const after = /inset:\s*-(\d+)px/u.exec(decls(`${selector}::after`));
+    return height + 2 * Math.max(0, Number(after?.[1] ?? 0) - 1);
+  };
+
+  it("small buttons, chips and the microphone look the same but take clicks over 44px", () => {
+    expect(px(decls(".btn-sm"), "height")).toBe(36);
+    expect(px(decls(".btn-sm"), "min-width")).toBeGreaterThanOrEqual(44);
+    expect(reach(".btn-sm", 36)).toBeGreaterThanOrEqual(44);
+    expect(reach(".chip", 36)).toBeGreaterThanOrEqual(44);
+    expect(reach(".ask-mic", px(decls(".ask-mic"), "height")!)).toBeGreaterThanOrEqual(44);
+    // The round microphone reaches as far left and right as up and down.
+    expect(decls(".ask-mic::after")).toMatch(/inset:\s*-5px\s*(?:;|$)/u);
+    for (const s of [".btn-sm", ".chip", ".ask-mic"]) expect(decls(s)).toMatch(/position:\s*relative/u);
+    // The source link in an answer: 26px tall, reaching 44.
+    expect(reach(".ask-links .src", 26)).toBeGreaterThanOrEqual(44);
+  });
+
+  it("disclosures and checkbox labels are at least 44px tall", () => {
+    for (const s of [".listen-more > summary", ".today-aside > summary", ".picker-hand > summary", ".recent-task > summary", ".resp-ended > summary", ".confirmation", ".cards-first a"]) {
+      expect(px(decls(s), "min-height"), s).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  it("rows of small buttons sit far enough apart that their click areas never overlap", () => {
+    expect(decls(".find-feedback > .find-next")).toMatch(/gap:\s*8px 4px/u);
+    expect(px(decls(".find-feedback > .find-next"), "margin-top")).toBeGreaterThanOrEqual(8);
+    expect(decls(".today-later")).toMatch(/gap:\s*8px/u);
   });
 });
 

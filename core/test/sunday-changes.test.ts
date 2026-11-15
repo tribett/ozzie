@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareSundayCheck, describeChange, diffSundayChecks, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../src/sunday-changes.js";
+import { changeStillHolds, compareSundayCheck, describeChange, diffSundayChecks, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../src/sunday-changes.js";
 import { nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../src/fictional-sunday.js";
 import type { SundayCapture, SundayRead, SundayRules } from "../src/sunday-capture.js";
 
@@ -65,6 +65,20 @@ describe("Sunday changes between two checks", () => {
     expect(changes.map(c => c.urgency)).toEqual(["attention", "attention"]);
     // Church-adjustable: a wider window makes the same change urgent.
     expect(diffSundayChecks(record(nov22Capture()), record(next), { now: NOW, urgentWithinHours: 72 }).map(c => c.urgency)).toEqual(["urgent", "urgent"]);
+  });
+
+  it("C19/C20 the 48-hour window on the live check: 47:59 before is urgent, exactly 48:00:00 is urgent (inside), 48:00:01 is not", () => {
+    // The service starts 2026-11-22T14:30:00Z. The window is inclusive: a change exactly 48:00:00 before
+    // the service falls inside it and is urgent; one second earlier than that falls outside.
+    const next = nov22Capture();
+    member(next, "401").attributes.status = "D";
+    need(next, "Greeter")!.attributes.quantity = 2;
+    const urgencyAt = (now: string) => diffSundayChecks(record(nov22Capture()), record(next), { now, urgentWithinHours: 48 }).map(c => [c.kind, c.urgency]);
+    expect(urgencyAt("2026-11-20T14:31:00Z")).toEqual([["confirmed-declined", "urgent"], ["need-increased", "urgent"]]); // 47:59 before
+    expect(urgencyAt("2026-11-20T14:30:00Z")).toEqual([["confirmed-declined", "urgent"], ["need-increased", "urgent"]]); // 48:00:00 before
+    expect(urgencyAt("2026-11-20T14:29:59Z")).toEqual([["confirmed-declined", "attention"], ["need-increased", "attention"]]); // 48:00:01 before
+    // After the service has started nothing is urgent any more: the window is before the service only.
+    expect(urgencyAt("2026-11-22T14:30:01Z")).toEqual([["confirmed-declined", "attention"], ["need-increased", "attention"]]);
   });
 
   it("a confirmed volunteer removed from the plan, leaving the role open, is urgent", () => {
@@ -150,7 +164,7 @@ describe("Sunday changes between two checks", () => {
       .toEqual([["confirmed-declined", "urgent"], ["need-increased", "urgent"], ["need-opened", "attention"], ["pending-accepted", "none"]]);
   });
 
-  it("a Sunday lead going missing inside the window is urgent", () => {
+  it("a confirmed Sunday lead declining inside the window is urgent; the missing lead it leaves is Worth a look, never urgent", () => {
     const leadRules: SundayRules = { ...rules, sundayLeads: [{ team_id: TEAMS.greeter, lead_position: "Greeter Lead" }] };
     const withLead = () => {
       const c = nov22Capture();
@@ -163,7 +177,7 @@ describe("Sunday changes between two checks", () => {
     member(next, "404").attributes.status = "D";
     const changes = diffSundayChecks(record(withLead(), NOW, leadRules), record(next, NOW, leadRules), urgent48);
     expect(changes.map(c => [c.kind, c.urgency, c.position])).toEqual([
-      ["confirmed-declined", "urgent", "Greeter Lead"], ["lead-missing", "urgent", "Greeter"],
+      ["confirmed-declined", "urgent", "Greeter Lead"], ["lead-missing", "attention", "Greeter"],
     ]);
     expect(describeChange(changes[1]!, nameOf)).toBe("No one is confirmed to lead Greeter this Sunday now.");
   });
@@ -222,6 +236,45 @@ describe("remembering what was already known", () => {
     const three = step(two.memory, declined);
     expect(kinds(two.changes)).toEqual(["confirmed-declined", "need-increased", "coverage-unverified"]);
     expect(kinds(three.changes)).toEqual(["coverage-verified"]);
+  });
+
+  it("a held change is rechecked against what is known now: a decline restored overnight no longer holds; one still declined does", () => {
+    const declined = nov22Capture();
+    member(declined, "401").attributes.status = "D";
+    need(declined, "Greeter")!.attributes.quantity = 2;
+    const one = step(null, nov22Capture());
+    const two = step(one.memory, declined);
+    const held = two.changes;
+    expect(kinds(held)).toEqual(["confirmed-declined", "need-increased"]);
+    expect(held.map(c => changeStillHolds(c, two.memory))).toEqual([true, true]);
+    // Restored before quiet hours ended: confirmed again, the extra request gone.
+    const restored = step(two.memory, nov22Capture());
+    expect(held.map(c => changeStillHolds(c, restored.memory))).toEqual([false, false]);
+    // A later check that couldn't read who is scheduled or the open requests never reads as restored.
+    const failing = nov22Capture();
+    readOf(failing, "team_members").outcome = "provider_failure";
+    readOf(failing, "needed_positions").outcome = "provider_failure";
+    expect(held.map(c => changeStillHolds(c, step(two.memory, failing).memory))).toEqual([true, true]);
+    // Still declined, and Greeter still needs the extra person: it holds.
+    expect(held.map(c => changeStillHolds(c, step(two.memory, declined).memory))).toEqual([true, true]);
+  });
+
+  it("rechecks declined requests and partial checks the same way", () => {
+    const declined = nov22Capture();
+    member(declined, "403").attributes.status = "D";
+    const one = step(null, nov22Capture());
+    const two = step(one.memory, declined);
+    expect(kinds(two.changes)).toEqual(["pending-declined"]);
+    const accepted = nov22Capture();
+    member(accepted, "403").attributes.status = "C";
+    expect(changeStillHolds(two.changes[0]!, two.memory)).toBe(true);
+    expect(changeStillHolds(two.changes[0]!, step(two.memory, accepted).memory)).toBe(false);
+    const failing = nov22Capture();
+    readOf(failing, "needed_positions").outcome = "provider_failure";
+    const partly = step(one.memory, failing);
+    expect(kinds(partly.changes)).toEqual(["coverage-unverified"]);
+    expect(changeStillHolds(partly.changes[0]!, partly.memory)).toBe(true);
+    expect(changeStillHolds(partly.changes[0]!, step(partly.memory, nov22Capture()).memory)).toBe(false);
   });
 
   it("a different Sunday starts a new baseline", () => {

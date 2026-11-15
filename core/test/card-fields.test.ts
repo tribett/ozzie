@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { possibleMatches, RECOGNIZED_TEXT_MAX, reviewedList, sameNameCards, suggestFields } from "../src/card-fields.js";
+import { followUpAsks, followUpFor, possibleMatches, readLines, RECOGNIZED_TEXT_MAX, reviewedList, sameNameCards, suggestFields } from "../src/card-fields.js";
 
 // Every name, number and address here is invented test data, shaped like Tesseract output
 // for the synthetic printed cards used in development. No real card was read.
@@ -79,7 +79,7 @@ describe("suggested card fields from on-device text recognition", () => {
   });
 
   it("never shows a request that may have been cut short as a clean reading", () => {
-    expect(suggestFields("Prayer request: For my dad.\n\nAnd for my sister, too.").request).toEqual({ text: "For my dad.", unclear: true });
+    expect(suggestFields("Prayer request: For my dad.\n\nAnd for my sister, too.").request).toEqual({ text: "For my dad.", unclear: true, more: true });
     expect(suggestFields("How can we pray for you?\nFor peace at home.\n\nThanks for visiting!").request.unclear).toBe(true);
     // Sentences that merely start like another label don't end the request or create a phone.
     const s = suggestFields("Prayer request: For my mom.\nChildren at home are worried.\nTelling her doctors we're grateful.");
@@ -94,7 +94,7 @@ describe("suggested card fields from on-device text recognition", () => {
       ["Name: Alex Harbor\nPrayer request: Please pray for my mom.\nName her in your prayers please.", "Please pray for my mom."],
       ["Prayer request: My son is sick.\nEmail me if you need anything.", "My son is sick."],
     ];
-    for (const [card, words] of cases) expect(suggestFields(card).request, card).toEqual({ text: words, unclear: true });
+    for (const [card, words] of cases) expect(suggestFields(card).request, card).toEqual({ text: words, unclear: true, more: true });
     // A second request label is unclear as before; a labeled line with a colon still ends it cleanly.
     expect(suggestFields("Prayer request: Pray for our move.\nRequest: also for my job").request).toEqual({ text: "", unclear: true });
     expect(suggestFields("Prayer request: Pray for our move.\nPhone: 202-555-0142").request).toEqual({ text: "Pray for our move.", unclear: false });
@@ -183,5 +183,160 @@ describe("the reviewed list a person copies", () => {
       "Request: couldn't be read",
       "",
     ].join("\n"));
+  });
+});
+
+// The four fictional sample cards (docs/prep/card-samples) exactly as Ozzie's line assembly
+// (card_lines in product/desktop/src-tauri/src/local_tools.rs) puts together what Ozzie's release
+// card reader returned for them on 2026-11-15. local_tools.rs tests the same readings from the
+// reader's own output. Invented people, reserved example.org addresses and 202-555-01xx numbers only.
+const SAMPLE_A = [
+  "VISITOR CARD — FICTIONAL TEST SAMPLE A",
+  "Synthetic lettering; not a photograph or real human handwriting.",
+  "Alex Harbor", "202-555-0142", "alex.harbor@example.org",
+  "Please call me about the volunteer orientation.", "",
+  "No real person or church is represented. Do not send messages.",
+  "Sample B has a deliberately ambiguous contact character. Ask; do not guess.",
+].join("\n");
+const SAMPLE_D = [
+  "WELCOME CARD - FICTIONAL TEST SAMPLE D",
+  "Synthetic lettering; not a photograph or real human handwriting.",
+  "Name: Casey Brook", "Phone: 202-555-0163", "Email: casey.brook@example.org",
+  "Request: I would like to help with the food pantry.", "",
+  "No real person or church is represented. Do not send messages.",
+].join("\n");
+const SAMPLE_C = [
+  "WELCOME CARD - FICTIONAL TEST SAMPLE C",
+  "Synthetic lettering; not a photograph or real human handwriting.",
+  "Name: Morgan Vale", "Phone: 202-555-0119", "Email: morgan.vale@example.org",
+  "Request: Please call me about the newcomers Lunch.", "",
+  "No real person or church is represented. Do not send messages.",
+].join("\n");
+
+describe("the fictional sample cards as this Mac reads them", () => {
+  it("fills a labeled card, and never lets printed words further down join the visitor's request", () => {
+    expect(suggestFields(SAMPLE_D)).toEqual({
+      name: { text: "Casey Brook", unclear: false },
+      phone: { text: "202-555-0163", unclear: false },
+      email: { text: "casey.brook@example.org", unclear: false },
+      // More writing sits further down the card: the request may go on, so a person checks it.
+      request: { text: "I would like to help with the food pantry.", unclear: true, more: true },
+    });
+    expect(suggestFields(SAMPLE_C).request).toEqual({ text: "Please call me about the newcomers Lunch.", unclear: true, more: true });
+  });
+
+  it("fills nothing on a card without labels, and lists every line it read for the person to place", () => {
+    expect(Object.values(suggestFields(SAMPLE_A))).toEqual(Array(4).fill({ text: "", unclear: false }));
+    expect(readLines(SAMPLE_A, [3])).toEqual([
+      { line: 0, text: "VISITOR CARD — FICTIONAL TEST SAMPLE A", unclear: false },
+      { line: 1, text: "Synthetic lettering; not a photograph or real human handwriting.", unclear: false },
+      { line: 2, text: "Alex Harbor", unclear: false },
+      { line: 3, text: "202-555-0142", unclear: true },
+      { line: 4, text: "alex.harbor@example.org", unclear: false },
+      { line: 5, text: "Please call me about the volunteer orientation.", unclear: false },
+      { line: 7, text: "No real person or church is represented. Do not send messages.", unclear: false },
+      { line: 8, text: "Sample B has a deliberately ambiguous contact character. Ask; do not guess.", unclear: false },
+    ]);
+  });
+
+  it("lists nothing from text it couldn't trust", () => {
+    expect(readLines(`Name: Riley Thornbury\n${"x".repeat(RECOGNIZED_TEXT_MAX)}`, [])).toEqual([]);
+    expect(readLines(undefined as unknown as string, [])).toEqual([]);
+    expect(readLines("  \n\n", [])).toEqual([]);
+  });
+});
+
+describe("explicit follow-up requests, from a fixed list of words", () => {
+  it("finds a plain ask to be called, emailed, texted or contacted", () => {
+    expect(followUpAsks("Please call me about the volunteer orientation.")).toEqual(["call"]);
+    expect(followUpAsks("Please send event information by email.")).toEqual(["email"]);
+    expect(followUpAsks("Text me or call me this week")).toEqual(["call", "text"]);
+    expect(followUpAsks("Would you e-mail me the schedule?")).toEqual(["email"]);
+    expect(followUpAsks("Can someone contact me?")).toEqual(["contact"]);
+    expect(followUpAsks("Please send me the newsletter")).toEqual(["contact"]);
+    expect(followUpAsks("Give me a call\nabout small groups")).toEqual(["call"]);
+  });
+
+  it("never reads an ask into words that don't make one", () => {
+    for (const words of [
+      "I would like to help with the food pantry.",
+      "Please call my sister, she is new here.",
+      "I heard about you by email.",
+      "Do not send messages.",
+      "Please don't call me.",
+      "Never call me at work",
+      "Phone calls from the hospital scare me.",
+      "",
+    ]) expect(followUpAsks(words), words).toEqual([]);
+    // A refusal only cancels its own part: "don't call me, email me" still asks for an email.
+    expect(followUpAsks("Please don't call me, but email me instead.")).toEqual(["email"]);
+    expect(followUpAsks(undefined as unknown as string)).toEqual([]);
+  });
+
+  it("prepares the visitor's exact words with the contact detail they gave for that way of reaching them", () => {
+    const fields = {
+      name: { text: "Alex Harbor", state: "typed" as const }, phone: { text: "202-555-0142", state: "typed" as const },
+      email: { text: "alex.harbor@example.org", state: "typed" as const },
+      request: { text: "Please call me about the volunteer orientation.", state: "typed" as const },
+    };
+    expect(followUpFor({ label: "Card 1", fields })).toEqual({
+      label: "Card 1", asked: "asked for a call", words: "Please call me about the volunteer orientation.",
+      details: ["Phone they gave: 202-555-0142"],
+    });
+    // A detail that isn't there or was hard to read says so; nothing is filled in.
+    expect(followUpFor({ label: "Card 2", fields: {
+      ...fields, email: { text: "", state: "unclear" }, request: { text: "Please send event information by email.", state: "typed" },
+    } })!.details).toEqual(["Email they gave: unclear on the card"]);
+    expect(followUpFor({ label: "Card 3", fields: {
+      ...fields, phone: { text: "", state: "blank" }, email: { text: "pat@example.org", state: "unclear" }, request: { text: "Contact me please", state: "typed" },
+    } })).toEqual({ label: "Card 3", asked: "asked to be contacted", words: "Contact me please",
+      details: ["Phone they gave: none on the card", "Email they gave: pat@example.org (unclear on the card, worth a look)"] });
+    expect(followUpFor({ label: "Card 4", fields: { ...fields, request: { text: "I would like to help.", state: "typed" } } })).toBeNull();
+    expect(followUpFor({ label: "Card 5", fields: { ...fields, request: { text: "", state: "blank" } } })).toBeNull();
+  });
+});
+
+describe("the reviewed list a person copies: who typed what, and prepared follow-ups", () => {
+  it("labels a field a person typed by hand, and lists each prepared follow-up as its own section", () => {
+    const list = reviewedList([
+      { label: "Card 1", fields: {
+        name: { text: "Alex Harbor", state: "typed" }, phone: { text: "202-555-0142", state: "typed" },
+        email: { text: "alex.harbor@example.org", state: "typed" }, request: { text: "Please call me about the volunteer orientation.", state: "typed" } } },
+      { label: "Card 2", fields: {
+        name: { text: "Jordan Field", state: "typed" }, phone: { text: "202-555-0176", state: "typed" },
+        email: { text: "jordan.field0@example.org", state: "typed", by: "person" },
+        request: { text: "I would like to help.", state: "unclear", by: "person" } } },
+    ]);
+    expect(list).toBe([
+      "Visitor cards checked in Ozzie: 2",
+      "Each card was checked against its photo before this list was copied. Nothing was added to Planning Center.",
+      "",
+      "Card 1",
+      "Name: Alex Harbor",
+      "Phone: 202-555-0142",
+      "Email: alex.harbor@example.org",
+      "Request (their exact words):",
+      "Please call me about the volunteer orientation.",
+      "",
+      "Card 2",
+      "Name: Jordan Field",
+      "Phone: 202-555-0176",
+      "Email: jordan.field0@example.org (typed by a person)",
+      "Request (their exact words, typed by a person, partly unclear):",
+      "I would like to help.",
+      "",
+      "Prepared follow-ups: 1",
+      "Suggested from the words on these cards. Ozzie didn't call, text or email anyone.",
+      "",
+      "Card 1 asked for a call",
+      "Their words: “Please call me about the volunteer orientation.”",
+      "Phone they gave: 202-555-0142",
+      "Choose who will follow up in your church tools.",
+      "",
+    ].join("\n"));
+    expect(reviewedList([{ label: "Card 1", fields: {
+      name: { text: "Sam Lee", state: "unclear", by: "person" }, phone: { text: "", state: "blank", by: "person" },
+      email: { text: "", state: "blank" }, request: { text: "", state: "blank" } } }]))
+      .toContain("Name: Sam Lee (typed by a person; unclear on the card, worth a look)\nPhone: blank on the card\n");
   });
 });

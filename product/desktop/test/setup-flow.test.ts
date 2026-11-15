@@ -32,6 +32,8 @@ describe("guided setup", () => {
   it("explains what Planning Center access will be read and says connected only after Planning Center confirmed it", () => {
     const before = render("connect");
     expect(before).toContain("What Ozzie will read");
+    // The People background-check read, said as narrowly as it is: only when asked for, only whether a cleared check is current.
+    expect(before).toContain("Background checks, only if you ask for them: when you mark kids teams and turn on the background-check rule in Church rules, and your connection includes People, Ozzie reads whether each person scheduled on those teams has a current cleared background check, never its details. That stays on this Mac and never goes to an AI.");
     expect(before).toContain("Change anything in Planning Center or send messages.");
     expect(before).toContain("Not connected yet.");
     expect(before).not.toMatch(/Connected\./);

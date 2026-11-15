@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { connection, foundOrganization, operationsAsked, type ConnectionStatus } from "./connection.js";
+import { shouldRefreshStale } from "./stale-refresh.js";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { connection, foundOrganization, operationsAsked, yourName, type ConnectionStatus } from "./connection.js";
 import "./hearth.css";
 import "./styles.css";
-import { buildSundayBrief, teamLeaders } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount, teamLeaders } from "../../../core/src/sunday-brief.js";
 import { captureToCoverage, type SundayCapture } from "../../../core/src/sunday-capture.js";
 import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { captureRooms, sundayOperations } from "../../../core/src/operations-capture.js";
-import { applyDecisions, openCount, type SundayDecision } from "../../../core/src/sunday-decisions.js";
+import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { SundayPage, useSundayDecisions } from "./sunday-page.js";
 import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
@@ -111,6 +112,9 @@ export function App() {
   useEffect(() => { loadProcedures().then(setProcedures).catch(() => setProcedures(null)); }, []);
   const orderedProcedures = useMemo(() => procedures ? PROCEDURE_ORDER.flatMap(id => procedures.get(id) ?? []) : null, [procedures]);
   const [focusProcedure, setFocusProcedure] = useState<string | null>(null);
+  // A page opens at its top: the work column keeps one scroll position, so without this a new page
+  // would open wherever the last one was left. Opening a procedure scrolls to it instead (rules-page).
+  const mainRef = useRef<HTMLElement>(null);
   // Debug builds only (dev_defaults reports something only there): developer lines and the loop choice.
   const [debug, setDebug] = useState(false);
   const [loop, setLoop] = useState<LoopChoice>("pi");
@@ -260,12 +264,27 @@ export function App() {
   useEffect(() => saveRules(rules), [rules]);
 
   const brief = useMemo(() => capture ? buildSundayBrief(capture, rules, fictional ? capture.completed_at : now, fictional) : null, [capture, rules, now, fictional]);
+  // Someone looking at Ozzie sees a current picture: with the window on screen, a live check that has
+  // gone out of date is read again (stale-refresh.ts). Paused checks stay paused.
+  const lastRefresh = useRef(0);
+  const refreshInput = { visible, fictional, ready: readiness === "ready", staleLive: Boolean(brief?.stale && capture?.kind === "live"),
+    paused: automatic.schedule.paused, running: automatic.running };
+  const mayRefresh = shouldRefreshStale({ ...refreshInput, nowMs: Date.parse(now), lastAttemptMs: lastRefresh.current });
+  useEffect(() => {
+    if (!mayRefresh) return;
+    lastRefresh.current = Date.now();
+    void proactive.checkNow("automatic").then(c => {
+      if (!current.current.fictional) { setCapture(c); setNow(new Date().toISOString()); }
+    }).catch(() => undefined);
+  }, [mayRefresh]);
   const positions = useMemo(() => capture ? captureToCoverage(capture, rules, now).positions : [], [capture, rules, now]);
   const [decisions, setDecisions] = useSundayDecisions(capture, brief);
-  const open = brief ? openCount(applyDecisions(brief, decisions)) : null;
   // Rooms, follow-ups and group meetings from the capture's own reads, on the church's own time zone
   // (the example's fictional church is on Eastern time). A fictional example is evaluated as of its own check.
   const operations = useMemo(() => capture ? sundayOperations(capture, rules, fictional ? {} : { now }) : null, [capture, rules, now, fictional]);
+  // One count everywhere: what the Sunday page shows (Services findings after decisions, plus rooms,
+  // follow-ups and group meetings), for the sidebar badge, Today and the page's own headline.
+  const open = brief ? sundayShownCount(applyDecisions(brief, decisions), operations) : null;
   const connected = (status?.state === "connected" || status?.state === "stored-unchecked") && Boolean(settings.organization) && status?.organization === settings.organization;
   const configured = /^\d+$/.test(settings.serviceTypeId) && /^\d+$/.test(settings.planId);
   const latest = recordings.filter(r => r.plan_id === settings.planId).sort((a, b) => b.completed_at.localeCompare(a.completed_at))[0];
@@ -294,7 +313,7 @@ export function App() {
   // "Use Ozzie's last check in other AI apps" (Settings): off unless the leader turns it on; only this church's check.
   const sharing = useSharing(harnessData, harnessSession, ledgerVersion, { organization: org, status });
   const ask: AskFn | null = useMemo(() => harness && procedures
-    ? (typed, signal) => askOzzie(harness, typed, { signal, recorder, skills: procedures, sender: "" })
+    ? (typed, signal) => askOzzie(harness, typed, { signal, recorder, skills: procedures, sender: yourName.get() })
       .finally(() => { void recorder.idle().then(() => setLedgerVersion(v => v + 1)); })
     : null, [harness, procedures, recorder]);
   // What happened reads the ledger when it opens, after each task, and every few seconds while it's open.
@@ -322,6 +341,11 @@ export function App() {
   const needsSetup = !(org && configured);
   useEffect(() => { if (launched) setSetup(s => s === "auto" ? needsSetup ? "open" : "closed" : s); }, [launched]);
   const showSetup = setup === "open" || (setup === "auto" && launched && needsSetup);
+  useLayoutEffect(() => {
+    if (focusProcedure) return;
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
+  }, [page, showSetup, focusProcedure]);
   const endSetup = (then: Page) => { setupMemory.close(); setSetup("closed"); setPage(then); };
   // Names for "What changed" come only from the current real check of the same organization.
   const changeNames = capture && !fictional && capture.organization === org ? capture.names : {};
@@ -373,7 +397,7 @@ export function App() {
           <p className="small side-org">{connected ? `Planning Center organization ${status!.organization}` : "Planning Center not connected"}</p>
         </div>
       </aside>
-      <main className="main">
+      <main className="main" ref={mainRef}>
         {showSetup && <SetupFlow status={status} settings={settings} onSettings={setSettings} onStatus={setStatus} prefs={automatic.prefs} onModel={setModelReady}
           onClose={() => endSetup("today")} onAutomatic={() => endSetup("automatic")}
           onExample={() => { endSetup("sunday"); void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }} />}

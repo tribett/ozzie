@@ -5,6 +5,7 @@
 import type { CandidateAssessment, PositionAssessment } from "./coverage.js";
 import { buildSundayBrief, leadKey, needKey, type Finding, type SundayBrief } from "./sunday-brief.js";
 import type { SundayCapture, SundayRules } from "./sunday-capture.js";
+import { kindWords } from "./finding-feedback.js";
 
 export interface PositionFacts {
   team_id: string; name: string; starts_at: string | null;
@@ -39,7 +40,9 @@ export type ChangeKind =
   | "confirmed-declined" | "confirmed-removed" | "pending-accepted" | "pending-declined" | "pending-removed"
   | "need-opened" | "need-increased" | "need-decreased" | "need-filled"
   | "lead-missing" | "lead-confirmed" | "suggestion-conflict" | "suggestion-left-out"
-  | "coverage-unverified" | "coverage-verified";
+  | "coverage-unverified" | "coverage-verified"
+  /** A finding of a kind the person asked to hear about right away, new since the last check (finding-feedback rightAwayChanges). */
+  | "finding-new";
 export interface SundayChange {
   /** Stable for the same fact, so the same change can be recognized again. */
   id: string;
@@ -54,6 +57,8 @@ export interface SundayChange {
   from?: number; to?: number;
   failed_reads?: number;
   service_starts_at?: string;
+  /** finding-new: the finding's kind, stable key and card tone. Ids only. */
+  finding?: { kind: string; key: string; tone: "decision" | "look" };
 }
 export interface ChangeOptions { now: string; urgentWithinHours: number }
 /** Default urgency window before the service; churches can adjust it. */
@@ -156,7 +161,6 @@ export function diffSundayChecks(previous: SundayCheckRecord, next: SundayCheckR
     }
   }
   const lostKeys = new Set(lost.map(f => needKey(f.team_id, f.position)));
-  const lostTeams = new Set(lost.map(f => f.team_id));
 
   for (const [key, after] of Object.entries(next.positions)) {
     const before = previous.positions[key];
@@ -176,10 +180,11 @@ export function diffSundayChecks(previous: SundayCheckRecord, next: SundayCheckR
       changes.push(worse({ id: `${kind}:${key}:${person}`, kind, position, team_id, person_id: person }, key, false));
     }
   }
-  // The team's Sunday lead, only when both checks positively read it.
+  // The team's Sunday lead, only when both checks positively read it. A missing lead is Worth a look on its
+  // card (the team's leader may be leading), so it is never urgent; a confirmed lead declining is, above.
   for (const [key, after] of Object.entries(next.leads)) {
     const before = previous.leads[key]?.state;
-    if (before === "confirmed" && after.state === "missing") changes.push(worse({ id: `lead-missing:${key}`, kind: "lead-missing", position: after.name, team_id: after.team_id }, key, lostTeams.has(after.team_id)));
+    if (before === "confirmed" && after.state === "missing") changes.push(worse({ id: `lead-missing:${key}`, kind: "lead-missing", position: after.name, team_id: after.team_id }, key, false));
     if (before === "missing" && after.state === "confirmed") changes.push(better({ id: `lead-confirmed:${key}`, kind: "lead-confirmed", position: after.name, team_id: after.team_id }));
   }
 
@@ -218,6 +223,34 @@ export function compareSundayCheck(memory: SundayCheckMemory | null, next: Sunda
   return { changes: diffSundayChecks(memory.known, next, options, memory.latest), memory: { latest: next, known: remember(memory.known, next) } };
 }
 
+/**
+ * Whether a worse change found earlier is still so in what is known about the same Sunday now. A notice held
+ * for quiet hours is rechecked against the newest saved check before it goes out (owner decision: quiet hours
+ * hold notices; what they held is rechecked first), so a change reversed meanwhile (a decline restored, the
+ * extra request gone) brings none. Facts are compared with the last value actually read: a fact no later
+ * check could read still holds, so nothing reads as resolved unless it was positively read.
+ */
+export function changeStillHolds(change: SundayChange, memory: SundayCheckMemory, found?: readonly string[] | null): boolean {
+  if (change.effect !== "worse") return false;
+  const { known } = memory;
+  // Serving changes carry the assignment in their id: `${kind}:${assignment_id}`.
+  const serving = () => known.serving?.find(f => f.assignment_id === change.id.slice(change.kind.length + 1))?.status;
+  const position = change.team_id && change.position ? known.positions[needKey(change.team_id, change.position)] : undefined;
+  switch (change.kind) {
+    case "confirmed-declined": case "confirmed-removed": return !known.serving || serving() !== "C";
+    case "pending-declined": { const status = serving(); return !known.serving || (status !== "C" && status !== "U"); }
+    // A position no longer in the plan has no open request.
+    case "need-opened": case "need-increased": return position !== undefined && (position.remaining === null || position.remaining > (change.from ?? 0));
+    case "suggestion-conflict": case "suggestion-left-out": return position !== undefined && (position.remaining ?? 1) > 0 && change.person_id !== undefined
+      && position.people[change.person_id] === (change.kind === "suggestion-conflict" ? "possible-conflict" : "excluded");
+    case "lead-missing": { const lead = change.team_id ? known.leads[leadKey(change.team_id)] : undefined; return lead !== undefined && lead.state !== "confirmed"; }
+    case "coverage-unverified": return !memory.latest.fully_read;
+    // A new finding still holds while the newest check still shows it (`found`: its finding keys, when known).
+    case "finding-new": return !found || (change.finding !== undefined && found.includes(change.finding.key));
+    default: return true;
+  }
+}
+
 // Wording follows the Sunday page ("Greeter still needs one more person.").
 const people = (n: number) => n === 1 ? "one more person" : `${n} more people`;
 /** Plain-language sentence for one change. Names come only from the local resolver, at render time. */
@@ -243,5 +276,6 @@ export function describeChange(change: SundayChange, nameOf: (personId: string) 
       ? `Some coverage couldn't be verified: ${change.failed_reads} Planning Center ${change.failed_reads === 1 ? "read" : "reads"} didn't complete.`
       : "Some coverage couldn't be verified in the latest check.";
     case "coverage-verified": return "Every Planning Center read completed again.";
+    case "finding-new": return `New since the last check: ${kindWords(change.finding?.kind ?? "")}. Your Church rules say to tell you right away.`;
   }
 }

@@ -15,12 +15,14 @@
 import { hasContactDetail } from "../src/ask.js";
 import { ToolFailure } from "../src/broker.js";
 import type { TaskEvent, ToolEnvelope } from "../src/harness/contract.js";
-import { envelopeProblems } from "../src/harness/fixed.js";
+import { envelopeProblems, isoMillis } from "../src/harness/fixed.js";
 import { FAILURE_CODES, ledgerDetailOk } from "../src/harness/ledger-events.js";
 import type { HarnessTools } from "../src/harness/tools.js";
 
 export const SHARED_FORMAT = "ozzie-shared-check-2";
 export const SHARED_FILE = "shared-check.json";
+/** Present beside the copy while the leader has sharing on; holds nothing. The copy is read only while it is a regular file (shared_check.rs ON_FILE). */
+export const ON_FILE = ".shared-check.on";
 /** Largest file read; the native writer keeps it far smaller (9 envelopes of at most 6,000 characters, 20 tasks). */
 export const MAX_SHARED_BYTES = 256 * 1024;
 /** Most recent tasks kept for "what happened". */
@@ -82,8 +84,8 @@ export async function sharedEnvelopes(tools: HarnessTools): Promise<ToolEnvelope
 
 /** When the facts in these results were read: the earliest check time among them (ISO, milliseconds), or null when none. */
 export function checkedAtOf(envelopes: readonly ToolEnvelope[]): string | null {
-  const times = envelopes.map(e => Date.parse(e.check_time));
-  return times.length && times.every(t => !Number.isNaN(t)) ? new Date(Math.min(...times)).toISOString() : null;
+  const times = envelopes.map(e => isoMillis(e.check_time));
+  return times.length && times.every(t => t !== null) ? new Date(Math.min(...times as number[])).toISOString() : null;
 }
 
 /** The file's text exactly as the native writer lays it out (for tests and for hosts without the desktop app). */
@@ -91,7 +93,7 @@ export const sharedCheckText = (envelopes: readonly ToolEnvelope[], tasks: reado
   JSON.stringify({ format: SHARED_FORMAT, copy_id: copyId, checked_at: checkedAtOf(envelopes), shared_at: sharedAt, envelopes, tasks });
 
 const INSTANT =/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/u;
-const instant = (v: unknown): v is string => typeof v === "string" && INSTANT.test(v) && !Number.isNaN(Date.parse(v));
+const instant = (v: unknown): v is string => typeof v === "string" && INSTANT.test(v) && isoMillis(v) !== null;
 const plain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && Object.getPrototypeOf(v) === Object.prototype;
 const exactly = (o: Record<string, unknown>, keys: readonly string[]) => Object.keys(o).length === keys.length && keys.every(k => Object.hasOwn(o, k));
 const KINDS: ReadonlySet<string> = new Set(["ask", "skill", "check"]);
@@ -133,7 +135,7 @@ export function parseSharedCheck(text: string): SharedCheck | null {
   if (new Set(envelopes.map(e => e.tool)).size !== envelopes.length) return null;
   // The check time must be the facts' own: the earliest among the results, never a later save time.
   const earliest = checkedAtOf(envelopes);
-  if (earliest === null || Date.parse(checked_at as string) !== Date.parse(earliest)) return null;
+  if (earliest === null || isoMillis(checked_at as string) !== isoMillis(earliest)) return null;
   if (!Array.isArray(tasks) || tasks.length > MAX_SHARED_TASKS || !tasks.every(taskOk)) return null;
   return { format: SHARED_FORMAT, copy_id, checked_at: checked_at as string, shared_at: value["shared_at"], envelopes, tasks };
 }

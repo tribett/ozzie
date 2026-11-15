@@ -131,6 +131,19 @@ describe("N confirmed people at each service time", () => {
     expect(f.map(x => x.position!.interval!.starts_at)).toEqual(["2026-11-22T14:30:00Z"]);
   });
 
+  it("one person confirmed on two rows of the same kids team at the same time is counted once", () => {
+    const capture = nov22Capture();
+    // The Nursery volunteer already confirmed for 9:30 is on a second Nursery row for the same time.
+    addMember(capture, "456", PEOPLE.nurseryConfirmed, "C", ["9001"]);
+    const [f, ...rest] = kinds(brief(capture, nursery()).findings, "too-few-confirmed");
+    expect(rest).toEqual([]);
+    expect(f).toMatchObject({ tone: "decision", needed: 2, confirmed: [PEOPLE.nurseryConfirmed] });
+    expect(f!.why.join(" ")).toContain("Planning Center shows 1 confirmed for this service time.");
+    // A second, different confirmed person does make two.
+    addMember(capture, "457", "557", "C", ["9001"]);
+    expect(kinds(brief(capture, nursery()).findings, "too-few-confirmed")).toEqual([]);
+  });
+
   it("no confirmed people at a time the team serves is a fact too", () => {
     const capture = nov22Capture();
     addSecondService(capture);
@@ -380,7 +393,9 @@ describe("kids findings flow into the briefing; background checks never leave th
     for (const skill of skills.values()) expect(build({ id: "t", kind: "skill", skill_id: skill.id, workspace_id: "w", created_at: "2026-11-20T15:05:00Z" })).not.toMatch(BACKGROUND);
     const session = new AskSession();
     const context = buildAskContext(session, { brief: b, names: capture.names, organization: capture.organization }, { timeZone: "America/New_York" })!;
-    const asked = prepareAsk(session, context, "Is everyone on Nursery cleared to serve?");
+    // A question about clearance is never sent at all (answered on this Mac instead); an ordinary one carries no such fact.
+    expect(prepareAsk(session, context, "Is everyone on Nursery cleared to serve?").ok).toBe(false);
+    const asked = prepareAsk(session, context, "Who is on Nursery this Sunday?");
     expect(asked.ok).toBe(true);
     if (asked.ok) expect(JSON.stringify(asked.asked.request)).not.toMatch(BACKGROUND);
     expect(ASK_SYSTEM).not.toMatch(BACKGROUND);

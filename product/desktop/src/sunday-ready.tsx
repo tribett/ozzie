@@ -9,6 +9,8 @@ import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../co
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { Icon } from "./icons.js";
 import { backgroundTitle, fewConfirmedTitle } from "./sunday-page.js";
+import { keptLines } from "./responsibility-words.js";
+import type { NoticedItem } from "./responsibility-runner.js";
 
 type Names = Readonly<Record<string, string>>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -66,6 +68,21 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
     <p className="small">{brief.mode === "recording" ? "From a saved recording made" : "Read from Planning Center"} {time(brief.checked_at ?? brief.completed_at)}.</p>
     <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSunday}>Open Sunday to decide</button></div>
+  </section>;
+}
+
+/**
+ * "Kept for your briefing", inside a morning briefing: what the person's Church rules keep for it ("Put this in
+ * the briefing") instead of a notice, each kind with how many its check showed. Kinds and counts only; nothing
+ * when nothing is kept.
+ */
+export function KeptForBriefing({ item }: { item: Pick<NoticedItem, "kind" | "kept"> }) {
+  const lines = keptLines(item);
+  if (!lines.length) return null;
+  return <section aria-label="Kept for your briefing">
+    <p className="small bold">Kept for your briefing</p>
+    <ul className="list">{lines.map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>
+    <p className="small">Your Church rules keep these for the briefing instead of a notice. Each one is on the Sunday page.</p>
   </section>;
 }
 

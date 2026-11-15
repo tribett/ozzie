@@ -9,8 +9,9 @@ import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { AskPanel, type PlanHooks, type Turn } from "../src/ask-panel.js";
 import {
-  AutostartToggle, NoticedCard, PlanCard, PlanEditor, PlanTurn, ResponsibilityList, startedText, TemplatePicker, type PlanActions, type PlanContext,
+  againText, AutostartToggle, checksBack, NoticedCard, PlanCard, PlanEditor, PlanTurn, ResponsibilityList, startedText, TemplatePicker, watchLine, type PlanActions, type PlanContext,
 } from "../src/responsibility-views.js";
+import { YourNameField } from "../src/connection-page.js";
 import type { NoticedItem, Runner, RunnerView } from "../src/responsibility-runner.js";
 import { TodayPage } from "../src/today-page.js";
 import { SetupFlow } from "../src/setup-flow.js";
@@ -424,6 +425,83 @@ describe("Today: what comes to the person", () => {
     const none = today({ items: [], noticed: [] });
     expect(none).toContain("Nothing is under way. Ask Ozzie something like “Keep an eye on Sunday”, and it will keep checking without being asked again.");
     expect(none).toContain("See what Ozzie can keep an eye on");
+  });
+});
+
+describe("a kind that has used its checks for the last 24 hours", () => {
+  // The kind's six checks were used by one that was stopped and set up again; the oldest was at 8:00 (two hours before FRI).
+  const used = Array.from({ length: 6 }, (_, i) => run({ run_id: `00000000-0000-4000-8000-0000000001${String(i).padStart(2, "0")}`, started_at: at_(FRI, -120 + i * 20) }));
+  const stopped = responsibility(sunday(), { id: "00000000-0000-4000-8000-000000000009", status: "ended", runs: used });
+  const fresh = responsibility(sunday());
+  const soon = at_(FRI, 31);
+  const v = view({ items: [fresh, stopped], next: { [fresh.id]: soon } });
+  const free = at_(FRI, -120 + 24 * 60);
+
+  it("says when it can check again, never a scheduled time it can't keep", () => {
+    expect(checksBack(fresh, v, FRI)).toBe(free);
+    const line = watchLine(fresh, v, FRI);
+    expect(line).toBe(`Can check again ${againText(free, FRI)} · not checked yet`);
+    expect(line).not.toContain("Next check");
+    const card = render(React.createElement(ResponsibilityList, { view: v, context: context(), runner: fakeRunner(v), actions }));
+    expect(card).toContain(`Next check It has used its checks for now. It can check again ${againText(free, FRI)}.`);
+    expect(card).toContain("6 of 6 checks used in the last 24 hours.");
+    // A scheduled time after its checks free up is one it can keep; with checks left, the schedule stands.
+    const later = view({ items: [fresh, stopped], next: { [fresh.id]: at_(free, 60) } });
+    expect(checksBack(fresh, later, FRI)).toBeNull();
+    expect(watchLine(fresh, later, FRI)).toMatch(/^Next check /u);
+    expect(checksBack(fresh, view({ items: [fresh], next: { [fresh.id]: soon } }), FRI)).toBeNull();
+  });
+
+  it("says the time plainly: today's time, tomorrow, or the day", () => {
+    const now = new Date(2026, 10, 20, 10, 0).toISOString();
+    expect(againText(new Date(2026, 10, 20, 15, 30).toISOString(), now)).toBe("at 3:30 PM");
+    expect(againText(new Date(2026, 10, 21, 8, 0).toISOString(), now)).toBe("tomorrow at 8:00 AM");
+    expect(againText(new Date(2026, 10, 23, 8, 0).toISOString(), now)).toBe("Mon 8:00 AM");
+  });
+});
+
+describe("drafted notes and your name", () => {
+  const stored = new Map<string, string>();
+  const fakeStorage = { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, x: string) => { stored.set(k, x); }, removeItem: (k: string) => { stored.delete(k); } };
+  const keep = responsibility(sunday());
+  const item: NoticedItem = { id: "p", responsibility_id: keep.id, template: "keep-sunday-covered", at: FRI, kind: "found", decisions: 1, drafted: true, drafts: 1 };
+  const card = () => render(React.createElement(NoticedCard, {
+    item, view: view({ items: [keep], noticed: [item] }), names, now: FRI, onOpen: () => {}, written: { summary: null, draft: "Hi Riley,\n\nCould you help?\n\nThank you,\n[Your name]" },
+  }));
+
+  it("a note the AI drafted is signed with your name on this Mac, or keeps [Your name] when none is set", () => {
+    vi.stubGlobal("localStorage", fakeStorage);
+    try {
+      stored.clear();
+      expect(card()).toContain("Thank you, [Your name]");
+      stored.set("ozzie.your-name.v1", "Pat Example");
+      expect(card()).toContain("Thank you, Pat Example");
+      expect(card()).not.toContain("[Your name]");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("Settings has a labelled field for it, kept on this Mac and never sent to an AI", () => {
+    const saved: string[] = [];
+    const html = renderToStaticMarkup(React.createElement(YourNameField, { store: { get: () => "Pat", set: v => { saved.push(v); } } }));
+    expect(html).toContain('<label for="your-name" class="field-l">Your name for notes</label>');
+    expect(html).toMatch(/<input id="your-name"[^>]*aria-describedby="your-name-help"[^>]*value="Pat"/u);
+    expect(text(html)).toContain("It stays on this Mac and goes in after any AI rewording, so it's never sent to an AI. Leave it empty to keep [Your name] for you to fill in.");
+    const settings = render(React.createElement(ConnectionPage, { status: null, settings: { clientId: "", organization: "", serviceTypeId: "", planId: "" }, onSettings: () => {}, onStatus: () => {},
+      nameStore: { get: () => "", set: () => {} } }));
+    expect(settings).toContain("Your name on notes");
+    expect(settings.indexOf("Your name on notes")).toBeGreaterThan(settings.indexOf("AI help"));
+  });
+});
+
+describe("a plan changed on a Sunday", () => {
+  it("never offers a lifetime that ends today", () => {
+    const SUN = "2026-11-15T14:00:00.000Z"; // Sunday 9:00 AM in New York
+    const plan = defaultPlan("keep-sunday-covered", SUN, ET);
+    expect(plan.lifetime).toMatchObject({ until: "2026-11-22" });
+    const editor = render(React.createElement(PlanEditor, { plan, context: context({ now: () => SUN }), onDone: () => {}, onCancel: () => {} }));
+    expect(editor).toContain("Until the end of Sunday, November 22");
+    expect(editor).toContain("Until the end of Sunday, November 29");
+    expect(editor).not.toContain("November 15");
   });
 });
 

@@ -179,12 +179,25 @@ export function untilLifetime(date: string, zone: string): Lifetime | null {
   return day ? { kind: "until", until: date, ends_at: day.ends_at } : null;
 }
 
+/**
+ * The coming Sunday in the church's zone, never today: said on a Sunday, "Sunday" means next week's, so a
+ * lifetime that ends with it always has more than a day left.
+ */
+export function sundayAhead(now: string, zone: string): string {
+  const sunday = upcomingWeekday(now, zone, 0);
+  return sunday === localDate(now, zone) ? addDays(sunday, 7) : sunday;
+}
+
 /** What a plan can know about this Mac's setup: the church-local date of the Sunday chosen in Settings, once a check has read it. */
 export interface PlanOptions { sunday?: string | null }
-/** The Sunday a "this Sunday" default means: the one chosen in Settings while it's still ahead, otherwise the coming Sunday. */
-function watchedSunday(now: string, zone: string, options: PlanOptions): string {
+/** The chosen Sunday while it's still ahead (after today), or null. */
+const chosenAhead = (now: string, zone: string, options: PlanOptions) => {
   const chosen = options.sunday;
-  return chosen && validDate(chosen) && chosen >= localDate(now, zone) ? chosen : upcomingWeekday(now, zone, 0);
+  return chosen && validDate(chosen) && chosen > localDate(now, zone) ? chosen : null;
+};
+/** The Sunday a "this Sunday" default means: the one chosen in Settings while it's still ahead, otherwise the coming Sunday (never today). */
+function watchedSunday(now: string, zone: string, options: PlanOptions): string {
+  return chosenAhead(now, zone, options) ?? sundayAhead(now, zone);
 }
 export function defaultPlan(template: TemplateId, now: string, zone: string, options: PlanOptions = {}): Plan {
   const t = TEMPLATES[template];
@@ -356,6 +369,17 @@ export function templateLimitsLeft(r: Pick<Responsibility, "template" | "limits"
   const same = all.filter(x => x.template === r.template);
   return limitsLeft({ limits: r.limits, runs: same.flatMap(x => [...x.runs, ...(x.open_run ? [x.open_run] : [])]), open_run: null }, now);
 }
+/**
+ * When `r`'s kind can check again once its checks for the last 24 hours are used (counted as templateLimitsLeft
+ * counts them): when the oldest counted check turns 24 hours old. null while it still has a check left.
+ */
+export function checksFreeAt(r: Pick<Responsibility, "template" | "limits">, all: readonly Pick<Responsibility, "template" | "runs" | "open_run">[], now: string): string | null {
+  const t = ms(now);
+  const runs = all.filter(x => x.template === r.template).flatMap(x => [...x.runs, ...(x.open_run ? [x.open_run] : [])]);
+  const starts = [...new Map(runs.map(x => [x.run_id, ms(x.started_at)])).values()].filter(s => s <= t && t - s < DAY_MS).sort((a, b) => a - b);
+  const over = starts.length - r.limits.checks_per_day;
+  return over >= 0 ? iso(starts[over]! + DAY_MS) : null;
+}
 
 /** Quiet hours hold a notice until they end (the first moment after a daylight-saving gap they end in); they never drop it. */
 export function quietDeferral(now: string, quiet: QuietHours, zone: string): { send: true } | { send: false; at: string } {
@@ -422,15 +446,21 @@ function parseLifetime(text: string, now: string, zone: string, template: Templa
   const until = (date: string | null) => date ? untilLifetime(date, zone) : null;
   const choicesFor = (...dates: string[]) => dates.map(d => until(d)).filter((l): l is Lifetime => l !== null);
   const unclear = (): LifetimeRead => ({ kind: "ask", choices: [defaultPlan(template, now, zone, options).lifetime, { kind: "until-stopped" }] });
+  // A Sunday is never today: said on a Sunday, it means next week's (sundayAhead). Other days keep their own.
+  const coming = (day: number) => day === 0 ? sundayAhead(now, zone) : upcomingWeekday(now, zone, day);
   const next = new RegExp(`\\bnext ${DAY}\\b`, "u").exec(text);
   if (next) {
     // "Next Sunday" means the coming one to some people and the one after to others.
-    const first = upcomingWeekday(now, zone, DAYS.indexOf(next[1]!));
+    const first = coming(DAYS.indexOf(next[1]!));
     return { kind: "ask", choices: choicesFor(first, addDays(first, 7)) };
   }
-  const named = new RegExp(`\\b(?:${UNTIL} (?:this )?|this (?:coming )?)${DAY}\\b`, "u").exec(text);
+  const named = new RegExp(`\\b(?:${UNTIL} (this )?|(this) (?:coming )?)${DAY}\\b`, "u").exec(text);
   if (named) {
-    const l = until(upcomingWeekday(now, zone, DAYS.indexOf(named[1]!)));
+    const day = DAYS.indexOf(named[3]!);
+    // "Until Sunday" is the Sunday being watched (the first Sunday on or after the plan chosen in Settings, while it's ahead);
+    // "this Sunday" is the coming one, whatever is chosen.
+    const chosen = day === 0 && !named[1] && !named[2] ? chosenAhead(now, zone, options) : null;
+    const l = until(chosen ? sundayFrom(chosen) : coming(day));
     return l ? { kind: "set", lifetime: l } : unclear();
   }
   if (new RegExp(`\\b${UNTIL} tomorrow\\b`, "u").test(text)) {

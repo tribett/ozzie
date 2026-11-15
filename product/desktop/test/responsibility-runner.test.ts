@@ -5,14 +5,14 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("
 import { defaultPlan, MIN_GAP_MS, RETRY_MS, RUN_TIMEOUT_MS, TEMPLATES, type Plan, type Responsibility, type RunRow } from "../../../core/src/harness/responsibilities.js";
 import { DEFAULT_QUIET_HOURS } from "../../../core/src/schedule.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
+import { FICTIONAL_ROOM, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayChange } from "../../../core/src/sunday-changes.js";
 import type { FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import {
   createRunner, handChanges, nativeResponsibilities, refusalOf, responsibilityStep, type Prepared, type ResponsibilityNative, type RunnerContext,
 } from "../src/responsibility-runner.js";
-import { noticedChanges, noticedTitle } from "../src/responsibility-words.js";
+import { keptLines, noticedBadge, noticedChanges, noticedTitle } from "../src/responsibility-words.js";
 import { StepFailure } from "../src/harness-bridge.js";
 import { createProactive } from "../src/proactive.js";
 import { sundayProblem } from "../src/sunday-source.js";
@@ -268,15 +268,27 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(noticedTitle(item, FRI)).toMatch(/this connection doesn't include what it needs\. Add access under Settings, then it can check\.$/u);
   });
 
-  it("with Calendar access, a room watch reports overlaps, once", async () => {
+  it("with Calendar access, a room watch reports overlaps, once, as the Sunday page labels them", async () => {
     const h = setup({ granted: ["services", "operations"] });
     await h.start({ ...defaultPlan("watch-room-bookings", FRI, ET), report: "decisions-only" });
-    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "found", findings: { rooms: 1 } });
-    expect(noticedTitle(h.runner.view().noticed[0]!, FRI)).toBe("Watch room bookings: 1 room booking overlap needs review.");
+    // No room rule says the room can't be shared: the overlap is Worth a look, as on the Sunday page.
+    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "found", decisions: 0, findings: { rooms_uncertain: 1 } });
+    expect(h.runner.view().noticed[0]!.findings!.rooms).toBeUndefined();
+    expect(noticedTitle(h.runner.view().noticed[0]!, FRI)).toBe("Watch room bookings: 1 room booking overlap is worth a look.");
+    expect(noticedBadge(h.runner.view().noticed[0]!)).toEqual({ label: "Worth a look", tone: "look" });
     // The same overlap a week later is not announced again.
     h.set("2026-11-26T14:00:00.000Z");
     await h.runner.tick();
     expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("a room rule that confirms the overlap makes it Needs a decision, as on the Sunday page", async () => {
+    const h = setup({ granted: ["services", "operations"], rules: { sundayLeads: [], checkInAfterSundaysInARow: 3, rooms: [{ room_id: FICTIONAL_ROOM, exclusive: true, setup_minutes: 30 }] } });
+    await h.start({ ...defaultPlan("watch-room-bookings", FRI, ET), report: "decisions-only" });
+    const item = h.runner.view().noticed[0]!;
+    expect(item).toMatchObject({ kind: "found", findings: { rooms: 1 } });
+    expect(noticedTitle(item, FRI)).toBe("Watch room bookings: 1 room booking overlap needs review.");
+    expect(noticedBadge(item)).toEqual({ label: "Needs a decision", tone: "attn" });
   });
 
   it("does nothing while everything is paused, doesn't call those times missed, and reports a limit once", async () => {
@@ -566,6 +578,57 @@ describe("pausing", () => {
     expect(h.runner.view().noticed[0]).toMatchObject({ kind: "found", notice: "none" });
   });
 
+  it("a held notice is rechecked when quiet hours end: a decline a newer check reads as restored brings no notice", async () => {
+    const h = setup({ urgentWithinHours: 1 });
+    await h.start(sunday());
+    // 11:00 PM Friday in New York: a decline brings the Sunday check sooner; its notice waits for quiet hours.
+    h.set("2026-11-21T04:00:00.000Z");
+    h.changeTo(decline);
+    await h.runner.changes([{ id: "need-increased:x", kind: "need-increased", effect: "worse", urgency: "attention", position: "Greeter", from: 1, to: 2 }]);
+    const night = h.runner.view().noticed.find(i => i.trigger === "change")!;
+    expect(night.notice).toBe("held");
+    // 6:30 AM: the regular Sunday check reads it restored (no new read is needed when quiet hours end).
+    h.changeTo(undefined);
+    h.set("2026-11-21T11:30:00.000Z");
+    h.runner.captured(captureAt(h.now()));
+    h.set("2026-11-21T12:01:00.000Z");
+    await h.runner.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.runner.view().noticed.find(i => i.id === night.id)!.notice).toBe("none");
+  });
+
+  it("a held notice whose cause still holds in the latest saved check goes out once when quiet hours end", async () => {
+    const h = setup({ urgentWithinHours: 1 });
+    await h.start(sunday());
+    h.set("2026-11-21T04:00:00.000Z");
+    h.changeTo(decline);
+    await h.runner.changes([{ id: "need-increased:x", kind: "need-increased", effect: "worse", urgency: "attention", position: "Greeter", from: 1, to: 2 }]);
+    const night = h.runner.view().noticed.find(i => i.trigger === "change")!;
+    h.set("2026-11-21T12:01:00.000Z");
+    await h.runner.tick();
+    expect(h.notify.mock.calls).toEqual([["needs-decision"]]);
+    expect(h.runner.view().noticed.find(i => i.id === night.id)!.notice).toBe("sent-later");
+  });
+
+  it("a held 'couldn't check' is dropped when a later check of the same job finished", async () => {
+    const h = setup();
+    await h.start(sunday());
+    h.set("2026-11-21T04:00:00.000Z");
+    h.failWith("network");
+    await h.runner.changes([{ id: "need-opened:x", kind: "need-opened", effect: "worse", urgency: "attention", position: "Greeter", from: 0, to: 1 }]);
+    const failed = h.runner.view().noticed[0]!;
+    expect(failed).toMatchObject({ kind: "couldnt-check", notice: "held" });
+    // Its retry an hour later finishes, still in quiet hours.
+    h.failWith(null);
+    h.set("2026-11-21T05:00:00.000Z");
+    await h.runner.tick();
+    expect(h.runner.view().noticed[0]!.kind).toBe("found");
+    h.set("2026-11-21T12:01:00.000Z");
+    await h.runner.tick();
+    expect((h.notify.mock.calls as unknown[][]).filter(([k]) => k === "couldnt-check")).toEqual([]);
+    expect(h.runner.view().noticed.find(i => i.id === failed.id)!.notice).toBe("none");
+  });
+
   it("drops a notice held for quiet hours, as the regular Sunday check's pause does", async () => {
     const h = setup();
     await h.start({ ...defaultPlan("morning-briefing", FRI, ET), schedule: { time: "06:00", weekdays: [], on_change: false } });
@@ -654,6 +717,20 @@ describe("the person's Church rules on notices", () => {
     expect(noticedChanges(item, names)).toContain("Avery Brightwater declined Greeter after confirming.");
   });
 
+  it("Put this in the briefing: the morning briefing lists what the person keeps for it", async () => {
+    const h = setup({ granted: ["services", "operations"], rules: rulesWith([briefingRule, { type: "urgency", id: "f", kind: "unowned-overdue", at: FRI, level: "briefing" }]) });
+    await h.start(defaultPlan("morning-briefing", FRI, ET));
+    const item = h.runner.view().noticed[0]!;
+    expect(item).toMatchObject({ kind: "briefing", kept: [{ kind: "needs-people", count: 2 }, { kind: "unowned-overdue", count: 1 }] });
+    expect(noticedTitle(item, FRI)).toBe("Your morning briefing is ready. It includes 3 things your Church rules keep for the briefing.");
+    expect(keptLines(item)).toEqual(["Open roles: 2", "Follow-ups without an owner: 1"]);
+    // Nothing kept for it: nothing extra to list.
+    const plain = setup();
+    await plain.start(defaultPlan("morning-briefing", FRI, ET));
+    expect(plain.runner.view().noticed[0]!.kept).toBeUndefined();
+    expect(keptLines(plain.runner.view().noticed[0]!)).toEqual([]);
+  });
+
   it("Always tell me right away: quiet hours still hold it, unless the person let urgent notices through", async () => {
     for (const [urgentDuringQuiet, expected] of [[false, "held"], [true, "sent"]] as const) {
       const h = setup({ rules: rulesWith([rightAway]), urgentWithinHours: 1, urgentDuringQuiet });
@@ -671,6 +748,45 @@ describe("the person's Church rules on notices", () => {
     h.changeTo(decline);
     await h.runner.changes([{ id: "need-increased:x", kind: "need-increased", effect: "worse", urgency: "attention", position: "Greeter", from: 1, to: 2 }]);
     expect(h.runner.view().noticed.find(i => i.trigger === "change")!.notice).toBe("held");
+  });
+});
+
+describe("Worth a look never sends a notice", () => {
+  /** The same Sunday before the group's meeting or the room's bookings were in Planning Center. */
+  const empty = (collection: string) => (c: SundayCapture) => {
+    for (const r of c.reads.filter(x => x.collection === collection)) r.body = { data: [], meta: { count: 0, total_count: 0 } };
+  };
+
+  it("Worth a look never sends a notice: a new group meeting clash shows in Ozzie as Worth a look", async () => {
+    const h = setup({ granted: ["services", "operations"] });
+    h.changeTo(empty("groups_group_events"));
+    await h.start(defaultPlan("group-night-clashes", FRI, ET));
+    expect(h.runner.view().noticed[0]!.findings).toEqual({ groups: 0 });
+    // Wednesday 9:00 AM: the group now meets while someone serves.
+    h.changeTo(undefined);
+    h.set("2026-11-25T14:00:00.000Z");
+    await h.runner.tick();
+    const item = h.runner.view().noticed[0]!;
+    expect(item).toMatchObject({ kind: "found", trigger: "scheduled", findings: { groups: 1 }, notice: "none" });
+    expect(noticedBadge(item)).toEqual({ label: "Worth a look", tone: "look" });
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("Worth a look never sends a notice: a new room overlap no room rule confirms shows in Ozzie, unless the person asked to hear right away", async () => {
+    for (const told of [false, true]) {
+      const rightAway: FeedbackEntry[] = told ? [{ type: "urgency", id: "r", kind: "room-overlap", at: FRI, level: "right-away" }] : [];
+      const h = setup({ granted: ["services", "operations"], rules: { sundayLeads: [], checkInAfterSundaysInARow: 3, feedback: rightAway } });
+      h.changeTo(empty("calendar_resource_bookings"));
+      await h.start(defaultPlan("watch-room-bookings", FRI, ET));
+      // Thursday 9:00 AM: two bookings now overlap.
+      h.changeTo(undefined);
+      h.set("2026-11-26T14:00:00.000Z");
+      await h.runner.tick();
+      const item = h.runner.view().noticed[0]!;
+      expect(item).toMatchObject({ kind: "found", trigger: "scheduled", findings: { rooms_uncertain: 1 }, notice: told ? "sent" : "none" });
+      // "Always tell me right away" is the person's own rule: it tells them, and never makes an uncertain overlap urgent.
+      expect(h.notify.mock.calls).toEqual(told ? [["needs-decision"]] : []);
+    }
   });
 });
 

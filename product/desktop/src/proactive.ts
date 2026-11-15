@@ -4,13 +4,15 @@ import { sundayProblem, sundaySource, type Settings } from "./sunday-source.js";
 import { desktopRecorder } from "./harness-bridge.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import {
-  compareSundayCheck, DEFAULT_URGENT_WITHIN_HOURS, recordSundayCheck, type SundayChange, type SundayCheckMemory, type SundayCheckRecord,
+  changeStillHolds, compareSundayCheck, DEFAULT_URGENT_WITHIN_HOURS, recordSundayCheck, type SundayChange, type SundayCheckMemory, type SundayCheckRecord,
 } from "../../../core/src/sunday-changes.js";
 import {
   DEFAULT_QUIET_HOURS, DEFAULT_SCHEDULE, finishRun, holdNotice, inQuietHours, launchSchedule, newSchedule, noticeDecision, parseClock,
   pauseSchedule, releaseHeld, rescheduleFor, resumeSchedule, settledQuietHours, startManual, tickSchedule, type RunTrigger, type ScheduleState,
 } from "../../../core/src/schedule.js";
-import { feedbackOf, routeChanges } from "../../../core/src/finding-feedback.js";
+import { feedbackOf, foundOf, rightAwayChanges, routeChanges } from "../../../core/src/finding-feedback.js";
+import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
+import { sundayOperations } from "../../../core/src/operations-capture.js";
 
 /**
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
@@ -194,8 +196,12 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
   let schedule = validSchedule(loaded) ? loaded : newSchedule();
   let history = read<{ version: 1; entries: HistoryEntry[] }>(deps.store, KEYS.history)?.entries ?? [];
   // A record of another shape is dropped; the next check for that Sunday becomes a fresh baseline.
-  let sundays = Object.fromEntries(Object.entries(read<{ version: 1; sundays: Record<string, SundayCheckMemory> }>(deps.store, KEYS.memory)?.sundays ?? {})
+  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]> }>(deps.store, KEYS.memory);
+  let sundays = Object.fromEntries(Object.entries(remembered?.sundays ?? {})
     .filter(([, m]) => m?.latest?.version === 2 && m?.known?.version === 2));
+  /** The finding keys (ids only) the newest check of each Sunday showed, so a kind told right away is told when it is new. */
+  let foundBy: Record<string, string[]> = Object.fromEntries(Object.entries(remembered?.found ?? {})
+    .filter(([k, keys]) => Object.hasOwn(sundays, k) && Array.isArray(keys) && keys.every(x => typeof x === "string")));
   let seenAt = read<string>(deps.store, KEYS.seen);
   /** While "Pause everything" is on: whether this check was paused on its own, to restore when it's lifted. */
   let beforeEverything = read<{ paused: boolean }>(deps.store, KEYS.everything);
@@ -240,20 +246,31 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const key = keyOf(capture.organization, capture.plan_id);
     const prior = sundays[key] ?? null;
     const { changes, memory } = compareSundayCheck(prior, record, { now, urgentWithinHours: prefs.urgentWithinHours });
+    // Every finding this check shows, kids teams, rooms and follow-ups included, with what the last check of this Sunday showed.
+    const entries = feedbackOf(rules);
+    const shown = foundOf(buildSundayBrief(capture, rules, now), sundayOperations(capture, rules, { now }));
+    const before = prior ? foundBy[key] ?? null : null;
     sundays = Object.fromEntries([...Object.entries({ ...sundays, [key]: memory })]
       .sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at)).slice(0, SUNDAYS_KEPT));
-    deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays }));
+    foundBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, shown.map(f => f.key)]] : foundBy[k] ? [[k, foundBy[k]]] : []));
+    deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy }));
     const about = { trigger, plan_id: capture.plan_id, plan_dates: record.plan_dates };
     if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return; }
-    // The person's Church rules on notices: kinds kept for the briefing, kinds told right away, and what they
-    // asked Ozzie to stop flagging (left out here altogether, as they are on the Sunday page).
-    const routed = routeChanges(changes, feedbackOf(rules));
-    const listed = changes.filter(c => !routed.stopped.includes(c));
+    // The person's Church rules on notices: kinds kept for the briefing, kinds told right away (a kind the Sunday
+    // comparison doesn't follow is told when this check newly finds one), and what they asked Ozzie to stop
+    // flagging (left out here altogether, as they are on the Sunday page).
+    const all = [...changes, ...rightAwayChanges(shown, before, entries)];
+    const routed = routeChanges(all, entries);
+    const listed = all.filter(c => !routed.stopped.includes(c));
     if (!listed.length) return;
     const found = { worse: routed.notify.length > 0, urgent: routed.urgent };
+    // Keep Sunday covered is handed the Sunday's own changes. A new finding told right away is this check's notice
+    // to send, so then nothing is handed over and one notice goes out.
+    const own = routed.notify.some(c => c.kind === "finding-new");
+    const sunday = listed.filter(c => c.kind !== "finding-new");
     let handed: Promise<boolean> | void = undefined;
-    if (trigger !== "manual") {
-      try { handed = hooks?.onChanges?.(listed, { plan_id: capture.plan_id, notice: found.worse }); } catch { /* the check itself finished */ }
+    if (trigger !== "manual" && !own && sunday.length) {
+      try { handed = hooks?.onChanges?.(sunday, { plan_id: capture.plan_id, notice: found.worse }); } catch { /* the check itself finished */ }
     }
     let notice: HistoryEntry["notice"] = "none";
     if (found.worse && trigger === "manual") notice = "in-app";
@@ -308,11 +325,20 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     return work;
   }
 
-  /** Held notices go out once quiet hours end, if the newest check still has something to look at. */
-  const stillNeedsAttention = () => {
+  /**
+   * A held entry still worth its notice once quiet hours end (owner decision: a held notice is rechecked for
+   * relevance before it goes out). Rechecked against the newest saved check of the same Sunday, with no new
+   * Planning Center read: a change reversed meanwhile (a decline restored, the extra request gone) no longer
+   * counts, and neither does one the person's Church rules now keep out of notices. With no saved check of
+   * that Sunday to recheck against, its changes stand as they were found.
+   */
+  const stillRelevant = (entry: HistoryEntry): boolean => {
     const ctx = hooks?.context();
-    const latest = ctx ? sundays[keyOf(ctx.settings.organization, ctx.settings.planId)]?.latest : undefined;
-    return !latest || latest.status !== "checked-scope-clear";
+    const own = ctx && entry.plan_id ? keyOf(ctx.settings.organization, entry.plan_id) : undefined;
+    const key = own && sundays[own] ? own : Object.keys(sundays).find(k => sundays[k]!.latest.plan_id === entry.plan_id);
+    const memory = key ? sundays[key] : undefined;
+    const holding = (entry.changes ?? []).filter(c => !memory || changeStillHolds(c, memory, foundBy[key!] ?? null));
+    return routeChanges(holding, feedbackOf(ctx?.rules ?? {})).notify.length > 0;
   };
 
   async function tick() {
@@ -325,9 +351,11 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     schedule = step.state;
     if (step.missed) add({ at: now, kind: "missed", scheduled_for: step.missed });
     const running = step.start ? run(step.start) : inflight;
-    if (released.deliver && stillNeedsAttention()) {
-      const outcome = await deliver();
-      history = history.map(e => e.notice === "held" ? { ...e, notice: outcome === "sent" ? "sent-later" : "unavailable" } : e);
+    if (released.deliver) {
+      // One notice for whatever is still so; a held entry that no longer is says no notice was needed.
+      const relevant = new Set(history.filter(e => e.notice === "held" && stillRelevant(e)));
+      const outcome = relevant.size ? await deliver() : null;
+      history = history.map(e => e.notice !== "held" ? e : { ...e, notice: !relevant.has(e) ? "none" : outcome === "sent" ? "sent-later" : "unavailable" });
     }
     emit();
     await running?.catch(() => undefined);

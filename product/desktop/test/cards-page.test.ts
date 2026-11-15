@@ -5,8 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { CardReviewController } from "../../src/card-review/controller.js";
 import type { CardView } from "../../../core/src/card-review/lifecycle.js";
-import { reviewedList } from "../../../core/src/card-fields.js";
-import { CardsReview, checkCard, emptyUi, listFor, lookFirst, readCardsLocally, readingFor, type CardsUi, type CardTextResult, type ReadState } from "../src/cards-page.js";
+import { readLines, reviewedList, type ReadLine } from "../../../core/src/card-fields.js";
+import {
+  CARD_PHOTO_ACCEPT, CardsReview, checkCard, emptyUi, escapeCloses, listFor, lookFirst, placeLine, readCardsLocally, readingFor,
+  type CardsUi, type CardTextResult, type FieldSource, type ReadState,
+} from "../src/cards-page.js";
 
 // Invented people and synthetic printed-card text only. No real card or photo is used.
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
@@ -33,16 +36,18 @@ const fieldsOf = (card: CardView) => Object.fromEntries((["name", "phone", "emai
 async function readWith(texts: (CardTextResult | Error)[], count = texts.length) {
   const review = await openReview(count);
   const states: Record<number, ReadState> = {};
-  const suggested: Record<number, string[]> = {};
+  const suggested: Record<number, Partial<Record<string, FieldSource>>> = {};
+  const lines: Record<number, readonly ReadLine[]> = {};
   let recognizer = "unknown";
   const pending = [...review.files] as (File | null)[];
   let i = 0;
   await readCardsLocally({
     controller: review.controller, ticket: review.ticket, files: pending, live: () => review.controller.status === "active",
     read: async image => { expect(image.byteLength).toBe(PNG.byteLength); const r = texts[i++]!; if (r instanceof Error) throw r; return r; },
-    onState: (id, s) => { states[id] = s; }, onSuggested: (id, f) => { suggested[id] = f; }, onRecognizer: r => { recognizer = r; },
+    onState: (id, s) => { states[id] = s; }, onSuggested: (id, f) => { suggested[id] = f; }, onRead: (id, l) => { lines[id] = l; },
+    onRecognizer: r => { recognizer = r; },
   });
-  return { ...review, states, suggested, recognizer, pending };
+  return { ...review, states, suggested, lines, recognizer, pending };
 }
 
 describe("reading visitor cards on this Mac", () => {
@@ -59,7 +64,7 @@ describe("reading visitor cards on this Mac", () => {
     });
     expect(a!.reviewed || b!.reviewed).toBe(false);
     expect(states).toEqual({ 1: "read", 2: "read" });
-    expect(suggested).toEqual({ 1: ["name", "phone", "email", "request"], 2: ["name", "phone", "email", "request"] });
+    expect(suggested).toEqual({ 1: { name: "read", phone: "read", email: "read", request: "read" }, 2: { name: "read", phone: "read", email: "read", request: "read" } });
     expect(recognizer).toBe("available");
     expect(pending).toEqual([null, null]);
   });
@@ -86,7 +91,7 @@ describe("reading visitor cards on this Mac", () => {
       name: { text: "Riley Thornbury", state: "typed" }, phone: { text: "(555) 014-2290", state: "unclear" },
       email: { text: "riley.t@example.com", state: "typed" }, request: { text: "Please pray for my\nnew job starting Monday.", state: "unclear" },
     });
-    expect(suggested).toEqual({ 1: ["name", "phone", "email", "request"] });
+    expect(suggested).toEqual({ 1: { name: "read", phone: "read", email: "read", request: "read" } });
     // Checking the card keeps them marked unclear in the copied list unless the person clears the mark.
     checkCard(controller, ticket, card!);
     expect(listFor(controller).text).toContain("Phone: (555) 014-2290 (unclear on the card, worth a look)");
@@ -105,7 +110,7 @@ describe("reading visitor cards on this Mac", () => {
     let release!: (r: CardTextResult) => void;
     const run = readCardsLocally({
       controller: review.controller, ticket: review.ticket, files: pending, live: () => review.controller.status === "active",
-      read: () => new Promise(r => { release = r; }), onState: () => {}, onSuggested: () => {}, onRecognizer: () => {},
+      read: () => new Promise(r => { release = r; }), onState: () => {}, onSuggested: () => {}, onRead: () => { throw new Error("read lines kept after discard"); }, onRecognizer: () => {},
     });
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     review.controller.discard(review.ticket);
@@ -151,9 +156,9 @@ describe("checking and finishing", () => {
 });
 
 describe("the review page", () => {
-  const render = (controller: CardReviewController, ticket: number | null, ui: Partial<CardsUi> = {}) =>
+  const render = (controller: CardReviewController, ticket: number | null, ui: Partial<CardsUi> = {}, lines: Record<number, readonly ReadLine[]> = {}) =>
     renderToStaticMarkup(React.createElement(CardsReview, {
-      controller, ticket, ui: { ...emptyUi, ...ui }, people, onChoose() {}, onCopy() {}, onDiscard() {}, onEdited() {},
+      controller, ticket, ui: { ...emptyUi, ...ui }, people, lines, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {},
     }));
 
   it("explains the temporary review before any photo is chosen", () => {
@@ -172,12 +177,14 @@ describe("the review page", () => {
 
   it("puts possible matches and unclear readings first, marks every field until a person checks the card, and holds the copy until then", async () => {
     const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }, { status: "read", text: CARD_B, unclearLines: [] }]);
-    const ui = { reading: { 1: "read", 2: "read" } as const, suggested: { 1: ["name", "phone", "email", "request"] as const, 2: ["name", "phone", "email", "request"] as const } };
+    const ui = { reading: { 1: "read", 2: "read" } as const, source: { 1: { name: "read", phone: "read", email: "read", request: "read" }, 2: { name: "read", phone: "read", email: "read", request: "read" } } as const };
     const html = render(controller, ticket, ui);
     const first = html.indexOf("Look at these first");
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThan(html.indexOf("card-1-name"));
-    expect(html).toContain("Card 1: “Riley Thornbury” may already be in this Sunday&#x27;s check as Riley Thornbury. Ozzie won&#x27;t combine them.");
+    expect(html).toContain("Card 1: “Riley Thornbury” has the same name as Riley Thornbury in this Sunday&#x27;s check. Worth a look: only the name matches, which doesn&#x27;t show it&#x27;s the same person. Ozzie won&#x27;t combine them. Check Planning Center before adding anyone.");
+    // On the card itself: worth a look, and a name alone is not enough to say it's the same person.
+    expect(html).toMatch(/Worth a look<\/span> Possible match: Riley Thornbury in this Sunday&#x27;s check has the same name\. Only the name matches, and a name alone doesn&#x27;t show it&#x27;s the same person\. Ozzie won&#x27;t combine them\./);
     expect(html).toContain("Card 2: the phone and email are hard to read.");
     expect(html).toContain("Looks right — keep the unclear parts marked");
     expect(html.match(/Needs a person to check/g)!.length).toBe(2 + 8);
@@ -194,9 +201,10 @@ describe("the review page", () => {
 
   it("shows words this Mac couldn't read clearly as a suggestion to check, worth a look", async () => {
     const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [1, 5] }]);
-    const html = render(controller, ticket, { reading: { 1: "read" }, suggested: { 1: ["name", "phone", "email", "request"] } });
+    const html = render(controller, ticket, { reading: { 1: "read" }, source: { 1: { name: "read", phone: "read", email: "read", request: "read" } } });
     expect(html.match(/Ozzie couldn&#x27;t read this clearly — check it against the card\./g)!.length).toBe(2);
-    expect(html.match(/Worth a look<\/span>/g)!.length).toBe(2);
+    // Two flagged fields (the possible-match note on this card has its own "Worth a look").
+    expect(html.match(/Worth a look<\/span><\/div>/g)!.length).toBe(2);
     expect(html).toContain('value="(555) 014-2290"');
     expect(html).toContain("Card 1: the phone and request are hard to read.");
     expect(html).toContain("Looks right — keep the unclear parts marked");
@@ -210,5 +218,191 @@ describe("the review page", () => {
   it("keeps no copy anywhere: the page has no storage, logging or network code", () => {
     const source = readFileSync(new URL("../src/cards-page.tsx", import.meta.url), "utf8");
     for (const banned of ["localStorage", "sessionStorage", "indexedDB", "console.", "fetch(", "XMLHttpRequest", "caches."]) expect(source).not.toContain(banned);
+  });
+});
+
+// Two of the fictional sample cards (docs/prep/card-samples) as Ozzie's line assembly delivers what
+// the release card reader returned for them (see core/test/card-fields.test.ts). Invented people only.
+const SAMPLE_A = [
+  "VISITOR CARD — FICTIONAL TEST SAMPLE A",
+  "Synthetic lettering; not a photograph or real human handwriting.",
+  "Alex Harbor", "202-555-0142", "alex.harbor@example.org",
+  "Please call me about the volunteer orientation.", "",
+  "No real person or church is represented. Do not send messages.",
+  "Sample B has a deliberately ambiguous contact character. Ask; do not guess.",
+].join("\n");
+const SAMPLE_D = [
+  "WELCOME CARD - FICTIONAL TEST SAMPLE D",
+  "Synthetic lettering; not a photograph or real human handwriting.",
+  "Name: Casey Brook", "Phone: 202-555-0163", "Email: casey.brook@example.org",
+  "Request: I would like to help with the food pantry.", "",
+  "No real person or church is represented. Do not send messages.",
+].join("\n");
+const CARD_WORDS = ["Alex", "Harbor", "202-555", "example.org", "orientation", "Riley", "Thornbury", "Casey", "pantry", "Quillfeather"];
+
+const renderPage = (controller: CardReviewController, ticket: number | null, ui: Partial<CardsUi> = {}, lines: Record<number, readonly ReadLine[]> = {}) =>
+  renderToStaticMarkup(React.createElement(CardsReview, {
+    controller, ticket, ui: { ...emptyUi, ...ui }, people, lines, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {},
+  }));
+
+/** Sample A, read on this Mac and placed field by field by a person from what it read. */
+async function placedSampleA(unclearLines: number[] = []) {
+  const read = await readWith([{ status: "read", text: SAMPLE_A, unclearLines }]);
+  const line = (text: string) => read.lines[1]!.find(l => l.text === text)!;
+  const card = () => cardsOf(read.controller)[0]!;
+  const source: Record<string, FieldSource> = {};
+  for (const [field, text] of [["name", "Alex Harbor"], ["phone", "202-555-0142"], ["email", "alex.harbor@example.org"],
+    ["request", "Please call me about the volunteer orientation."]] as const) {
+    source[field] = placeLine(read.controller, read.ticket, card(), field, line(text), undefined)!;
+  }
+  return { ...read, card, line, source: { 1: source } };
+}
+
+describe("what this Mac read, for a person to put where it belongs", () => {
+  it("fills nothing from a card without labels, and keeps every line it read for this review only", async () => {
+    const { controller, states, suggested, lines } = await readWith([{ status: "read", text: SAMPLE_A, unclearLines: [] }]);
+    expect(states).toEqual({ 1: "read" });
+    expect(suggested).toEqual({ 1: {} });
+    for (const f of Object.values(fieldsOf(cardsOf(controller)[0]!))) expect(f).toEqual({ text: "", state: "unreviewed" });
+    expect(lines[1]).toEqual(readLines(SAMPLE_A, []));
+  });
+
+  it("lists the lines by the photo, each with one control to put it in a field, and says why nothing was filled", async () => {
+    const { controller, ticket, lines } = await readWith([{ status: "read", text: SAMPLE_A, unclearLines: [3] }]);
+    const html = renderPage(controller, ticket, { reading: { 1: "read" }, source: { 1: {} } }, lines);
+    expect(html).toContain("What this Mac read on the card");
+    expect(html).toContain("This Mac read this card but found no printed labels like “Name:”, so it filled nothing in. Put the lines it read where they belong, or type what you see.");
+    expect(html.indexOf("What this Mac read on the card")).toBeLessThan(html.indexOf('id="card-1-name"'));
+    expect(html.match(/<select[^>]*aria-label="Use line \d+ as"/g)!.length).toBe(8);
+    // The line the reader couldn't read clearly says so, with the reason.
+    expect(html).toMatch(/<span id="card-1-line-4" class="cards-line-t">202-555-0142<\/span><span class="badge b-look">.*?Worth a look<\/span><span class="small">Hard to read<\/span>/);
+    expect(html).toMatch(/<select[^>]*aria-label="Use line 4 as"[^>]*aria-describedby="card-1-line-4"/);
+    for (const option of [">Use as…</option>", ">Name</option>", ">Phone</option>", ">Email</option>", ">Request</option>"]) expect(html).toContain(option);
+  });
+
+  it("puts a line where the person chooses: name, phone and email take it, the request adds it on a new line", async () => {
+    const { controller, ticket, card, line } = await placedSampleA([3]);
+    expect(placeLine(controller, ticket, card(), "request", line("Alex Harbor"), "typed")).toBe("typed");
+    expect(fieldsOf(card())).toEqual({
+      // A line this Mac couldn't read clearly stays marked hard to read in its field.
+      name: { text: "Alex Harbor", state: "typed" }, phone: { text: "202-555-0142", state: "unclear" },
+      email: { text: "alex.harbor@example.org", state: "typed" },
+      request: { text: "Please call me about the volunteer orientation.\nAlex Harbor", state: "typed" },
+    });
+    const html = renderPage(controller, ticket, { reading: { 1: "read" }, source: { 1: { name: "chosen", phone: "chosen" } } }, { 1: readLines(SAMPLE_A, [3]) });
+    expect(html).toContain("You put this line here from what this Mac read. Compare it with the photo.");
+    expect(html).toContain("This Mac couldn&#x27;t read that line clearly — check it against the card.");
+    expect(html).toContain(">Request (add this line)</option>");
+    // A line too long for a field is never cut to fit.
+    expect(placeLine(controller, ticket, card(), "name", { line: 9, text: "x".repeat(257), unclear: false }, "chosen")).toBeNull();
+    expect(card().fields.name.text).toBe("Alex Harbor");
+  });
+
+  it("fills a labeled card; printed words further down never join the request, and the reason is shown", async () => {
+    const { controller, ticket, suggested, lines } = await readWith([{ status: "read", text: SAMPLE_D, unclearLines: [] }]);
+    expect(fieldsOf(cardsOf(controller)[0]!)).toEqual({
+      name: { text: "Casey Brook", state: "typed" }, phone: { text: "202-555-0163", state: "typed" },
+      email: { text: "casey.brook@example.org", state: "typed" }, request: { text: "I would like to help with the food pantry.", state: "unclear" },
+    });
+    expect(suggested).toEqual({ 1: { name: "read", phone: "read", email: "read", request: "read-more" } });
+    const html = renderPage(controller, ticket, { reading: { 1: "read" }, source: suggested }, lines);
+    expect(html).toContain("There&#x27;s more writing on the card after these words. Check whether any of it belongs to their request, and compare every word with the photo.");
+    expect(html).not.toContain("found no printed labels");
+    expect(lookFirst(cardsOf(controller), {}, suggested).map(x => x.text))
+      .toEqual(["Card 1: there's more writing on the card after the request. Worth a look: check whether it belongs to it."]);
+  });
+});
+
+describe("prepared follow-ups and the copied list", () => {
+  it("once a person checks a card that asks for a call, prepares it with their exact words and the phone they gave", async () => {
+    const { controller, ticket, card, source } = await placedSampleA();
+    const lines = { 1: readLines(SAMPLE_A, []) };
+    expect(renderPage(controller, ticket, { reading: { 1: "read" }, source }, lines)).not.toContain("Prepared follow-up");
+    expect(checkCard(controller, ticket, card())).toBe("ok");
+    const html = renderPage(controller, ticket, { reading: { 1: "read" }, source }, lines);
+    expect(html).toContain("Prepared follow-up");
+    expect(html).toContain("Suggested because their words ask for a call. Check that this is what they meant.");
+    expect(html).toContain("“Please call me about the volunteer orientation.”");
+    expect(html).toContain("Phone they gave: 202-555-0142");
+    expect(html).toContain("Choose who will follow up in your church tools.");
+    expect(html).toContain("Ozzie won&#x27;t call, text or email anyone. This goes in the list you copy; nothing is added to Planning Center.");
+  });
+
+  it("labels what a person typed by hand in the copied list, and adds each follow-up as its own section", async () => {
+    const { controller, ticket, card, source } = await placedSampleA();
+    checkCard(controller, ticket, card());
+    const { text, count, followUps } = listFor(controller, { 1: { ...source[1], email: "typed" } });
+    expect(count).toBe(1);
+    expect(followUps).toBe(1);
+    expect(text).toContain("Name: Alex Harbor\nPhone: 202-555-0142\nEmail: alex.harbor@example.org (typed by a person)\nRequest (their exact words):\nPlease call me about the volunteer orientation.\n");
+    expect(text).toContain("Prepared follow-ups: 1\nSuggested from the words on these cards. Ozzie didn't call, text or email anyone.\n\nCard 1 asked for a call\nTheir words: “Please call me about the volunteer orientation.”\nPhone they gave: 202-555-0142\nChoose who will follow up in your church tools.");
+    // Typed when this Mac couldn't read cards at all: every typed field says so.
+    expect(listFor(controller, { 1: { name: "typed", phone: "typed", email: "typed", request: "typed" } }).text).toContain("Request (their exact words, typed by a person):");
+  });
+
+  it("after copying, says the cards were reviewed here and nothing was saved to the church's tools", () => {
+    const controller = new CardReviewController("fictional-test", { foreground: () => true, createURL: () => "blob:x", revokeURL() {}, decode: async () => true });
+    const html = renderPage(controller, null, { ended: "copied", copied: 2, followUps: 1 });
+    expect(html).toContain("Reviewed here; nothing saved to your church&#x27;s tools.");
+    expect(html).toContain("The list includes 1 prepared follow-up. Choose who will follow up in your church tools; Ozzie won&#x27;t contact anyone.");
+    expect(renderPage(controller, null, { ended: "copied", copied: 1, followUps: 0 })).not.toContain("prepared follow-up");
+  });
+});
+
+describe("photos, controls and what is announced", () => {
+  it("asks the picker for PNG and JPEG only, and still refuses anything else with the same message", async () => {
+    expect(CARD_PHOTO_ACCEPT).toBe("image/png,image/jpeg,.png,.jpg,.jpeg");
+    for (const file of [new File(["# notes"], "README.md", { type: "text/markdown" }), new File(["<svg/>"], "visitor-a.svg", { type: "image/svg+xml" })]) {
+      const controller = new CardReviewController("fictional-test", { foreground: () => true, createURL: () => "blob:x", revokeURL() {}, decode: async () => true });
+      const ticket = controller.choose(() => {})!;
+      expect(await controller.select(ticket, [file])).toBe("invalid");
+      expect(renderPage(controller, null)).toContain("Those photos couldn&#x27;t be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each.");
+    }
+  });
+
+  it("closes the larger photo with Escape; its button works from the keyboard and says whether it is pressed", async () => {
+    let closed = 0;
+    const stop = vi.fn();
+    escapeCloses(true, () => { closed++; })({ key: "Escape", stopPropagation: stop });
+    expect([closed, stop.mock.calls.length]).toEqual([1, 1]);
+    escapeCloses(false, () => { closed++; })({ key: "Escape", stopPropagation: stop });
+    escapeCloses(true, () => { closed++; })({ key: "Enter", stopPropagation: stop });
+    expect(closed).toBe(1);
+    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }]);
+    expect(renderPage(controller, ticket, { reading: { 1: "read" } })).toMatch(/<button type="button" class="btn btn-quiet btn-sm" aria-pressed="false">See the photo larger/);
+  });
+
+  it("names each repeated control with its card and field", async () => {
+    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }, { status: "read", text: CARD_B, unclearLines: [] }]);
+    const html = renderPage(controller, ticket, { reading: { 1: "read", 2: "read" } });
+    expect(html).toContain('See the photo larger<span class="sr-only"> (Card 1)</span>');
+    expect(html).toContain('Remove this card<span class="sr-only"> (Card 2)</span>');
+    expect(html).toContain('<span class="sr-only">Card 2 phone: </span>Hard to read on the card');
+  });
+
+  it("never announces card contents: live regions carry counts and status only", async () => {
+    const regions = (html: string) => {
+      const out: string[] = [];
+      const open = /<(p|div|span|section)\b[^>]*(?:role="(?:status|alert)"|aria-live="[^"]+")[^>]*>/g;
+      for (let m; (m = open.exec(html));) {
+        const close = new RegExp(`<${m[1]}\\b[^>]*>|</${m[1]}>`, "g");
+        close.lastIndex = open.lastIndex;
+        let depth = 1, end = html.length;
+        for (let t; depth && (t = close.exec(html));) { depth += t[0].startsWith("</") ? -1 : 1; end = close.lastIndex; }
+        out.push(html.slice(m.index, end));
+      }
+      return out;
+    };
+    const { controller, ticket, card, source } = await placedSampleA([3]);
+    const lines = { 1: readLines(SAMPLE_A, [3]) };
+    const pages = [renderPage(controller, ticket, { reading: { 1: "read" }, source }, lines)];
+    checkCard(controller, ticket, card());
+    pages.push(renderPage(controller, ticket, { reading: { 1: "read" }, source, copyProblem: true }, lines));
+    controller.discard(ticket);
+    pages.push(renderPage(controller, null, { ended: "copied", copied: 1, followUps: 1 }));
+    expect(pages[0]).toContain("Alex Harbor");
+    const found = pages.flatMap(regions);
+    expect(found.length).toBeGreaterThanOrEqual(3);
+    for (const region of found) for (const word of CARD_WORDS) expect(region, region).not.toContain(word);
   });
 });

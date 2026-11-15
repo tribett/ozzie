@@ -85,14 +85,17 @@ export const FAILURE_REASONS: Readonly<Record<FailureCode, string>> = Object.fre
   fidelity: "the answer couldn't be backed up by what Ozzie read",
   transport: "the AI service couldn't be reached",
   "no-model": "no AI model is set up",
-  interrupted: "Ozzie closed before it finished",
+  interrupted: "it was stopped before it finished",
 });
 const reason = (code: string | null | undefined) => (code && Object.hasOwn(FAILURE_REASONS, code) ? FAILURE_REASONS[code as FailureCode] : "something went wrong");
+
+/** When Ozzie can't tell, what it can do instead (owner decision "Useful help when work cannot be completed"). */
+export const CAN_DO_INSTEAD = "Ozzie can tell you what still needs a decision this Sunday, who on a team could help with an open role, or prepare a note for you to copy. Ask “What can you do?” to see more.";
 
 /** What the Ask panel says when a question couldn't be answered. "no-model" shows the set-up panel instead. */
 export const ASK_FAILURES = Object.freeze({
   egress: "That question includes details Ozzie keeps on this Mac, so Ozzie stopped before sending them. Try asking again in other words, or ask about the role instead of the person.",
-  fidelity: "Ozzie couldn't back that answer up with what it read, so it isn't shown.",
+  fidelity: "Ozzie couldn't back that answer up with what it read, so it isn't shown. Try asking about one role or one thing at a time, or ask “What can you do?”",
   invalid: "Ozzie couldn't prepare that question in a safe form. Nothing was sent. Try different wording.",
   denied: "The AI asked to use something Ozzie doesn't allow, so Ozzie stopped. Nothing was sent or changed.",
   steps: "That needed more steps than Ozzie allows for one question. Try asking about one thing at a time.",
@@ -107,6 +110,42 @@ export const ASK_FAILURES = Object.freeze({
   unfinished: "Ozzie couldn't finish that just now.",
   cancelled: "You stopped this question. Ozzie won't show an answer for it.",
 });
+// ---- Answered on this Mac, without the AI (owner decisions "Useful before accounts are connected" and
+// "Useful help when work cannot be completed", 2026-11-15) ----------------------------------------------------
+
+/** What Ozzie can do here, for "What can you do?", "help" and the like. Fixed words; nothing is sent. */
+export const HELP = Object.freeze({
+  intro: "Here is what Ozzie can do for you, from what it reads in Planning Center:",
+  can: Object.freeze([
+    "Check Sunday: open roles, pending requests, kids team counts and background checks, and anything that needs a decision.",
+    "Show who on a team could help with an open role, in no particular order, with what the check found for each person.",
+    "Prepare a note for you to read, copy and send yourself.",
+    "Keep an eye on Sunday, room bookings, follow-ups and group meetings, and tell you when something changes.",
+    "Give you a morning briefing on Today.",
+    "Read visitor cards on this Mac, on the Visitor cards page.",
+  ]),
+  never: "Ozzie never sends messages, never changes anything in Planning Center, and never writes prayers, sermons or scripture. People decide and people go.",
+  try: "You could ask “What still needs a decision this Sunday?”, or say “Keep an eye on Sunday”.",
+  first: "To start, connect Planning Center in Settings, or open the fictional example on the Sunday page.",
+});
+/** A question before anything was read: what to do next, never an error. */
+export const ASK_START = "Ozzie hasn't read anything from Planning Center yet, so it can't answer that. Connect Planning Center in Settings, or check Planning Center on the Sunday page. You can also open the fictional example there.";
+/** A question asked in the moment before Ozzie's procedures have loaded. */
+export const ASK_LOADING = "Ozzie is still getting ready. Try again in a moment.";
+/** Under an answer written on this Mac. */
+export const LOCAL_NOTE = "Answered on this Mac without the AI. Nothing was sent.";
+/** "See how this works" for an answer written on this Mac. */
+export const LOCAL_HOW = "Ozzie answered this on this Mac from its last check, without asking the AI. Nothing was sent to anyone, and nothing in Planning Center changed.";
+/** "See how this works" when items were added to the AI's choice on this Mac. */
+export const ADDED_HOW = "Ozzie added the items under “Also on the Sunday page” itself, from the same check; the AI didn't choose them, and background checks never reach it.";
+export const KEPT_STEP = "Looked at background checks, kept on this Mac";
+
+/** The steps of an answer written on this Mac: each read-only tool it read, and the background checks it kept here. */
+export function localSteps(evidence: readonly ToolEnvelope[], keptHere: boolean): string[] {
+  return [...evidence.map(e => `${TOOL_PHRASES[e.tool as ToolName] ?? "Looked at the last check"} — ${STATUS_WORDS[e.completeness] ?? "didn't finish"}`),
+    ...(keptHere ? [KEPT_STEP] : [])];
+}
+
 /** The Ask panel's message for a task's FailureCode, and the native code behind its failed step when there was one (review C9). */
 export function askFailureText(code: FailureCode | null, native?: string): string {
   if (native === "ledger-unavailable") return ASK_FAILURES.ledger;
@@ -186,7 +225,7 @@ export function basedOnBrief(brief: SundayBrief): string {
 }
 
 /** "Based on: …" for one verified answer: each source it read, with its check time, newest first per source. */
-export function basedOnEvidence(evidence: readonly ToolEnvelope[], mode: "live" | "recording" | "fictional"): string {
+export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" | "check_time">[], mode: "live" | "recording" | "fictional"): string {
   if (!evidence.length) return "Based on: nothing Ozzie read";
   const latest = new Map<string, string>();
   for (const e of evidence) {
@@ -220,8 +259,8 @@ export function evidenceGaps(evidence: readonly ToolEnvelope[], mode: "live" | "
 
 // ---- What happened ------------------------------------------------------------------------------------
 
-/** How a Sunday check started, kept on this Mac by task id. */
-export type CheckTrigger = "automatic" | "manual";
+/** How a Sunday check started, or that a question was answered on this Mac without the AI, kept on this Mac by task id. */
+export type CheckTrigger = "automatic" | "manual" | "on-this-mac";
 const clockText = (iso: string, now: Date) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "an unknown time";
@@ -242,7 +281,7 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
     outcome = row.state === "verified" ? (tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "part of this couldn't be read" : null) : null;
   } else {
     const procedure = row.kind === "skill" ? options.procedures?.get(row.skill_id)?.title ?? "A check Ozzie ran" : null;
-    title = row.kind === "ask" ? row.state === "verified" ? "Answered a question" : "A question" : procedure!;
+    title = row.kind === "ask" ? row.state === "verified" ? options.trigger === "on-this-mac" ? "Answered on this Mac" : "Answered a question" : "A question" : procedure!;
     outcome = row.state === "verified" ? `checked · ${things(tools.length)}` : null;
   }
   if (row.state === "failed") outcome = `Couldn't finish: ${reason(row.failure)}`;

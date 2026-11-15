@@ -1,10 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { buildSundayBrief, leadKey, needKey, teamLeaders } from "../src/sunday-brief.js";
+import { buildSundayBrief, leadKey, needKey, shownUncertainties, sundayShownCount, teamLeaders } from "../src/sunday-brief.js";
 import type { SundayCapture } from "../src/sunday-capture.js";
 import { nov22Capture, PEOPLE, TEAMS } from "../src/fictional-sunday.js";
+import { fictionalOperations, withFictionalOperations } from "../src/fictional-operations.js";
+import { sundayOperations, type SundayOperations } from "../src/operations-capture.js";
+import { applyDecisions, decide } from "../src/sunday-decisions.js";
 
 const NOW = "2026-11-20T15:05:00Z";
 const rules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
+
+describe("what the Sunday page shows, counted (one number for the headline, the sidebar and Today)", () => {
+  const example = withFictionalOperations(nov22Capture());
+  const brief = buildSundayBrief(example, rules, example.completed_at, true);
+  const ops = sundayOperations(example, rules, {})!;
+
+  it("counts open Services findings, rooms by certainty, follow-ups, room details that couldn't be confirmed and group meetings", () => {
+    // Services: two open roles (decisions), the pending request and the streak (Worth a look). Rooms and follow-ups: the follow-up
+    // without an owner (a decision), the room overlap no Church rule confirms and the card saying why (Worth a look), and one group meeting.
+    expect(ops.result!.findings.map(f => f.label)).toEqual(["Follow-up needs an owner", "Worth a look"]);
+    expect(sundayShownCount(applyDecisions(brief, []), ops)).toEqual({ decisions: 3, looks: 5, resolved: 0 });
+    // A room the Church rules say isn't shared, with an unresolved overlap: Room use needs review is a decision, and nothing is uncertain.
+    expect(sundayShownCount(applyDecisions(brief, []), fictionalOperations())).toEqual({ decisions: 4, looks: 2, resolved: 0 });
+  });
+
+  it("leaves out what the person resolved (counted as resolved) and what an out-of-date or missing rooms check doesn't show", () => {
+    const nursery = brief.findings.find(f => f.kind === "needs-people" && f.position!.name === "Nursery")!;
+    const decided = applyDecisions(brief, [decide(nursery, "not-needed", "Only two babies registered", NOW)]);
+    expect(sundayShownCount(decided, ops)).toEqual({ decisions: 2, looks: 5, resolved: 1 });
+    const stale: SundayOperations = { ...ops, result: null, group_meetings: [], stale: true, checked_at: null };
+    expect(sundayShownCount(applyDecisions(brief, []), stale)).toEqual({ decisions: 2, looks: 2, resolved: 0 });
+    expect(sundayShownCount(applyDecisions(brief, []), null)).toEqual({ decisions: 2, looks: 2, resolved: 0 });
+  });
+
+  it("a part that couldn't be read is under What I didn't check, not an open question", () => {
+    const result = { ...ops.result!, unchecked_scope_ids: ["room887596-rule"] };
+    expect(shownUncertainties(result)).toEqual([]);
+    expect(shownUncertainties(ops.result)).toHaveLength(1);
+    expect(shownUncertainties(null)).toEqual([]);
+    expect(sundayShownCount(applyDecisions(brief, []), { ...ops, result })).toEqual({ decisions: 3, looks: 4, resolved: 0 });
+  });
+});
 
 describe("Sunday brief", () => {
   it("leads with the two open positions, then the pending lyrics assignment and the serving streak", () => {

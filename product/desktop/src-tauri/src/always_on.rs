@@ -9,7 +9,8 @@
 //!    `backgroundThrottling: "disabled"`, which needs macOS 14: the bundle's minimum system version);
 //!  - a native timer thread wakes the (possibly hidden) page every TICK, sooner when the page says
 //!    work is due (never sooner than MIN_DUE_LEAD, and never two due wakes within MIN_DUE_GAP), and
-//!    notices when the Mac slept (more wall-clock time than awake time passed);
+//!    notices when the Mac slept (more wall-clock time than awake time passed); on every wake it
+//!    is also the task ledger's watchdog (`sweep_ledger`);
 //!  - "Open Ozzie when I log in" (tauri-plugin-autostart, a Launch Agent labelled with the app's
 //!    identifier, off unless the person turns it on); opened that way, the window stays hidden;
 //!  - the responsibilities store and its commands (core/native-auth responsibilities.rs is the
@@ -17,7 +18,7 @@
 //!  - discreet notifications whose text is fixed here: never a name or a detail.
 use crate::{Ledger, SessionNames};
 use ozzie_native_auth::agent::{self, AgentError, AgentStepReply};
-use ozzie_native_auth::ledger::{StepView, TaskKind};
+use ozzie_native_auth::ledger::{StepView, TaskKind, Watchdog};
 use ozzie_native_auth::model::{self as model_route, KeychainKeys};
 use ozzie_native_auth::responsibilities::{
     Grant, Listing, ResponsibilityError, ResponsibilityRow, ResponsibilityStore,
@@ -164,9 +165,23 @@ impl Timer {
         }
     }
 }
+/// The watchdog (build contract §2.4: independent of the worker it watches), on every wake before
+/// the page hears of it: ledger tasks stuck past their ceiling are ended (`Watchdog::sweep`). It
+/// runs on this thread, not in the page, because a page that reloaded or stopped is what leaves a
+/// task running. It never stalls or ends this thread: a busy ledger skips the wake, and a panic is
+/// contained so the next wake still comes. What happened reads the ledger every few seconds while
+/// open, so it shows the change. Returns how many it ended; None when nothing was swept.
+fn sweep_ledger(watchdog: &mut Watchdog, ledger: &Ledger) -> Option<usize> {
+    let ledger = ledger.get().ok()?;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| watchdog.sweep(&ledger)))
+        .ok()
+        .flatten()
+}
 fn spawn_timer(app: tauri::AppHandle, timer: Arc<Timer>, tick: Duration) {
     std::thread::spawn(move || {
+        let mut watchdog = Watchdog::default();
         while let Some(event) = timer.next(tick) {
+            sweep_ledger(&mut watchdog, &app.state::<Ledger>());
             if let Some(ms) = event.slept_ms {
                 let _ = app.emit(
                     "ozzie:wake",
@@ -801,6 +816,71 @@ mod tests {
             Some(AgentError::Limit)
         );
         assert_eq!(steps_taken(&store), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn every_wake_ends_ledger_tasks_stuck_past_their_ceiling_and_survives_a_panic() {
+        use ozzie_native_auth::fixed::{self, ASK_SKILL};
+        use ozzie_native_auth::ledger::{
+            FailureCode, LEDGER_FILE, RunState, STALE_AFTER_MS, TaskLedger,
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let awake = Arc::new(AtomicU64::new(0));
+        let read = awake.clone();
+        let mut watchdog = Watchdog::with_clock(move || read.load(Ordering::SeqCst));
+        // Start-up couldn't open the ledger: nothing to sweep.
+        assert_eq!(sweep_ledger(&mut watchdog, &Ledger::default()), None);
+        let dir = std::env::temp_dir().join(format!(
+            "ozzie-always-on-sweep-{}-{}",
+            std::process::id(),
+            unix_ms()
+        ));
+        let (stale, fresh) = (
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+        );
+        let hash = &fixed::skill(ASK_SKILL).unwrap().hash;
+        TaskLedger::open(&dir)
+            .unwrap()
+            .admit(stale, "ask", ASK_SKILL, hash)
+            .unwrap();
+        // As if the page that admitted it reloaded more than the ceiling ago.
+        let file = dir.join(LEDGER_FILE);
+        let mut record: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(&file).unwrap().trim()).unwrap();
+        for field in ["/created_ms", "/updated_ms", "/events/0/at_ms"] {
+            let ms = record.pointer_mut(field).unwrap();
+            *ms = (ms.as_u64().unwrap() - STALE_AFTER_MS - 60_000).into();
+        }
+        std::fs::write(&file, format!("{record}\n")).unwrap();
+        let opened = Arc::new(TaskLedger::open(&dir).unwrap());
+        opened.admit(fresh, "ask", ASK_SKILL, hash).unwrap();
+        let ledger = Ledger::default();
+        ledger.0.set(Some(opened.clone())).ok().unwrap();
+        // A panic during a wake is contained, and the ledger and the next wake still work.
+        let mut broken = Watchdog::with_clock(|| panic!("a fictional fault"));
+        assert_eq!(sweep_ledger(&mut broken, &ledger), None);
+        assert_eq!(sweep_ledger(&mut broken, &ledger), None);
+        // Past the ceiling by the wall clock, but not yet seen stuck for it while awake.
+        assert_eq!(sweep_ledger(&mut watchdog, &ledger), Some(0));
+        awake.store(STALE_AFTER_MS, Ordering::SeqCst);
+        assert_eq!(sweep_ledger(&mut watchdog, &ledger), Some(1));
+        let state = |id: &str| {
+            let row = opened
+                .list(10)
+                .into_iter()
+                .find(|r| r.task_id == id)
+                .unwrap();
+            (row.state, row.failure)
+        };
+        assert_eq!(
+            state(stale),
+            (RunState::Failed, Some(FailureCode::Interrupted))
+        );
+        assert_eq!(state(fresh), (RunState::Admitted, None));
+        assert_eq!(sweep_ledger(&mut watchdog, &ledger), Some(0));
+        drop((ledger, opened));
         let _ = std::fs::remove_dir_all(dir);
     }
 

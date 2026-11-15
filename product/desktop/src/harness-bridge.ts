@@ -13,6 +13,11 @@ import { evaluateAttentionImport, type AttentionReport } from "../../../core/src
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { AgentRuntime, AgentStepReply, FailureCode, ModelStep, Skill, TaskEvent, TaskOutcome, ToolEnvelope } from "../../../core/src/harness/contract.js";
+import { REFUSALS } from "../../../core/src/ask.js";
+import {
+  decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_TO_DECIDE, openDecisions, type KidsQuestion, type LocalAnswer,
+} from "../../../core/src/harness/compose.js";
+import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { ASK_SKILL, composeAnswer, Harness, type HarnessData } from "../../../core/src/harness/index.js";
 import { PiLoop } from "../../../core/src/harness/pi-loop.js";
 import type { HarnessSession } from "../../../core/src/harness/session.js";
@@ -23,7 +28,7 @@ import type { SundayCapture, SundayRules } from "../../../core/src/sunday-captur
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
 import type { ConnectionStatus } from "./connection.js";
 import {
-  askFailureText, basedOnEvidence, evidenceGaps, ledgerDetail, modelSteps, outcomeSteps, type CheckTrigger, type TaskRow,
+  askFailureText, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, ledgerDetail, localSteps, modelSteps, outcomeSteps, type CheckTrigger, type TaskRow,
 } from "./harness-words.js";
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -435,6 +440,23 @@ export class LedgerRecorder {
     }
   }
 
+  /**
+   * A question answered on this Mac without the AI (review Q L3), as an "ask" task under the Ask procedure: admitted,
+   * running, one tool event per read, verified, and kept as "on-this-mac" so What happened says where it was answered.
+   * Name-free like every task; no model step. Best effort, like every ledger call.
+   */
+  answeredHere(evidence: readonly ToolEnvelope[]): void {
+    const id = this.#newId();
+    const observer = this.task("ask", ASK_SKILL);
+    let sequence = 0;
+    const emit = (type: TaskEvent["type"], detail = "") => observer.onEvent({ task_id: id, sequence: ++sequence, at: new Date().toISOString(), type, detail });
+    try { this.#triggers?.set(id, "on-this-mac"); } catch { /* per-device convenience only */ }
+    emit("admitted");
+    emit("running");
+    for (const e of evidence) emit("tool", `${e.tool}:${e.completeness}`);
+    emit("verified");
+  }
+
   /** Recent tasks, newest first; null when the ledger isn't available. */
   async list(limit = 50): Promise<TaskRow[] | null> {
     try {
@@ -464,7 +486,7 @@ export function localTriggers(store: { getItem(k: string): string | null; setIte
   const read = (): [string, CheckTrigger][] => {
     try {
       const raw = JSON.parse(store?.getItem(TRIGGERS_KEY) ?? "[]") as unknown;
-      return Array.isArray(raw) ? raw.filter((e): e is [string, CheckTrigger] => Array.isArray(e) && typeof e[0] === "string" && (e[1] === "automatic" || e[1] === "manual")) : [];
+      return Array.isArray(raw) ? raw.filter((e): e is [string, CheckTrigger] => Array.isArray(e) && typeof e[0] === "string" && (e[1] === "automatic" || e[1] === "manual" || e[1] === "on-this-mac")) : [];
     } catch { return []; }
   };
   return {
@@ -504,6 +526,10 @@ export interface ShownAnswer {
   aiSteps: number;
   /** Where to look next. */
   page: "sunday" | "today";
+  /** Written on this Mac without the AI (kids teams and background checks): nothing was sent. */
+  local?: boolean;
+  /** Open decisions the AI's answer left out were added on this Mac, under "Also on the Sunday page". */
+  added?: boolean;
 }
 export type AskTurn =
   | { state: "refused"; text: string }
@@ -533,19 +559,80 @@ export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: S
   };
 }
 
-/** One question through the harness: refused before anything is sent, or run as a task and shaped for the panel. */
+/** Background checks on every kids team: for a note about one, which is never drafted with AI help (review Q H2). */
+const backgroundOnly = (data: HarnessData): KidsQuestion => {
+  const teams = kidsTeams(data.rules).map(t => t.team_id);
+  return { teams, marked: teams.length > 0, named: false, background: true, who: false, whole: false };
+};
+
+/** An answer written on this Mac without the AI (core compose.ts kidsAnswer), restored here; `first` is fixed wording shown above it. */
+export function localAnswer(harness: Harness, local: LocalAnswer, first: string[] = []): ShownAnswer {
+  const mode = harness.data.mode;
+  return {
+    body: [...first, ...local.paragraphs.map(p => local.fill(harness.restore(p)))].join("\n\n"),
+    draft: null, notCovered: false,
+    basedOn: basedOnEvidence([...local.evidence, ...local.sources], mode),
+    gaps: [...evidenceGaps(local.evidence, mode), ...local.gaps],
+    procedure: null,
+    steps: localSteps(local.evidence, local.sources.some(s => s.source === "Planning Center People")),
+    aiSteps: 0, page: "sunday", local: true,
+  };
+}
+
+/**
+ * One question: refused before anything is sent; a question about kids teams or background checks answered on this Mac
+ * without the AI (background checks never reach it); or run as a task and shaped for the panel, with any open decisions
+ * a decision question's answer left out added here, and what Ozzie can do instead when it can't tell.
+ */
 export async function askOzzie(harness: Harness, typed: string, options: {
   signal?: AbortSignal; recorder?: LedgerRecorder | null; skills: ReadonlyMap<string, Skill>; sender?: string;
   /** Where agentStep kept the native code of a failed step. Defaults to the app's. */
   notes?: StepNotes;
 }): Promise<AskTurn> {
+  const signal = options.signal ?? new AbortController().signal;
+  const here = async (work: () => Promise<LocalAnswer>, first: string[] = []): Promise<AskTurn> => {
+    const local = await work();
+    if (signal.aborted) return { state: "cancelled", text: askFailureText("cancelled") };
+    options.recorder?.answeredHere(local.evidence);
+    return { state: "answered", answer: localAnswer(harness, local, first) };
+  };
+  // The same refusals first, so nothing is answered here that couldn't be asked.
+  const prepared = harness.prepare(typed);
+  if (!prepared.ok) {
+    // A question naming a background check is never prepared for the AI (review Q H2): it is answered here instead.
+    if (prepared.refusal === REFUSALS.backgroundNote) return here(() => kidsAnswer(harness.tools, backgroundOnly(harness.data), signal), [REFUSALS.backgroundNote]);
+    if (prepared.refusal === REFUSALS.background) {
+      const q = kidsQuestion(typed, harness.data);
+      if (q && !q.whole) return here(() => kidsAnswer(harness.tools, q, signal));
+      return here(() => openDecisions(harness.tools, signal));
+    }
+    return { state: "refused", text: prepared.refusal };
+  }
+  const kids = kidsQuestion(typed, harness.data);
+  if (kids) return here(() => kidsAnswer(harness.tools, kids, signal));
   const observer = options.recorder?.task("ask", ASK_SKILL);
   const result = await harness.ask(typed, { ...(options.signal ? { signal: options.signal } : {}), ...(observer ? { onEvent: observer.onEvent } : {}) });
   if (!result.ok) return { state: "refused", text: result.refusal };
   const { outcome } = result;
   const native = (options.notes ?? stepNotes).take(result.task.id);
   if (outcome.status === "verified" && outcome.answer) {
-    return { state: "answered", answer: shownAnswer(harness, outcome, options.skills.get(ASK_SKILL), options.sender ?? "") };
+    const shown = shownAnswer(harness, outcome, options.skills.get(ASK_SKILL), options.sender ?? "");
+    // No silent omission: the open decisions the answer left out, in fixed words, with their sources.
+    const left = isDecisionQuestion(typed) && !signal.aborted ? await decisionsLeftOut(harness.tools, outcome.answer, outcome.evidence, signal) : null;
+    const added = left !== null && left.paragraphs.length > 0;
+    // "Nothing in this check needs a decision" counts only what the AI read; it is never said above decisions added here.
+    const own = shown.body.split("\n\n").filter(p => p && !(added && p === NOTHING_TO_DECIDE));
+    const body = [...own, ...(added ? left.paragraphs.map(p => left.fill(harness.restore(p))) : []), ...(shown.notCovered && !added ? [CAN_DO_INSTEAD] : [])].join("\n\n");
+    const mode = harness.data.mode;
+    return { state: "answered", answer: {
+      ...shown, body,
+      ...(added ? {
+        added: true, basedOn: basedOnEvidence([...outcome.evidence, ...left.evidence, ...left.sources], mode),
+        gaps: [...new Set([...shown.gaps, ...evidenceGaps(left.evidence, mode)])],
+        // What Ozzie read on this Mac for them, after the AI's own steps, each once.
+        steps: [...new Set([...shown.steps, ...localSteps(left.evidence, left.sources.some(s => s.source === "Planning Center People"))])],
+      } : {}),
+    } };
   }
   if (outcome.status === "cancelled") return { state: "cancelled", text: askFailureText("cancelled") };
   if (outcome.code === "no-model") return { state: "no-model" };
