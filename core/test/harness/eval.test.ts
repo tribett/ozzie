@@ -312,6 +312,9 @@ describe("every request a model could receive holds no name, contact detail or s
   for (const [label, make] of FIXTURES) it(`${label}: every procedure, both ways of reading, and an Ask question`, async () => {
     for (const plan of ["reads", "people"] as const) {
       for (const skill of [...skills.keys()]) {
+        // The scripted model resolves on microtasks only; a macrotask turn here lets the worker answer the test
+        // runner during this long sweep (without it, CI timed out "calling onTaskUpdate" though every test passed).
+        await new Promise(resolve => setImmediate(resolve));
         const data = make();
         const m = scripted(greedy(plan));
         const h = harness(data, m.model, label === "live, out of date" ? "2026-11-20T17:00:00Z" : FRESH);
