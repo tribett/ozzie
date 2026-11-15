@@ -8,8 +8,9 @@ import {
 } from "../../../core/src/sunday-changes.js";
 import {
   DEFAULT_QUIET_HOURS, DEFAULT_SCHEDULE, finishRun, holdNotice, inQuietHours, launchSchedule, newSchedule, noticeDecision, parseClock,
-  pauseSchedule, releaseHeld, rescheduleFor, resumeSchedule, startManual, tickSchedule, type RunTrigger, type ScheduleState,
+  pauseSchedule, releaseHeld, rescheduleFor, resumeSchedule, settledQuietHours, startManual, tickSchedule, type RunTrigger, type ScheduleState,
 } from "../../../core/src/schedule.js";
+import { feedbackOf, routeChanges } from "../../../core/src/finding-feedback.js";
 
 /**
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
@@ -55,8 +56,12 @@ export interface HistoryEntry {
   trigger?: RunTrigger;
   plan_id?: string; plan_dates?: string | null;
   changes?: SundayChange[];
-  /** What happened to the notice for this entry. "in-app": a person was already looking. */
-  notice?: "sent" | "held" | "sent-later" | "in-app" | "unavailable" | "none";
+  /**
+   * What happened to the notice for this entry. "in-app": a person was already looking. "briefing": every
+   * change that got worse is a kind the person's Church rules keep for the briefing. "handed": waiting on
+   * Keep Sunday covered's run; "responsibility": that run decided the notice, so this check sent none.
+   */
+  notice?: "sent" | "held" | "sent-later" | "in-app" | "unavailable" | "briefing" | "handed" | "responsibility" | "none";
   scheduled_for?: string;
   problem?: string;
 }
@@ -73,8 +78,13 @@ export interface ProactiveHooks {
   context: () => ProactiveContext;
   onStatus: (s: ConnectionStatus) => void;
   onCapture: (capture: SundayCapture, trigger: RunTrigger) => void;
-  /** What an automatic check found changed (person ids only), so a responsibility can check sooner. */
-  onChanges?: (changes: SundayChange[]) => void;
+  /**
+   * What an automatic check found changed (person ids only), so a responsibility can check sooner. `about`:
+   * the Sunday it is about, and whether this check has a notice to send. A promise means Keep Sunday covered
+   * took the changes: this check sends no notice of its own unless it resolves false (that run was refused,
+   * failed, was paused or decided nothing), so one change brings at most one notice.
+   */
+  onChanges?: (changes: SundayChange[], about: { plan_id: string; notice: boolean }) => Promise<boolean> | void;
 }
 export interface ProactiveDeps {
   store: KeyValueStore;
@@ -144,13 +154,29 @@ function cleanPrefs(raw: Partial<ProactivePrefs> | null): ProactivePrefs {
     urgentWithinHours: int(raw?.urgentWithinHours, 1, 7 * 24, DEFAULT_PREFS.urgentWithinHours),
   };
 }
+/** Saved preferences carry this once the settled defaults (owner decision, October 26) have been applied to them. */
+const SETTLED = 1;
+/**
+ * Saved preferences, with quiet hours moved to the settled default (9:00 PM to 7:00 AM) only when they
+ * still equal the earlier default and haven't been settled before. A person's own choice is never changed.
+ */
+export function loadPrefs(store: KeyValueStore): ProactivePrefs {
+  const raw = read<Partial<ProactivePrefs> & { settled?: number }>(store, KEYS.prefs);
+  const prefs = cleanPrefs(raw);
+  if (!raw || raw.settled === SETTLED) return prefs;
+  const quiet = settledQuietHours({ start: prefs.quietStart, end: prefs.quietEnd });
+  const settled = { ...prefs, quietStart: quiet.start, quietEnd: quiet.end };
+  savePrefs(store, settled);
+  return settled;
+}
+const savePrefs = (store: KeyValueStore, prefs: ProactivePrefs) => store.set(KEYS.prefs, JSON.stringify({ ...prefs, settled: SETTLED }));
 const validSchedule = (s: ScheduleState | null): s is ScheduleState =>
   s !== null && typeof s === "object" && s.version === 1 && typeof s.paused === "boolean" && typeof s.failures === "number";
 const keyOf = (organization: string, planId: string) => `${organization}:${planId}`;
 const worse = (e: HistoryEntry) => e.kind === "missed" || e.kind === "failed" || (e.kind === "changes" && Boolean(e.changes?.some(c => c.effect === "worse")));
 
 export function createProactive(deps: ProactiveDeps): ProactiveController {
-  let prefs = cleanPrefs(read<Partial<ProactivePrefs>>(deps.store, KEYS.prefs));
+  let prefs = loadPrefs(deps.store);
   const loaded = read<ScheduleState>(deps.store, KEYS.schedule);
   let schedule = validSchedule(loaded) ? loaded : newSchedule();
   let history = read<{ version: 1; entries: HistoryEntry[] }>(deps.store, KEYS.history)?.entries ?? [];
@@ -206,17 +232,42 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays }));
     const about = { trigger, plan_id: capture.plan_id, plan_dates: record.plan_dates };
     if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return; }
-    if (!changes.length) return;
-    if (trigger !== "manual") { try { hooks?.onChanges?.(changes); } catch { /* the check itself finished */ } }
-    const found = { worse: changes.some(c => c.effect === "worse"), urgent: changes.some(c => c.urgency === "urgent") };
+    // The person's Church rules on notices: kinds kept for the briefing, kinds told right away, and what they
+    // asked Ozzie to stop flagging (left out here altogether, as they are on the Sunday page).
+    const routed = routeChanges(changes, feedbackOf(rules));
+    const listed = changes.filter(c => !routed.stopped.includes(c));
+    if (!listed.length) return;
+    const found = { worse: routed.notify.length > 0, urgent: routed.urgent };
+    let handed: Promise<boolean> | void = undefined;
+    if (trigger !== "manual") {
+      try { handed = hooks?.onChanges?.(listed, { plan_id: capture.plan_id, notice: found.worse }); } catch { /* the check itself finished */ }
+    }
     let notice: HistoryEntry["notice"] = "none";
     if (found.worse && trigger === "manual") notice = "in-app";
-    else if (found.worse) {
-      const decision = noticeDecision(found, { quiet: quiet(), urgentDuringQuiet: prefs.urgentDuringQuiet }, now, deps.timeZone());
-      if (decision === "send") notice = await deliver();
-      if (decision === "hold") { schedule = holdNotice(schedule, now, found.urgent); notice = "held"; }
-    }
-    add({ at: now, kind: "changes", ...about, changes, notice });
+    else if (found.worse && handed) { notice = "handed"; void afterHandoff(now, handed, found); }
+    else if (found.worse) notice = await decide(found, now);
+    else if (routed.briefing.length && trigger !== "manual") notice = "briefing";
+    add({ at: now, kind: "changes", ...about, changes: listed, notice });
+  }
+  /** Send the notice now, or hold it for quiet hours (unless the person let urgent ones through). */
+  async function decide(found: { worse: boolean; urgent: boolean }, now: string): Promise<NonNullable<HistoryEntry["notice"]>> {
+    const decision = noticeDecision(found, { quiet: quiet(), urgentDuringQuiet: prefs.urgentDuringQuiet }, now, deps.timeZone());
+    if (decision === "send") return deliver();
+    if (decision === "hold") { schedule = holdNotice(schedule, now, found.urgent); return "held"; }
+    return "none";
+  }
+  /**
+   * Changes handed to Keep Sunday covered: its run sends the notice, with the notes it prepared. If it
+   * doesn't decide one, this check's notice goes out after all, as it would have (quiet hours still hold
+   * it), so nothing goes silent. Paused meanwhile: dropped, as a held notice is. Seen in Ozzie meanwhile:
+   * that counts as being told.
+   */
+  async function afterHandoff(at: string, handed: Promise<boolean>, found: { worse: boolean; urgent: boolean }) {
+    const decided = await handed.catch(() => false);
+    const outcome: NonNullable<HistoryEntry["notice"]> = decided ? "responsibility" : schedule.paused ? "none"
+      : seenAt && seenAt >= at ? "in-app" : await decide(found, deps.now());
+    history = history.map(e => e.at === at && e.kind === "changes" && e.notice === "handed" ? { ...e, notice: outcome } : e);
+    emit();
   }
 
   function run(trigger: RunTrigger, source?: "manual" | "automatic"): Promise<SundayCapture> {
@@ -279,6 +330,14 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
         schedule = step.state;
         if (step.interrupted) add({ at: now, kind: "interrupted", trigger: step.interrupted.trigger, scheduled_for: step.interrupted.started_at });
         if (step.missed) add({ at: now, kind: "missed", scheduled_for: step.missed });
+        // Ozzie closed while Keep Sunday covered had changes this check handed it: its notice waits like a
+        // held one and goes out at the next tick outside quiet hours, so nothing goes silent.
+        const handed = history.filter(e => e.notice === "handed");
+        if (handed.length) {
+          const urgent = handed.some(e => routeChanges(e.changes ?? [], feedbackOf(h.context().rules)).urgent);
+          if (!schedule.paused) schedule = holdNotice(schedule, now, urgent);
+          history = history.map(e => e.notice === "handed" ? { ...e, notice: schedule.paused ? "none" : "held" } : e);
+        }
         emit();
       }
       if (timer === null) timer = deps.timers.setInterval(() => { void tick(); }, TICK_MS);
@@ -315,7 +374,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     },
     setPrefs(next) {
       prefs = cleanPrefs(next);
-      deps.store.set(KEYS.prefs, JSON.stringify(prefs));
+      savePrefs(deps.store, prefs);
       schedule = rescheduleFor(schedule, scheduleSettings(), deps.now());
       emit();
     },

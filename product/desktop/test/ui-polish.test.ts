@@ -8,7 +8,7 @@ import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { SundayPage } from "../src/sunday-page.js";
 import { TodayPage } from "../src/today-page.js";
 import { AskPanel } from "../src/ask-panel.js";
-import { ConnectionPage } from "../src/connection-page.js";
+import { ConnectionPage, SavedRecordings } from "../src/connection-page.js";
 import { SetupFlow } from "../src/setup-flow.js";
 import { DEFAULT_PREFS } from "../src/proactive.js";
 import { zoneText } from "../src/proactive-page.js";
@@ -51,7 +51,7 @@ describe("Ask Ozzie beside Settings", () => {
   }));
   it("offers no button to the page already on screen", () => {
     expect(panel("connection")).not.toContain(">Open Settings</button>");
-    expect(panel("connection")).toContain("Set one up in Wording help on this page.");
+    expect(panel("connection")).toContain("Set one up in AI help on this page.");
     expect(panel("sunday")).not.toContain(">Open Sunday</button>");
     expect(panel("today")).toContain(">Open Settings</button>");
     expect(panel("today")).toContain(">Open Sunday</button>");
@@ -65,9 +65,10 @@ describe("Settings", () => {
   it("is titled Settings, with its sections in a fixed order", () => {
     expect(html).toContain("<h1 class=\"h1\">Settings</h1>");
     const order = ["Planning Center</h2>", "Sign in</h3>", "Which Sunday</h3>", "Rooms, follow-ups and group events</h3>",
-      "Wording help</h2>", "Automatic checks</h2>", "Saved recordings</h2>", "Guided setup</h2>"].map(s => html.indexOf(s));
+      "AI help</h2>", "Automatic checks</h2>", "Saved recordings</h2>", "Guided setup</h2>"].map(s => html.indexOf(s));
     expect(order.every(i => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(text(html)).not.toMatch(/wording help/iu);
     expect(text(html)).toContain("Every hour, and when Ozzie opens.");
     expect(text(html)).toContain("Change these in What runs automatically");
   });
@@ -84,7 +85,25 @@ describe("Settings", () => {
       expect(html).toContain(label);
     }
   });
-  it("shows each wording-help route as one row with one action, and the own-provider fields only when asked for", () => {
+  it("chooses the Sunday with the same picker as guided setup, typing the plan by hand folded below", () => {
+    expect(html).toContain("class=\"picker\"");
+    expect(html).toMatch(/<details class="picker-hand"[^>]*><summary>.*Enter the plan by hand<\/summary>/u);
+  });
+  it("asks once before deleting saved recordings, and says what deleting does", () => {
+    const closed = renderToStaticMarkup(React.createElement(SavedRecordings, { count: 3, onDelete: () => {}, sharing: false }));
+    expect(closed).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-controls="delete-recordings"[^>]*>Delete saved recordings<\/button>/u);
+    expect(closed).not.toContain("Yes, delete");
+    const open = text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 3, onDelete: () => {}, sharing: true, confirming: true })));
+    expect(open).toContain("Delete all 3 saved recordings from this Mac? Sunday can't be shown from them afterwards. The copy for other AI apps is removed too.");
+    expect(open).toContain("Yes, delete them");
+    expect(open).toContain("Keep them");
+    const one = text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 1, onDelete: () => {}, sharing: false, confirming: true })));
+    expect(one).toContain("Delete the saved recording from this Mac? Sunday can't be shown from it afterwards. Planning Center doesn't change.");
+    expect(one).toContain("Keep it");
+    expect(text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 0, onDelete: () => {}, sharing: false, confirming: true }))))
+      .toBe(" No saved recordings for this organization. ");
+  });
+  it("shows each AI help route as one row with one action, and the own-provider fields only when asked for", () => {
     const ai = renderToStaticMarkup(React.createElement(AiSettings, { onChange: () => {} }));
     expect(ai.match(/<li class="route"/g)).toHaveLength(3);
     expect(ai.match(/>Use this<\/button>/g)).toHaveLength(2);

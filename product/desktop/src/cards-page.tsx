@@ -12,16 +12,27 @@ import { CardReviewController } from "../../src/card-review/controller.js";
 import { bindForeground, browserImages } from "../../src/card-review/browser.js";
 import { Icon } from "./icons.js";
 
-export type CardTextResult = { status: "read"; text: string } | { status: "not-available" };
-/** Native, on this Mac: the photo's bytes go to the local recognizer on a pipe and its text comes back. Never to an AI model. */
+/** `unclearLines`: the lines of `text` (from 0) the reader couldn't read clearly. */
+export type CardTextResult = { status: "read"; text: string; unclearLines: number[] } | { status: "not-available" };
+const lineNumbers = (value: unknown): value is number[] =>
+  Array.isArray(value) && value.every(n => Number.isSafeInteger(n) && n >= 0);
+/**
+ * Native, on this Mac: the photo's bytes go to the local recognizer (Apple Vision in Ozzie's own
+ * sandboxed reader) on a pipe and its text comes back. Never to an AI model.
+ */
 export const cardReader = {
+  /** The page opened: get the reader ready (a minute or two the first time on a Mac). No card is involved. */
+  prepare: () => invoke<"ready" | "not-available">("prepare_card_reader"),
   read: (image: Uint8Array) => invoke<CardTextResult>("read_card_text", image),
   /** The review closed: stop any card still being read; its text is thrown away natively. */
   cancel: () => invoke<void>("cancel_card_reading"),
 };
 
 export type ReadState = "waiting" | "reading" | "read" | "by-hand" | "failed";
-export type Recognizer = "unknown" | "available" | "not-available";
+/** "preparing": the first preparation on this Mac is taking a while. */
+export type Recognizer = "unknown" | "preparing" | "available" | "not-available";
+/** How long the preparation runs before the page says it's getting ready (it usually takes under a second). */
+const SLOW_PREPARE_MS = 1500;
 export interface CardsUi {
   reading: Readonly<Record<number, ReadState>>;
   suggested: Readonly<Record<number, readonly FieldName[]>>;
@@ -76,10 +87,12 @@ export async function readCardsLocally({ controller, ticket, files, read, live, 
     if (!file || !controller.source(ticket, id)) continue;
     onState(id, "reading");
     let text: string | null = null;
+    let unclearLines: number[] = [];
     let unavailable = false;
     try {
       const result = await read(new Uint8Array(await file.arrayBuffer()));
-      if (result.status === "not-available") unavailable = true; else text = typeof result.text === "string" ? result.text : null;
+      if (result.status === "not-available") unavailable = true;
+      else if (typeof result.text === "string" && lineNumbers(result.unclearLines)) ({ text, unclearLines } = result);
     } catch { text = null; }
     if (!live()) { files.fill(null); return; }
     if (unavailable) {
@@ -90,7 +103,7 @@ export async function readCardsLocally({ controller, ticket, files, read, live, 
     }
     if (text === null) { onState(id, "failed"); continue; }
     onRecognizer("available");
-    const suggestions = suggestFields(text);
+    const suggestions = suggestFields(text, unclearLines);
     text = null;
     const filled: FieldName[] = [];
     for (const field of fields) {
@@ -185,6 +198,20 @@ function CardsHost({ people, workspace }: { people: Readonly<Record<string, stri
     setController(review);
     return () => { files.current.fill(null); files.current = []; current.current = null; unsubscribe(); unbind(); stopReading(); };
   }, [workspace]);
+  // Get this Mac's reader ready while the person finds their photos. It reads only Ozzie's own
+  // practice picture; a card chosen meanwhile simply waits for it.
+  useLayoutEffect(() => {
+    let live = true;
+    const slow = setTimeout(() => { if (live) setUi(u => u.recognizer === "unknown" ? { ...u, recognizer: "preparing" } : u); }, SLOW_PREPARE_MS);
+    cardReader.prepare().then(status => {
+      if (!live) return;
+      const r: Recognizer = status === "ready" ? "available" : "not-available";
+      recognizer.current = r;
+      setUi(u => ({ ...u, recognizer: r }));
+    }, () => { if (live) setUi(u => u.recognizer === "preparing" ? { ...u, recognizer: "unknown" } : u); })
+      .finally(() => clearTimeout(slow));
+    return () => { live = false; clearTimeout(slow); };
+  }, []);
   if (!controller) return <div className="col"><p role="status">Preparing a temporary review.</p></div>;
 
   const begin = async (t: number, chosen: File[]) => {
@@ -249,7 +276,8 @@ export function CardsReview({ controller, ticket, ui, people, onChoose, onCopy, 
     </div>
     {ui.recognizer === "not-available"
       ? <p className="panel-info"><Icon name="info" small />This Mac can't read card text, so please type each card.</p>
-      : <p className="small">If this Mac can read the card text, I'll fill in what I can read clearly and mark what I can't. Every field still needs a person to check it.</p>}
+      : <p className="small">If this Mac can read the card text, Ozzie fills in what it reads clearly and marks what it can't. Every field still needs a person to check it.</p>}
+    {ui.recognizer === "preparing" && <p className="small" role="status"><Icon name="spinner" small spin /> Getting this Mac ready to read cards. The first time can take a minute or two; nothing from your cards is used for this.</p>}
 
     {!open && <div className="row">
       <button type="button" className="btn btn-primary" aria-describedby="cards-limits" onClick={onChoose}>Choose card photos</button>
@@ -319,7 +347,7 @@ function CardItem({ card, controller, ticket, state, suggested, people, onEdited
         const id = `card-${card.id}-${field}`;
         const fromMac = suggested.includes(field);
         const note = fromMac && hard && !value.text ? "This Mac couldn't read this clearly. Type what you see on the card."
-          : fromMac && hard ? "Some of this didn't read clearly. Compare every word with the photo."
+          : fromMac && hard ? "Ozzie couldn't read this clearly — check it against the card."
             : fromMac ? "Read by this Mac. Compare it with the photo."
               : hard ? "You marked this hard to read." : field === "request" ? "Keep their exact words. Don't summarize or fix them." : "";
         const props = {

@@ -1,11 +1,13 @@
-//! On-device helpers for Today's spoken briefing (macOS `say`) and visitor-card text
-//! recognition (the locally installed Tesseract). Each runs as a child process under its own
-//! deny-by-default sandbox profile with an empty environment. Text and image bytes travel only
+//! On-device helpers: Today's spoken briefing (macOS `say`), visitor-card text recognition (Ozzie's
+//! own Apple Vision helper, or a locally installed Tesseract if that helper can't run) and speaking
+//! a question into Ask (Ozzie's own on-device speech helper). Each runs as a child process under
+//! its own sandbox profile with an empty environment. Text, image bytes and transcripts travel only
 //! over pipes and live only in memory for one call: no temporary files, no recordings, no logs.
-//! Errors are closed codes that never carry card or briefing content.
-use std::io::{Read, Write};
-use std::path::Path;
-use std::process::{Child, Command, Stdio};
+//! Errors are closed codes that never carry card, briefing or spoken content.
+use std::ffi::OsString;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -66,6 +68,75 @@ pub const SAY_POLICY: &str = r#"(version 1)
   (xpc-service-name "com.apple.ax.MauiTTSSupport.MauiAUSP.apple-extension-service"))
 "#;
 
+/// The rules both runs of Ozzie's card reader share. A macro so the two policies stay literal text.
+/// Parameters, filled in by `CardReader::command`: HELPER, the reader itself; APP, Ozzie.app (or
+/// the reader's folder in a development build); MODEL_CACHE and METAL_CACHE, the two folders
+/// Apple's recognizer keeps its compiled models in.
+macro_rules! card_reader_rules {
+    () => {
+        r#"(version 1)
+(deny default)
+; Run the reader itself: Ozzie's own program, signed with Ozzie.
+(allow process-exec (literal (param "HELPER")))
+(allow file-read*
+  ; The working directory, and Ozzie.app, which the reader looks itself up in.
+  (literal "/") (subpath (param "APP"))
+  ; Directory lookups on the way to system files (contents of /System/Volumes/Data are not readable).
+  (literal "/System") (literal "/System/Volumes") (literal "/System/Volumes/Data") (literal "/System/Volumes/Preboot")
+  ; System frameworks, Apple's text recognition models that come with macOS, the shared library cache.
+  (subpath "/System/Library") (subpath "/System/Cryptexes") (subpath "/System/iOSSupport")
+  (subpath "/System/Volumes/Preboot/Cryptexes")
+  ; System libraries, Unicode and language data.
+  (subpath "/usr/lib") (subpath "/usr/share")
+  ; The recognizer's compiled models.
+  (subpath (param "MODEL_CACHE")) (subpath (param "METAL_CACHE")))
+; Folder lookups on the way to those (the per-user cache folder is reached through /var).
+(allow file-read-metadata (literal "/var")
+  (path-ancestors (param "APP")) (path-ancestors (param "MODEL_CACHE")) (path-ancestors (param "METAL_CACHE")))
+; Kernel facts such as the processor and memory size.
+(allow sysctl-read)
+; The graphics processor and the Neural Engine, as Apple's own app sandbox grants them for
+; recognition models; the system service that loads models onto the Neural Engine; and the lookup
+; of this person's cache folder.
+(allow iokit-open (iokit-user-client-class "AGXDeviceUserClient" "IOSurfaceRootUserClient"
+  "AppleVirtIONeuralEngineDeviceUserClient" "H11ANEInDirectPathClient" "H1xANELoadBalancerDirectPathClient"))
+(allow mach-lookup (global-name "com.apple.appleneuralengine" "com.apple.bsd.dirhelper"))
+"#
+    };
+}
+
+/// Reading a card. Ozzie's Vision reader parses untrusted photos, so beyond the rules above it gets
+/// nothing: no network, no file writes at all, no other programs, no home folder. The compiled
+/// models are read-only here. Verified 2026-11-14 on macOS 27.2 in an app bundle and a development
+/// folder: text identical to an unsandboxed run on the fictional cards; without the GPU client it
+/// silently reads nothing, without the Neural Engine or /usr/share it fails.
+pub const CARD_READER_POLICY: &str = card_reader_rules!();
+
+/// Preparing, once per launch: the same reader on Ozzie's fixed practice picture (never a card)
+/// may also compile Apple's models into their two cache folders and let the Neural Engine service
+/// read them. The first time on a Mac, and after a macOS update, this takes a minute or two.
+pub const CARD_PREPARE_POLICY: &str = concat!(
+    card_reader_rules!(),
+    r#"; Preparing only: write the compiled models, and let the Neural Engine service read them.
+(allow file-write* (subpath (param "MODEL_CACHE")) (subpath (param "METAL_CACHE")))
+(allow file-issue-extension
+  (require-all (extension-class "com.apple.app-sandbox.read") (subpath (param "MODEL_CACHE"))))
+"#
+);
+
+/// Listening for a spoken question. The microphone and on-device speech recognition need many
+/// system services (audio, privacy permissions, the recognizer), so this starts from allow and
+/// takes away what matters: no network, no file writes (nothing can be recorded or kept), and no
+/// other programs. The helper itself also insists on on-device recognition.
+pub const LISTEN_POLICY: &str = r#"(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(deny process-fork)
+(deny process-exec)
+(allow process-exec (literal (param "HELPER")))
+"#;
+
 const SAY: &str = "/usr/bin/say";
 /// A fixed voice and rate; the webview can't choose either. 170 words per minute matches
 /// `SPOKEN_WORDS_PER_MINUTE` in core/src/spoken-briefing.ts.
@@ -75,6 +146,14 @@ const RATE: &str = "170";
 pub const MAX_SPEECH_CHARS: usize = 4000;
 const MAX_PLAYBACK: Duration = Duration::from_secs(300);
 
+/// Ozzie's own helpers (helpers/*.swift), built by build.rs, bundled beside Ozzie's program and
+/// signed with it: Ozzie.app/Contents/MacOS in the app, target/<profile> in a development build.
+pub const CARD_READER: &str = "ozzie-card-reader";
+pub const LISTENER: &str = "ozzie-listen";
+/// Ozzie's bundle identifier (tauri.conf.json). Inside Ozzie.app, Apple's recognizer names its
+/// model caches after it; in a development build, after the reader's file name.
+const BUNDLE_ID: &str = "church.ozzie.desktop";
+/// A Homebrew Tesseract, used only when Ozzie's own reader can't run on this Mac.
 const TESSERACT: &str = "/opt/homebrew/bin/tesseract";
 /// Same per-image limit as the card review lifecycle.
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -83,7 +162,15 @@ pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 /// Recognized text beyond this is refused, never truncated.
 pub const MAX_TEXT_BYTES: usize = 16 * 1024;
+/// The Vision reader's pieces of text with their boxes, as JSON lines (the text itself is at most
+/// MAX_TEXT_BYTES; the reader refuses more).
+const MAX_PIECES_BYTES: usize = 64 * 1024;
 const RECOGNITION_TIMEOUT: Duration = Duration::from_secs(30);
+/// Preparing compiles Apple's models the first time: about two minutes at most observed.
+const PREPARE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Ozzie's fixed practice picture: two printed lines ("Ozzie is getting ready / to read cards on
+/// this Mac"), rendered once with Core Text. No person, no card.
+const PRACTICE_PICTURE: &[u8] = include_bytes!("../helpers/practice.png");
 
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -99,10 +186,24 @@ pub enum LocalToolError {
 }
 
 /// `not-available` when this Mac has no local recognizer; the page then offers empty fields.
+/// `unclearLines`: the lines of `text` (from 0) holding a piece the reader couldn't read clearly;
+/// the page flags any field read from them for a person to check. A Tesseract reports none.
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum CardText {
-    Read { text: String },
+    Read {
+        text: String,
+        #[serde(rename = "unclearLines")]
+        unclear_lines: Vec<usize>,
+    },
+    NotAvailable,
+}
+
+/// Whether this Mac can read card text: Ozzie's Vision reader (prepared) or a Tesseract.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CardReaderStatus {
+    Ready,
     NotAvailable,
 }
 
@@ -147,6 +248,212 @@ fn sandboxed(policy: &str, locale: &str, argv: &[&str]) -> Command {
         .stdin(Stdio::piped())
         .stderr(Stdio::null());
     command
+}
+
+/// One of Ozzie's own helpers under `policy`, whose parameters (`-D NAME=path`) are paths known
+/// only at run time. HOME is passed so the recognizers find this person's cache folders without
+/// a directory-service lookup; nothing else of Ozzie's environment is.
+fn sandboxed_helper(
+    policy: &str,
+    locale: &str,
+    params: &[(&str, &Path)],
+    helper: &Path,
+    args: &[&str],
+    home: Option<&Path>,
+) -> Command {
+    let mut command = Command::new(SANDBOX);
+    command.arg("-p").arg(policy);
+    for (name, value) in params {
+        let mut define = OsString::from(format!("{name}="));
+        define.push(value.as_os_str());
+        command.arg("-D").arg(define);
+    }
+    command
+        .arg(helper)
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LC_ALL", locale)
+        .current_dir("/")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(home) = home {
+        command.env("HOME", home);
+    }
+    command
+}
+
+/// One of Ozzie's helpers beside `program` (Ozzie's own executable), as a real path: the sandbox
+/// matches paths after links are resolved.
+fn helper_beside(program: &Path, name: &str) -> Option<PathBuf> {
+    let path = program.parent()?.join(name).canonicalize().ok()?;
+    path.is_file().then_some(path)
+}
+fn helper(name: &str) -> Option<PathBuf> {
+    helper_beside(&std::env::current_exe().ok()?.canonicalize().ok()?, name)
+}
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .and_then(|home| home.canonicalize().ok())
+}
+
+/// The per-user cache folder macOS gives every program (/private/var/folders/…/C).
+fn darwin_user_cache_dir() -> Option<PathBuf> {
+    unsafe extern "C" {
+        fn confstr(name: i32, buf: *mut std::ffi::c_char, len: usize) -> usize;
+    }
+    const CS_DARWIN_USER_CACHE_DIR: i32 = 65538;
+    let mut buf = vec![0u8; 1024];
+    // SAFETY: confstr writes at most `len` bytes, NUL-terminated, into the buffer it is given.
+    let len = unsafe { confstr(CS_DARWIN_USER_CACHE_DIR, buf.as_mut_ptr().cast(), buf.len()) };
+    if len == 0 || len > buf.len() {
+        return None;
+    }
+    buf.truncate(len - 1);
+    let path = PathBuf::from(String::from_utf8(buf).ok()?);
+    path.canonicalize().ok()
+}
+
+/// Where Ozzie's Vision reader runs from and where Apple's recognizer keeps its compiled models.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardReader {
+    helper: PathBuf,
+    /// Ozzie.app, or the reader's folder in a development build.
+    app: PathBuf,
+    home: PathBuf,
+    model_cache: PathBuf,
+    metal_cache: PathBuf,
+}
+impl CardReader {
+    /// Inside Ozzie.app the recognizer names its caches after Ozzie's bundle identifier; a
+    /// development build's reader (not in an app) after its own file name. The model cache sits in
+    /// ~/Library/Caches, the graphics cache in the per-user cache folder.
+    pub fn at(helper: PathBuf, home: PathBuf, darwin_cache: &Path) -> Option<CardReader> {
+        let folder = helper.parent()?;
+        let contents = folder.parent();
+        let bundle = contents.and_then(Path::parent).filter(|app| {
+            folder.file_name() == Some("MacOS".as_ref())
+                && contents.and_then(Path::file_name) == Some("Contents".as_ref())
+                && app.extension() == Some("app".as_ref())
+        });
+        let (app, id) = match bundle {
+            Some(app) => (app.to_path_buf(), BUNDLE_ID.to_string()),
+            None => (
+                folder.to_path_buf(),
+                helper.file_name()?.to_str()?.to_string(),
+            ),
+        };
+        Some(CardReader {
+            model_cache: home
+                .join("Library/Caches")
+                .join(&id)
+                .join("com.apple.e5rt.e5bundlecache"),
+            metal_cache: darwin_cache.join(&id).join("com.apple.metal"),
+            helper,
+            app,
+            home,
+        })
+    }
+    fn find() -> Option<CardReader> {
+        CardReader::at(helper(CARD_READER)?, home()?, &darwin_user_cache_dir()?)
+    }
+    fn command(&self, policy: &str) -> Command {
+        sandboxed_helper(
+            policy,
+            "C",
+            &[
+                ("HELPER", &self.helper),
+                ("APP", &self.app),
+                ("MODEL_CACHE", &self.model_cache),
+                ("METAL_CACHE", &self.metal_cache),
+            ],
+            &self.helper,
+            &[],
+            Some(&self.home),
+        )
+    }
+}
+
+/// One piece of text the Vision reader found, with Vision's confidence in it (0 to 1) and its box
+/// (0 to 1 from the top left).
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct Piece {
+    t: String,
+    c: f64,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+/// A piece read with this confidence or less is unclear. Vision's accurate reader reported only
+/// 0.3, 0.5 or 1.0 on Ozzie's fictional cards, and its 0.5 readings were already garbled. Many
+/// misreadings still come back at 1.0, so a clear piece is never proof the reading is right.
+const UNCLEAR_AT_OR_BELOW: f64 = 0.5;
+
+/// A card's recognized text, and the lines of it (from 0) holding a piece read unclearly.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CardLines {
+    pub text: String,
+    pub unclear: Vec<usize>,
+}
+
+/// Puts the Vision reader's pieces of text back into lines, top to bottom and left to right, so a
+/// printed label and the handwriting beside it read as one line ("Name: Alex Harbor") the way the
+/// card-field suggestions (core/src/card-fields.ts) expect. Two pieces share a line when their
+/// heights overlap by at least half of the shorter one. A line is unclear when any of its pieces
+/// is. Nothing is repaired or reworded; malformed output from the reader is a failure, never a guess.
+pub fn card_lines(out: &[u8]) -> Result<CardLines, LocalToolError> {
+    let mut pieces = Vec::new();
+    for line in out.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+        let piece: Piece = serde_json::from_slice(line).map_err(|_| LocalToolError::Failed)?;
+        let sane = |v: f64| v.is_finite() && (-0.01..=1.01).contains(&v);
+        if ![piece.x, piece.y, piece.w, piece.h].into_iter().all(sane)
+            || piece.h <= 0.0
+            || !(0.0..=1.0).contains(&piece.c)
+        {
+            return Err(LocalToolError::Failed);
+        }
+        let text = piece.t.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            pieces.push(Piece { t: text, ..piece });
+        }
+    }
+    pieces.sort_by(|a, b| (a.y + a.h / 2.0).total_cmp(&(b.y + b.h / 2.0)));
+    let mut rows: Vec<(f64, f64, Vec<Piece>)> = Vec::new();
+    for piece in pieces {
+        let (top, bottom) = (piece.y, piece.y + piece.h);
+        match rows.last_mut() {
+            Some((row_top, row_bottom, row))
+                if bottom.min(*row_bottom) - top.max(*row_top)
+                    >= 0.5 * piece.h.min(*row_bottom - *row_top) =>
+            {
+                *row_top = row_top.min(top);
+                *row_bottom = row_bottom.max(bottom);
+                row.push(piece);
+            }
+            _ => rows.push((top, bottom, vec![piece])),
+        }
+    }
+    let mut unclear = Vec::new();
+    let text = rows
+        .into_iter()
+        .enumerate()
+        .map(|(number, (_, _, mut row))| {
+            if row.iter().any(|p| p.c <= UNCLEAR_AT_OR_BELOW) {
+                unclear.push(number);
+            }
+            row.sort_by(|a, b| a.x.total_cmp(&b.x));
+            row.into_iter().map(|p| p.t).collect::<Vec<_>>().join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(LocalToolError::TooMuchText);
+    }
+    Ok(CardLines { text, unclear })
 }
 
 /// One playback at a time. A new briefing stops the one before it.
@@ -313,9 +620,19 @@ fn run_bounded(
         return Err(LocalToolError::TooMuchText);
     }
     if !status.success() {
-        return Err(LocalToolError::Failed);
+        return Err(exit_error(status.code()));
     }
     Ok(out)
+}
+
+/// Ozzie's helpers say why they stopped with an exit code (sysexits): 69 this Mac can't do it,
+/// 74 too much text. Anything else, including a crash, is a plain failure.
+fn exit_error(code: Option<i32>) -> LocalToolError {
+    match code {
+        Some(69) => LocalToolError::Unavailable,
+        Some(74) => LocalToolError::TooMuchText,
+        _ => LocalToolError::Failed,
+    }
 }
 
 /// Width and height a PNG declares in its first chunk, which must be IHDR.
@@ -381,12 +698,24 @@ pub fn card_image_ok(image: &[u8]) -> bool {
         })
 }
 
-/// One card at a time. The image goes to Tesseract on stdin and the text comes back on stdout.
-/// `cancel` (the review closed, or Ozzie is quitting) kills the reading in progress.
+/// What reads card text on this Mac, decided once per launch by `Cards::recognizer`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Recognizer {
+    Vision(CardReader),
+    Tesseract,
+    None,
+}
+
+/// One card at a time. The image goes to the recognizer on stdin and its text comes back on
+/// stdout. `cancel` (the review closed, or Ozzie is quitting) kills the reading in progress.
 #[derive(Default)]
 pub struct Cards {
     busy: AtomicBool,
     generation: AtomicU64,
+    /// Unset until decided; then what reads cards for the rest of this launch.
+    recognizer: Mutex<Option<Recognizer>>,
+    /// Ozzie is quitting: stop preparing too.
+    closing: AtomicBool,
 }
 struct Reading<'a>(&'a AtomicBool);
 impl Drop for Reading<'_> {
@@ -395,25 +724,117 @@ impl Drop for Reading<'_> {
     }
 }
 impl Cards {
+    /// Ozzie's Vision reader once it has been prepared on the practice picture, otherwise a
+    /// Tesseract if one is installed, otherwise nothing. Callers wait while another call prepares.
+    /// A preparation cut short (too slow, or Ozzie quitting) is tried again next time; one that
+    /// fails leaves the Vision reader out until Ozzie is opened again.
+    fn recognizer(&self) -> Recognizer {
+        let mut decided = self.recognizer.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(recognizer) = decided.as_ref() {
+            return recognizer.clone();
+        }
+        if !Path::new(SANDBOX).is_file() {
+            *decided = Some(Recognizer::None);
+            return Recognizer::None;
+        }
+        let mut again = false;
+        if let Some(reader) = CardReader::find() {
+            match self.prepare_reader(&reader) {
+                Ok(()) => {
+                    *decided = Some(Recognizer::Vision(reader.clone()));
+                    return Recognizer::Vision(reader);
+                }
+                Err(LocalToolError::Timeout | LocalToolError::Cancelled) => again = true,
+                Err(_) => {}
+            }
+        }
+        let fallback = if Path::new(TESSERACT).is_file() {
+            Recognizer::Tesseract
+        } else {
+            Recognizer::None
+        };
+        if !again {
+            *decided = Some(fallback.clone());
+        }
+        fallback
+    }
+    /// Reads the practice picture under CARD_PREPARE_POLICY, the only run that may write Apple's
+    /// compiled models. It carries no card, so nothing from a card can reach those folders.
+    fn prepare_reader(&self, reader: &CardReader) -> Result<(), LocalToolError> {
+        for folder in [&reader.model_cache, &reader.metal_cache] {
+            std::fs::create_dir_all(folder).map_err(|_| LocalToolError::Unavailable)?;
+        }
+        let closing = || self.closing.load(Ordering::SeqCst);
+        let out = run_bounded(
+            reader.command(CARD_PREPARE_POLICY),
+            PRACTICE_PICTURE.to_vec(),
+            PREPARE_TIMEOUT,
+            MAX_PIECES_BYTES,
+            &closing,
+        )?;
+        // The practice picture has words on it: reading none means the recognizer can't work here.
+        if card_lines(&out)?.text.is_empty() {
+            return Err(LocalToolError::Failed);
+        }
+        Ok(())
+    }
+    /// The Visitor cards page opened: get the reader ready before the first card.
+    pub fn prepare(&self) -> CardReaderStatus {
+        match self.recognizer() {
+            Recognizer::None => CardReaderStatus::NotAvailable,
+            _ => CardReaderStatus::Ready,
+        }
+    }
     pub fn read(&self, image: Vec<u8>) -> Result<CardText, LocalToolError> {
         if !card_image_ok(&image) {
             return Err(LocalToolError::InvalidInput);
         }
-        if !Path::new(TESSERACT).is_file() || !Path::new(SANDBOX).is_file() {
-            return Ok(CardText::NotAvailable);
+        // A review that closes while the reader is still being prepared drops this card.
+        let since = self.generation.load(Ordering::SeqCst);
+        match self.recognizer() {
+            Recognizer::Vision(reader) => {
+                let out = self.read_with(
+                    reader.command(CARD_READER_POLICY),
+                    image,
+                    RECOGNITION_TIMEOUT,
+                    MAX_PIECES_BYTES,
+                    since,
+                )?;
+                let CardLines { text, unclear } = card_lines(&out)?;
+                Ok(CardText::Read {
+                    text,
+                    unclear_lines: unclear,
+                })
+            }
+            Recognizer::Tesseract => {
+                let out = self.read_with(
+                    sandboxed(TESSERACT_POLICY, "C", &[TESSERACT, "stdin", "stdout"]),
+                    image,
+                    RECOGNITION_TIMEOUT,
+                    MAX_TEXT_BYTES,
+                    since,
+                )?;
+                // Tesseract's plain text carries no confidence, so nothing it reads can be called clear: every line is
+                // reported unclear and each suggestion is shown only for the person to check against the card.
+                let text = String::from_utf8_lossy(&out).into_owned();
+                let unclear_lines = (0..text.lines().count()).collect();
+                Ok(CardText::Read {
+                    text,
+                    unclear_lines,
+                })
+            }
+            Recognizer::None => Ok(CardText::NotAvailable),
         }
-        self.read_with(
-            sandboxed(TESSERACT_POLICY, "C", &[TESSERACT, "stdin", "stdout"]),
-            image,
-            RECOGNITION_TIMEOUT,
-        )
     }
+    /// Runs one reading of `image`, unless the review closed after `since`.
     fn read_with(
         &self,
         command: Command,
         image: Vec<u8>,
         timeout: Duration,
-    ) -> Result<CardText, LocalToolError> {
+        max_out: usize,
+        since: u64,
+    ) -> Result<Vec<u8>, LocalToolError> {
         // A cancelled reading ends within a few milliseconds, so the next review's first card
         // waits briefly for it instead of failing.
         let waited = Instant::now();
@@ -424,18 +845,260 @@ impl Cards {
             std::thread::sleep(Duration::from_millis(10));
         }
         let _reading = Reading(&self.busy);
-        let generation = self.generation.load(Ordering::SeqCst);
-        let cancelled = || self.generation.load(Ordering::SeqCst) != generation;
-        let out = run_bounded(command, image, timeout, MAX_TEXT_BYTES, &cancelled)?;
+        let cancelled = || self.generation.load(Ordering::SeqCst) != since;
         if cancelled() {
             return Err(LocalToolError::Cancelled);
         }
-        Ok(CardText::Read {
-            text: String::from_utf8_lossy(&out).into_owned(),
-        })
+        let out = run_bounded(command, image, timeout, max_out, &cancelled)?;
+        if cancelled() {
+            return Err(LocalToolError::Cancelled);
+        }
+        Ok(out)
     }
     pub fn cancel(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+    fn close(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+        self.cancel();
+    }
+}
+
+/// Whether Ozzie can listen for a spoken question. Checking never asks the person anything.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum VoiceStatus {
+    /// Ozzie can listen (macOS asks for permission the first time).
+    Ready,
+    /// This Mac can't recognize speech on the device, or Ozzie's listener isn't here.
+    NotAvailable,
+    /// The microphone or speech recognition is turned off for Ozzie in System Settings.
+    NoPermission { what: Permission },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Permission {
+    Microphone,
+    Speech,
+}
+
+/// How one listening ended.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum Listened {
+    /// Everything heard, possibly nothing, for the person to check in the Ask box.
+    Heard {
+        text: String,
+    },
+    /// Cancelled (Ask closed, or Ozzie quitting): whatever was heard was thrown away.
+    Stopped,
+    NotAvailable,
+    NoPermission {
+        what: Permission,
+    },
+    NoMicrophone,
+}
+
+/// The listener's `--check` report: no permission is asked for. Unreadable output is "not available".
+pub fn voice_status(out: &[u8]) -> VoiceStatus {
+    #[derive(serde::Deserialize)]
+    struct Check {
+        #[serde(rename = "onDevice")]
+        on_device: bool,
+        speech: String,
+        microphone: String,
+    }
+    let Ok(check) = serde_json::from_slice::<Check>(out.trim_ascii()) else {
+        return VoiceStatus::NotAvailable;
+    };
+    let refused = |answer: &str| matches!(answer, "denied" | "restricted");
+    if !check.on_device {
+        VoiceStatus::NotAvailable
+    } else if refused(&check.microphone) {
+        VoiceStatus::NoPermission {
+            what: Permission::Microphone,
+        }
+    } else if refused(&check.speech) {
+        VoiceStatus::NoPermission {
+            what: Permission::Speech,
+        }
+    } else {
+        VoiceStatus::Ready
+    }
+}
+
+/// One line from the listener: words so far, all the words, or how it stopped.
+#[derive(Debug, PartialEq, serde::Deserialize)]
+#[serde(untagged)]
+enum ListenerLine {
+    Final {
+        r#final: String,
+    },
+    Words {
+        text: String,
+    },
+    Status {
+        status: String,
+        what: Option<Permission>,
+    },
+}
+
+/// The listener stops listening by itself after 30 seconds; this also covers the time macOS's
+/// permission questions stay open the first time.
+const LISTEN_LIMIT: Duration = Duration::from_secs(150);
+/// The listener's lines: words so far (at most 4 KB of text each), repeated as they grow.
+const MAX_LISTENER_LINE: usize = 16 * 1024;
+const MAX_LISTENER_OUTPUT: u64 = 4 * 1024 * 1024;
+
+fn listener_command(helper: &Path, args: &[&str]) -> Command {
+    sandboxed_helper(
+        LISTEN_POLICY,
+        "en_US.UTF-8",
+        &[("HELPER", helper)],
+        helper,
+        args,
+        home().as_deref(),
+    )
+}
+
+/// One listening at a time. Stop (the person is done) closes the listener's stdin so it finishes
+/// the last words; cancel (Ask closed, Ozzie quitting) kills it and drops what it heard.
+#[derive(Default)]
+pub struct Voice {
+    current: Mutex<Option<(u64, Child, Option<ChildStdin>)>>,
+    generation: AtomicU64,
+}
+impl Voice {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<(u64, Child, Option<ChildStdin>)>> {
+        self.current.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn check(&self) -> VoiceStatus {
+        let Some(helper) = helper(LISTENER).filter(|_| Path::new(SANDBOX).is_file()) else {
+            return VoiceStatus::NotAvailable;
+        };
+        let never = || false;
+        match run_bounded(
+            listener_command(&helper, &["--check"]),
+            Vec::new(),
+            Duration::from_secs(10),
+            4096,
+            &never,
+        ) {
+            Ok(out) => voice_status(&out),
+            Err(_) => VoiceStatus::NotAvailable,
+        }
+    }
+    pub fn listen(&self, on_words: impl Fn(String)) -> Result<Listened, LocalToolError> {
+        let Some(helper) = helper(LISTENER).filter(|_| Path::new(SANDBOX).is_file()) else {
+            return Ok(Listened::NotAvailable);
+        };
+        self.listen_with(listener_command(&helper, &[]), LISTEN_LIMIT, on_words)
+    }
+    fn listen_with(
+        &self,
+        mut command: Command,
+        limit: Duration,
+        on_words: impl Fn(String),
+    ) -> Result<Listened, LocalToolError> {
+        command.stdout(Stdio::piped());
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let stdout = {
+            let mut current = self.lock();
+            if let Some((_, mut previous, _)) = current.take() {
+                let _ = previous.kill();
+                let _ = previous.wait();
+            }
+            let mut child = command.spawn().map_err(|_| LocalToolError::Unavailable)?;
+            let stdin = child.stdin.take();
+            let Some(stdout) = child.stdout.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(LocalToolError::Failed);
+            };
+            *current = Some((generation, child, stdin));
+            stdout
+        };
+        let (sent, received) = mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut lines = BufReader::new(stdout.take(MAX_LISTENER_OUTPUT));
+            loop {
+                let mut line = Vec::new();
+                match (&mut lines)
+                    .take(MAX_LISTENER_LINE as u64 + 1)
+                    .read_until(b'\n', &mut line)
+                {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if sent.send(line).is_ok() => {}
+                    Ok(_) => break,
+                }
+            }
+        });
+        let deadline = Instant::now() + limit;
+        let mut ended: Option<Result<Listened, LocalToolError>> = None;
+        // Reaps this listening's helper (unless a newer listening has replaced it).
+        let end = |result| {
+            let mine = self.lock().take_if(|(owner, _, _)| *owner == generation);
+            if let Some((_, mut child, _)) = mine {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            result
+        };
+        loop {
+            if self.generation.load(Ordering::SeqCst) != generation {
+                return end(Ok(Listened::Stopped));
+            }
+            match received.recv_timeout(Duration::from_millis(50)) {
+                Ok(line) if line.len() > MAX_LISTENER_LINE => {
+                    return end(Err(LocalToolError::TooMuchText));
+                }
+                Ok(line) => match serde_json::from_slice::<ListenerLine>(line.trim_ascii()) {
+                    Ok(ListenerLine::Words { text }) if ended.is_none() => on_words(text),
+                    Ok(ListenerLine::Words { .. }) => {}
+                    Ok(ListenerLine::Final { r#final }) => {
+                        ended.get_or_insert(Ok(Listened::Heard { text: r#final }));
+                    }
+                    Ok(ListenerLine::Status { status, what }) => match (status.as_str(), what) {
+                        ("listening", _) => {}
+                        ("not-available", _) => {
+                            ended.get_or_insert(Ok(Listened::NotAvailable));
+                        }
+                        ("no-microphone", _) => {
+                            ended.get_or_insert(Ok(Listened::NoMicrophone));
+                        }
+                        ("no-permission", Some(what)) => {
+                            ended.get_or_insert(Ok(Listened::NoPermission { what }));
+                        }
+                        _ => {
+                            ended.get_or_insert(Err(LocalToolError::Failed));
+                        }
+                    },
+                    Err(_) => return end(Err(LocalToolError::Failed)),
+                },
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => return end(Err(LocalToolError::Timeout)),
+                // The listener closed its output: it has finished.
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        if self.generation.load(Ordering::SeqCst) != generation {
+            return end(Ok(Listened::Stopped));
+        }
+        end(ended.unwrap_or(Err(LocalToolError::Failed)))
+    }
+    /// The person is done speaking: the listener stops the microphone and sends the last words.
+    pub fn stop(&self) {
+        if let Some((_, _, stdin)) = self.lock().as_mut() {
+            stdin.take();
+        }
+    }
+    /// Ask closed or Ozzie is quitting: stop now and keep nothing.
+    pub fn cancel(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some((_, mut child, _)) = self.lock().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -443,12 +1106,15 @@ impl Cards {
 pub struct LocalTools {
     speech: Arc<Speech>,
     cards: Arc<Cards>,
+    voice: Arc<Voice>,
 }
 impl LocalTools {
-    /// App exit: no briefing keeps talking and no card keeps being read after Ozzie closes.
+    /// App exit: no briefing keeps talking, no card keeps being read and nothing keeps listening
+    /// after Ozzie closes.
     pub fn stop(&self) {
         self.speech.stop();
-        self.cards.cancel();
+        self.cards.close();
+        self.voice.cancel();
     }
 }
 
@@ -466,6 +1132,17 @@ pub async fn speak_briefing(
 #[tauri::command]
 pub fn stop_briefing(tools: tauri::State<'_, LocalTools>) {
     tools.speech.stop();
+}
+
+/// The Visitor cards page opened: prepare the reader (a minute or two the first time on a Mac).
+#[tauri::command]
+pub async fn prepare_card_reader(
+    tools: tauri::State<'_, LocalTools>,
+) -> Result<CardReaderStatus, LocalToolError> {
+    let cards = tools.cards.clone();
+    tauri::async_runtime::spawn_blocking(move || cards.prepare())
+        .await
+        .map_err(|_| LocalToolError::Failed)
 }
 
 /// The review closed (finished, discarded, interrupted or left): stop any card being read.
@@ -491,6 +1168,46 @@ pub async fn read_card_text(
     tauri::async_runtime::spawn_blocking(move || cards.read(image))
         .await
         .map_err(|_| LocalToolError::Failed)?
+}
+
+/// Ask opened: can Ozzie listen here? Never asks the person for anything.
+#[tauri::command]
+pub async fn voice_status_check(
+    tools: tauri::State<'_, LocalTools>,
+) -> Result<VoiceStatus, LocalToolError> {
+    let voice = tools.voice.clone();
+    tauri::async_runtime::spawn_blocking(move || voice.check())
+        .await
+        .map_err(|_| LocalToolError::Failed)
+}
+
+/// The microphone button in Ask: listens on this Mac and sends the words so far on `on_words`.
+/// The words only fill the Ask box; the person checks them and presses Ask themselves.
+#[tauri::command]
+pub async fn listen_for_question(
+    on_words: tauri::ipc::Channel<String>,
+    tools: tauri::State<'_, LocalTools>,
+) -> Result<Listened, LocalToolError> {
+    let voice = tools.voice.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        voice.listen(|words| {
+            let _ = on_words.send(words);
+        })
+    })
+    .await
+    .map_err(|_| LocalToolError::Failed)?
+}
+
+/// The person pressed the microphone button again: finish with what was said.
+#[tauri::command]
+pub fn stop_listening(tools: tauri::State<'_, LocalTools>) {
+    tools.voice.stop();
+}
+
+/// Ask closed: stop listening and keep nothing.
+#[tauri::command]
+pub fn cancel_listening(tools: tauri::State<'_, LocalTools>) {
+    tools.voice.cancel();
 }
 
 #[cfg(test)]
@@ -552,22 +1269,42 @@ mod tests {
             other.cancel();
         });
         let started = Instant::now();
+        let since = cards.generation.load(Ordering::SeqCst);
         assert_eq!(
-            cards.read_with(plain(&["/bin/sleep", "5"]), vec![], Duration::from_secs(10)),
+            cards.read_with(
+                plain(&["/bin/sleep", "5"]),
+                vec![],
+                Duration::from_secs(10),
+                64,
+                since
+            ),
             Err(LocalToolError::Cancelled)
         );
         canceller.join().unwrap();
         assert!(started.elapsed() < Duration::from_secs(2));
         // The next card isn't refused because of the old one.
+        let since = cards.generation.load(Ordering::SeqCst);
         assert_eq!(
             cards.read_with(
                 plain(&["/bin/cat"]),
                 b"Name: Fictional".to_vec(),
-                Duration::from_secs(5)
+                Duration::from_secs(5),
+                64,
+                since
             ),
-            Ok(CardText::Read {
-                text: "Name: Fictional".into()
-            })
+            Ok(b"Name: Fictional".to_vec())
+        );
+        // A review that closed while the reader was still being prepared never starts its card.
+        cards.cancel();
+        assert_eq!(
+            cards.read_with(
+                plain(&["/bin/cat"]),
+                b"Name: Fictional".to_vec(),
+                Duration::from_secs(5),
+                64,
+                since
+            ),
+            Err(LocalToolError::Cancelled)
         );
     }
 
@@ -786,7 +1523,7 @@ mod tests {
         cards.busy.store(true, Ordering::SeqCst);
         let started = Instant::now();
         assert_eq!(
-            cards.read_with(plain(&["/bin/cat"]), vec![], Duration::from_secs(5)),
+            cards.read_with(plain(&["/bin/cat"]), vec![], Duration::from_secs(5), 64, 0),
             Err(LocalToolError::Busy)
         );
         assert!(started.elapsed() >= Duration::from_secs(1));
@@ -807,15 +1544,545 @@ mod tests {
     }
 
     /// Manual: `OZZIE_SYNTHETIC_CARD=/path/to/fictional-card.png cargo test -- --ignored`.
-    /// Runs the installed recognizer under TESSERACT_POLICY on a generated fictional card.
+    /// Runs the installed Tesseract under TESSERACT_POLICY on a generated fictional card. In tests
+    /// Ozzie's Vision reader isn't beside the test program, so this is the fallback path.
     #[test]
     #[ignore]
     fn reads_a_synthetic_card_with_the_installed_recognizer() {
         let path = std::env::var("OZZIE_SYNTHETIC_CARD").expect("OZZIE_SYNTHETIC_CARD");
         let image = std::fs::read(path).unwrap();
         match Cards::default().read(image).unwrap() {
-            CardText::Read { text } => assert!(text.contains("Name:")),
+            CardText::Read { text, .. } => assert!(text.contains("Name:")),
             CardText::NotAvailable => panic!("recognizer not installed"),
         }
+    }
+
+    #[test]
+    fn the_card_reader_never_writes_and_only_preparing_writes_the_model_caches() {
+        let rules = |policy: &str| {
+            policy
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with(';'))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let reading = rules(CARD_READER_POLICY);
+        assert!(CARD_READER_POLICY.starts_with("(version 1)\n(deny default)\n"));
+        for forbidden in [
+            "allow default",
+            "network",
+            "file-write",
+            "file-issue-extension",
+            "allow process-fork",
+            "allow process*",
+            "(subpath \"/Users",
+            "(subpath \"/System\")",
+            "(subpath \"/System/Volumes/Data",
+            "(subpath \"/private",
+            "(subpath \"/\")",
+            "(param \"HOME\")",
+        ] {
+            assert!(!reading.contains(forbidden), "{forbidden}");
+        }
+        assert_eq!(reading.matches("(allow process-exec").count(), 1);
+        assert!(reading.contains("(allow process-exec (literal (param \"HELPER\")))"));
+        // Preparing is reading plus writing the two model caches, and nothing else.
+        let extra = CARD_PREPARE_POLICY
+            .strip_prefix(CARD_READER_POLICY)
+            .unwrap();
+        let extra = rules(extra);
+        assert_eq!(
+            extra,
+            "(allow file-write* (subpath (param \"MODEL_CACHE\")) (subpath (param \"METAL_CACHE\"))) \
+             (allow file-issue-extension \
+             (require-all (extension-class \"com.apple.app-sandbox.read\") (subpath (param \"MODEL_CACHE\"))))"
+        );
+        assert!(!extra.contains("network"));
+    }
+
+    #[test]
+    fn listening_has_no_network_no_writes_and_no_other_programs() {
+        let rules: Vec<&str> = LISTEN_POLICY.lines().map(str::trim).collect();
+        assert_eq!(rules[0], "(version 1)");
+        // Later rules win, so every denial comes after the allow and nothing allows them back.
+        for denied in [
+            "(deny network*)",
+            "(deny file-write*)",
+            "(deny process-fork)",
+            "(deny process-exec)",
+        ] {
+            assert!(rules.contains(&denied), "{denied}");
+        }
+        let allows: Vec<&&str> = rules.iter().filter(|r| r.starts_with("(allow")).collect();
+        assert_eq!(
+            allows,
+            [
+                &"(allow default)",
+                &"(allow process-exec (literal (param \"HELPER\")))"
+            ]
+        );
+        assert_eq!(rules[1], "(allow default)");
+    }
+
+    #[test]
+    fn the_readers_caches_are_named_after_ozzie_in_the_app_and_after_the_reader_in_development() {
+        let home = PathBuf::from("/fictional-home");
+        let darwin = PathBuf::from("/fictional-cache/C");
+        let app = CardReader::at(
+            PathBuf::from("/Applications/Ozzie.app/Contents/MacOS/ozzie-card-reader"),
+            home.clone(),
+            &darwin,
+        )
+        .unwrap();
+        assert_eq!(app.app, PathBuf::from("/Applications/Ozzie.app"));
+        assert_eq!(
+            app.model_cache,
+            PathBuf::from(
+                "/fictional-home/Library/Caches/church.ozzie.desktop/com.apple.e5rt.e5bundlecache"
+            )
+        );
+        assert_eq!(
+            app.metal_cache,
+            PathBuf::from("/fictional-cache/C/church.ozzie.desktop/com.apple.metal")
+        );
+        let dev = CardReader::at(
+            PathBuf::from("/work/ozzie/target/debug/ozzie-card-reader"),
+            home,
+            &darwin,
+        )
+        .unwrap();
+        assert_eq!(dev.app, PathBuf::from("/work/ozzie/target/debug"));
+        assert_eq!(
+            dev.model_cache,
+            PathBuf::from(
+                "/fictional-home/Library/Caches/ozzie-card-reader/com.apple.e5rt.e5bundlecache"
+            )
+        );
+        assert_eq!(
+            dev.metal_cache,
+            PathBuf::from("/fictional-cache/C/ozzie-card-reader/com.apple.metal")
+        );
+        // A folder that only looks a bit like an app is not one.
+        let odd = CardReader::at(
+            PathBuf::from("/work/Ozzie.app/MacOS/ozzie-card-reader"),
+            PathBuf::from("/fictional-home"),
+            &darwin,
+        )
+        .unwrap();
+        assert_eq!(odd.app, PathBuf::from("/work/Ozzie.app/MacOS"));
+    }
+
+    fn piece(t: &str, x: f64, y: f64, w: f64, h: f64) -> String {
+        piece_read(t, 1.0, x, y, w, h)
+    }
+    fn piece_read(t: &str, c: f64, x: f64, y: f64, w: f64, h: f64) -> String {
+        serde_json::json!({ "t": t, "c": c, "x": x, "y": y, "w": w, "h": h }).to_string()
+    }
+    fn text_of(out: &[u8]) -> Result<String, LocalToolError> {
+        card_lines(out).map(|lines| lines.text)
+    }
+
+    #[test]
+    fn lines_holding_a_piece_read_unclearly_are_reported_by_number() {
+        // Vision's accurate reader reported 0.3, 0.5 or 1.0 on the fictional cards; at 0.5 its
+        // text was already garbled ("orden fuld"), so 0.5 counts as unclear.
+        let out = [
+            piece_read("Name:", 1.0, 0.05, 0.20, 0.10, 0.04),
+            piece_read("Alex Harbor", 0.3, 0.30, 0.20, 0.20, 0.04),
+            piece_read("Phone:", 1.0, 0.05, 0.30, 0.10, 0.04),
+            piece_read("202-555-0142", 0.51, 0.30, 0.30, 0.20, 0.04),
+            piece_read("Prayer request:", 1.0, 0.05, 0.40, 0.15, 0.04),
+            piece_read("   ", 0.3, 0.05, 0.45, 0.15, 0.04),
+            piece_read("orden fuld", 0.5, 0.05, 0.50, 0.30, 0.04),
+        ]
+        .join("\n");
+        assert_eq!(
+            card_lines(out.as_bytes()),
+            Ok(CardLines {
+                text: "Name: Alex Harbor\nPhone: 202-555-0142\nPrayer request:\norden fuld".into(),
+                unclear: vec![0, 3],
+            })
+        );
+        // What the Visitor cards page receives: the text and the numbers of its unclear lines.
+        assert_eq!(
+            serde_json::to_value(CardText::Read {
+                text: "Name: Alex Harbor".into(),
+                unclear_lines: vec![0],
+            })
+            .unwrap(),
+            serde_json::json!({ "status": "read", "text": "Name: Alex Harbor", "unclearLines": [0] })
+        );
+    }
+
+    #[test]
+    fn a_printed_label_and_the_handwriting_beside_it_read_as_one_line() {
+        // Boxes as Apple Vision reported them for helpers/fixtures/fictional-labeled-card.png:
+        // out of reading order, the handwriting a little higher than its printed label.
+        let out = [
+            piece(
+                "VISITOR CARD - FICTIONAL TEST SAMPLE C",
+                0.0375,
+                0.0710,
+                0.4667,
+                0.0390,
+            ),
+            piece("Name:", 0.0427, 0.2495, 0.0684, 0.0371),
+            piece("Alex Harbor", 0.2834, 0.2402, 0.1528, 0.0369),
+            piece("Phone:", 0.0415, 0.3617, 0.0725, 0.0329),
+            piece("202-555-0142", 0.2848, 0.3542, 0.1921, 0.0349),
+            piece("Email:", 0.0436, 0.4718, 0.0625, 0.0316),
+            piece("Prayer request:", 0.0434, 0.5867, 0.1472, 0.0338),
+            piece("alex.harbor@example.org", 0.2830, 0.4567, 0.3046, 0.0562),
+            piece(
+                "Please call me about the orientation.",
+                0.2848,
+                0.5646,
+                0.4479,
+                0.0472,
+            ),
+        ]
+        .join("\n");
+        assert_eq!(
+            text_of(out.as_bytes()),
+            Ok("VISITOR CARD - FICTIONAL TEST SAMPLE C\n\
+                Name: Alex Harbor\n\
+                Phone: 202-555-0142\n\
+                Email: alex.harbor@example.org\n\
+                Prayer request: Please call me about the orientation."
+                .into())
+        );
+    }
+
+    #[test]
+    fn lines_follow_the_card_top_to_bottom_and_left_to_right() {
+        // Two lines close together stay two lines; pieces of one line join left to right.
+        let out = [
+            piece("for my mom", 0.30, 0.205, 0.20, 0.04),
+            piece("Please pray", 0.05, 0.20, 0.20, 0.04),
+            piece("who is in the hospital.", 0.05, 0.25, 0.30, 0.04),
+            piece("  spaced   out  ", 0.05, 0.40, 0.20, 0.04),
+            piece("   ", 0.05, 0.50, 0.20, 0.04),
+        ]
+        .join("\n");
+        assert_eq!(
+            text_of(out.as_bytes()),
+            Ok("Please pray for my mom\nwho is in the hospital.\nspaced out".into())
+        );
+        assert_eq!(text_of(b""), Ok(String::new()));
+        assert_eq!(text_of(b"\n\n"), Ok(String::new()));
+    }
+
+    #[test]
+    fn malformed_or_oversized_reader_output_is_refused_not_guessed() {
+        assert_eq!(text_of(b"Name: Alex"), Err(LocalToolError::Failed));
+        assert_eq!(
+            text_of(b"{\"t\":\"x\",\"c\":1,\"x\":0.1,\"y\":0.1}"),
+            Err(LocalToolError::Failed)
+        );
+        for bad in [f64::NAN, f64::INFINITY, -0.5, 1.5] {
+            let line =
+                serde_json::json!({ "t": "x", "c": 1.0, "x": bad, "y": 0.1, "w": 0.1, "h": 0.1 })
+                    .to_string();
+            assert_eq!(
+                text_of(line.as_bytes()),
+                Err(LocalToolError::Failed),
+                "{bad}"
+            );
+        }
+        // A missing or impossible confidence is a failure, never taken as a clear reading.
+        let no_confidence = r#"{"t":"x","x":0.1,"y":0.1,"w":0.1,"h":0.1}"#;
+        assert_eq!(
+            text_of(no_confidence.as_bytes()),
+            Err(LocalToolError::Failed)
+        );
+        for bad in [-0.1, 1.5] {
+            assert_eq!(
+                text_of(piece_read("x", bad, 0.1, 0.1, 0.1, 0.1).as_bytes()),
+                Err(LocalToolError::Failed),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            text_of(piece("x", 0.1, 0.1, 0.1, 0.0).as_bytes()),
+            Err(LocalToolError::Failed)
+        );
+        let long = (0..20)
+            .map(|i| piece(&"a".repeat(1000), 0.1, f64::from(i) * 0.04, 0.5, 0.03))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(text_of(long.as_bytes()), Err(LocalToolError::TooMuchText));
+    }
+
+    #[test]
+    fn helper_exit_codes_say_why_without_any_content() {
+        assert_eq!(exit_error(Some(69)), LocalToolError::Unavailable);
+        assert_eq!(exit_error(Some(74)), LocalToolError::TooMuchText);
+        assert_eq!(exit_error(Some(70)), LocalToolError::Failed);
+        assert_eq!(exit_error(None), LocalToolError::Failed);
+        assert_eq!(
+            run_bounded(
+                plain(&["/bin/sh", "-c", "exit 69"]),
+                vec![],
+                Duration::from_secs(5),
+                64,
+                &never
+            ),
+            Err(LocalToolError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn the_practice_picture_is_a_small_png_the_reader_accepts() {
+        assert!(card_image_ok(PRACTICE_PICTURE));
+        assert_eq!(png_size(PRACTICE_PICTURE), Some((640, 160)));
+    }
+
+    #[test]
+    fn listening_is_ready_unless_this_mac_cant_or_the_person_said_no() {
+        let check = |on: bool, speech: &str, microphone: &str| {
+            voice_status(
+                serde_json::json!({ "onDevice": on, "speech": speech, "microphone": microphone })
+                    .to_string()
+                    .as_bytes(),
+            )
+        };
+        // macOS hasn't asked yet: ready, and macOS asks on first use.
+        assert_eq!(
+            check(true, "not-determined", "not-determined"),
+            VoiceStatus::Ready
+        );
+        assert_eq!(check(true, "authorized", "authorized"), VoiceStatus::Ready);
+        assert_eq!(
+            check(false, "authorized", "authorized"),
+            VoiceStatus::NotAvailable
+        );
+        assert_eq!(
+            check(true, "authorized", "denied"),
+            VoiceStatus::NoPermission {
+                what: Permission::Microphone
+            }
+        );
+        assert_eq!(
+            check(true, "restricted", "authorized"),
+            VoiceStatus::NoPermission {
+                what: Permission::Speech
+            }
+        );
+        assert_eq!(voice_status(b"not json"), VoiceStatus::NotAvailable);
+        assert_eq!(voice_status(b""), VoiceStatus::NotAvailable);
+    }
+
+    /// A stand-in listener: a shell script that prints `lines` the way ozzie-listen does.
+    fn listener(script: &str) -> Command {
+        let mut command = plain(&["/bin/sh", "-c", script]);
+        command.stdout(Stdio::piped());
+        command
+    }
+
+    #[test]
+    fn the_words_so_far_stream_out_and_the_last_words_are_the_result() {
+        let voice = Voice::default();
+        let heard = Mutex::new(Vec::new());
+        let result = voice.listen_with(
+            listener(
+                r#"printf '%s\n' '{"status":"listening"}' '{"text":"Who could"}' '{"text":"Who could cover Greeter"}' '{"final":"Who could cover Greeter?"}'"#,
+            ),
+            Duration::from_secs(5),
+            |words| heard.lock().unwrap().push(words),
+        );
+        assert_eq!(
+            result,
+            Ok(Listened::Heard {
+                text: "Who could cover Greeter?".into()
+            })
+        );
+        assert_eq!(
+            *heard.lock().unwrap(),
+            ["Who could", "Who could cover Greeter"]
+        );
+        assert!(voice.lock().is_none());
+    }
+
+    #[test]
+    fn listening_reports_why_it_could_not_start_in_closed_words() {
+        let voice = Voice::default();
+        let run =
+            |script: &str| voice.listen_with(listener(script), Duration::from_secs(5), |_| {});
+        assert_eq!(
+            run(r#"echo '{"status":"not-available"}'; exit 69"#),
+            Ok(Listened::NotAvailable)
+        );
+        assert_eq!(
+            run(r#"echo '{"status":"no-permission","what":"microphone"}'; exit 77"#),
+            Ok(Listened::NoPermission {
+                what: Permission::Microphone
+            })
+        );
+        assert_eq!(
+            run(r#"echo '{"status":"no-microphone"}'; exit 69"#),
+            Ok(Listened::NoMicrophone)
+        );
+        // Anything unexpected is a failure that carries nothing the listener printed.
+        assert_eq!(run("echo 'something else'"), Err(LocalToolError::Failed));
+        assert_eq!(
+            run(r#"echo '{"status":"odd"}'"#),
+            Err(LocalToolError::Failed)
+        );
+        assert_eq!(run("exit 0"), Err(LocalToolError::Failed));
+    }
+
+    #[test]
+    fn stop_lets_the_listener_finish_the_last_words() {
+        let voice = Arc::new(Voice::default());
+        let other = voice.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            other.stop();
+        });
+        let started = Instant::now();
+        // Like ozzie-listen: listens until its stdin closes, then reports what it heard.
+        let result = voice.listen_with(
+            listener(r#"echo '{"status":"listening"}'; cat > /dev/null; echo '{"final":"Draft a note"}'"#),
+            Duration::from_secs(10),
+            |_| {},
+        );
+        stopper.join().unwrap();
+        assert_eq!(
+            result,
+            Ok(Listened::Heard {
+                text: "Draft a note".into()
+            })
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn cancel_drops_what_was_heard_and_a_time_limit_ends_a_stuck_listener() {
+        let voice = Arc::new(Voice::default());
+        let other = voice.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            other.cancel();
+        });
+        let heard = Mutex::new(Vec::new());
+        let started = Instant::now();
+        let result = voice.listen_with(
+            listener(
+                r#"echo '{"text":"Private words"}'; sleep 5; echo '{"final":"Private words"}'"#,
+            ),
+            Duration::from_secs(10),
+            |words| heard.lock().unwrap().push(words),
+        );
+        canceller.join().unwrap();
+        assert_eq!(result, Ok(Listened::Stopped));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(voice.lock().is_none());
+        let started = Instant::now();
+        assert_eq!(
+            voice.listen_with(listener("sleep 5"), Duration::from_millis(300), |_| {}),
+            Err(LocalToolError::Timeout)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        // Too much on one line is refused, never cut.
+        let long = format!(r#"echo '{{"text":"{}"}}'"#, "a".repeat(MAX_LISTENER_LINE));
+        assert_eq!(
+            voice.listen_with(listener(&long), Duration::from_secs(5), |_| {}),
+            Err(LocalToolError::TooMuchText)
+        );
+    }
+
+    /// Ozzie's helpers as tauri-build placed them for this build: beside the program, which for
+    /// tests is one folder up from target/<profile>/deps.
+    fn built_helper(name: &str) -> PathBuf {
+        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        helper_beside(exe.parent().unwrap(), name).expect("build.rs builds the helpers")
+    }
+
+    /// Manual (Apple Vision; the first run on a Mac compiles its models for a minute or two):
+    /// `cargo test reads_the_fictional -- --ignored`. Prepares Ozzie's Vision reader on the
+    /// practice picture under CARD_PREPARE_POLICY, then reads the fictional labeled card under
+    /// CARD_READER_POLICY (no writes). Two more fictional sample cards (visitor-a.png and
+    /// visitor-b.png) are read too when `OZZIE_CARD_SAMPLES=/path/to/folder` names a folder holding
+    /// them; without it those are skipped with a note.
+    #[test]
+    #[ignore]
+    fn reads_the_fictional_cards_with_ozzies_vision_reader() {
+        let reader = CardReader::at(
+            built_helper(CARD_READER),
+            home().unwrap(),
+            &darwin_user_cache_dir().unwrap(),
+        )
+        .unwrap();
+        let cards = Cards::default();
+        cards.prepare_reader(&reader).unwrap();
+        let read = |path: &Path| {
+            let image = std::fs::read(path).unwrap();
+            assert!(card_image_ok(&image));
+            let out = cards
+                .read_with(
+                    reader.command(CARD_READER_POLICY),
+                    image,
+                    RECOGNITION_TIMEOUT,
+                    MAX_PIECES_BYTES,
+                    cards.generation.load(Ordering::SeqCst),
+                )
+                .unwrap();
+            card_lines(&out).unwrap()
+        };
+        let CardLines {
+            text: labeled,
+            unclear,
+        } = read(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("helpers/fixtures/fictional-labeled-card.png"),
+        );
+        // Clean print reads clearly: nothing on it is flagged.
+        assert_eq!(unclear, Vec::<usize>::new());
+        for line in [
+            "Name: Alex Harbor",
+            "Phone: 202-555-0142",
+            "Email: alex.harbor@example.org",
+            "Prayer request: Please call me about the orientation.",
+        ] {
+            assert!(labeled.lines().any(|l| l == line), "{line}");
+        }
+        // Two more fictional sample cards, read only when OZZIE_CARD_SAMPLES names their folder.
+        let Some(samples) = std::env::var_os("OZZIE_CARD_SAMPLES").map(PathBuf::from) else {
+            println!("OZZIE_CARD_SAMPLES isn't set: skipped the two fictional sample cards");
+            return;
+        };
+        assert!(samples.is_dir(), "OZZIE_CARD_SAMPLES isn't a folder");
+        let a = read(&samples.join("visitor-a.png")).text;
+        assert!(a.lines().any(|l| l == "Alex Harbor"));
+        assert!(a.lines().any(|l| l == "202-555-0142"));
+        assert!(
+            a.lines()
+                .any(|l| l == "Please call me about the volunteer orientation.")
+        );
+        // Sample B's deliberately ambiguous oval came back as a confident capital O on 2026-11-14
+        // (macOS 27.2), not as uncertain (confidence 1.0, no other candidate): low confidence
+        // catches some misreadings, never all, so every field still needs a person to check the photo.
+        let b = read(&samples.join("visitor-b.png")).text;
+        assert!(b.lines().any(|l| l == "Jordan Field"));
+    }
+
+    /// Manual: `cargo test asks_nothing -- --ignored`. Runs the built listener's `--check` under
+    /// LISTEN_POLICY; it reports permissions without asking the person anything.
+    #[test]
+    #[ignore]
+    fn the_listener_check_asks_nothing() {
+        let helper = built_helper(LISTENER);
+        let out = run_bounded(
+            listener_command(&helper, &["--check"]),
+            Vec::new(),
+            Duration::from_secs(10),
+            4096,
+            &never,
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert!(report["onDevice"].is_boolean());
+        assert!(report["microphone"].is_string() && report["speech"].is_string());
     }
 }

@@ -12,6 +12,9 @@ import {
   type DecidedItem, type DecisionChoice, type DecisionHistory, type SundayDecision,
 } from "../../../core/src/sunday-decisions.js";
 import { model, modelProblem } from "./model.js";
+import { alwaysFor, briefTarget, followUpTarget, groupTarget, roomTarget } from "../../../core/src/finding-feedback.js";
+import { canRemind, reminderDraft, restoreReminder } from "../../../core/src/reminder-draft.js";
+import { FindingFeedback, SetAside, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
 
 type Names = Record<string, string>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -75,8 +78,8 @@ export function Why({ finding, checkedAt, onHow, defaultOpen = false }: { findin
     <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}>
       <Icon name="info" small /> Why I flagged this
     </button>
-    <span className="badge b-muted">Planning Center</span>
-    {checkedAt && <span>Checked {time(checkedAt)}</span>}
+    <span className="badge b-muted">{finding.source ?? "Planning Center"}</span>
+    {(finding.checked_at ?? checkedAt) && <span>Checked {time(finding.checked_at ?? checkedAt!)}</span>}
     {open && <ul className="list why">{finding.why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
     {open && <HowLink onHow={onHow} />}
   </div>;
@@ -122,6 +125,8 @@ function PeopleList({ finding, names, onDraft }: { finding: Finding; names: Name
   </div>;
 }
 
+const REWORD_LABEL: Record<Rewording, string> = { warmer: "Warmer", shorter: "Shorter", casual: "More casual", formal: "More formal" };
+
 function Draft({ finding, person, names, sender, canReword, onClose }: {
   finding: Finding; person: string; names: Names; sender: string; canReword: boolean; onClose: () => void;
 }) {
@@ -131,23 +136,26 @@ function Draft({ finding, person, names, sender, canReword, onClose }: {
   const [edited, setEdited] = useState(false);
   const [working, setWorking] = useState<Rewording | null>(null);
   const [problem, setProblem] = useState("");
+  // Says the wording changed (the draft itself changes in place, which is easy to miss).
+  const [reworded, setReworded] = useState<Rewording | null>(null);
   const reword = async (choice: Rewording) => {
-    setWorking(choice); setProblem("");
+    setWorking(choice); setProblem(""); setReworded(null);
     try {
       const reply = await model.reword(buildRewordRequest(version, choice, names));
       const next = acceptModelReply(reply, version, names);
-      setVersion(next); setBody(restoreDraft(next, ctx, names, sender)); setEdited(false);
+      setVersion(next); setBody(restoreDraft(next, ctx, names, sender)); setEdited(false); setReworded(choice);
     } catch (error) {
       setProblem(error instanceof Error && /draft|name|Ozzie/.test(error.message) ? error.message : modelProblem(error));
     } finally { setWorking(null); }
   };
-  return <DraftBox label="Draft note" body={body} onBody={b => { setBody(b); setEdited(true); }} onClose={onClose}
+  return <DraftBox label="Draft note" to={nameOf(names, person)} body={body} onBody={b => { setBody(b); setEdited(true); setReworded(null); }} onClose={onClose}
     footer="Ozzie never sends messages. The AI sees placeholders like [Volunteer A] instead of the names Ozzie read from Planning Center.">
     {canReword && <div className="find-next reword">
       <span className="find-next-l">Ask Ozzie to reword it</span>
       {(Object.keys(REWORDINGS) as Rewording[]).map(choice => <button key={choice} type="button" className="chip" disabled={working !== null} onClick={() => { void reword(choice); }}>
-        {working === choice ? <Icon name="spinner" small spin /> : null}{({ warmer: "Warmer", shorter: "Shorter", casual: "More casual", formal: "More formal" })[choice]}</button>)}
+        {working === choice ? <Icon name="spinner" small spin /> : null}{REWORD_LABEL[choice]}</button>)}
     </div>}
+    {canReword && <p className="small" role="status">{working ? "Rewording…" : reworded ? `Reworded: ${REWORD_LABEL[reworded].toLowerCase()}. Read it through before you copy it.` : ""}</p>}
     {canReword && edited && <p className="small">Rewording starts from Ozzie's last version. Your own changes stay on this Mac and are never sent.</p>}
     {problem && <p role="alert" className="problem">{problem}</p>}
   </DraftBox>;
@@ -181,6 +189,13 @@ export function LeaderNote({ finding, leader, names, sender, onClose }: { findin
   const ctx = { finding, leader_id: leader };
   const [body, setBody] = useState(() => restoreEscalation(escalationDraft(ctx), ctx, names, sender));
   return <DraftBox label="Draft note to the team's leader" to={`${nameOf(names, leader)} (team leader in Planning Center)`} body={body} onBody={setBody} onClose={onClose}
+    footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
+}
+
+/** A reminder to someone whose request has no answer yet. Written on this Mac in placeholder form and never offered for AI rewording. */
+export function ReminderNote({ finding, names, sender, onClose }: { finding: Finding; names: Names; sender: string; onClose: () => void }) {
+  const [body, setBody] = useState(() => restoreReminder(reminderDraft(finding), finding, names, sender));
+  return <DraftBox label="Draft reminder" to={nameOf(names, finding.person_id)} body={body} onBody={setBody} onClose={onClose}
     footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
 }
 
@@ -220,14 +235,53 @@ function Earlier({ decision }: { decision: SundayDecision }) {
   </ul>;
 }
 
-function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHow }: {
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** "Only 1 confirmed person in Nursery at 9:30 AM." Services has no age: people, never "adults". */
+export function fewConfirmedTitle(f: Finding): string {
+  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? `at ${clock(f.position!.interval.starts_at)}` : "this Sunday";
+  return c === 0 ? `No confirmed people in ${f.position!.name} ${at}.` : `Only ${count(c, "confirmed person", "confirmed people")} in ${f.position!.name} ${at}.`;
+}
+/** Pending is never confirmed, and an unsent request is never called asked. */
+export function fewConfirmedBody(f: Finding): string {
+  const asked = f.asked?.length ?? 0, unsent = f.not_sent?.length ?? 0;
+  return [
+    asked ? `${asked} more ${asked === 1 ? "is" : "are"} asked but ${asked === 1 ? "hasn't" : "haven't"} answered.` : "",
+    unsent ? `${unsent} more ${unsent === 1 ? "is" : "are"} penciled in, but the request hasn't been sent.` : "",
+    !asked && !unsent ? "No one else is asked yet." : "",
+    `Your Church rules ask for at least ${f.needed ?? 2}. Ozzie counts confirmed people; it doesn't check ages.`,
+    f.tone === "look" ? "Planning Center doesn't show which service time some confirmed people serve, so this count may be low." : "",
+  ].filter(Boolean).join(" ");
+}
+/** Nothing about a check beyond whether one is current on file, or when it runs out relative to Sunday. */
+export function backgroundTitle(name: string, check: Finding["check"]): string {
+  return check === "expires-before-sunday" ? `${name}'s background check on file expires before Sunday.`
+    : check === "expires-on-sunday" ? `${name}'s background check on file expires on Sunday.`
+      : `${name} has no current background check on file.`;
+}
+
+/** The Sunday a finding belongs to, for "This isn't right" (that Sunday only). */
+export interface Occurrence { id: string; label: string | null }
+
+function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHow, feedback = null, occurrence }: {
   item: DecidedItem; names: Names; checkedAt: string | null; sender: string; canReword: boolean;
   onDecide: (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) => void;
   onHow?: ((procedure: string) => void) | undefined;
+  feedback?: FeedbackControls | null;
+  occurrence: Occurrence;
 }) {
   const { finding } = item;
+  const target = briefTarget(finding, occurrence.id, occurrence.label);
+  // "Always do this": the note a Church rule asks Ozzie to prepare is ready when the card opens.
+  const always = feedback && alwaysFor(feedback.entries, target);
   const [draftFor, setDraftFor] = useState<string | null>(null);
-  const [leaderFor, setLeaderFor] = useState<string | null>(null);
+  const firstLeader = () => canEscalate(finding) ? alphabetical(finding.leaders ?? [], names)[0] ?? null : null;
+  const [leaderFor, setLeaderFor] = useState<string | null>(() => always?.action === "prepare-leader-note" ? firstLeader() : null);
+  const [reminding, setReminding] = useState(() => always?.action === "prepare-reminder" && canRemind(finding));
+  // A rule made from this card just now prepares its note straight away, as it will on every later check.
+  useEffect(() => {
+    if (always?.action === "prepare-reminder" && canRemind(finding)) setReminding(true);
+    if (always?.action === "prepare-leader-note") setLeaderFor(l => l ?? firstLeader());
+  }, [always?.id]); // Only when the rule itself changes.
   const [choosing, setChoosing] = useState<DecisionChoice | null>(null);
   const [open, setOpen] = useState(finding.kind === "needs-people");
   const hasPeople = listsPeople(finding);
@@ -243,7 +297,7 @@ function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHo
       { const n = finding.people!.suggestions.length, c = finding.people!.conflicts.length;
         body = n + c === 0 ? "No one else on this team is clear for this time."
           : n === 0 ? `No one else on the team is clear with no overlap found; ${c === 1 ? "one person has" : `${c} people have`} a possible conflict.`
-            : `${n === 1 ? "One person" : `${n} people`} on the team could help with no overlap found${c ? `, and ${c} with a possible conflict` : ""}.`; }
+            : `${n === 1 ? "One person" : `${n} people`} on the team could help with no overlap found${c ? `, and ${c === 1 ? "one" : c} with a possible conflict` : ""}.`; }
       break;
     case "pending":
       title = `${nameOf(names, finding.person_id)} is pending for ${finding.position!.name}.`;
@@ -262,6 +316,15 @@ function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHo
     case "lead-unverified":
       title = `I couldn't confirm the scheduled lead for ${finding.position!.name}.`;
       body = "Planning Center has someone scheduled to lead, but their answer or serving time couldn't be confirmed, so I'm not counting it as covered.";
+      break;
+    case "too-few-confirmed":
+      title = fewConfirmedTitle(finding);
+      body = fewConfirmedBody(finding);
+      break;
+    case "background-check":
+      title = backgroundTitle(nameOf(names, finding.person_id), finding.check);
+      body = `Scheduled for ${finding.position!.name} ${finding.position!.interval ? `at ${clock(finding.position!.interval.starts_at)}` : "this Sunday"}. Your Church rules ask for a current background check before serving with kids.${
+        finding.tone === "look" && finding.check === "none-current" ? " Planning Center showed no current background checks for anyone on your kids teams; your Planning Center login may not be able to see them." : ""}`;
       break;
     default:
       title = finding.stale ? "This check is out of date." : "Part of this Sunday couldn't be checked.";
@@ -299,8 +362,12 @@ function FindingCard({ item, names, checkedAt, sender, canReword, onDecide, onHo
     </div>}
     {choosing && <DecisionForm key={choosing} choice={choosing} onCancel={() => setChoosing(null)}
       onSave={reason => { onDecide(finding, choosing, reason, item.decision); setChoosing(null); }} />}
+    {canRemind(finding) && !reminding && <div className="find-next">
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReminding(true)}>Prepare a reminder</button></div>}
+    {reminding && <ReminderNote finding={finding} names={names} sender={sender} onClose={() => setReminding(false)} />}
     {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} onClose={() => setLeaderFor(null)} />}
     <Why finding={finding} checkedAt={checkedAt} onHow={onHow ? () => onHow(procedureFor(finding)) : undefined} />
+    <FindingFeedback target={target} feedback={feedback} />
   </article>;
 }
 
@@ -379,10 +446,12 @@ export const hasOperationsSection = (operations: SundayOperations | null): opera
  * "nothing found" line appears only when the operations check says every part was fully read, and
  * names only those parts, with the time Planning Center was read (never a Church-rules time).
  */
-export function OperationsSection({ operations, onHow, whyOpen = false }: {
+export function OperationsSection({ operations, onHow, whyOpen = false, feedback = null, occurrence = "" }: {
   operations: SundayOperations; onHow?: ((procedure: string) => void) | undefined;
   /** Start with every Why I flagged this open (tests). */
   whyOpen?: boolean;
+  /** The person's Church rules for these cards, and the Sunday's plan id they belong to. */
+  feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const how = (procedure: string) => onHow ? () => onHow(procedure) : undefined;
   const { labels, result } = operations;
@@ -417,6 +486,7 @@ export function OperationsSection({ operations, onHow, whyOpen = false }: {
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
       <div className="find-next"><span className="find-next-l">Next step</span><span>{f.next_action}</span></div>
       <OpsWhy evidence={f.evidence} why={why} onHow={how(PROCEDURE_FOR.room)} defaultOpen={whyOpen} />
+      <FindingFeedback target={roomTarget(f, occurrence, labels)} feedback={feedback} />
     </article>;
   };
   const followUp = (f: FollowUpFinding) => <article className="find" key={f.finding_id}>
@@ -426,6 +496,7 @@ export function OperationsSection({ operations, onHow, whyOpen = false }: {
     <div className="find-next"><span className="find-next-l">Next step</span><span>{f.next_action}</span></div>
     <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${time(f.due_at)}, has passed.`]}
       onHow={how(PROCEDURE_FOR.followUp)} defaultOpen={whyOpen} />
+    <FindingFeedback target={followUpTarget(f, occurrence, labels)} feedback={feedback} />
   </article>;
   return <section className="stack" aria-label="Rooms and follow-ups">
     <h2 className="h3">Rooms and follow-ups</h2>
@@ -440,7 +511,9 @@ export function OperationsSection({ operations, onHow, whyOpen = false }: {
   </section>;
 }
 
-function GroupMeetingCard({ item, names, onHow, defaultOpen = false }: { item: GroupMeeting; names: Names; onHow?: (() => void) | undefined; defaultOpen?: boolean }) {
+function GroupMeetingCard({ item, names, onHow, defaultOpen = false, feedback = null, occurrence = "" }: {
+  item: GroupMeeting; names: Names; onHow?: (() => void) | undefined; defaultOpen?: boolean; feedback?: FeedbackControls | null; occurrence?: string;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   const roles = [...new Set(item.serving.map(s => s.position ?? "their role"))].join(", ");
   const serving = [...new Set(item.serving.map(s => `${s.status} for ${s.position ?? "a role"}`))].join(" and ");
@@ -460,15 +533,18 @@ function GroupMeetingCard({ item, names, onHow, defaultOpen = false }: { item: G
       {open && <ul className="list why">{why.map(w => <li key={w}><Icon name="dot" small />{w}</li>)}</ul>}
       {open && <HowLink onHow={onHow} />}
     </div>
+    <FindingFeedback target={groupTarget(item, occurrence)} feedback={feedback} />
   </article>;
 }
 
 /** People on this plan whose group meets while they serve. Listed alphabetically, never ranked; names resolve on this Mac. */
-export function GroupMeetings({ items, names, onHow, whyOpen = false }: { items: GroupMeeting[]; names: Names; onHow?: ((procedure: string) => void) | undefined; whyOpen?: boolean }) {
+export function GroupMeetings({ items, names, onHow, whyOpen = false, feedback = null, occurrence = "" }: {
+  items: GroupMeeting[]; names: Names; onHow?: ((procedure: string) => void) | undefined; whyOpen?: boolean; feedback?: FeedbackControls | null; occurrence?: string;
+}) {
   return <section className="stack" aria-label="Group meetings">
     <h2 className="h3">Group meetings</h2>
     {[...items].sort((a, b) => nameOf(names, a.person_id).localeCompare(nameOf(names, b.person_id)))
-      .map(m => <GroupMeetingCard key={m.person_id} item={m} names={names} defaultOpen={whyOpen}
+      .map(m => <GroupMeetingCard key={m.person_id} item={m} names={names} defaultOpen={whyOpen} feedback={feedback} occurrence={occurrence}
         onHow={onHow ? () => onHow(PROCEDURE_FOR.group) : undefined} />)}
   </section>;
 }
@@ -479,10 +555,17 @@ export function SundayPage(props: {
   decisions: SundayDecision[]; onDecisions: (next: SundayDecision[]) => void;
   operations: SundayOperations | null;
   onCheck: () => void; onRecording: () => void; onExample: () => void; onLaterExample?: (() => void) | undefined;
+  /** Opens Settings, where Planning Center is connected and the Sunday chosen. */
+  onSettings?: (() => void) | undefined;
   /** "See how this works" under Why I flagged this: opens that procedure on the Church rules page. */
   onHow?: ((procedure: string) => void) | undefined;
+  /** What the person tells Ozzie on finding cards, kept with the Church rules. */
+  feedback?: FeedbackSource | null;
 }) {
   const { brief, names, decisions, onDecisions } = props;
+  const { controls, notice } = useFeedback(props.feedback, names);
+  const occurrence: Occurrence = { id: brief?.plan.id ?? "", label: brief?.plan.dates ?? null };
+  const setAside = [...(brief?.hidden ?? []).map(h => h.entry), ...(props.operations?.hidden ?? []).map(h => h.entry)];
   const stamp = useMemo(() => brief?.checked_at ? time(brief.checked_at) : null, [brief]);
   const view = useMemo(() => brief ? applyDecisions(brief, decisions) : null, [brief, decisions]);
   const counts = view ? openCount(view) : { decisions: 0, looks: 0, resolved: 0 };
@@ -504,6 +587,7 @@ export function SundayPage(props: {
       {brief.status === "checked-scope-clear" ? "Everything Ozzie checked is covered. " :
         `${counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision` : incomplete ? "Nothing in what was read needs a decision" : "Nothing needs a decision"}${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `}
       {counts.resolved + history.length > 0 && `You resolved ${counts.resolved + history.length} yourself. `}
+      {setAside.length > 0 && `${setAside.length === 1 ? "One finding is" : `${setAside.length} findings are`} set aside by your Church rules. `}
       {brief.plan.title && <span className="muted">{brief.plan.title}.</span>}
     </p>}
     {!brief && <p className="lede">Sunday hasn't been checked yet. Check Planning Center now, or look around the fictional example first.</p>}
@@ -515,13 +599,17 @@ export function SundayPage(props: {
       {!brief && <button type="button" className="btn btn-quiet" onClick={props.onExample}>See a fictional example</button>}
       {brief?.mode === "fictional" && props.onLaterExample && <button type="button" className="btn btn-quiet" onClick={props.onLaterExample}>See a later fictional check</button>}
     </div>
-    {!props.connected && <p className="small">Connect Planning Center under Settings to check a real Sunday. Ozzie only reads; it changes nothing there.</p>}
-    {props.connected && !props.configured && <p className="small">Choose which Sunday to check under Settings.</p>}
+    {(!props.connected || !props.configured) && <p className="small row">
+      <span>{!props.connected ? "Connect Planning Center under Settings to check a real Sunday. Ozzie only reads; it changes nothing there." : "Choose which Sunday to check under Settings."}</span>
+      {props.onSettings && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSettings}>Open Settings</button>}</p>}
     {props.problem && <p role="alert" className="problem">{props.problem}</p>}
     {brief && <section className="stack" aria-labelledby="sunday-open-title">
       <h2 id="sunday-open-title" className="sr-only">Open for this Sunday</h2>
-      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={props.sender} canReword={props.canReword} onDecide={onDecide} onHow={props.onHow} />)}
-      {brief.findings.length === 0 && <p className="lede">No open needs, pending requests or Church-rule check-ins in what was read.</p>}
+      {notice}
+      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={props.sender} canReword={props.canReword} onDecide={onDecide} onHow={props.onHow}
+        feedback={controls} occurrence={occurrence} />)}
+      {brief.findings.length === 0 && <p className="lede">{brief.hidden?.length ? "Nothing open in what was read, apart from what your Church rules set aside below."
+        : "No open needs, pending requests or Church-rule check-ins in what was read."}</p>}
       {brief.findings.length > 0 && open.length === 0 && <p className="lede">Everything left is something you resolved yourself, below.</p>}
     </section>}
     {(resolved.length > 0 || history.length > 0) && <section className="stack" aria-label="Resolved by you">
@@ -530,8 +618,10 @@ export function SundayPage(props: {
       {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => onDecisions(withoutDecision(decisions, i.finding.key))} />)}
       {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => onDecisions(withoutDecision(decisions, h.decision.key))} />)}
     </section>}
-    {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} onHow={props.onHow} />}
-    {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names} onHow={props.onHow} />}
+    {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} onHow={props.onHow} feedback={controls} occurrence={occurrence.id} />}
+    {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names} onHow={props.onHow}
+      feedback={controls} occurrence={occurrence.id} />}
+    {brief && <SetAside entries={setAside} feedback={controls} />}
     {brief && <section className="notchecked" aria-label="What I didn't check">
       <h2 className="h3">What I didn't check</h2>
       <ul className="list">{[...brief.not_checked, ...(props.operations ? props.operations.not_checked : operationsNotChecked(null))].map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul>

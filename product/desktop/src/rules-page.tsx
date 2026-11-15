@@ -4,6 +4,9 @@ import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { roomRules } from "../../../core/src/operations-capture.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import { Icon } from "./icons.js";
+import { KidsTeamsRules } from "./kids-rules-section.js";
+import { feedbackOf } from "../../../core/src/finding-feedback.js";
+import { FromYourCards, useFeedback } from "./finding-feedback.js";
 
 /**
  * A room's rule, stored with the other rules. "Not shared" is the only room rule, with its setup
@@ -47,6 +50,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   /** A procedure to open and bring into view (from a Sunday card's "See how this works"). */
   focus?: string | null;
 }) {
+  // What the person told Ozzie on finding cards, kept with these rules; deleting one says so, with Undo.
+  const { controls, notice } = useFeedback({ entries: feedbackOf(rules), onEntries: next => onChange({ ...rules, feedback: next }) }, names);
   const roomRule = (id: string) => roomRules(rules).find(r => r.room_id === id);
   const setRoom = (id: string, next: { setup_minutes: number } | null) => onChange(withRoomRule(rules, id, next));
   const teams = [...new Map(positions.map(p => [p.team_id, positions.filter(x => x.team_id === p.team_id).map(x => x.name)])).entries()];
@@ -91,6 +96,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
         {leaderText(team) && <p className="small rule-note">{leaderText(team)}</p>}
       </div>)}
     </section>
+    <KidsTeamsRules rules={rules} onChange={onChange} teams={teams} />
     <section className="find rule-rooms">
       <h2 className="h3">Rooms</h2>
       <p className="find-body">Say which rooms can't hold two things at once, and how much setup time to allow before each booking. Rooms come from Planning Center Calendar; nothing there changes.</p>
@@ -110,6 +116,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
       })}
       {rooms.length > 0 && <p className="small">For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records: an overlap Calendar lists as not yet resolved shows as Room use needs review. Overlaps in a room with no rule set, or that Ozzie can't confirm, show as Worth a look.</p>}
     </section>
+    {notice}
+    <FromYourCards feedback={controls} />
     {procedures && procedures.length > 0 && <HowOzzieChecks procedures={procedures} focus={focus} />}
   </div>;
 }

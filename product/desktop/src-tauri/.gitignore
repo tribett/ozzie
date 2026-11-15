@@ -1,1 +1,3 @@
 /gen/schemas/
+# Ozzie's Mac helpers, built from helpers/*.swift by build.rs.
+/binaries/

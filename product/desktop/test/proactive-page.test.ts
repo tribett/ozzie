@@ -51,7 +51,10 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, 
 describe("What runs automatically", () => {
   it("says what runs, which account, what it can do, and how to stop it", async () => {
     const page = text(render(await viewAfterDecline(), {}));
-    expect(page).toContain("Check Sunday coverage in Planning Center");
+    expect(page).toContain("Keeping an eye on Sunday");
+    expect(page).toContain("The regular Sunday check");
+    // Its interval, under Schedule and quiet hours, is named for it (Keep Sunday covered keeps its own times).
+    expect(page).toContain("Regular Sunday check every");
     expect(page).toContain("Reads only. It never changes Planning Center or sends messages.");
     expect(page).toContain("Planning Center organization 1001");
     // Closing the window no longer stops Ozzie (it stays in the menu bar); quitting does.

@@ -49,9 +49,18 @@
 //! the request is sent: a step refused for a missing key, a spent cap or by the ledger costs
 //! nothing (C11); a cap another call spent in between is recorded as a `limit` step that never
 //! reached the network. Managed requests (and own-provider requests to AI
-//! Gateway's host) require zero data retention; managed requests also disable hidden reasoning and
+//! Gateway's host) require zero data retention, and a reply on them without AI Gateway's
+//! confirmation of it is refused as `provider-failure` (model.rs `Exchange::send`, owner
+//! 2026-11-14); managed requests also disable hidden reasoning and
 //! carry only the fixed agent tag; every route keeps model.rs's URL rules (managed fixed, own https
 //! with its key bound to its host, local loopback, never Planning Center).
+//!
+//! Ozzie managed (hosted.rs): with a device token saved, the managed route's step goes to
+//! ozzie.church's `/api/v1/agent-step` with the token, its body the exact request every check above
+//! accepted plus `kind` ("ask" or "procedure"); ozzie.church writes the gateway request (zero data
+//! retention, reasoning off) and answers in the gateway's reply shape, which `read_reply` reads here
+//! as before. Only the address, the body's outer shape and the authorization change; a spent church
+//! allowance is `allowance-paused`.
 //!
 //! A final reply (no tool calls) must be the closed answer form and nothing else (structured
 //! answers, review 2026-11-14 section C; `fixed::final_answer`): a JSON object choosing fact ids
@@ -73,9 +82,10 @@
 //! Errors are a closed vocabulary (`AgentError`); nothing from a request, a reply or a key is ever
 //! carried, and keys stay inside model.rs.
 use crate::fixed;
+use crate::hosted::{self, HostedConfig};
 use crate::ledger::{StepRefusal, StepView, TaskKind, TaskLedger, task_id_ok};
 use crate::model::{
-    self, Exchange, ModelError, ModelHttp, ModelKeys, NativeModelHttp, RouteConfig, Spend,
+    self, Exchange, ModelError, ModelHttp, ModelKeys, NativeModelHttp, RouteConfig, Spend, Target,
 };
 use crate::name_guard::{self, NameGuard};
 use serde::{Deserialize, Serialize};
@@ -188,6 +198,12 @@ pub enum AgentError {
     /// id) or chose a fact or draft id no tool result in the request holds. The reply was dropped;
     /// the loop fails the task as `fidelity`.
     InvalidAnswer,
+    /// Ozzie managed: the church's allowance on ozzie.church is spent; AI help is paused until it
+    /// resets or the plan changes. Checks and briefings keep working.
+    AllowancePaused,
+    /// Ozzie managed: ozzie.church refused the step as holding a phone number or email address.
+    /// Nothing went to the AI; the loop fails the task as `egress`.
+    ContactDetail,
 }
 impl From<ModelError> for AgentError {
     fn from(error: ModelError) -> Self {
@@ -200,6 +216,10 @@ impl From<ModelError> for AgentError {
             ModelError::InvalidRequest => Self::InvalidRequest,
             ModelError::ModelNotAllowed => Self::ModelNotAllowed,
             ModelError::NamePresent => Self::Egress,
+            ModelError::AllowancePaused => Self::AllowancePaused,
+            ModelError::ContactDetail => Self::ContactDetail,
+            // ozzie.church counts the task's steps too: the same limit the ledger keeps here.
+            ModelError::StepLimit => Self::Limit,
         }
     }
 }
@@ -266,7 +286,8 @@ pub struct ToolSpec {
     pub description: String,
     pub parameters: ToolParameters,
 }
-#[derive(Clone, PartialEq, Eq, Deserialize)]
+/// Serialized only as the body ozzie.church takes (`hosted_step_body`): the contract's own shape.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStepRequest {
     pub task_id: String,
@@ -528,7 +549,7 @@ fn question_ok(text: &str, names: &NameGuard) -> bool {
 /// tool that fits the closed grammar (`fixed::tool_message`), whose label and time strings name no
 /// one and whose sentences of fixed words spell no run of a name's parts
 /// (`NameGuard::present_as_phrase`, labels set aside as a break).
-fn tool_message_ok(content: &str, tool: &str, names: &NameGuard) -> bool {
+pub(crate) fn tool_message_ok(content: &str, tool: &str, names: &NameGuard) -> bool {
     if !chars_within(content, 1, ENVELOPE_CHARS)
         || content.chars().any(hidden)
         || spelled_escape(content)
@@ -836,6 +857,19 @@ pub fn step_body(config: &RouteConfig, request: &AgentStepRequest) -> Value {
     body
 }
 
+/// The body ozzie.church's `/api/v1/agent-step` takes: the exact request the checks accepted, in the
+/// contract's shape (contract.ts AgentStepRequest; dotted tool names), plus `kind`: "ask" for an Ask
+/// task, "procedure" for any other.
+pub fn hosted_step_body(request: &AgentStepRequest, kind: TaskKind) -> Option<Vec<u8>> {
+    let mut body = serde_json::to_value(request).ok()?;
+    body["kind"] = json!(if kind == TaskKind::Ask {
+        "ask"
+    } else {
+        "procedure"
+    });
+    serde_json::to_vec(&body).ok()
+}
+
 /// The provider's reply as the contract's AgentStepReply, or a closed code. A malformed reply is
 /// `provider-failure`; one that fails a check is `egress`; more tool calls than the task has left
 /// (`calls_left`) is `limit`. A truncated reply ("length") keeps its checked text and drops any
@@ -1023,9 +1057,14 @@ fn outcome(reply: &Result<AgentStepReply, AgentError>) -> &'static str {
             Finish::ToolCalls => "tool_calls",
             Finish::Length => "length",
         },
-        Err(AgentError::Egress) => "egress",
+        Err(AgentError::Egress | AgentError::ContactDetail) => "egress",
         Err(AgentError::Denied) => "denied",
-        Err(AgentError::Limit | AgentError::Budget | AgentError::DailyLimit) => "limit",
+        Err(
+            AgentError::Limit
+            | AgentError::Budget
+            | AgentError::DailyLimit
+            | AgentError::AllowancePaused,
+        ) => "limit",
         Err(AgentError::ProviderFailure) => "provider-failure",
         Err(AgentError::InvalidAnswer) => "fidelity",
         Err(AgentError::NotConfigured | AgentError::ModelNotAllowed) => "no-model",
@@ -1043,30 +1082,47 @@ pub(crate) struct StepEnv<'a> {
     pub ledger: &'a TaskLedger,
     /// The UTC day the per-day cap counts (`model::utc_day`).
     pub day: u64,
+    /// Where Ozzie managed is reached in this build (`HostedConfig::current`).
+    pub hosted: &'a HostedConfig,
 }
 /// A request that passed every check, ready to send.
 struct Checked {
     url: String,
     body: Vec<u8>,
     calls_left: usize,
+    /// To ozzie.church with the device token (`Target::Hosted`).
+    hosted: bool,
 }
 impl StepEnv<'_> {
-    /// Every refusal that needs no key, budget, client or network, in one pass.
+    /// Every refusal that needs no key, budget, client or network, in one pass. Only once the
+    /// request passed every check is the Keychain looked at, for whether a device token is saved
+    /// (`model::target`), which decides the address and the body's outer shape.
     fn check(&self, request: &AgentStepRequest) -> Result<Checked, AgentError> {
-        let url = self.config.endpoint()?;
+        self.config.endpoint()?;
         model::check_model(self.config, self.names)?;
         if !task_id_ok(&request.task_id) {
             return Err(AgentError::Egress);
         }
         let task = self.ledger.step_view(&request.task_id)?;
         check_step(request, self.names, &task)?;
-        let body =
-            serde_json::to_vec(&step_body(self.config, request)).map_err(|_| AgentError::Egress)?;
+        // Only now, with the request checked: whether the managed route goes through ozzie.church.
+        let (url, body, hosted) = match model::target(self.config, self.keys, self.hosted)? {
+            Target::Direct(direct) => {
+                let body = serde_json::to_vec(&step_body(self.config, request))
+                    .map_err(|_| AgentError::Egress)?;
+                (direct, body, false)
+            }
+            Target::Hosted(base) => {
+                let body = hosted_step_body(request, task.kind).ok_or(AgentError::Egress)?;
+                (format!("{base}{}", hosted::AGENT_STEP_PATH), body, true)
+            }
+        };
         let minted: usize = task.minted.iter().map(|&n| usize::from(n)).sum();
         Ok(Checked {
             url,
             body,
             calls_left: MAX_TOOL_CALLS.saturating_sub(minted),
+            hosted,
         })
     }
     /// The key, the step taken in the ledger, the caps, the request, then the reply checked and
@@ -1086,6 +1142,7 @@ impl StepEnv<'_> {
             tags: AGENT_TAGS,
             keys: self.keys,
             http,
+            hosted: checked.hosted,
         };
         let mut taken = None;
         let sent = exchange.send(Spend::AgentStep { day: self.day }, || {
@@ -1125,6 +1182,7 @@ pub fn agent_step(
     names: &NameGuard,
     ledger: &TaskLedger,
 ) -> Result<AgentStepReply, AgentError> {
+    let hosted = HostedConfig::current();
     let env = StepEnv {
         config,
         usage,
@@ -1132,10 +1190,11 @@ pub fn agent_step(
         names,
         ledger,
         day: model::utc_day(crate::sunday_check::unix_ms()),
+        hosted: &hosted,
     };
     // Everything that can refuse without a client does so first, once.
     let checked = env.check(request)?;
-    let http = NativeModelHttp::new(config.route)?;
+    let http = NativeModelHttp::for_route(config.route, &hosted)?;
     env.send(request, checked, &http)
 }
 #[cfg(test)]

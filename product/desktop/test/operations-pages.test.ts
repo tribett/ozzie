@@ -12,7 +12,7 @@ import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { captureRooms, roomRules, sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { FICTIONAL_ROOM, withFictionalOperations, withFictionalOperationsOff } from "../../../core/src/fictional-operations.js";
 import { nov22Capture, PEOPLE } from "../../../core/src/fictional-sunday.js";
-import { OPERATIONS_COLLECTIONS, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
+import { KIDS_COLLECTIONS, OPERATIONS_COLLECTIONS, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
 
 // Fictional fixed data only. The example is evaluated on the fictional church's Eastern time.
 const rules: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
@@ -139,6 +139,15 @@ describe("What happened: the new reads", () => {
     expect(t).toContain("Not asked — turned off in Settings");
     expect(t).not.toMatch(/calendar_|people_workflow|groups_/);
     expect(activityLabel("organization")).toBe("Read the church's time zone");
+  });
+  it("names the kids rule's background-check read in words too, and later pages of a list without a raw offset", () => {
+    for (const collection of KIDS_COLLECTIONS) expect(activityLabel(collection)).not.toBe(collection);
+    expect(activityLabel("people_background_checks")).toBe("Read whether one person has a current background check");
+    const c = nov22Capture();
+    const paged: SundayCapture = { ...c, reads: c.reads.map((r, i) => i === 1 ? { ...r, offset: 25 } : r) };
+    const t = text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: paged })));
+    expect(t).toContain("(continued)");
+    expect(t).not.toMatch(/page from|\b25\b/);
   });
   it("says Planning Center didn't grant it when Ozzie asked and it granted Services only", async () => {
     expect(activityOutcome("not-requested", true)).toBe("Not asked — Planning Center didn't grant this");

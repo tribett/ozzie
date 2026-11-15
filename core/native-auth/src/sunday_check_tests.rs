@@ -296,7 +296,7 @@ fn run_with(
     script: &dyn SourceHttp,
     clock: &FakeClock,
 ) -> Result<SundayCapture, SourceError> {
-    run(auth, "10", "20", &AtomicBool::new(false), script, clock).map(|(capture, _)| capture)
+    run(auth, "10", "20", &[], &AtomicBool::new(false), script, clock).map(|(capture, _)| capture)
 }
 fn check(script: &Script, clock: &FakeClock) -> Result<SundayCapture, SourceError> {
     run_with(&controller(), script, clock)
@@ -845,6 +845,7 @@ fn cancellation_aborts_the_whole_check_instead_of_returning_a_partial_capture() 
         &controller(),
         "10",
         "20",
+        &[],
         &AtomicBool::new(true),
         &script,
         &FakeClock::new(),
@@ -1025,6 +1026,7 @@ fn invalid_service_type_or_plan_ids_are_refused_before_any_read() {
             &f.auth,
             st,
             plan,
+            &[],
             &AtomicBool::new(false),
             &script,
             &FakeClock::new(),
@@ -2492,6 +2494,7 @@ fn names_pruned_from_the_capture_are_still_refused_by_the_model_guard() {
         &controller(),
         "10",
         "20",
+        &[],
         &AtomicBool::new(false),
         &script,
         &FakeClock::new(),
@@ -2549,10 +2552,298 @@ fn names_pruned_from_the_capture_are_still_refused_by_the_model_guard() {
         &granted(),
         "10",
         "20",
+        &[],
         &AtomicBool::new(false),
         &operations(),
         &FakeClock::new(),
     )
     .unwrap();
     assert!(!ops.iter().any(|n| n.contains("name-canary")));
+}
+
+// ---- People background checks (kids rule) ------------------------------------------------------
+
+fn background_url(person: &str) -> String {
+    format!("{API}/people/v2/people/{person}/background_checks?filter=complete_clear&per_page=100&offset=0")
+}
+/// The `sunday()` plan's only scheduled person is 50 (Keys, team 71). Two more on team 71: 53
+/// pending and 54 declined; 51 is a candidate on team 70 who isn't on the plan.
+fn kids_sunday() -> Script {
+    operations()
+        .page(
+            format!("{PLAN}/team_members?include=person&per_page=100&offset=0"),
+            json!({"data":[
+                {"id":"40","type":"PlanPerson","attributes":{"status":"C","team_position_name":"Keys"},"relationships":{"person":person_rel("50"),"team":team_rel("71")}},
+                {"id":"41","type":"PlanPerson","attributes":{"status":"U","team_position_name":"Keys"},"relationships":{"person":person_rel("53"),"team":team_rel("71")}},
+                {"id":"42","type":"PlanPerson","attributes":{"status":"D","team_position_name":"Keys"},"relationships":{"person":person_rel("54"),"team":team_rel("71")}}],
+                "included":[{"id":"50","type":"Person","attributes":{"full_name":"Avery Fictional"}},
+                            {"id":"53","type":"Person","attributes":{"full_name":"Dana Fictional"}},
+                            {"id":"54","type":"Person","attributes":{"full_name":"Emery Fictional"}}]}),
+        )
+        .page(
+            background_url("50"),
+            json!({"data":[{"id":"901","type":"BackgroundCheck","attributes":{"completed_at":"2026-01-05T12:00:00Z","current":true,"expires_on":"2027-01-05",
+                "note":"note-canary","report_url":"https://example.invalid/secret-canary","status":"complete_clear","status_updated_at":"2026-01-05T12:00:00Z"},
+                "relationships":{"person":person_rel("50"),"created_by":person_rel("180")}}],
+                "included":[{"id":"180","type":"Person","attributes":{"name":"Operator name-canary"}}],
+                "meta":{"count":1,"total_count":1,"parent":{"id":"50","type":"Person"}}}),
+        )
+}
+fn kids_check(
+    auth: &AuthController,
+    script: &Script,
+    kids: &[&str],
+) -> Result<SundayCapture, SourceError> {
+    let kids: Vec<String> = kids.iter().map(|k| (*k).to_string()).collect();
+    run(
+        auth,
+        "10",
+        "20",
+        &kids,
+        &AtomicBool::new(false),
+        script,
+        &FakeClock::new(),
+    )
+    .map(|(capture, _)| capture)
+}
+
+#[test]
+fn background_checks_are_read_last_and_only_for_people_scheduled_on_kids_teams() {
+    let script = kids_sunday();
+    let capture = kids_check(&granted(), &script, &["71"]).unwrap();
+    let seen = script.seen();
+    let checks: Vec<&String> = seen.iter().filter(|u| u.contains("background_checks")).collect();
+    // Confirmed 50 and pending 53, in plan order; not declined 54, not candidate 51.
+    assert_eq!(checks, [&background_url("50"), &background_url("53")]);
+    assert_eq!(seen.len() - 2, seen.iter().position(|u| *u == background_url("50")).unwrap());
+    let reads = reads(&capture, "people_background_checks");
+    assert_eq!(
+        reads
+            .iter()
+            .map(|r| (r.people_person_id.as_deref(), r.person_id.as_deref(), r.outcome.as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("50"), None, "ok"), (Some("53"), None, "ok")]
+    );
+    assert_eq!(
+        reads[0].body.as_ref().unwrap()["data"][0]["attributes"],
+        json!({"status":"complete_clear","current":true,"expires_on":"2027-01-05"})
+    );
+    let wire = serde_json::to_string(&capture).unwrap();
+    for canary in ["note-canary", "secret-canary", "name-canary", "report_url", "created_by"] {
+        assert!(!wire.contains(canary), "{canary} survived");
+    }
+    let bodies = serde_json::to_string(&reads.iter().map(|r| &r.body).collect::<Vec<_>>()).unwrap();
+    for dropped in ["completed_at", "status_updated_at", "included"] {
+        assert!(!bodies.contains(dropped), "{dropped} survived");
+    }
+    // No name is added for a background check: 180 (whoever entered it) is never kept.
+    assert!(!capture.names.contains_key("180"));
+    // A capture with background-check reads saves and reloads as it was.
+    let root = TempDir::new("background");
+    let dir = root.0.join("recordings");
+    let path_id = save_recording(&dir, &capture).unwrap();
+    let loaded = load_recording(&dir, "1001", &path_id).unwrap();
+    assert_eq!(
+        serde_json::to_value(&loaded.reads).unwrap(),
+        serde_json::to_value(&capture.reads).unwrap()
+    );
+}
+
+#[test]
+fn without_a_kids_team_no_background_check_is_ever_read() {
+    let script = kids_sunday();
+    let capture = kids_check(&granted(), &script, &[]).unwrap();
+    assert!(!script.seen().iter().any(|u| u.contains("background_checks")));
+    assert!(reads(&capture, "people_background_checks").is_empty());
+    // A kids team with nobody scheduled reads nothing either.
+    let script = kids_sunday();
+    kids_check(&granted(), &script, &["70"]).unwrap();
+    assert!(!script.seen().iter().any(|u| u.contains("background_checks")));
+}
+
+#[test]
+fn a_services_only_connection_records_background_checks_not_requested_and_asks_nothing() {
+    let script = kids_sunday();
+    let capture = kids_check(&controller(), &script, &["71"]).unwrap();
+    assert!(script.seen().iter().all(|u| u.starts_with(BASE)));
+    let reads = reads(&capture, "people_background_checks");
+    assert_eq!(reads.len(), 2);
+    assert!(reads.iter().all(|r| r.outcome == NOT_REQUESTED && r.body.is_none()));
+    // Consent marks every People, Calendar and Groups read alike, so it saves and reloads.
+    let root = TempDir::new("background-not-requested");
+    let dir = root.0.join("recordings");
+    let path_id = save_recording(&dir, &capture).unwrap();
+    assert!(load_recording(&dir, "1001", &path_id).is_ok());
+}
+
+#[test]
+fn a_refused_background_read_is_recorded_as_refused_and_never_as_no_check() {
+    let mut script = kids_sunday();
+    script.fail_prefix = vec![(
+        format!("{API}/people/v2/people/"),
+        SourceError::Denied,
+    )];
+    let capture = kids_check(&granted(), &script, &["71"]).unwrap();
+    let refused = reads(&capture, "people_background_checks");
+    assert!(refused.iter().all(|r| r.outcome == "denied" && r.body.is_none()));
+    // The rest of the check is whole.
+    assert!(capture.reads.iter().filter(|r| r.collection == "team_members").all(|r| r.outcome == "ok"));
+    // A page Planning Center answered with another outcome than cleared is refused whole.
+    let script = kids_sunday().page(
+        background_url("53"),
+        json!({"data":[{"id":"902","type":"BackgroundCheck","attributes":{"status":"complete_not_clear","current":true,"expires_on":null},
+            "relationships":{"person":person_rel("53")}}]}),
+    );
+    let capture = kids_check(&granted(), &script, &["71"]).unwrap();
+    let outcomes: Vec<(Option<&str>, &str)> = reads(&capture, "people_background_checks")
+        .iter()
+        .map(|r| (r.people_person_id.as_deref(), r.outcome.as_str()))
+        .collect();
+    assert_eq!(outcomes, [(Some("50"), "ok"), (Some("53"), "invalid-response")]);
+    assert!(!serde_json::to_string(&capture).unwrap().contains("complete_not_clear"));
+}
+
+#[test]
+fn kids_team_ids_are_validated_before_any_read() {
+    let eleven: Vec<String> = (70..81).map(|t| t.to_string()).collect();
+    let eleven: Vec<&str> = eleven.iter().map(String::as_str).collect();
+    for bad in [vec!["07"], vec!["x"], vec![""], vec!["71", "71"], vec!["71/../72"], eleven] {
+        let script = kids_sunday();
+        assert_eq!(
+            kids_check(&granted(), &script, &bad).err(),
+            Some(SourceError::InvalidRequest),
+            "{bad:?}"
+        );
+        assert!(script.seen().is_empty());
+    }
+}
+
+#[test]
+fn recordings_refuse_background_reads_that_were_tampered_with() {
+    let root = TempDir::new("background-tamper");
+    let dir = root.0.join("recordings");
+    let mut capture = kids_check(&granted(), &kids_sunday(), &["71"]).unwrap();
+    capture.completed_at = rfc3339(1_794_571_260_000);
+    let path_id = save_recording(&dir, &capture).unwrap();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join(&path_id)).unwrap()).unwrap();
+    let at = read_index(&original, "people_background_checks");
+    type Tamper = Box<dyn Fn(&mut Value)>;
+    let tampers: Vec<Tamper> = vec![
+        // A check's other fields or outcomes never come back in.
+        Box::new(move |v| v["reads"][at]["body"]["data"][0]["attributes"]["note"] = json!("note-canary")),
+        Box::new(move |v| v["reads"][at]["body"]["data"][0]["attributes"]["status"] = json!("complete_not_clear")),
+        Box::new(move |v| {
+            v["reads"][at]["body"]["data"][0]["relationships"]["created_by"] = json!({"data":{"id":"180","type":"Person"}})
+        }),
+        // Never someone who isn't on this plan, and never under a Services or Groups person id.
+        Box::new(move |v| v["reads"][at]["people_person_id"] = json!("51")),
+        Box::new(move |v| {
+            let id = v["reads"][at]["people_person_id"].take();
+            v["reads"][at].as_object_mut().unwrap().remove("people_person_id");
+            v["reads"][at]["person_id"] = id;
+        }),
+        Box::new(move |v| v["reads"][at]["groups_person_id"] = json!("50")),
+        // Not requested is consent: one People read alone can't claim it.
+        Box::new(move |v| {
+            v["reads"][at]["outcome"] = json!(NOT_REQUESTED);
+            v["reads"][at].as_object_mut().unwrap().remove("body");
+        }),
+    ];
+    for (i, tamper) in tampers.iter().enumerate() {
+        let mut value = original.clone();
+        tamper(&mut value);
+        std::fs::write(dir.join(&path_id), serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            load_recording(&dir, "1001", &path_id).err(),
+            Some(RecordingError::Unavailable),
+            "tamper {i}"
+        );
+    }
+    std::fs::write(dir.join(&path_id), serde_json::to_vec(&original).unwrap()).unwrap();
+    assert!(load_recording(&dir, "1001", &path_id).is_ok());
+}
+
+#[test]
+fn background_checks_are_read_for_at_most_forty_people_and_never_mark_the_plan_truncated_for_it() {
+    // 45 people confirmed on kids team 71. People reads already stop at MAX_PEOPLE (that bound marks
+    // team_members truncated, as before); background checks are read for the first 40 only.
+    let rows: Vec<Value> = (0..45)
+        .map(|i| json!({"id":format!("{}", 4000 + i),"type":"PlanPerson","attributes":{"status":"C","team_position_name":"Keys"},
+            "relationships":{"person":person_rel(&format!("{}", 600 + i)),"team":team_rel("71")}}))
+        .collect();
+    let script = operations().page(
+        format!("{PLAN}/team_members?include=person&per_page=100&offset=0"),
+        json!({"data": rows, "meta":{"count":45,"total_count":45}}),
+    );
+    let capture = kids_check(&granted(), &script, &["71"]).unwrap();
+    let asked: Vec<String> = script
+        .seen()
+        .into_iter()
+        .filter(|u| u.contains("background_checks"))
+        .collect();
+    assert_eq!(asked.len(), MAX_BACKGROUND_PEOPLE);
+    assert_eq!(asked[0], background_url("600"));
+    assert_eq!(asked[39], background_url("639"));
+    assert_eq!(reads(&capture, "people_background_checks").len(), 40);
+    assert_eq!(capture.kids_teams, ["71"]);
+}
+
+#[test]
+fn a_background_404_is_a_provider_failure_never_an_empty_answer() {
+    let script = kids_sunday().fail(background_url("50"), SourceError::NotFound);
+    let capture = kids_check(&granted(), &script, &["71"]).unwrap();
+    let outcomes: Vec<(Option<&str>, &str, bool)> = reads(&capture, "people_background_checks")
+        .iter()
+        .map(|r| (r.people_person_id.as_deref(), r.outcome.as_str(), r.body.is_some()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [(Some("50"), "provider-failure", false), (Some("53"), "ok", true)]
+    );
+}
+
+#[test]
+fn recordings_keep_background_reads_only_for_people_on_the_kids_teams_the_check_was_given() {
+    let root = TempDir::new("background-kids-teams");
+    let dir = root.0.join("recordings");
+    let mut capture = kids_check(&granted(), &kids_sunday(), &["71"]).unwrap();
+    capture.completed_at = rfc3339(1_794_571_260_000);
+    assert_eq!(capture.kids_teams, ["71"]);
+    let path_id = save_recording(&dir, &capture).unwrap();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join(&path_id)).unwrap()).unwrap();
+    assert_eq!(original["kids_teams"], json!(["71"]));
+    let at = read_index(&original, "people_background_checks");
+    type Tamper = Box<dyn Fn(&mut Value)>;
+    let tampers: Vec<Tamper> = vec![
+        // The kids teams can't be widened, narrowed away or made up.
+        Box::new(|v| v["kids_teams"] = json!(["70"])),
+        Box::new(|v| {
+            v.as_object_mut().unwrap().remove("kids_teams");
+        }),
+        Box::new(|v| v["kids_teams"] = json!(["71", "71"])),
+        Box::new(|v| v["kids_teams"] = json!(["071"])),
+        // Someone on the plan and on team 71 who declined is not someone whose check was read.
+        Box::new(move |v| v["reads"][at]["people_person_id"] = json!("54")),
+    ];
+    for (i, tamper) in tampers.iter().enumerate() {
+        let mut value = original.clone();
+        tamper(&mut value);
+        std::fs::write(dir.join(&path_id), serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            load_recording(&dir, "1001", &path_id).err(),
+            Some(RecordingError::Unavailable),
+            "tamper {i}"
+        );
+    }
+    std::fs::write(dir.join(&path_id), serde_json::to_vec(&original).unwrap()).unwrap();
+    assert_eq!(
+        load_recording(&dir, "1001", &path_id).unwrap().kids_teams,
+        ["71"]
+    );
+    // A check given no kids teams records none, and its recording has no kids_teams key.
+    let plain = kids_check(&granted(), &kids_sunday(), &[]).unwrap();
+    assert!(plain.kids_teams.is_empty());
+    assert!(!serde_json::to_string(&plain).unwrap().contains("kids_teams"));
 }

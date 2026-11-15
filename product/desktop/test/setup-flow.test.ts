@@ -56,12 +56,21 @@ describe("guided setup", () => {
     expect(planFromAddress("nothing here")).toEqual({});
   });
 
-  it("reuses the wording-help settings and points to What runs automatically for checks and quiet hours", () => {
-    expect(render("wording")).toContain("Wording help");
+  it("reuses the AI help settings and points to What runs automatically for checks and quiet hours", () => {
+    // One name for the AI settings everywhere: they cover rewording drafts and Ask Ozzie's answers.
+    expect(render("wording")).toContain("AI help (optional)");
+    expect(render("wording")).toContain("AI help can reword a draft when you ask, and answers your questions in Ask Ozzie.");
+    expect(render("wording")).not.toMatch(/wording help/iu);
+    expect(render("sunday")).not.toMatch(/wording help/iu);
+    // Ozzie managed isn't offered as available yet in first-run setup.
+    expect(render("wording")).toContain("Ozzie managed (coming soon)");
+    expect(render("wording")).not.toContain("Connect to Ozzie managed");
     const auto = render("automatic");
     expect(auto).toContain("Every hour");
     expect(auto).toContain("Quiet hours");
-    expect(auto).toContain("Change these in What runs automatically");
+    // Going to What runs automatically from here also ends setup, and the button says so.
+    expect(auto).toContain("Finish and open What runs automatically");
+    expect(auto).not.toContain("Change these in What runs automatically");
     expect(auto).toContain("Waits until Planning Center is connected.");
     expect(auto).toContain("Finish setup");
   });

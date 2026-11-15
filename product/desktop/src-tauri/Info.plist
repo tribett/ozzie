@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ozzie listens only after you press the microphone button in Ask, to turn your spoken question into text you can check. The sound stays on this Mac and is never recorded.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Ozzie turns your spoken question into text on this Mac, so you can check it before you ask. Your words are never sent anywhere to do this.</string>
+</dict>
+</plist>

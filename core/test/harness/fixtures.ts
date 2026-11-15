@@ -3,7 +3,7 @@
 import { evaluateAttentionImport, type AttentionReport } from "../../src/attention-import/index.js";
 import { harborAttentionImport } from "../../src/fictional-attention.js";
 import { FICTIONAL_ROOM, withFictionalOperations, withFictionalOperationsOff } from "../../src/fictional-operations.js";
-import { CHECKED, nov22Capture, PEOPLE, TEAMS } from "../../src/fictional-sunday.js";
+import { CHECKED, nov22Capture, PEOPLE, TEAMS, withFictionalBackgroundChecks } from "../../src/fictional-sunday.js";
 import { sundayOperations } from "../../src/operations-capture.js";
 import { buildSundayBrief } from "../../src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../src/sunday-capture.js";
@@ -17,6 +17,8 @@ export const RULES: SundayRules = {
 };
 /** Also asks for a scheduled Nursery lead, which the fictional Sunday doesn't have. */
 export const LEAD_RULES: SundayRules = { ...RULES, sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery Lead" }] };
+/** Nursery (two confirmed at each time) and Lyrics (one) marked as kids teams, with the background-check rule on. */
+export const KIDS_RULES: SundayRules = { ...RULES, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 2 }, { team_id: TEAMS.lyrics, min_confirmed: 1 }] };
 export const ATTENTION = evaluateAttentionImport(harborAttentionImport()) as AttentionReport;
 /** Five minutes after the fictional check: a live check that is still current. */
 export const FRESH = "2026-11-20T15:05:00Z";
@@ -88,6 +90,9 @@ export const FIXTURES: [string, () => HarnessData][] = [
   ["room bookings timed out", () => harnessData({ mode: "live", outcomes: { calendar_resource_bookings: "timeout" } })],
   ["room list and workflows failed", () => harnessData({ mode: "live", outcomes: { calendar_rooms: "failed", people_workflows: "failed", people_workflow_steps: "failed" } })],
   ["group reads denied", () => harnessData({ mode: "live", outcomes: { groups_person_memberships: "denied", groups_group_events: "denied" } })],
+  ["kids teams and background checks", () => harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()) })],
+  ["kids teams, People not granted", () => harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()),
+    outcomes: { people_background_checks: "not-requested" } })],
 ];
 
 /** Every envelope every tool returns over one fixture, with every role and person label as arguments. */

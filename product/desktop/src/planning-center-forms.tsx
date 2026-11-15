@@ -75,6 +75,8 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       {saved && <button className="btn btn-secondary" disabled={!ready || working} onClick={() => { void run(() => connection.refresh(settings.clientId, settings.organization, registered)); }}>Check saved connection</button>}
       {pending && <button className="btn btn-quiet" onClick={() => { void run(() => connection.cancel()); }}>Cancel sign-in</button>}
     </div>
+    {/* Says why Connect is off, rather than leaving a grey button to guess at. */}
+    {!ready && !connected && !pending && <p className="input-help">To connect, enter both IDs and tick the box confirming the return address.</p>}
     {connected
       ? <p className="panel-ok" role="status"><Icon name="check" small /><span>Connected. Planning Center confirmed organization {status.organization}{status.checked_at_ms != null ? ` at ${at(status.checked_at_ms)}` : ""}.</span></p>
       : <p aria-live="polite">{state}</p>}

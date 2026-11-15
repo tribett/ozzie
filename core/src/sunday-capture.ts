@@ -5,11 +5,14 @@ import type {
   Completeness, CoverageCandidate, CoverageInput, CoveragePosition, CoverageScope,
   Observation, ServingAssignment, ServingInterval,
 } from "./coverage.js";
+import type { FeedbackEntry } from "./finding-feedback.js";
 
 export interface SundayRead {
   collection: string; team_id?: string; person_id?: string; offset: number;
   /** v2 operations reads (Calendar, People, Groups) carry their own ids, never team_id/person_id. */
   workflow_id?: string; group_id?: string; groups_person_id?: string;
+  /** The Person whose People background checks were read (`people_background_checks`; same id space as person_id). */
+  people_person_id?: string;
   /** calendar_conflicts reads are per Calendar event. */
   event_id?: string;
   /** The time window a windowed read asked for (canonical UTC). */
@@ -26,9 +29,14 @@ export interface SundayCapture {
   names: Record<string, string>;
   /** Room, workflow and step display names (`room:<id>`, `workflow:<id>`, `step:<id>`). LOCAL ONLY, like `names`. */
   labels?: Record<string, string>;
+  /** The kids teams whose scheduled people's background checks this check read (native `kids_teams`). Absent: none. */
+  kids_teams?: string[];
 }
 /** The church's own rule for one Planning Center Calendar room. */
 export interface RoomRuleSetting { room_id: string; exclusive: boolean; setup_minutes: number }
+/** A team the church marks as a kids team, and how many confirmed people it needs at each service time. */
+/** `name`: the team's display name when it was marked, local only, so Church rules can list it after it leaves the Sunday checked. */
+export interface KidsTeamSetting { team_id: string; min_confirmed: number; name?: string }
 export interface SundayRules {
   /** Teams where the church expects a scheduled Sunday lead, by the lead's position name. */
   sundayLeads: { team_id: string; lead_position: string }[];
@@ -36,6 +44,12 @@ export interface SundayRules {
   checkInAfterSundaysInARow: number;
   /** Rooms the church has set a rule for. Absent or empty: none set. */
   rooms?: RoomRuleSetting[];
+  /** Teams the church marks as kids teams (core/src/kids-rules.ts). Absent or empty: none; no team is assumed. */
+  kidsTeams?: KidsTeamSetting[];
+  /** A current background check in Planning Center People before serving on a kids team. On unless set false. */
+  kidsBackgroundChecks?: boolean;
+  /** What the person said on finding cards (finding-feedback.ts). Read through feedbackOf, which checks every entry. */
+  feedback?: FeedbackEntry[];
 }
 /** Calendar, People and Groups reads (contract "v2 operations reads"). They never feed Services coverage. */
 export const OPERATIONS_COLLECTIONS: ReadonlySet<string> = new Set([
@@ -44,6 +58,9 @@ export const OPERATIONS_COLLECTIONS: ReadonlySet<string> = new Set([
   "calendar_conflicts",
 ]);
 export const isOperationsRead = (read: Pick<SundayRead, "collection">) => OPERATIONS_COLLECTIONS.has(read.collection);
+/** The People background-check read (kids-rules.ts). Reported by the kids rules; never Services coverage or the operations check. */
+export const KIDS_COLLECTIONS: ReadonlySet<string> = new Set(["people_background_checks"]);
+export const isKidsRead = (read: Pick<SundayRead, "collection">) => KIDS_COLLECTIONS.has(read.collection);
 /** The Services Organization read: only the church's time zone (core/src/church-time.ts). Not part of coverage. */
 export const ORGANIZATION_COLLECTION = "organization";
 export interface PositionLabel { position_id: string; team_id: string; name: string; interval: ServingInterval | null }
@@ -96,7 +113,7 @@ export function captureToCoverage(capture: SundayCapture, rules: SundayRules, no
   // Scopes: one per collection/team/person, from every page read for it.
   const grouped = new Map<string, SundayRead[]>();
   for (const read of capture.reads) {
-    if (read.collection === "plan" || read.collection === ORGANIZATION_COLLECTION || isOperationsRead(read)) continue;
+    if (read.collection === "plan" || read.collection === ORGANIZATION_COLLECTION || isOperationsRead(read) || isKidsRead(read)) continue;
     const id = scopeId(read);
     grouped.set(id, [...(grouped.get(id) ?? []), read]);
   }

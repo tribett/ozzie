@@ -8,7 +8,9 @@
 //   couple of minutes, the regular Sunday check's included → with an AI model, the template's
 //   procedure through the harness, each AI step paid from the run's grant → compare with the last
 //   run → an "Ozzie noticed" item, and a discreet notice only as the report policy says (quiet hours
-//   hold it, never drop it; pausing drops it) → end (native).
+//   hold it, never drop it; pausing drops it) → end (native). For changes the regular Sunday check
+//   handed over (handChanges), this run's notice is the one notice; the regular check sends its own only
+//   if this run doesn't decide one.
 //
 // Missed runs (Mac asleep, Ozzie not running, Planning Center not connected) are reported plainly
 // and caught up ONCE. A run that couldn't finish, or couldn't start, says so and is tried again
@@ -17,16 +19,17 @@
 // only at render). A written summary and a drafted note live in memory only, for this run of the app.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import {
-  changeEligible, dueNow, quietDeferral, refusedUntil, retryAt, scheduledSlots, TEMPLATES, type LocalState, type Plan, type Responsibility,
-  type RunTrigger, type TemplateId,
+  changeEligible, dueNow, includesSundayReady, quietDeferral, refusedUntil, retryAt, scheduledSlots, settledPlan, TEMPLATES, type LocalState, type Plan,
+  type Responsibility, type RunTrigger, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { FailureCode, ModelStep } from "../../../core/src/harness/contract.js";
 import { isTimeZone } from "../../../core/src/church-time.js";
-import type { QuietHours } from "../../../core/src/schedule.js";
+import { inQuietHours, type QuietHours } from "../../../core/src/schedule.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
+import { alwaysFor, briefTarget, feedbackOf, routeChanges, routeFindings, stableFindingKey } from "../../../core/src/finding-feedback.js";
 import { checkFailure, retryDenied, StepFailure, stepFailure, type Invoke } from "./harness-bridge.js";
 import type { KeyValueStore } from "./proactive.js";
 
@@ -88,7 +91,7 @@ export function responsibilityStep(runId: string, invoke: Invoke = nativeInvoke)
 export type NoticeKind = "briefing-ready" | "needs-decision" | "checked" | "couldnt-check";
 /** Why a check couldn't happen: a run's FailureCode, or the store refusing it (`unavailable`, `invalid`). */
 export type ItemCode = FailureCode | "unavailable" | "invalid";
-/** One "Ozzie noticed" entry. Name-free: counts, codes, times, and person ids inside changes. */
+/** One "Ozzie noticed" entry. Name-free: counts, codes, times, the run and plan ids, and person ids inside changes. */
 export interface NoticedItem {
   id: string;
   responsibility_id: string;
@@ -96,6 +99,10 @@ export interface NoticedItem {
   at: string;
   kind: "found" | "clear" | "briefing" | "couldnt-check" | "missed" | "limit" | "ended";
   trigger?: RunTrigger;
+  /** found / clear / briefing: the run that reported it (the native store's run id). */
+  run_id?: string;
+  /** found / clear / briefing: the Sunday plan its check read, and when that check finished. */
+  check?: { plan_id: string; completed_at: string };
   /** missed / couldnt-check: the scheduled time it was about. */
   scheduled_for?: string;
   missed_reason?: "asleep" | "closed" | "waiting" | "unknown";
@@ -116,9 +123,21 @@ export interface NoticedItem {
   /** Notes ready to review on the Sunday page, plus any the AI drafted. */
   drafts?: number;
   summarized?: boolean;
+  /** The AI drafted a note (one of `drafts`). */
+  drafted?: boolean;
   /** ended: the date it was for. */
   until?: string;
-  notice?: "sent" | "held" | "sent-later" | "in-app" | "unavailable" | "none";
+  /** It came up during quiet hours: the morning briefing labels it Overnight. */
+  overnight?: boolean;
+  /** briefing: how many items came up overnight since the last briefing. */
+  overnight_count?: number;
+  /** briefing: Thursday's, which includes the full Sunday Ready brief. */
+  sunday_ready?: boolean;
+  /**
+   * "briefing": kept for the briefing by the person's Church rules ("Put this in the briefing").
+   * "in-briefing": held for quiet hours, then brought into the morning briefing instead of its own notice.
+   */
+  notice?: "sent" | "held" | "sent-later" | "in-app" | "unavailable" | "briefing" | "in-briefing" | "none";
 }
 /** What a run with an AI model prepared, restored on this Mac. Kept in memory only. */
 export interface Prepared { status: "verified" | "failed" | "cancelled"; code: FailureCode | null; summary: string | null; draft: string | null; ai_steps: number }
@@ -136,6 +155,8 @@ export interface RunnerContext {
   /** Quiet hours follow this Mac's clock, as they always have. */
   macZone: string;
   quiet: QuietHours;
+  /** The person let urgent notices through quiet hours (What runs automatically); Ozzie never widens it. */
+  urgentDuringQuiet?: boolean;
   urgentWithinHours: number;
   modelReady: boolean;
 }
@@ -190,8 +211,15 @@ export interface Runner {
   refresh(): Promise<void>;
   tick(): Promise<void>;
   wake(sleptMs: number, at: string): void;
-  /** Changes the regular Sunday check found: an eligible responsibility runs sooner. */
-  changes(changes: readonly SundayChange[]): Promise<void>;
+  /** Whether an eligible responsibility would run sooner for these changes now (what `changes` checks first). */
+  takes(changes: readonly SundayChange[]): boolean;
+  /**
+   * Changes the regular Sunday check found: an eligible responsibility runs sooner. Resolves true when Keep
+   * Sunday covered ran for the Sunday in `about` and decided the notice itself (sent it, held it for quiet
+   * hours or kept it for the briefing); false when nothing ran, or its run was refused, failed, was paused
+   * or decided nothing, so the regular check's own notice goes out instead.
+   */
+  changes(changes: readonly SundayChange[], about?: HandedChanges): Promise<boolean>;
   /** A check the app just made (the regular Sunday check's included): runs within a couple of minutes share it. */
   captured(capture: SundayCapture): void;
   /** "Pause everything" changed somewhere else (the menu bar): takes effect at once, not after a running run. */
@@ -208,9 +236,22 @@ export interface Runner {
   view(): RunnerView;
   subscribe(listener: () => void): () => void;
 }
-export type RunResult = { status: "ok" | "failed"; code: FailureCode | null; noticed: number; drafts: number } | { status: "refused"; code: Refusal } | { status: "skipped" };
+export type RunResult = {
+  status: "ok" | "failed"; code: FailureCode | null; noticed: number; drafts: number;
+  /** ok: the Sunday plan whose notice this run decided (sent, held or kept for the briefing), if it decided one. */
+  decided_for?: string;
+} | { status: "refused"; code: Refusal } | { status: "skipped" };
+/**
+ * What the regular Sunday check says about changes it hands over: the Sunday they are about, and whether it
+ * has a notice of its own to send if the responsibility doesn't decide one.
+ */
+export interface HandedChanges { plan_id: string; notice: boolean }
 
-const KEYS = { state: "ozzie.responsibilities.state.v1", noticed: "ozzie.responsibilities.noticed.v1", seen: "ozzie.responsibilities.seen.v1", held: "ozzie.responsibilities.held.v1" };
+const KEYS = {
+  state: "ozzie.responsibilities.state.v1", noticed: "ozzie.responsibilities.noticed.v1", seen: "ozzie.responsibilities.seen.v1", held: "ozzie.responsibilities.held.v1",
+  /** Responsibilities already moved to the settled defaults, so a person's later choice of the old time stays. */
+  settled: "ozzie.responsibilities.settled.v1",
+};
 const NOTICED_KEPT = 30;
 const REPORTED_KEPT = 60;
 const WAKES_KEPT = 10;
@@ -233,17 +274,12 @@ const NOTICE_RANK: Record<NoticeKind, number> = { "couldnt-check": 0, checked: 1
 const CANCELLED = Symbol("cancelled");
 const rateLimited = (value: unknown) => (JSON.stringify(value) ?? "").includes("rate-limited");
 
+/** One finding a run reports, by its stable key and kind (for the person's Church rules on notices). Ids only. */
+export interface FoundKey { key: string; kind: string; tone: "decision" | "look" }
 /**
- * A room or follow-up finding's id without its workspace, organization and access epoch (which change
- * from check to check), so the same overlap or follow-up is recognized again.
+ * What one fresh check shows for a template. Counts and keys (ids) only. The person's Church rules
+ * already set aside what they asked Ozzie to stop flagging; notes their "Always do this" prepares count as drafts.
  */
-function stableKey(findingId: string): string {
-  try {
-    const parts = JSON.parse(findingId) as unknown;
-    return Array.isArray(parts) && parts.length > 3 ? JSON.stringify(parts.slice(3)) : findingId;
-  } catch { return findingId; }
-}
-/** What one fresh check shows for a template. Counts and keys (ids) only. */
 export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string) {
   const brief = buildSundayBrief(capture, rules, now);
   const ops = TEMPLATES[template].needs.includes("operations") || template === "morning-briefing" ? sundayOperations(capture, rules, { now }) : null;
@@ -251,18 +287,36 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
   const followUps = ops?.result?.findings.filter(f => f.kind === "unowned-overdue") ?? [];
   const groups = ops?.group_meetings ?? [];
   const decisions = brief.findings.filter(f => f.tone === "decision"), looks = brief.findings.filter(f => f.tone === "look");
-  const drafts = brief.findings.filter(f => f.kind === "needs-people" && (f.people?.suggestions.length ?? 0) > 0).length;
+  const entries = feedbackOf(rules);
+  const always = brief.findings.filter(f => alwaysFor(entries, briefTarget(f, capture.plan_id))).length;
+  const drafts = brief.findings.filter(f => f.kind === "needs-people" && (f.people?.suggestions.length ?? 0) > 0).length + always;
+  const roomKeys = rooms.map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: f.certainty === "confirmed" ? "decision" : "look" }));
+  const followUpKeys = followUps.map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: "decision" }));
+  const decisionKeys = decisions.map((f): FoundKey => ({ key: f.key, kind: f.kind, tone: f.tone }));
+  const keyed = (found: FoundKey[]) => ({ found, keys: found.map(f => f.key) });
   switch (template) {
-    case "watch-room-bookings": return { decisions: 0, looks: 0, findings: { rooms: rooms.length }, keys: rooms.map(f => stableKey(f.finding_id)), drafts: 0 };
-    case "follow-ups-without-owner": return { decisions: 0, looks: 0, findings: { follow_ups: followUps.length }, keys: followUps.map(f => stableKey(f.finding_id)), drafts: 0 };
-    case "group-night-clashes": return { decisions: 0, looks: groups.length, findings: { groups: groups.length }, keys: groups.map(g => `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`), drafts: 0 };
+    case "watch-room-bookings": return { decisions: 0, looks: 0, findings: { rooms: rooms.length }, ...keyed(roomKeys), drafts: 0 };
+    case "follow-ups-without-owner": return { decisions: 0, looks: 0, findings: { follow_ups: followUps.length }, ...keyed(followUpKeys), drafts: 0 };
+    case "group-night-clashes": return {
+      decisions: 0, looks: groups.length, findings: { groups: groups.length }, drafts: 0,
+      ...keyed(groups.map((g): FoundKey => ({ key: `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`, kind: "group-meeting", tone: "look" }))),
+    };
     case "morning-briefing": return {
       decisions: decisions.length, looks: looks.length, findings: { rooms: rooms.length, follow_ups: followUps.length, groups: groups.length },
-      keys: decisions.map(f => f.key), drafts,
+      ...keyed(decisionKeys), drafts,
     };
-    default: return { decisions: decisions.length, looks: looks.length, findings: {}, keys: decisions.map(f => f.key), drafts };
+    default: return { decisions: decisions.length, looks: looks.length, findings: {}, ...keyed(decisionKeys), drafts };
   }
 }
+
+/**
+ * The regular Sunday check's onChanges. What got worse goes to Keep Sunday covered when it would run for it
+ * now; the regular check then leaves the notice to that run and sends its own only if the run didn't decide
+ * one (proactive.ts afterCapture). Otherwise nothing is handed over and the regular check's notice goes out
+ * as it always has.
+ */
+export const handChanges = (runner: Pick<Runner, "takes" | "changes">) =>
+  (changes: readonly SundayChange[], about: HandedChanges): Promise<boolean> | undefined => runner.takes(changes) ? runner.changes(changes, about) : undefined;
 
 export function createRunner(deps: RunnerDeps): Runner {
   let hooks: RunnerHooks | null = null;
@@ -301,8 +355,14 @@ export function createRunner(deps: RunnerDeps): Runner {
   });
   let snapshot = build();
   const emit = () => { save(); snapshot = build(); listeners.forEach(l => l()); };
+  /** During quiet hours (this Mac's clock, as notices follow it): the morning briefing labels it Overnight. */
+  const overnight = (at: string) => {
+    const ctx = hooks?.context();
+    return Boolean(ctx && inQuietHours(ctx.quiet, at, ctx.macZone));
+  };
   const add = (item: Omit<NoticedItem, "id">): NoticedItem => {
-    const full = { ...item, id: `${item.responsibility_id}:${item.at}:${item.kind}` };
+    const marked = item.kind !== "briefing" && item.kind !== "ended" && item.kind !== "clear" && overnight(item.at) ? { ...item, overnight: true } : item;
+    const full = { ...marked, id: `${item.responsibility_id}:${item.at}:${item.kind}` };
     noticed = [full, ...noticed.filter(i => i.id !== full.id)].slice(0, NOTICED_KEPT);
     return full;
   };
@@ -376,12 +436,16 @@ export function createRunner(deps: RunnerDeps): Runner {
     return !listing.paused_all && listing.items.find(r => r.id === id)?.status === "active";
   }
 
-  async function notice(kind: NoticeKind, item: NoticedItem, trigger: RunTrigger, id: string) {
+  /**
+   * `urgent`: inside the church's window, or a kind the person asked to hear about right away. Quiet hours
+   * still hold it unless the person chose to let urgent notices through; Ozzie never widens that itself.
+   */
+  async function notice(kind: NoticeKind, item: NoticedItem, trigger: RunTrigger, id: string, urgent = false) {
     // A person who just asked is already looking.
     if (trigger === "start" || trigger === "manual") { patch(item.id, { notice: "in-app" }); return; }
     if (!await stillActive(id)) { patch(item.id, { notice: "none" }); return; }
     const ctx = hooks!.context();
-    const decision = quietDeferral(deps.now(), ctx.quiet, ctx.macZone);
+    const decision = urgent && ctx.urgentDuringQuiet === true ? { send: true as const } : quietDeferral(deps.now(), ctx.quiet, ctx.macZone);
     if (!decision.send) {
       held = [...held.filter(h => h.kind !== kind), { kind, at: decision.at, item: item.id }];
       patch(item.id, { notice: "held" });
@@ -403,6 +467,41 @@ export function createRunner(deps: RunnerDeps): Runner {
       patch(h.item, { notice: outcome });
       if (h.kind === "briefing-ready") openToday = true;
     }
+  }
+  /**
+   * The morning briefing brings in what came up overnight (owner decision, October 26): notices held for
+   * quiet hours become part of it instead of a catch-up flood of their own. Returns how many items came up
+   * overnight since the last briefing.
+   */
+  function foldIntoBriefing(briefing: NoticedItem): number {
+    for (const h of held) patch(h.item, { notice: "in-briefing" });
+    held = [];
+    const previous = noticed.find(i => i.kind === "briefing" && i.id !== briefing.id && i.at < briefing.at);
+    return noticed.filter(i => i.overnight && i.id !== briefing.id && i.at <= briefing.at && (!previous || i.at > previous.at)).length;
+  }
+  /** A morning briefing due now (and able to run) gathers held notices itself. */
+  function briefingDue(ready: boolean): boolean {
+    if (!ready || !listing || listing.paused_all) return false;
+    const now = deps.now();
+    return listing.items.some(r => r.template === "morning-briefing" && dueNow(r, stateOf(r.id), now, zoneOf(r), options()).due);
+  }
+  /**
+   * A saved morning briefing still on the earlier default time and days moves to the settled default
+   * (7:00 AM weekdays), once: a person who later picks the old time keeps it.
+   */
+  async function settleDefaults() {
+    if (!listing) return;
+    const done = new Set(read<string[]>(deps.store, KEYS.settled) ?? []);
+    let changed = false;
+    for (const r of listing.items) {
+      if (done.has(r.id)) continue;
+      const plan = settledPlan(r, zoneOf(r));
+      if (!plan) continue;
+      done.add(r.id);
+      changed = true;
+      try { await deps.native.edit(r.id, plan); log(`responsibility: settled defaults template=${r.template}`); } catch { /* it keeps its saved time */ }
+    }
+    if (changed) { deps.store.set(KEYS.settled, JSON.stringify([...done].slice(-50))); await refresh(); }
   }
 
   function missedReason(slot: string, s: Saved): NonNullable<NoticedItem["missed_reason"]> {
@@ -442,7 +541,12 @@ export function createRunner(deps: RunnerDeps): Runner {
     }
   }
 
-  async function run(r: Responsibility, trigger: RunTrigger, slot: string | null, missed: string[]): Promise<RunResult> {
+  /**
+   * `fallback`: changes the regular Sunday check handed over with a notice of its own to send if this run
+   * doesn't decide one. Then a run that can't finish says so in Ozzie without a notice of its own: the
+   * regular check's notice is the one the person gets.
+   */
+  async function run(r: Responsibility, trigger: RunTrigger, slot: string | null, missed: string[], fallback = false): Promise<RunResult> {
     if (!hooks) return { status: "skipped" };
     const started = deps.now();
     const s = stateOf(r.id);
@@ -465,7 +569,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (broken) {
         // The store couldn't be read, or refused the plan as saved: say so, and try again later.
         const item = add({ responsibility_id: r.id, template: r.template, at: started, kind: "couldnt-check", code, retry_at: until, scheduled_for: slot ?? started, trigger });
-        if (s.failures === 0) await notice("couldnt-check", item, trigger, r.id);
+        if (s.failures === 0 && !fallback) await notice("couldnt-check", item, trigger, r.id);
         else patch(item.id, { notice: "none" });
       }
       return { status: "refused", code };
@@ -490,7 +594,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       log(`responsibility: run status=failed code=${code} noticed=0 drafts=0`);
       const item = add({ responsibility_id: r.id, template: r.template, at: deps.now(), kind: "couldnt-check", code, retry_at: retry, scheduled_for: slot ?? started, trigger, ...(access ? { access } : {}) });
       // Reported once per streak; retries continue quietly.
-      if (failures === 1) await notice("couldnt-check", item, trigger, r.id);
+      if (failures === 1 && !fallback) await notice("couldnt-check", item, trigger, r.id);
       else patch(item.id, { notice: "none" });
       return { status: "failed", code, noticed: 0, drafts: 0 };
     };
@@ -516,24 +620,41 @@ export function createRunner(deps: RunnerDeps): Runner {
       }
       const reported = new Set(stateOf(r.id).reported);
       const newKeys = found.keys.filter(k => !reported.has(k));
-      const worse = changes.some(c => c.effect === "worse");
+      // The person's Church rules on notices: "Put this in the briefing" keeps a kind out of them; "Always
+      // tell me right away" marks it urgent; what they asked Ozzie to stop flagging is left out altogether.
+      const entries = feedbackOf(ctx.rules);
+      const routed = routeChanges(changes, entries);
+      const listed = changes.filter(c => !routed.stopped.includes(c));
+      const worse = listed.some(c => c.effect === "worse");
       const count = found.decisions + found.looks + (found.findings.rooms ?? 0) + (found.findings.follow_ups ?? 0) + (r.template === "group-night-clashes" ? 0 : (found.findings.groups ?? 0));
       const drafts = found.drafts + (ready?.draft ? 1 : 0);
-      const kind: NoticedItem["kind"] = r.template === "morning-briefing" ? "briefing" : count > 0 || worse ? "found" : "clear";
+      const briefing = r.template === "morning-briefing";
+      const kind: NoticedItem["kind"] = briefing ? "briefing" : count > 0 || worse ? "found" : "clear";
       const item = add({
-        responsibility_id: r.id, template: r.template, at: now, kind, trigger, decisions: found.decisions, looks: found.looks, findings: found.findings,
-        changes, drafts, summarized: Boolean(ready?.summary),
+        responsibility_id: r.id, template: r.template, at: now, kind, trigger, run_id: grant.run_id, check: { plan_id: capture.plan_id, completed_at: capture.completed_at },
+        decisions: found.decisions, looks: found.looks, findings: found.findings,
+        changes: listed, drafts, summarized: Boolean(ready?.summary), drafted: Boolean(ready?.draft), ...(briefing && includesSundayReady(now, zoneOf(r)) ? { sunday_ready: true } : {}),
       });
       if (ready?.summary || ready?.draft) prepared[item.id] = { summary: ready.summary, draft: ready.draft };
       saved[r.id] = { ...stateOf(r.id), failures: 0, retry_at: null, memory, reported: [...new Set([...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
-      const noticeKind: NoticeKind | null = r.template === "morning-briefing" ? "briefing-ready"
-        : r.report === "every-check" ? (count > 0 ? "needs-decision" : "checked")
-          : newKeys.length > 0 || worse ? "needs-decision" : null;
-      if (noticeKind) await notice(noticeKind, item, trigger, r.id);
-      else patch(item.id, { notice: "none" });
+      if (briefing) {
+        const n = foldIntoBriefing(item);
+        if (n) patch(item.id, { overnight_count: n });
+      }
+      const fresh = routeFindings(found.found.filter(f => newKeys.includes(f.key)), entries);
+      const kept = routeFindings(found.found, entries);
+      const urgent = routed.urgent || fresh.urgent;
+      const noticeKind: NoticeKind | null = briefing ? "briefing-ready"
+        : r.report === "every-check" ? (count > kept.briefing.length ? "needs-decision" : "checked")
+          : fresh.notify.length > 0 || routed.notify.length > 0 ? "needs-decision" : null;
+      const briefingOnly = fresh.briefing.length + routed.briefing.length > 0 && trigger !== "start" && trigger !== "manual";
+      if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent);
+      else patch(item.id, { notice: briefingOnly ? "briefing" : "none" });
       await deps.native.end(r.id, grant.run_id, "ok", null, count, drafts).catch(() => undefined);
       log(`responsibility: run status=ok code=- noticed=${count} drafts=${drafts}${ready ? ` summary=${ready.status}` : ""}`);
-      return { status: "ok", code: null, noticed: count, drafts };
+      // "none": nothing new for this run to tell, or paused before its notice. Anything else is a decision.
+      const decided = noticed.find(i => i.id === item.id)?.notice;
+      return { status: "ok", code: null, noticed: count, drafts, ...(decided && decided !== "none" ? { decided_for: capture.plan_id } : {}) };
     } catch (error) {
       if (error === CANCELLED || abort.signal.aborted) {
         // Paused while it ran: it ends as cancelled, quietly; nothing is retried or announced.
@@ -574,7 +695,9 @@ export function createRunner(deps: RunnerDeps): Runner {
   async function tickOnce() {
     if (!hooks) return;
     await refresh();
-    await deliverHeld();
+    await settleDefaults();
+    // A morning briefing about to run brings held notices in with it, rather than sending them first.
+    if (!briefingDue(hooks.context().ready)) await deliverHeld();
     if (listing && !listing.paused_all) {
       const ctx = hooks.context();
       for (const r of listing.items) {
@@ -601,6 +724,13 @@ export function createRunner(deps: RunnerDeps): Runner {
     busy = mine.catch(() => undefined);
     return mine;
   }
+  /** A change brings this responsibility's run sooner now: not held back by a refusal or a slow-down. */
+  function runsFor(r: Responsibility, changes: readonly SundayChange[]): boolean {
+    const s = stateOf(r.id);
+    if (s.not_before && ms(deps.now()) < ms(s.not_before)) return false;
+    if (slowing() && !shared()) return false;
+    return changeEligible(r, s, changes, deps.now(), options());
+  }
   /** After Pause / Pause everything (or their resume) changed in the store: at once, never after a running run. */
   async function afterPause(paused: boolean, id?: string) {
     if (paused) {
@@ -626,18 +756,20 @@ export function createRunner(deps: RunnerDeps): Runner {
       wakes.splice(WAKES_KEPT);
       void serial(tickOnce);
     },
-    changes(changes) {
+    takes: changes => Boolean(hooks && listing && !listing.paused_all && hooks.context().ready && listing.items.some(r => runsFor(r, changes))),
+    changes(changes, about) {
       return serial(async () => {
-        if (!hooks || !listing || listing.paused_all || !hooks.context().ready) return;
+        if (!hooks || !listing || listing.paused_all || !hooks.context().ready) return false;
+        let decided = false;
         for (const r of listing.items) {
           if (listing?.paused_all) break;
-          const s = stateOf(r.id);
-          if (s.not_before && ms(deps.now()) < ms(s.not_before)) continue;
-          if (slowing() && !shared()) continue;
-          if (changeEligible(r, s, changes, deps.now(), options())) await run(r, "change", null, []);
+          if (!runsFor(r, changes)) continue;
+          const result = await run(r, "change", null, [], about?.notice === true);
+          if (about && r.template === "keep-sunday-covered" && result.status === "ok" && result.decided_for === about.plan_id) decided = true;
         }
         scheduleNext();
         emit();
+        return decided;
       });
     },
     captured,

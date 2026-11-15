@@ -26,8 +26,9 @@ export function verifyAnswer(answer: string, evidence: readonly ToolEnvelope[]):
   const known = new Set(evidence.flatMap(e => [...idsIn(e)]));
   if (!parsed.facts.every(id => known.has(id)) || (parsed.draft !== null && !known.has(parsed.draft))) return { ok: false, code: "fidelity" };
   if (parsed.answer === "nothing-needs-a-decision") {
-    const overview = evidence.filter(e => e.tool === "sunday.overview").map(e => (e.payload as { needs_a_decision?: unknown } | null)?.needs_a_decision);
-    if (!overview.length || overview.some(n => n !== 0)) return { ok: false, code: "fidelity" };
+    const overview = evidence.filter(e => e.tool === "sunday.overview").map(e => e.payload as { needs_a_decision?: unknown; kept_on_this_mac?: unknown } | null);
+    // Findings kept on this Mac (background checks) aren't counted there, so "nothing" can't be said while any may exist.
+    if (!overview.length || overview.some(p => p?.needs_a_decision !== 0 || p?.kept_on_this_mac !== undefined)) return { ok: false, code: "fidelity" };
   }
   return { ok: true, answer: answerText(parsed) };
 }

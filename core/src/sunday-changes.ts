@@ -48,6 +48,8 @@ export interface SundayChange {
   /** "urgent": a required role lost confirmed coverage inside the church's window before the service. */
   urgency: "urgent" | "attention" | "none";
   position?: string;
+  /** The team it is about, so a Church rule scoped to a team or role can recognize it. */
+  team_id?: string;
   person_id?: string;
   from?: number; to?: number;
   failed_reads?: number;
@@ -143,7 +145,7 @@ export function diffSundayChecks(previous: SundayCheckRecord, next: SundayCheckR
     for (const before of previous.serving) {
       const after = current.get(before.assignment_id);
       const key = needKey(before.team_id, before.position);
-      const who = { position: before.position, ...(before.person_id ? { person_id: before.person_id } : {}) };
+      const who = { position: before.position, team_id: before.team_id, ...(before.person_id ? { person_id: before.person_id } : {}) };
       if (before.status === "C" && (!after || after.status === "D")) {
         lost.push(before);
         const kind = after ? "confirmed-declined" : "confirmed-removed";
@@ -158,27 +160,27 @@ export function diffSundayChecks(previous: SundayCheckRecord, next: SundayCheckR
 
   for (const [key, after] of Object.entries(next.positions)) {
     const before = previous.positions[key];
-    const position = after.name;
+    const position = after.name, team_id = after.team_id;
     // Open requests. A position new to the plan starts from zero.
     const from = before ? before.remaining : 0, to = after.remaining;
     if (from !== null && to !== null && from !== to) {
-      if (to > from) changes.push(worse({ id: `${from === 0 ? "need-opened" : "need-increased"}:${key}:${to}`, kind: from === 0 ? "need-opened" : "need-increased", position, from, to }, key, lostKeys.has(key)));
-      else if (to === 0) changes.push(better({ id: `need-filled:${key}`, kind: "need-filled", position, from, to }));
-      else changes.push(better({ id: `need-decreased:${key}:${to}`, kind: "need-decreased", position, from, to }));
+      if (to > from) changes.push(worse({ id: `${from === 0 ? "need-opened" : "need-increased"}:${key}:${to}`, kind: from === 0 ? "need-opened" : "need-increased", position, team_id, from, to }, key, lostKeys.has(key)));
+      else if (to === 0) changes.push(better({ id: `need-filled:${key}`, kind: "need-filled", position, team_id, from, to }));
+      else changes.push(better({ id: `need-decreased:${key}:${to}`, kind: "need-decreased", position, team_id, from, to }));
     }
     // Someone suggested before who no longer is, while the position still needs people.
     if (before && (to ?? 0) > 0) for (const [person, was] of Object.entries(before.people)) {
       const is = after.people[person];
       if (was !== "suggestion" || (is !== "possible-conflict" && is !== "excluded")) continue;
       const kind = is === "possible-conflict" ? "suggestion-conflict" : "suggestion-left-out";
-      changes.push(worse({ id: `${kind}:${key}:${person}`, kind, position, person_id: person }, key, false));
+      changes.push(worse({ id: `${kind}:${key}:${person}`, kind, position, team_id, person_id: person }, key, false));
     }
   }
   // The team's Sunday lead, only when both checks positively read it.
   for (const [key, after] of Object.entries(next.leads)) {
     const before = previous.leads[key]?.state;
-    if (before === "confirmed" && after.state === "missing") changes.push(worse({ id: `lead-missing:${key}`, kind: "lead-missing", position: after.name }, key, lostTeams.has(after.team_id)));
-    if (before === "missing" && after.state === "confirmed") changes.push(better({ id: `lead-confirmed:${key}`, kind: "lead-confirmed", position: after.name }));
+    if (before === "confirmed" && after.state === "missing") changes.push(worse({ id: `lead-missing:${key}`, kind: "lead-missing", position: after.name, team_id: after.team_id }, key, lostTeams.has(after.team_id)));
+    if (before === "missing" && after.state === "confirmed") changes.push(better({ id: `lead-confirmed:${key}`, kind: "lead-confirmed", position: after.name, team_id: after.team_id }));
   }
 
   if (latest.fully_read && !next.fully_read) changes.push(worse({ id: "coverage-unverified", kind: "coverage-unverified", failed_reads: next.failed_reads }, null, false));

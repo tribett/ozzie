@@ -2,16 +2,22 @@
 //! answered from a placeholder-only fact sheet.
 //!
 //! Open-source Ozzie lets a pastor use their own provider key or a local model; the managed
-//! route goes through Vercel AI Gateway with zero data retention required on every request.
-//! All three speak the OpenAI Chat Completions format.
+//! route goes through ozzie.church with this Mac's device token (hosted.rs), which calls Vercel AI
+//! Gateway with zero data retention required on every request. The own and local routes speak the
+//! OpenAI Chat Completions format; ozzie.church takes the checked request and answers in it. Debug
+//! builds keep the managed route's earlier direct path to AI Gateway with the owner's key, used only
+//! when this Mac has no device token; release builds never read that key.
 //!
-//! Apart from Planning Center's OAuth sign-in endpoints (token exchange, refresh, revoke), these
-//! are the only non-GET requests Ozzie makes: one POST per call to the configured model
-//! provider. They never go to Planning Center, share no client or credential with the Planning
-//! Center paths, and carry only text that already passed a placeholder boundary in the webview
-//! and passes the native checks here. Keys are read from the Keychain here and never leave this
-//! module: not in errors, status or IPC.
+//! Apart from Planning Center's OAuth sign-in endpoints (token exchange, refresh, revoke) and
+//! Ozzie managed's connect and revoke (hosted.rs, which carry no church data), these are the only
+//! non-GET requests Ozzie makes: one POST per call to the configured model provider, or to
+//! ozzie.church for the managed route. They never go to Planning Center, share no client or
+//! credential with the Planning Center paths, and carry only text that already passed a
+//! placeholder boundary in the webview and passes the native checks here. Keys and the device
+//! token are read from the Keychain here and in hosted.rs and never leave them: not in errors,
+//! status or IPC.
 use crate::credentials::{StoreError, classify_status};
+use crate::hosted::{self, HostedConfig};
 use crate::name_guard::NameGuard;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -91,6 +97,15 @@ pub enum ModelError {
     /// Agent steps only: today's agent steps on this route (model.json `agent_steps_per_day`)
     /// are spent. Rewording and Ask never return it.
     DailyLimit,
+    /// Ozzie managed: the church's allowance on ozzie.church is spent, so AI help is paused until
+    /// it resets or the plan changes (HTTP 402 `allowance-paused`). Checks and briefings keep working.
+    AllowancePaused,
+    /// Ozzie managed: ozzie.church refused the request as holding a phone number or email address
+    /// (HTTP 400 `contact-detail`). Nothing went to the AI.
+    ContactDetail,
+    /// Ozzie managed, agent steps only: ozzie.church says the task has taken its model steps
+    /// (HTTP 429 `step-limit`).
+    StepLimit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,7 +170,7 @@ fn host_key(url: &url::Url) -> Option<String> {
     })
 }
 /// Planning Center and Church Center (its people-facing site), on any route.
-fn planning_center_host(host: &str) -> bool {
+pub(crate) fn planning_center_host(host: &str) -> bool {
     ["planningcenteronline.com", "churchcenter.com"]
         .iter()
         .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
@@ -380,8 +395,8 @@ impl RouteConfig {
     }
 }
 
-/// Read-only key source. Keys are added outside the app (macOS `security`) or by a later
-/// Settings flow; nothing here writes one.
+/// Read-only key source. Provider keys are added outside the app (macOS `security`); nothing here
+/// writes one. hosted.rs writes only Ozzie managed's device token (`hosted::TokenStore`).
 pub trait ModelKeys: Send + Sync {
     fn key(&self, account: &str) -> Result<Option<Zeroizing<String>>, StoreError>;
 }
@@ -415,6 +430,10 @@ fn key_for(
 ) -> Result<Option<Zeroizing<String>>, ModelError> {
     if config.route == Route::Local {
         return Ok(None);
+    }
+    // The owner's AI Gateway key is for development only: a release build never reads it.
+    if config.route == Route::Managed && !cfg!(debug_assertions) {
+        return Err(ModelError::NotConfigured);
     }
     let account = config.key_account().ok_or(ModelError::NotConfigured)?;
     match keys.key(&account) {
@@ -592,6 +611,7 @@ pub const ASK_SYSTEM: &str = concat!(
     "K: a person is scheduled this many Sundays in a row; the church rules suggest a check-in, which is about care, not performance. ",
     "G: part of the check couldn't be verified; then how many reads didn't complete, and s if the check is too old to treat as current. ",
     "U: a Sunday lead is scheduled for the role, but their answer or serving time couldn't be confirmed. ",
+    "A: a kids team has fewer confirmed people at a service time than the church rules ask; then the role, the time, how many are confirmed, how many the rules ask for, how many more are asked with no answer yet, how many more have a request not sent yet, and u if some confirmed people aren't placed at a time. Pending isn't counted, and ages aren't checked. ",
     "Lines under an N finding list people on that role's team; none means no one else on the team was found. ",
     "Each person line has s no overlap found, c possible conflict, v availability needs confirmation or x left out; then reasons: ",
     "t on the team with no overlap found, u an unanswered request elsewhere at this time, p penciled in elsewhere with the request not sent, q pending elsewhere at this time, o confirmed elsewhere at this time, b a blockout covers this time, r a blockout that can't be checked, a other schedules couldn't be read, e records say not on the team, not eligible or not available, n a detail couldn't be verified. ",
@@ -604,7 +624,9 @@ pub const ASK_SYSTEM: &str = concat!(
 pub const ASK_TAGS: (&str, &str) = ("ai-reporting-tags", "app:ozzie,route:managed,feature:ask");
 /// Separates the fact lines from the question; the last occurrence is the question.
 pub const QUESTION_PREFIX: &str = "\nQ | ";
-pub const MAX_ASK_SYSTEM_CHARS: usize = 4000;
+/// Bounds the fixed legend (compared byte for byte with ASK_SYSTEM anyway). 4000 until the kids-rule
+/// A line (2026-11-14) took it to about 4330.
+pub const MAX_ASK_SYSTEM_CHARS: usize = 4400;
 pub const MAX_ASK_USER_CHARS: usize = 8000;
 pub const MAX_ASK_QUESTION_CHARS: usize = 600;
 pub const MAX_ASK_TOKENS: u32 = 600;
@@ -1049,6 +1071,16 @@ fn finding_fields(fields: &[&str]) -> bool {
         ["W", role, when, who, "s" | "n"] => role_ok(role) && span_ok(when) && someone(who),
         ["K", who, sundays] => someone(who) && (count_ok(sundays) || *sundays == "?"),
         ["G", failed, "s" | "-"] => count_ok(failed),
+        // Kids rules: counts for a team. Background checks never reach a model (no B line).
+        ["A", role, when, confirmed, needed, asked, unsent]
+        | ["A", role, when, confirmed, needed, asked, unsent, "u"] => {
+            role_ok(role)
+                && span_ok(when)
+                && count_ok(confirmed)
+                && (count_ok(needed) || *needed == "?")
+                && count_ok(asked)
+                && count_ok(unsent)
+        }
         ["H", "o" | "n" | "e"] | ["H", "o" | "n" | "e", "r"] => true,
         _ => false,
     }
@@ -1164,11 +1196,18 @@ pub(crate) enum Spend {
 pub(crate) fn utc_day(unix_ms: u64) -> u64 {
     unix_ms / DAY_MS
 }
-/// One call's spend against the route's usage: refused when a cap is spent.
-fn spend_on(config: &RouteConfig, ledger: &mut Ledger, spend: Spend) -> Result<(), ModelError> {
+/// One call's spend against the route's usage: refused when a cap is spent. Through ozzie.church
+/// (`hosted`) the lifetime `call_cap` doesn't apply: the account's monthly allowance and its honest
+/// pause are the limit there (owner, 2026-10-26 / 2026-11-14). The daily agent-step cap still does.
+fn spend_on(
+    config: &RouteConfig,
+    ledger: &mut Ledger,
+    spend: Spend,
+    hosted: bool,
+) -> Result<(), ModelError> {
     let route = config.route;
     let usage = ledger.usage(route);
-    if route.paid() && usage.calls >= config.call_cap {
+    if route.paid() && !hosted && usage.calls >= config.call_cap {
         return Err(ModelError::Budget);
     }
     if let Spend::AgentStep { day } = spend {
@@ -1185,14 +1224,24 @@ fn spend_on(config: &RouteConfig, ledger: &mut Ledger, spend: Spend) -> Result<(
     usage.calls += 1;
     Ok(())
 }
-fn reserve(config: &RouteConfig, ledger: &Path, spend: Spend) -> Result<(), ModelError> {
-    update_ledger(ledger, |ledger| spend_on(config, ledger, spend))
+fn reserve(
+    config: &RouteConfig,
+    ledger: &Path,
+    spend: Spend,
+    hosted: bool,
+) -> Result<(), ModelError> {
+    update_ledger(ledger, |ledger| spend_on(config, ledger, spend, hosted))
 }
 /// Whether `reserve` would succeed now, without spending anything.
-fn affordable(config: &RouteConfig, ledger: &Path, spend: Spend) -> Result<(), ModelError> {
+fn affordable(
+    config: &RouteConfig,
+    ledger: &Path,
+    spend: Spend,
+    hosted: bool,
+) -> Result<(), ModelError> {
     let _lock = LEDGER.lock().unwrap_or_else(|e| e.into_inner());
     let mut ledger = read_ledger(ledger)?;
-    spend_on(config, &mut ledger, spend)
+    spend_on(config, &mut ledger, spend, hosted)
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1211,7 +1260,7 @@ impl Ledger {
     }
 }
 static LEDGER: Mutex<()> = Mutex::new(());
-fn read_small(path: &Path) -> io::Result<Option<Vec<u8>>> {
+pub(crate) fn read_small(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let file = match std::fs::File::open(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         result => result?,
@@ -1224,7 +1273,7 @@ fn read_small(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 /// Private file in a private folder, replaced atomically.
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -1276,23 +1325,58 @@ pub(crate) trait ModelHttp {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError>;
+    /// A GET with the key as a bearer token: only Ozzie managed's account status (hosted.rs) uses it.
+    fn get(&self, url: &str, key: Option<&str>) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
+        let _ = (url, key);
+        Err(ModelError::ProviderFailure)
+    }
 }
 pub(crate) struct NativeModelHttp(reqwest::blocking::Client);
 impl NativeModelHttp {
     pub(crate) fn new(route: Route) -> Result<Self, ModelError> {
+        // Plain http is only ever reachable for a validated loopback local model.
+        Self::build(route != Route::Local, Duration::from_secs(45))
+    }
+    /// The client for a request on `route`: the managed route's may reach a debug build's 127.0.0.1
+    /// server for Ozzie managed (`HostedConfig::https_only`); every other route's is `new`'s.
+    pub(crate) fn for_route(route: Route, hosted: &HostedConfig) -> Result<Self, ModelError> {
+        if route == Route::Managed {
+            Self::build(hosted.https_only(), Duration::from_secs(45))
+        } else {
+            Self::new(route)
+        }
+    }
+    /// Ozzie managed's connect, account and revoke requests.
+    pub(crate) fn hosted(hosted: &HostedConfig, timeout: Duration) -> Result<Self, ModelError> {
+        Self::build(hosted.https_only(), timeout)
+    }
+    fn build(https_only: bool, timeout: Duration) -> Result<Self, ModelError> {
         Ok(Self(
             reqwest::blocking::Client::builder()
-                // Plain http is only ever reachable for a validated loopback local model.
-                .https_only(route != Route::Local)
+                .https_only(https_only)
                 .no_proxy()
                 .retry(reqwest::retry::never())
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(45))
+                .timeout(timeout)
                 .user_agent("Ozzie (https://ozzie.church)")
                 .build()
                 .map_err(|_| ModelError::ProviderFailure)?,
         ))
+    }
+    fn read(
+        response: reqwest::blocking::Response,
+    ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
+        let status = response.status().as_u16();
+        let mut bytes = Zeroizing::new(Vec::new());
+        response
+            .take(MAX_RESPONSE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ModelError::ProviderFailure)?;
+        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(ModelError::ProviderFailure);
+        }
+        Ok((status, bytes))
     }
 }
 impl ModelHttp for NativeModelHttp {
@@ -1316,17 +1400,57 @@ impl ModelHttp for NativeModelHttp {
             request = request.bearer_auth(key);
         }
         let response = request.send().map_err(|_| ModelError::ProviderFailure)?;
-        let status = response.status().as_u16();
-        let mut bytes = Zeroizing::new(Vec::new());
-        response
-            .take(MAX_RESPONSE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ModelError::ProviderFailure)?;
-        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
-            return Err(ModelError::ProviderFailure);
-        }
-        Ok((status, bytes))
+        Self::read(response)
     }
+    fn get(&self, url: &str, key: Option<&str>) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
+        let mut request = self.0.get(url).header("Accept", "application/json");
+        if let Some(key) = key {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().map_err(|_| ModelError::ProviderFailure)?;
+        Self::read(response)
+    }
+}
+
+/// Where one request on the configured route goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Target {
+    /// `RouteConfig::endpoint` with the route's key: an own provider, a local model, and (debug
+    /// builds only, when this Mac has no device token) the managed route straight to AI Gateway.
+    Direct(String),
+    /// Ozzie managed through ozzie.church with this Mac's device token: the base URL.
+    Hosted(String),
+}
+/// The managed route goes through ozzie.church whenever a device token is saved. Without one, a
+/// debug build falls back to the direct gateway path and a release build is `not-configured`. Reads
+/// the Keychain for the token's presence, so callers run their request checks first.
+pub(crate) fn target(
+    config: &RouteConfig,
+    keys: &dyn ModelKeys,
+    hosted: &HostedConfig,
+) -> Result<Target, ModelError> {
+    let direct = config.endpoint()?;
+    if config.route != Route::Managed {
+        return Ok(Target::Direct(direct));
+    }
+    if hosted::connected(keys) {
+        return Ok(Target::Hosted(hosted.base.clone()));
+    }
+    if hosted.debug {
+        Ok(Target::Direct(direct))
+    } else {
+        Err(ModelError::NotConfigured)
+    }
+}
+/// The reword body ozzie.church takes: the exact checked request, its token limit capped as the
+/// direct body caps it. The server writes the Chat Completions request (zero data retention).
+fn hosted_reword_body(request: &DraftRequest) -> Result<Vec<u8>, ModelError> {
+    serde_json::to_vec(&json!({
+        "system": request.system,
+        "user": request.user,
+        "max_tokens": request.max_tokens.min(MAX_TOKENS),
+    }))
+    .map_err(|_| ModelError::InvalidRequest)
 }
 
 /// The model id goes out with every request: no name this session has shown in it.
@@ -1347,13 +1471,16 @@ pub fn reword(
     names: &NameGuard,
 ) -> Result<Reply, ModelError> {
     // Everything that can refuse without a client does so first.
+    let hosted = HostedConfig::current();
     config.endpoint()?;
     request_body(config, request)?;
     check_draft(request, names)?;
     check_model(config, names)?;
-    let http = NativeModelHttp::new(config.route)?;
-    reword_using(config, ledger, request, keys, names, &http)
+    let http = NativeModelHttp::for_route(config.route, &hosted)?;
+    reword_with(config, ledger, request, keys, names, &http, &hosted)
 }
+/// The current build's `HostedConfig`; tests choose one with the `_with` form.
+#[cfg(test)]
 pub(crate) fn reword_using(
     config: &RouteConfig,
     ledger: &Path,
@@ -1362,13 +1489,49 @@ pub(crate) fn reword_using(
     names: &NameGuard,
     http: &dyn ModelHttp,
 ) -> Result<Reply, ModelError> {
-    let url = config.endpoint()?;
-    let body = serde_json::to_vec(&request_body(config, request)?)
+    reword_with(
+        config,
+        ledger,
+        request,
+        keys,
+        names,
+        http,
+        &HostedConfig::current(),
+    )
+}
+pub(crate) fn reword_with(
+    config: &RouteConfig,
+    ledger: &Path,
+    request: &DraftRequest,
+    keys: &dyn ModelKeys,
+    names: &NameGuard,
+    http: &dyn ModelHttp,
+    hosted: &HostedConfig,
+) -> Result<Reply, ModelError> {
+    config.endpoint()?;
+    let direct = serde_json::to_vec(&request_body(config, request)?)
         .map_err(|_| ModelError::InvalidRequest)?;
     // Before any key, budget or network: the exact shape, and no remembered name.
     check_draft(request, names)?;
     check_model(config, names)?;
-    complete_using(config, ledger, &url, &body, MANAGED_TAGS, keys, http)
+    let (url, body, through) = match target(config, keys, hosted)? {
+        Target::Direct(url) => (url, direct, false),
+        Target::Hosted(base) => (
+            format!("{base}{}", hosted::REWORD_PATH),
+            hosted_reword_body(request)?,
+            true,
+        ),
+    };
+    complete_using(
+        config,
+        ledger,
+        &url,
+        &body,
+        MANAGED_TAGS,
+        keys,
+        http,
+        through,
+    )
 }
 
 /// Answers one Ask Ozzie question through the configured route.
@@ -1380,13 +1543,25 @@ pub fn ask(
     names: &NameGuard,
 ) -> Result<Reply, ModelError> {
     // Everything that can refuse without a client does so first.
+    let hosted = HostedConfig::current();
     config.endpoint()?;
     ask_body(config, request)?;
     check_ask(request, names)?;
     check_model(config, names)?;
+    ask_route_ok(config, &hosted)?;
     let http = NativeModelHttp::new(config.route)?;
-    ask_using(config, ledger, request, keys, names, &http)
+    ask_with(config, ledger, request, keys, names, &http, &hosted)
 }
+/// The fact-sheet Ask is the debug autopilot's comparison path: ozzie.church has no endpoint for it,
+/// so on the managed route it is a debug build's direct gateway path only.
+fn ask_route_ok(config: &RouteConfig, hosted: &HostedConfig) -> Result<(), ModelError> {
+    if config.route == Route::Managed && !hosted.debug {
+        return Err(ModelError::NotConfigured);
+    }
+    Ok(())
+}
+/// The current build's `HostedConfig`; tests choose one with the `_with` form.
+#[cfg(test)]
 pub(crate) fn ask_using(
     config: &RouteConfig,
     ledger: &Path,
@@ -1395,16 +1570,38 @@ pub(crate) fn ask_using(
     names: &NameGuard,
     http: &dyn ModelHttp,
 ) -> Result<Reply, ModelError> {
+    ask_with(
+        config,
+        ledger,
+        request,
+        keys,
+        names,
+        http,
+        &HostedConfig::current(),
+    )
+}
+pub(crate) fn ask_with(
+    config: &RouteConfig,
+    ledger: &Path,
+    request: &AskRequest,
+    keys: &dyn ModelKeys,
+    names: &NameGuard,
+    http: &dyn ModelHttp,
+    hosted: &HostedConfig,
+) -> Result<Reply, ModelError> {
     let url = config.endpoint()?;
     let body =
         serde_json::to_vec(&ask_body(config, request)?).map_err(|_| ModelError::InvalidRequest)?;
     // Before any key, budget or network: the Ask shape, and no remembered name anywhere.
     check_ask(request, names)?;
     check_model(config, names)?;
-    complete_using(config, ledger, &url, &body, ASK_TAGS, keys, http)
+    ask_route_ok(config, hosted)?;
+    complete_using(config, ledger, &url, &body, ASK_TAGS, keys, http, false)
 }
 
-/// Reword and Ask: one exchange, then the reply text and its token counts.
+/// Reword and Ask: one exchange, then the reply text and its token counts. `hosted`: the request
+/// goes to ozzie.church (`Exchange::hosted`).
+#[allow(clippy::too_many_arguments)]
 fn complete_using(
     config: &RouteConfig,
     ledger: &Path,
@@ -1413,8 +1610,19 @@ fn complete_using(
     tags: (&str, &str),
     keys: &dyn ModelKeys,
     http: &dyn ModelHttp,
+    hosted: bool,
 ) -> Result<Reply, ModelError> {
-    let value = exchange_using(config, ledger, url, body, tags, keys, http)?;
+    let exchange = Exchange {
+        config,
+        usage: ledger,
+        url,
+        body,
+        tags,
+        keys,
+        http,
+        hosted,
+    };
+    let value = exchange.send(Spend::Call, || Ok::<(), ModelError>(()))?;
     let text = value["choices"][0]["message"]["content"]
         .as_str()
         .filter(|text| {
@@ -1430,30 +1638,10 @@ fn complete_using(
     })
 }
 
-/// Key, call cap, one POST and the closed reason codes, shared by every request kind (rewording,
-/// Ask and agent steps), so all of them spend from one per-route cap. Callers have already checked
-/// the request. Returns the provider's JSON for the caller to read; it is never echoed in an error.
-pub(crate) fn exchange_using(
-    config: &RouteConfig,
-    ledger: &Path,
-    url: &str,
-    body: &[u8],
-    tags: (&str, &str),
-    keys: &dyn ModelKeys,
-    http: &dyn ModelHttp,
-) -> Result<Value, ModelError> {
-    let exchange = Exchange {
-        config,
-        usage: ledger,
-        url,
-        body,
-        tags,
-        keys,
-        http,
-    };
-    exchange.send(Spend::Call, || Ok(()))
-}
-/// One checked request on its way to the route.
+/// One checked request on its way to the route: key, call cap, one POST and the closed reason codes,
+/// shared by every request kind (rewording, Ask and agent steps), so all of them spend from one
+/// per-route cap. Callers have already checked the request and resolved its `Target`. The reply's
+/// JSON is returned for the caller to read; it is never echoed in an error.
 pub(crate) struct Exchange<'a> {
     pub config: &'a RouteConfig,
     /// The usage file (LEDGER_FILE).
@@ -1463,6 +1651,9 @@ pub(crate) struct Exchange<'a> {
     pub tags: (&'a str, &'a str),
     pub keys: &'a dyn ModelKeys,
     pub http: &'a dyn ModelHttp,
+    /// `Target::Hosted`: the device token instead of the route's key, no gateway reporting tags
+    /// (ozzie.church sets its own), and ozzie.church's refusals (`hosted::refusal`).
+    pub hosted: bool,
 }
 impl Exchange<'_> {
     /// The key, then the caps (looked at, not spent), then `before_send`, then the usage
@@ -1476,12 +1667,16 @@ impl Exchange<'_> {
         spend: Spend,
         before_send: impl FnOnce() -> Result<(), E>,
     ) -> Result<Value, E> {
-        let key = key_for(self.config, self.keys)?;
-        affordable(self.config, self.usage, spend)?;
+        let key = if self.hosted {
+            Some(hosted::device_token(self.keys)?)
+        } else {
+            key_for(self.config, self.keys)?
+        };
+        affordable(self.config, self.usage, spend, self.hosted)?;
         before_send()?;
-        reserve(self.config, self.usage, spend)?;
+        reserve(self.config, self.usage, spend, self.hosted)?;
         let tagged = [self.tags];
-        let headers: &[(&str, &str)] = if self.config.route == Route::Managed {
+        let headers: &[(&str, &str)] = if self.config.route == Route::Managed && !self.hosted {
             &tagged
         } else {
             &[]
@@ -1495,6 +1690,7 @@ impl Exchange<'_> {
             text.contains("RestrictedModelsError") || text.contains("no_providers_available")
         };
         let refused = match status {
+            _ if self.hosted => hosted::refusal(status, &bytes),
             200 => None,
             429 => Some(ModelError::RateLimited),
             _ if refused_model(&bytes) => Some(ModelError::ModelNotAllowed),
@@ -1505,8 +1701,41 @@ impl Exchange<'_> {
         if let Some(error) = refused {
             return Err(error.into());
         }
-        serde_json::from_slice(&bytes).map_err(|_| ModelError::ProviderFailure.into())
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| ModelError::ProviderFailure)?;
+        // Owner 2026-11-14: a route that requires zero data retention also requires AI Gateway's
+        // confirmation of it in the reply; without it the reply is refused and none of it is read.
+        // ozzie.church passes the gateway's reply through unchanged and refuses the same way, so
+        // this holds in the open core too. The call went out, so it stays spent with its tokens.
+        if self.config.zero_retention() && !retention_confirmed(&value) {
+            record_tokens(self.usage, self.config.route, &value);
+            return Err(ModelError::ProviderFailure.into());
+        }
+        Ok(value)
     }
+}
+
+/// Whether a reply confirms zero data retention: AI Gateway's provider metadata carries
+/// `gateway.enabledZeroDataRetention`, true when the request went only to zero-retention providers
+/// (Vercel docs, AI Gateway "Zero Data Retention"; live Chat Completions replies carry it at
+/// `choices[0].message.provider_metadata.gateway`, seen 2026-11-14). Looked for at the top level
+/// and on the first message, as `provider_metadata`, `providerMetadata` or bare `gateway`; every
+/// place that has the field must say exactly `true`, and at least one must. Mirrors web/'s
+/// `zeroRetention` (src/lib/hosted/gateway.ts).
+pub(crate) fn retention_confirmed(value: &Value) -> bool {
+    let message = &value["choices"][0]["message"];
+    let mut seen = false;
+    for at in [value, message] {
+        for holder in [&at["provider_metadata"], &at["providerMetadata"], at] {
+            if let Some(flag) = holder["gateway"].get("enabledZeroDataRetention") {
+                if flag != &Value::Bool(true) {
+                    return false;
+                }
+                seen = true;
+            }
+        }
+    }
+    seen
 }
 
 /// Adds a reply's reported token counts to the route's usage and returns them.
@@ -1563,15 +1792,26 @@ pub struct ModelStatus {
     pub route: &'static str,
     pub label: String,
     /// What is missing, as a closed code the app can explain: "ready"; "no-route" (no usable
-    /// model.json); "no-key" (nothing under `key_account`); or "own-key-not-bound" (an own-provider
+    /// model.json); "no-key" (nothing under `key_account`); "own-key-not-bound" (an own-provider
     /// key saved under the old account `own-provider`, which is bound to no host and never used:
-    /// save it again under `key_account`).
+    /// save it again under `key_account`); for the managed route, "not-connected" (this Mac isn't
+    /// connected to Ozzie managed) or "reconnect" (ozzie.church refused this Mac's connection).
     pub setup: &'static str,
     /// The Keychain account (service KEYCHAIN_SERVICE) this route's key belongs under; None for a
-    /// local model. Never a key.
+    /// local model and for Ozzie managed, whose device token the app saves itself. Never a key.
     pub key_account: Option<String>,
+    /// Ozzie managed on this Mac, whichever route is chosen: "not-connected", "connected" or
+    /// "reconnect" (`hosted::attach`; `status` alone looks only when the managed route is chosen).
+    pub managed: &'static str,
+    /// The church's plan and usage on ozzie.church, when connected and known (`hosted::attach`).
+    pub account: Option<hosted::Account>,
 }
 pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
+    status_for(dir, keys, cfg!(debug_assertions))
+}
+/// `debug`: a debug build, where the managed route may still go straight to AI Gateway with the
+/// owner's key when this Mac has no device token.
+pub(crate) fn status_for(dir: &Path, keys: &dyn ModelKeys, debug: bool) -> ModelStatus {
     let Some(config) = load_config(dir) else {
         return ModelStatus {
             configured: false,
@@ -1579,8 +1819,41 @@ pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
             label: "No AI model set up".into(),
             setup: "no-route",
             key_account: None,
+            managed: "not-connected",
+            account: None,
         };
     };
+    let host = config.host().unwrap_or_default();
+    if config.route == Route::Managed {
+        let connected = hosted::connected(keys);
+        // Debug builds only, and only without a device token: the owner's gateway key.
+        let gateway = !connected && debug && key_for(&config, keys).is_ok();
+        let label = if gateway {
+            format!(
+                "Ozzie managed AI straight to AI Gateway (developer build), zero data retention ({})",
+                config.model
+            )
+        } else {
+            "Ozzie managed AI through ozzie.church, zero data retention".to_owned()
+        };
+        return ModelStatus {
+            configured: connected || gateway,
+            route: config.route.name(),
+            label,
+            setup: if connected || gateway {
+                "ready"
+            } else {
+                "not-connected"
+            },
+            key_account: gateway.then(|| MANAGED_ACCOUNT.to_owned()),
+            managed: if connected {
+                "connected"
+            } else {
+                "not-connected"
+            },
+            account: None,
+        };
+    }
     let configured = key_for(&config, keys).is_ok();
     // Presence only: a key under the old unbound account is looked at, never used.
     let unbound = || matches!(keys.key(LEGACY_OWN_ACCOUNT), Ok(Some(key)) if usable_key(&key));
@@ -1589,11 +1862,9 @@ pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
         (false, Route::Own) if unbound() => "own-key-not-bound",
         (false, _) => "no-key",
     };
-    let host = config.host().unwrap_or_default();
     let label = match config.route {
-        Route::Managed => format!("Ozzie managed AI, zero data retention ({})", config.model),
         Route::Own => format!("Your AI provider at {host} ({})", config.model),
-        Route::Local => format!("AI model on this Mac ({})", config.model),
+        _ => format!("AI model on this Mac ({})", config.model),
     };
     ModelStatus {
         configured,
@@ -1601,6 +1872,8 @@ pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
         label,
         setup,
         key_account: config.key_account(),
+        managed: "not-connected",
+        account: None,
     }
 }
 

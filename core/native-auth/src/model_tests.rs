@@ -88,8 +88,20 @@ impl ModelHttp for FakeHttp {
         answer.map(|(status, body)| (status, Zeroizing::new(body.into_bytes())))
     }
 }
+/// AI Gateway's reply shape, with the zero data retention confirmation every live reply carries
+/// (`choices[0].message.provider_metadata.gateway.enabledZeroDataRetention`, seen 2026-11-14).
 fn ok_reply(text: &str) -> String {
-    json!({"choices":[{"message":{"role":"assistant","content":text}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}).to_string()
+    json!({"choices":[{"message":{"role":"assistant","content":text,"provider_metadata":{"gateway":{"enabledZeroDataRetention":true}}}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}).to_string()
+}
+/// `ok_reply` with the message's provider metadata replaced (None: removed).
+fn reply_with_metadata(text: &str, metadata: Option<Value>) -> String {
+    let mut value: Value = serde_json::from_str(&ok_reply(text)).unwrap();
+    let message = value["choices"][0]["message"].as_object_mut().unwrap();
+    match metadata {
+        Some(metadata) => message.insert("provider_metadata".into(), metadata),
+        None => message.remove("provider_metadata"),
+    };
+    value.to_string()
 }
 fn draft(system: &str, user: &str, max_tokens: u32) -> DraftRequest {
     DraftRequest {
@@ -573,7 +585,7 @@ fn provider_answers_map_to_the_closed_reason_codes() {
         ),
         (Ok((200, "not json".into())), ModelError::ProviderFailure),
         (
-            Ok((200, "{\"choices\":[]}".into())),
+            Ok((200, "{\"choices\":[],\"provider_metadata\":{\"gateway\":{\"enabledZeroDataRetention\":true}}}".into())),
             ModelError::ProviderFailure,
         ),
         (Ok((200, ok_reply(""))), ModelError::ProviderFailure),
@@ -581,7 +593,7 @@ fn provider_answers_map_to_the_closed_reason_codes() {
         (
             Ok((
                 200,
-                json!({"choices":[{"message":{"content":["x"]}}]}).to_string(),
+                json!({"choices":[{"message":{"content":["x"]}}],"provider_metadata":{"gateway":{"enabledZeroDataRetention":true}}}).to_string(),
             )),
             ModelError::ProviderFailure,
         ),
@@ -604,7 +616,7 @@ fn provider_answers_map_to_the_closed_reason_codes() {
     let dir = TempDir::new("nousage");
     let http = FakeHttp::answering(vec![Ok((
         200,
-        json!({"choices":[{"message":{"content":"[Volunteer A] OK"}}]}).to_string(),
+        json!({"choices":[{"message":{"content":"[Volunteer A] OK"}}],"provider_metadata":{"gateway":{"enabledZeroDataRetention":true}}}).to_string(),
     ))]);
     let reply = send(
         &RouteConfig::managed(),
@@ -1696,7 +1708,7 @@ fn pinned_facts(marker: &str) -> Vec<&'static str> {
 fn every_fact_line_the_webview_emits_fits_the_closed_grammar() {
     // core/test/ask-rich.ts uses every line kind; the fictional facts add s, c and E lines.
     let rich = pinned_facts("expect(rich.facts).toBe([");
-    assert_eq!(rich.len(), 22);
+    assert_eq!(rich.len(), 24);
     let lines: Vec<&str> = rich
         .iter()
         .copied()
@@ -1729,8 +1741,28 @@ fn every_fact_line_the_webview_emits_fits_the_closed_grammar() {
         "E2 | c | - | ? | u",
         "E3 | m | 2026-11-19 19:00 | n",
         "S | R | - | 0 | 0",
+        // Kids rules (core/src/kids-rules.ts).
+        "F4 | A | [Role 2] | 2026-11-22 09:30-10:30 | 1 | 2 | 1 | 0",
+        "F4 | A | [Role 2] | - | 0 | ? | 0 | 2 | u",
     ] {
         assert!(fact_line_ok(line), "{line:?}");
+    }
+    // No background-check line exists (they stay on the Mac), and a kids-team line carries counts only.
+    for line in [
+        "F5 | B | [Role 2] | 2026-11-22 09:30-10:30 | [Person 3] | n",
+        "F5 | B | [Role 2] | - | [Person 3] | e",
+        "F5 | B | [Role 2] | - | [Person 3] | n | u",
+        "F5 | B | [Role 2] | - | [Person 3] | complete_not_clear",
+        "F5 | B | [Role 2] | - | [Person 3] | n | 2027-01-05",
+        "F5 | B | [Role 2] | - | Riley | n",
+        "F5 | B | Nursery | - | [Person 3] | n",
+        "F5 | B | [Role 2] | - | [Person 3] | x",
+        "F4 | A | Nursery | - | 1 | 2 | 0 | 0",
+        "F4 | A | [Role 2] | - | one | 2 | 0 | 0",
+        "F4 | A | [Role 2] | - | 1 | 2 | 0",
+        "F4 | A | [Role 2] | - | 1 | 2 | 0 | 0 | adults",
+    ] {
+        assert!(!fact_line_ok(line), "{line:?}");
     }
 }
 
@@ -1978,7 +2010,8 @@ fn status_says_which_key_is_missing_and_where_it_belongs() {
     assert!(!text.contains(OWN_KEY) && !text.contains(UNBOUND_KEY));
     assert_eq!(status(&dir.0, &no_keys()).setup, "no-key");
     save_config(&dir.0, Route::Managed, None, None).unwrap();
-    assert_eq!(status(&dir.0, &no_keys()).setup, "no-key");
+    // The managed route is connected to, not keyed (hosted.rs); the gateway key is a debug build's.
+    assert_eq!(status(&dir.0, &no_keys()).setup, "not-connected");
     assert_eq!(status(&dir.0, &keys()).setup, "ready");
     save_config(&dir.0, Route::Local, None, None).unwrap();
     let local = status(&dir.0, &no_keys());
@@ -2161,4 +2194,425 @@ fn the_stricter_contact_rule_reads_written_out_addresses_and_long_spread_numbers
         );
     }
     assert_eq!(http.count(), 0);
+}
+
+// ---- Ozzie managed through ozzie.church (hosted.rs) ---------------------------------------------------
+
+const DEVICE_TOKEN: &str = crate::hosted::fake::FAKE_TOKENS[0];
+fn connected() -> crate::hosted::fake::MemoryKeys {
+    crate::hosted::fake::MemoryKeys::with(&[
+        (crate::hosted::MANAGED_TOKEN_ACCOUNT, DEVICE_TOKEN),
+        (MANAGED_ACCOUNT, GATEWAY_KEY),
+    ])
+}
+
+#[test]
+fn with_a_device_token_rewording_goes_to_ozzie_church_with_the_checked_request() {
+    let dir = TempDir::new("hosted-reword");
+    let keys = connected();
+    for (debug, max_tokens, sent_tokens) in [(false, 120, 120), (true, 900, MAX_TOKENS)] {
+        let http = FakeHttp::default();
+        let request = draft(SYSTEM, &user("Make it shorter.", NOTE), max_tokens);
+        let reply = reword_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &request,
+            &keys,
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(debug, None),
+        )
+        .unwrap();
+        assert_eq!(reply.text, "[Volunteer A] OK");
+        let sent = http.sent.lock().unwrap();
+        assert_eq!(sent[0].url, "https://ozzie.church/api/v1/reword");
+        assert_eq!(sent[0].key.as_deref(), Some(DEVICE_TOKEN));
+        assert!(sent[0].headers.is_empty());
+        assert_eq!(
+            sent[0].body,
+            json!({"system": SYSTEM, "user": request.user, "max_tokens": sent_tokens})
+        );
+    }
+    // Counted on the managed route as any call is.
+    assert_eq!(ledger(&dir)["managed"]["calls"], 2);
+    // The checks still run first: a remembered name is refused before the token is read.
+    let mut names = NameGuard::default();
+    names.remember(&["Riley Thornbury".to_owned()]);
+    let named = draft(
+        SYSTEM,
+        &user(
+            "Make it warmer.",
+            &NOTE.replace("[Volunteer A],", "[Volunteer A] and Riley,"),
+        ),
+        120,
+    );
+    let quiet = connected();
+    let http = FakeHttp::default();
+    assert_eq!(
+        reword_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &named,
+            &quiet,
+            &names,
+            &http,
+            &HostedConfig::from_env(false, None)
+        )
+        .err(),
+        Some(ModelError::NamePresent)
+    );
+    assert_eq!((http.count(), quiet.lookups.load(Ordering::SeqCst)), (0, 0));
+}
+
+#[test]
+fn a_paused_allowance_and_a_refused_token_are_closed_codes_on_rewording() {
+    let dir = TempDir::new("hosted-refusals");
+    let keys = connected();
+    for (status, body, expected) in [
+        (
+            402,
+            r#"{"error":"allowance-paused"}"#,
+            ModelError::AllowancePaused,
+        ),
+        (
+            401,
+            r#"{"error":"unauthorized"}"#,
+            ModelError::NotConfigured,
+        ),
+        // Each code the Mac can explain is its own (review of 2026-11-14), never provider-failure.
+        (429, r#"{"error":"rate-limited"}"#, ModelError::RateLimited),
+        (
+            400,
+            r#"{"error":"contact-detail"}"#,
+            ModelError::ContactDetail,
+        ),
+        (
+            400,
+            r#"{"error":"invalid-request"}"#,
+            ModelError::ProviderFailure,
+        ),
+        (
+            503,
+            "upstream said Riley Thornbury",
+            ModelError::ProviderFailure,
+        ),
+    ] {
+        let http = FakeHttp::answering(vec![Ok((status, body.into()))]);
+        let error = reword_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &plain(),
+            &keys,
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(false, None),
+        )
+        .err();
+        assert_eq!(error, Some(expected), "{status}");
+        let text = serde_json::to_string(&error).unwrap();
+        assert!(!text.contains("Riley") && !text.contains(DEVICE_TOKEN));
+    }
+    assert_eq!(
+        serde_json::to_string(&ModelError::AllowancePaused).unwrap(),
+        "\"allowance-paused\""
+    );
+}
+
+#[test]
+fn without_a_device_token_a_release_build_refuses_the_managed_route_and_never_reads_the_gateway_key()
+ {
+    let dir = TempDir::new("hosted-release");
+    let gateway_only = crate::hosted::fake::MemoryKeys::with(&[(MANAGED_ACCOUNT, GATEWAY_KEY)]);
+    let http = FakeHttp::default();
+    assert_eq!(
+        reword_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &plain(),
+            &gateway_only,
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(false, None),
+        )
+        .err(),
+        Some(ModelError::NotConfigured)
+    );
+    // The fact-sheet Ask has no hosted endpoint: on the managed route it is a debug build's only.
+    assert_eq!(
+        ask_with(
+            &RouteConfig::managed(),
+            &dir.ledger(),
+            &asking("Who could cover [Role 1]?"),
+            &gateway_only,
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(false, None),
+        )
+        .err(),
+        Some(ModelError::NotConfigured)
+    );
+    assert_eq!(http.count(), 0);
+    assert!(!dir.ledger().exists());
+    assert_eq!(
+        *gateway_only.looked.lock().unwrap(),
+        [crate::hosted::MANAGED_TOKEN_ACCOUNT]
+    );
+    // A debug build without a token keeps the direct gateway path; an own provider never looks for
+    // a device token.
+    reword_with(
+        &RouteConfig::managed(),
+        &dir.ledger(),
+        &plain(),
+        &gateway_only,
+        &NameGuard::default(),
+        &http,
+        &HostedConfig::from_env(true, None),
+    )
+    .unwrap();
+    assert_eq!(
+        http.sent.lock().unwrap()[0].url,
+        "https://ai-gateway.vercel.sh/v1/chat/completions"
+    );
+    let own = RouteConfig::new(
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("vendor/model-1"),
+    )
+    .unwrap();
+    let own_keys =
+        crate::hosted::fake::MemoryKeys::with(&[("own-provider:api.example.invalid", OWN_KEY)]);
+    reword_with(
+        &own,
+        &dir.ledger(),
+        &plain(),
+        &own_keys,
+        &NameGuard::default(),
+        &http,
+        &HostedConfig::from_env(false, None),
+    )
+    .unwrap();
+    assert_eq!(
+        *own_keys.looked.lock().unwrap(),
+        ["own-provider:api.example.invalid"]
+    );
+}
+
+#[test]
+fn status_says_whether_this_mac_is_connected_to_ozzie_managed() {
+    let dir = TempDir::new("hosted-status");
+    save_config(&dir.0, Route::Managed, None, None).unwrap();
+    let gateway_only = crate::hosted::fake::MemoryKeys::with(&[(MANAGED_ACCOUNT, GATEWAY_KEY)]);
+    // Release, not connected: nothing to type into Terminal, just connect.
+    let release = status_for(&dir.0, &gateway_only, false);
+    assert_eq!(
+        (
+            release.configured,
+            release.setup,
+            release.managed,
+            release.key_account.clone()
+        ),
+        (false, "not-connected", "not-connected", None)
+    );
+    assert_eq!(
+        release.label,
+        "Ozzie managed AI through ozzie.church, zero data retention"
+    );
+    // Connected: ready through ozzie.church, in either build, whatever else is saved.
+    for debug in [false, true] {
+        let ready = status_for(&dir.0, &connected(), debug);
+        assert_eq!(
+            (
+                ready.configured,
+                ready.setup,
+                ready.managed,
+                ready.key_account.clone()
+            ),
+            (true, "ready", "connected", None)
+        );
+        assert!(ready.label.contains("through ozzie.church"));
+        let text = serde_json::to_string(&ready).unwrap();
+        assert!(!text.contains(DEVICE_TOKEN) && !text.contains(GATEWAY_KEY));
+    }
+    // A debug build without a token, with the owner's key: the developer path, said so.
+    let developer = status_for(&dir.0, &gateway_only, true);
+    assert_eq!(
+        (
+            developer.configured,
+            developer.setup,
+            developer.key_account.as_deref()
+        ),
+        (true, "ready", Some(MANAGED_ACCOUNT))
+    );
+    assert!(developer.label.contains("developer build"));
+    assert!(developer.label.contains("zero data retention"));
+    // Neither: not connected.
+    assert_eq!(status_for(&dir.0, &no_keys(), true).setup, "not-connected");
+    // Own and local routes don't look for a device token.
+    save_config(&dir.0, Route::Local, None, None).unwrap();
+    let keys = connected();
+    let local = status_for(&dir.0, &keys, false);
+    assert_eq!(
+        (local.managed, keys.lookups.load(Ordering::SeqCst)),
+        ("not-connected", 0)
+    );
+}
+
+#[test]
+fn through_ozzie_church_the_monthly_allowance_is_the_limit_not_the_lifetime_call_cap() {
+    let dir = TempDir::new("hosted-cap");
+    let mut config = RouteConfig::managed();
+    config.call_cap = 1;
+    let request = draft(SYSTEM, &user("Make it shorter.", NOTE), 120);
+    // Hosted: past the lifetime cap, rewording still goes to ozzie.church (its allowance decides).
+    for _ in 0..3 {
+        let http = FakeHttp::default();
+        reword_with(
+            &config,
+            &dir.ledger(),
+            &request,
+            &connected(),
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(false, None),
+        )
+        .unwrap();
+        assert_eq!(http.count(), 1);
+    }
+    assert_eq!(ledger(&dir)["managed"]["calls"], 3);
+    // A debug build's direct gateway route (no device token) still stops at the cap.
+    let gateway_only = crate::hosted::fake::MemoryKeys::with(&[(MANAGED_ACCOUNT, GATEWAY_KEY)]);
+    let http = FakeHttp::default();
+    assert_eq!(
+        reword_with(
+            &config,
+            &dir.ledger(),
+            &request,
+            &gateway_only,
+            &NameGuard::default(),
+            &http,
+            &HostedConfig::from_env(true, None),
+        )
+        .err(),
+        Some(ModelError::Budget)
+    );
+    assert_eq!(http.count(), 0);
+}
+
+#[test]
+fn retention_confirmation_is_found_on_real_ai_gateway_replies() {
+    // Live replies recorded 2026-11-14 (ids removed): a text reply and a tool-call reply.
+    for live in [
+        include_str!("../../test/fixtures/gateway-live-text-2026-11-14.json"),
+        include_str!("../../test/fixtures/gateway-live-tool-2026-11-14.json"),
+    ] {
+        let value: Value = serde_json::from_str(live).unwrap();
+        assert!(retention_confirmed(&value));
+    }
+}
+
+#[test]
+fn retention_confirmation_is_read_wherever_ai_gateway_puts_it() {
+    let confirmed = json!({"gateway": {"enabledZeroDataRetention": true}});
+    let off = json!({"gateway": {"enabledZeroDataRetention": false}});
+    assert!(retention_confirmed(
+        &json!({"choices": [{"message": {"provider_metadata": confirmed}}]})
+    ));
+    assert!(retention_confirmed(
+        &json!({"provider_metadata": confirmed})
+    ));
+    assert!(retention_confirmed(
+        &json!({"choices": [{"message": {"providerMetadata": confirmed}}]})
+    ));
+    assert!(!retention_confirmed(&json!({"choices": [{"message": {}}]})));
+    assert!(!retention_confirmed(&json!({"choices": []})));
+    assert!(!retention_confirmed(&json!([1])));
+    assert!(!retention_confirmed(
+        &json!({"choices": [{"message": {"provider_metadata": off}}]})
+    ));
+    assert!(!retention_confirmed(&json!({"choices": [{"message": {
+        "provider_metadata": {"gateway": {"enabledZeroDataRetention": "true"}}
+    }}]})));
+    // One true can't outvote a false somewhere else.
+    assert!(!retention_confirmed(&json!({
+        "provider_metadata": confirmed,
+        "choices": [{"message": {"provider_metadata": off}}],
+    })));
+}
+
+#[test]
+fn a_gateway_reply_without_the_retention_confirmation_is_refused_and_still_spent() {
+    // Owner 2026-11-14: a managed or gateway reply that lacks the zero data retention
+    // confirmation is refused, not just warned about. Its text never reaches the caller.
+    let gateway_keys = crate::hosted::fake::MemoryKeys::with(&[
+        (MANAGED_ACCOUNT, GATEWAY_KEY),
+        ("own-provider:ai-gateway.vercel.sh", OWN_KEY),
+    ]);
+    let send_debug =
+        |config: &RouteConfig, dir: &TempDir, keys: &dyn ModelKeys, http: &FakeHttp| {
+            reword_with(
+                config,
+                &dir.ledger(),
+                &plain(),
+                keys,
+                &NameGuard::default(),
+                http,
+                &HostedConfig::from_env(true, None),
+            )
+        };
+    let gateway_routes = [
+        RouteConfig::managed(),
+        RouteConfig::new(
+            Route::Own,
+            Some("https://ai-gateway.vercel.sh/v1"),
+            Some("anthropic/claude-haiku-5.5"),
+        )
+        .unwrap(),
+    ];
+    for config in &gateway_routes {
+        assert!(config.zero_retention());
+        for metadata in [
+            None,
+            Some(json!({"gateway": {"enabledZeroDataRetention": false}})),
+            Some(json!({"gateway": {}})),
+        ] {
+            let dir = TempDir::new("zdr");
+            let http = FakeHttp::answering(vec![Ok((
+                200,
+                reply_with_metadata("[Volunteer A] OK", metadata.clone()),
+            ))]);
+            assert_eq!(
+                send_debug(config, &dir, &gateway_keys, &http).err(),
+                Some(ModelError::ProviderFailure),
+                "{:?} {metadata:?}",
+                config.route
+            );
+            assert_eq!(http.count(), 1);
+            // The request went out: the call is counted and its tokens recorded.
+            let route = config.route.name();
+            assert_eq!(ledger(&dir)[route]["calls"], 1);
+            assert_eq!(ledger(&dir)[route]["prompt_tokens"], 12);
+        }
+        let dir = TempDir::new("zdr-ok");
+        let http = FakeHttp::answering(vec![Ok((200, ok_reply("[Volunteer A] OK")))]);
+        let reply = send_debug(config, &dir, &gateway_keys, &http).unwrap();
+        assert_eq!(reply.text, "[Volunteer A] OK");
+    }
+    // Routes that aren't AI Gateway's don't send the requirement, so they aren't held to it.
+    for config in [
+        RouteConfig::new(
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("vendor/model-1"),
+        )
+        .unwrap(),
+        RouteConfig::new(Route::Local, None, None).unwrap(),
+    ] {
+        assert!(!config.zero_retention());
+        let dir = TempDir::new("zdr-other");
+        let http = FakeHttp::answering(vec![Ok((
+            200,
+            reply_with_metadata("[Volunteer A] OK", None),
+        ))]);
+        assert!(send_debug(&config, &dir, &keys(), &http).is_ok());
+    }
 }

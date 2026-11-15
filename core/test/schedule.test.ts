@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_QUIET_HOURS, DEFAULT_SCHEDULE, finishRun, holdNotice, inQuietHours, launchSchedule, newSchedule, noticeDecision,
-  parseClock, pauseSchedule, releaseHeld, resumeSchedule, retryDelayMs, rescheduleFor, startManual, tickSchedule,
+  DEFAULT_QUIET_HOURS, DEFAULT_SCHEDULE, EARLIER_DEFAULT_QUIET_HOURS, finishRun, holdNotice, inQuietHours, launchSchedule, newSchedule, noticeDecision,
+  parseClock, pauseSchedule, releaseHeld, resumeSchedule, retryDelayMs, rescheduleFor, settledQuietHours, startManual, tickSchedule,
   type ScheduleState,
 } from "../src/schedule.js";
 
@@ -165,15 +165,22 @@ describe("quiet hours and notices", () => {
     return new Date(Date.parse(`${day}T00:00:00Z`) + ((h! + 6) * 60 + m!) * 60_000).toISOString();
   };
 
-  it("defaults to 9:30 PM to 6:30 AM, in this Mac's local time, across midnight", () => {
-    expect(DEFAULT_QUIET_HOURS).toEqual({ start: "21:30", end: "06:30" });
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("21:29"), zone)).toBe(false);
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("21:30"), zone)).toBe(true);
+  it("defaults to 9:00 PM to 7:00 AM (owner, October 26), in this Mac's local time, across midnight", () => {
+    expect(DEFAULT_QUIET_HOURS).toEqual({ start: "21:00", end: "07:00" });
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("20:59"), zone)).toBe(false);
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("21:00"), zone)).toBe(true);
     expect(inQuietHours(DEFAULT_QUIET_HOURS, local("23:59"), zone)).toBe(true);
     expect(inQuietHours(DEFAULT_QUIET_HOURS, local("00:00"), zone)).toBe(true);
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("06:29"), zone)).toBe(true);
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("06:30"), zone)).toBe(false);
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("06:59"), zone)).toBe(true);
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, local("07:00"), zone)).toBe(false);
     expect(inQuietHours(DEFAULT_QUIET_HOURS, local("12:00"), zone)).toBe(false);
+  });
+
+  it("moves saved quiet hours to the settled default only when they still equal the earlier default", () => {
+    expect(EARLIER_DEFAULT_QUIET_HOURS).toEqual({ start: "21:30", end: "06:30" });
+    expect(settledQuietHours({ start: "21:30", end: "06:30" })).toEqual(DEFAULT_QUIET_HOURS);
+    expect(settledQuietHours({ start: "22:00", end: "06:30" })).toEqual({ start: "22:00", end: "06:30" });
+    expect(settledQuietHours({ start: "21:30", end: "07:00" })).toEqual({ start: "21:30", end: "07:00" });
   });
 
   it("supports daytime quiet hours, treats equal times as off, and rejects bad times", () => {
@@ -186,11 +193,11 @@ describe("quiet hours and notices", () => {
   });
 
   it("follows the Mac's time zone, including daylight saving", () => {
-    // 2026-07-01 02:00Z is 9:00 PM CDT (UTC-5): before quiet hours.
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-07-01T02:00:00Z", zone)).toBe(false);
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-07-01T02:30:00Z", zone)).toBe(true);
-    // The same instant is 11:30 AM in Tokyo.
-    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-07-01T02:30:00Z", "Asia/Tokyo")).toBe(false);
+    // 2026-07-01 01:59Z is 8:59 PM CDT (UTC-5): just before quiet hours; 02:00Z is 9:00 PM, when they start.
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-07-01T01:59:00Z", zone)).toBe(false);
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-07-01T02:00:00Z", zone)).toBe(true);
+    // The same instant is 11:00 AM in Tokyo.
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-07-01T02:00:00Z", "Asia/Tokyo")).toBe(false);
   });
 
   it("sends when something got worse, holds during quiet hours, and lets urgent through only if chosen", () => {

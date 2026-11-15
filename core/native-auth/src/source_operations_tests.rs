@@ -289,6 +289,7 @@ fn stdin_protocol_cannot_reach_operations_collections_ids_or_windows() {
         "people_workflow_snoozed_cards",
         "groups_person_memberships",
         "groups_group_events",
+        "people_background_checks",
     ] {
         let text = REQUEST.replace("needed_positions", collection);
         assert_eq!(
@@ -912,9 +913,31 @@ fn target_for(collection: Collection) -> Target {
         Collection::CalendarResourceBookings => Target::default().within(&window()),
         Collection::CalendarEventConflicts => Target::event("231"),
         Collection::GroupsGroupEvents => Target::group("287").within(&window()),
+        Collection::PeopleBackgroundChecks => Target::people_person("50"),
+        // Setup's Sunday picker: no target, and less of a plan (see `valid`).
+        Collection::ServiceTypes | Collection::UpcomingPlans => Target::default(),
     }
 }
-const ALL: [Collection; 19] = [
+/// A valid request for every collection: the picker's reads come before a plan is chosen, so
+/// service types name no service type or plan, and upcoming plans name no plan.
+fn valid(collection: Collection) -> SourceRequest {
+    let (service_type, plan) = match collection {
+        Collection::ServiceTypes => ("", ""),
+        Collection::UpcomingPlans => ("10", ""),
+        _ => ("10", "20"),
+    };
+    SourceRequest::capture_at(
+        &binding(),
+        service_type,
+        plan,
+        collection,
+        &target_for(collection),
+        100,
+        0,
+    )
+    .unwrap()
+}
+const ALL: [Collection; 22] = [
     Collection::Plan,
     Collection::Organization,
     Collection::PlanTimes,
@@ -934,6 +957,9 @@ const ALL: [Collection; 19] = [
     Collection::PeopleWorkflowSnoozedCards,
     Collection::GroupsPersonMemberships,
     Collection::GroupsGroupEvents,
+    Collection::PeopleBackgroundChecks,
+    Collection::ServiceTypes,
+    Collection::UpcomingPlans,
 ];
 
 #[test]
@@ -942,8 +968,7 @@ fn the_source_client_only_ever_builds_get_requests_for_every_collection() {
     // read-only rule is enforced here, in the HTTP layer: every request built is a bodiless GET
     // of the allowlisted URL, with that product's pinned version.
     let http = NativeSourceHttp::new().unwrap();
-    let mut requests: Vec<SourceRequest> =
-        ALL.iter().map(|&c| at(c, target_for(c)).unwrap()).collect();
+    let mut requests: Vec<SourceRequest> = ALL.iter().map(|&c| valid(c)).collect();
     // The stdin protocol's own requests too.
     for c in ["needed_positions", "team_members", "plan_times"] {
         let text = format!(
@@ -1364,7 +1389,7 @@ fn only_a_groups_membership_404_means_not_found_and_every_other_404_stays_a_fail
     // Live, 2026-11-13: Groups answers 404 for a Services person with no Groups profile. That
     // is the one collection where 404 is an answer; everywhere else it is still a failure.
     for collection in ALL {
-        let request = at(collection, target_for(collection)).unwrap();
+        let request = valid(collection);
         let expected = if collection == Collection::GroupsPersonMemberships {
             SourceError::NotFound
         } else {
@@ -1414,4 +1439,214 @@ fn only_a_groups_membership_404_means_not_found_and_every_other_404_stays_a_fail
         SourceError::NotFound.envelope(),
         json!({"version":1,"ok":false,"code":"provider-failure","reason":"not-found"})
     );
+}
+
+// ---- People background checks (kids rule) ------------------------------------------------------
+
+fn background(person: &str) -> SourceRequest {
+    at(
+        Collection::PeopleBackgroundChecks,
+        Target::people_person(person),
+    )
+    .unwrap()
+}
+/// A cleared check as Planning Center documents it (People 2025-11-10 `BackgroundCheck`), with
+/// every field Ozzie must drop carrying a canary.
+fn cleared(id: &str, person: &str) -> Value {
+    json!({"id":id,"type":"BackgroundCheck","attributes":{"completed_at":"2026-01-05T12:00:00Z","current":true,
+        "expires_on":"2027-01-05","note":"note-canary","report_url":"https://example.invalid/secret-canary",
+        "status":"complete_clear","status_updated_at":"2026-01-05T12:00:00Z"},
+        "relationships":{"person":{"data":{"id":person,"type":"Person"}},"created_by":{"data":{"id":"180","type":"Person"}}},
+        "links":{"self":"https://api.planningcenteronline.com/people/v2/background_checks/1"}})
+}
+
+#[test]
+fn background_checks_are_one_persons_cleared_checks_by_an_exact_get_with_the_people_pin() {
+    let request = background("50");
+    assert_eq!(
+        request.url(),
+        "https://api.planningcenteronline.com/people/v2/people/50/background_checks?filter=complete_clear&per_page=100&offset=0"
+    );
+    assert_eq!(request.collection.product(), Product::People);
+    assert_eq!(request.collection.product().version(), "2025-11-10");
+    assert_eq!(request.collection.label(), "people_background_checks");
+    let built = NativeSourceHttp::new()
+        .unwrap()
+        .build(&request, "fictional-native-secret-canary")
+        .unwrap();
+    assert_eq!(built.method(), reqwest::Method::GET);
+    assert!(built.body().is_none());
+    assert_eq!(built.headers()["X-PCO-API-Version"], "2025-11-10");
+}
+
+#[test]
+fn background_check_targets_take_only_a_people_person_id() {
+    let invalid = Some(SourceError::InvalidRequest);
+    let make = |t: Target| at(Collection::PeopleBackgroundChecks, t).err();
+    assert_eq!(make(Target::people_person("50")), None);
+    assert_eq!(make(Target::default()), invalid);
+    // Services and Groups person ids never stand in for it, and it never rides along with them.
+    assert_eq!(make(Target::person("50")), invalid);
+    assert_eq!(make(Target::groups_person("50")), invalid);
+    let mut both = Target::people_person("50");
+    both.person_id = Some("50".into());
+    assert_eq!(make(both), invalid);
+    assert_eq!(make(Target::people_person("50").within(&window())), invalid);
+    assert_eq!(
+        at(Collection::PersonSchedules, Target::people_person("50")).err(),
+        invalid
+    );
+    for bad in ["", "050", "5/../1", "50?filter=all", "-1", "1.5"] {
+        assert_eq!(make(Target::people_person(bad)), invalid, "{bad}");
+    }
+}
+
+#[test]
+fn a_background_check_keeps_only_whether_it_is_current_and_its_expiry() {
+    let body = project(
+        &background("50"),
+        json!({"data":[cleared("901", "50")],
+            "included":[{"id":"50","type":"Person","attributes":{"name":"name-canary","first_name":"first-name-canary"}}],
+            "meta":{"count":1,"total_count":1,"can_include":["created_by","person"],"parent":{"id":"50","type":"Person"}}}),
+    )
+    .unwrap();
+    assert_eq!(
+        body,
+        json!({"data":[{"id":"901","type":"BackgroundCheck",
+            "attributes":{"status":"complete_clear","current":true,"expires_on":"2027-01-05"},
+            "relationships":{"person":{"data":{"id":"50","type":"Person"}}}}],
+            "meta":{"count":1,"total_count":1}})
+    );
+    clean(&body);
+    let wire = body.to_string();
+    for dropped in [
+        "completed_at",
+        "status_updated_at",
+        "report_url",
+        "note",
+        "created_by",
+        "180",
+        "links",
+    ] {
+        assert!(!wire.contains(dropped), "{dropped} survived: {wire}");
+    }
+    // No expiry, or no `current` at all, still projects: the webview decides what that means.
+    let mut open = cleared("902", "50");
+    open["attributes"]["expires_on"] = Value::Null;
+    open["attributes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("current");
+    assert!(project(&background("50"), json!({ "data": [open] })).is_ok());
+    // An empty answer is an answer.
+    assert_eq!(
+        project(
+            &background("50"),
+            json!({"data":[],"meta":{"count":0,"total_count":0}})
+        )
+        .unwrap(),
+        json!({"data":[],"meta":{"count":0,"total_count":0}})
+    );
+}
+
+#[test]
+fn a_background_page_that_breaks_the_filter_or_names_someone_else_is_refused_whole() {
+    type Tamper = fn(&mut Value);
+    let tampers: [(&str, Tamper); 10] = [
+        // Planning Center ignoring the filter must never hand over another outcome.
+        ("status not clear", |r| {
+            r["attributes"]["status"] = json!("complete_not_clear")
+        }),
+        ("status pending", |r| {
+            r["attributes"]["status"] = json!("needs_review")
+        }),
+        ("manual not clear", |r| {
+            r["attributes"]["status"] = json!("manual_not_clear")
+        }),
+        ("no status", |r| {
+            r["attributes"].as_object_mut().unwrap().remove("status");
+        }),
+        ("another person", |r| {
+            r["relationships"]["person"]["data"]["id"] = json!("51")
+        }),
+        ("no person", |r| {
+            r["relationships"].as_object_mut().unwrap().remove("person");
+        }),
+        ("person typed otherwise", |r| {
+            r["relationships"]["person"]["data"]["type"] = json!("Assignee")
+        }),
+        ("free-text expiry", |r| {
+            r["attributes"]["expires_on"] = json!("next spring")
+        }),
+        ("expiry as an instant", |r| {
+            r["attributes"]["expires_on"] = json!("2027-01-05T00:00:00Z")
+        }),
+        ("another row type", |r| r["type"] = json!("Person")),
+    ];
+    for (label, tamper) in tampers {
+        let mut row = cleared("901", "50");
+        tamper(&mut row);
+        assert_eq!(
+            project(
+                &background("50"),
+                json!({"data":[cleared("900", "50"), row]})
+            )
+            .err(),
+            Some(SourceError::InvalidResponse),
+            "{label}"
+        );
+    }
+    // A parent that isn't this person is a contradiction.
+    assert_eq!(
+        project(
+            &background("50"),
+            json!({"data":[],"meta":{"parent":{"id":"51","type":"Person"}}})
+        )
+        .err(),
+        Some(SourceError::InvalidResponse)
+    );
+}
+
+#[test]
+fn a_background_next_link_must_keep_the_cleared_filter() {
+    let next = |link: &str| {
+        project(
+            &background("50"),
+            json!({"data":[cleared("901", "50")],"meta":{"next":{"offset":100}},"links":{"next":link}}),
+        )
+    };
+    let base = "https://api.planningcenteronline.com/people/v2/people/50/background_checks";
+    assert!(
+        next(&format!(
+            "{base}?filter=complete_clear&offset=100&per_page=100"
+        ))
+        .is_ok()
+    );
+    for bad in [
+        format!("{base}?offset=100&per_page=100"),
+        format!("{base}?filter=expired&offset=100&per_page=100"),
+        format!("{base}?filter=complete_clear,complete_not_clear&offset=100&per_page=100"),
+        format!("{base}?filter=complete_clear&include=created_by&offset=100&per_page=100"),
+        "https://api.planningcenteronline.com/people/v2/people/51/background_checks?filter=complete_clear&offset=100&per_page=100".into(),
+    ] {
+        assert_eq!(
+            next(&bad).err(),
+            Some(SourceError::InvalidResponse),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn a_check_entered_by_hand_counts_as_cleared() {
+    // Shape seen live on 2026-11-14 for the `complete_clear` filter (values fictional): `manual_clear`.
+    let mut row = cleared("70", "50");
+    row["attributes"]["status"] = json!("manual_clear");
+    let page = project(&background("50"), json!({"data":[row],"meta":{"count":1,"total_count":1,"parent":{"id":"50","type":"Person"}}}))
+        .unwrap();
+    assert_eq!(
+        page["data"][0]["attributes"]["status"],
+        json!("manual_clear")
+    );
+    assert!(page["data"][0]["attributes"].get("note").is_none());
 }

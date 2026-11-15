@@ -12,6 +12,9 @@ import type { Interval, OperationsResult, PairResolution, RequiredScope, SourceS
 import { evaluateOperationsSources, type OperationsSources } from "./operations-source-integration.js";
 import { isSourceInstant } from "./read-result.js";
 import { isOperationsRead, LIVE_CHECK_VALID_MS, type RoomRuleSetting, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
+import {
+  applyFeedback, feedbackOf, followUpTarget, groupTarget, roomTarget, stableFindingKey, type CorrectionEntry, type StopEntry,
+} from "./finding-feedback.js";
 
 export interface OperationsOptions {
   /** The evaluation clock for a live check. A recording is always evaluated as of its completion. Default: completed_at. */
@@ -44,6 +47,8 @@ export interface SundayOperations {
   clear: OperationsPart[];
   /** Earliest Planning Center read time behind rooms and follow-ups. Never a Church-rules or evaluation time. */
   checked_at: string | null;
+  /** Findings the person's Church rules set aside, by kind and stable key, and which entry did. Absent when none. */
+  hidden?: { kind: string; key: string; entry: StopEntry | CorrectionEntry }[];
 }
 
 type State = "ok" | "not-requested" | "denied" | "truncated" | "timeout" | "failed" | "missing" | "window";
@@ -526,10 +531,20 @@ export function sundayOperations(capture: SundayCapture, rules: SundayRules, opt
   if (unexplained) lines.push(`${unexplained} ${unexplained === 1 ? "part" : "parts"} of the room and follow-up check couldn't be read.`);
   lines.push(...groups.lines);
   const result = merge(results);
+  // Something set aside by the person's Church rules was still found: never a "nothing found" line.
   const found = !!result && (result.findings.length > 0 || result.uncertainties.length > 0);
+  const entries = feedbackOf(rules);
+  const kept = applyFeedback(result?.findings ?? [], f => f.kind === "room-overlap" ? roomTarget(f, capture.plan_id, ctx.labels) : followUpTarget(f, capture.plan_id, ctx.labels), entries);
+  const meetings = applyFeedback(groups.meetings, m => groupTarget(m, capture.plan_id), entries);
+  const hidden = [
+    ...kept.hidden.map(h => ({ kind: h.item.kind, key: stableFindingKey(h.item.finding_id), entry: h.entry })),
+    ...meetings.hidden.map(h => ({ kind: "group-meeting", key: `group:${h.item.person_id}`, entry: h.entry })),
+  ];
   return {
-    result, labels: ctx.labels, group_meetings: groups.meetings, not_checked: unique(lines), stale: false,
+    result: result && kept.hidden.length ? { ...result, findings: kept.shown } : result, labels: ctx.labels, group_meetings: meetings.shown,
+    not_checked: unique(lines), stale: false,
     clear: complete && !found ? checked : [], checked_at: earliest([...rooms.read, ...followUps.read]),
+    ...(hidden.length ? { hidden } : {}),
   };
 }
 

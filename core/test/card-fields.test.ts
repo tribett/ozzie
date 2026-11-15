@@ -105,6 +105,28 @@ describe("suggested card fields from on-device text recognition", () => {
     expect(suggestFields(`Prayer request: ${"a".repeat(2001)}`).request).toEqual({ text: "", unclear: true });
   });
 
+  // Lines of `clean`: 0 heading, 1 blank, 2 name, 3 phone, 4 email, 5 blank, 6-7 request.
+  it("keeps a low-confidence reading as a suggestion to check, flagged unclear, never as a clean fill", () => {
+    expect(suggestFields(clean, [2])).toEqual({
+      name: { text: "Riley Thornbury", unclear: true },
+      phone: { text: "(555) 014-2290", unclear: false },
+      email: { text: "riley.t@example.com", unclear: false },
+      request: { text: "Please pray for my\nnew job starting Monday.", unclear: false },
+    });
+    expect(suggestFields(clean, [3]).phone).toEqual({ text: "(555) 014-2290", unclear: true });
+    expect(suggestFields(clean, [4]).email).toEqual({ text: "riley.t@example.com", unclear: true });
+    // Any line of the request, its label line or a later one, flags the whole request.
+    expect(suggestFields(clean, [6]).request).toEqual({ text: "Please pray for my\nnew job starting Monday.", unclear: true });
+    expect(suggestFields(clean, [7]).request).toEqual({ text: "Please pray for my\nnew job starting Monday.", unclear: true });
+  });
+
+  it("a low-confidence line outside every field changes nothing; a malformed value stays blank", () => {
+    expect(suggestFields(clean, [0, 1, 5, 99])).toEqual(suggestFields(clean));
+    expect(suggestFields("Phone: 555 O1Z 77", [0]).phone).toEqual({ text: "", unclear: true });
+    const labelOnly = suggestFields("How can we pray for you?\nFor my mom, who is in the hospital.", [0]);
+    expect(labelOnly.request).toEqual({ text: "For my mom, who is in the hospital.", unclear: true });
+  });
+
   it("treats oversized or non-text input as unreadable and returns nothing from it", () => {
     const big = suggestFields(`Name: Riley Thornbury\n${"x".repeat(RECOGNIZED_TEXT_MAX)}`);
     expect(Object.values(big)).toEqual(Array(4).fill({ text: "", unclear: true }));

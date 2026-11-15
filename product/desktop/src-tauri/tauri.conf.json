@@ -33,8 +33,13 @@
     "targets": [
       "app"
     ],
+    "externalBin": [
+      "binaries/ozzie-card-reader",
+      "binaries/ozzie-listen"
+    ],
     "macOS": {
-      "minimumSystemVersion": "14.0"
+      "minimumSystemVersion": "14.0",
+      "entitlements": "Entitlements.plist"
     },
     "icon": [
       "icons/icon.png"

@@ -48,6 +48,7 @@
 import type { AttentionReport } from "./attention-import/index.js";
 import type { BriefPerson, Finding, SundayBrief } from "./sunday-brief.js";
 import { applyDecisions, type DecisionChoice, type SundayDecision } from "./sunday-decisions.js";
+import { BACKGROUND_LINE, forModels } from "./kids-rules.js";
 import { BOOKS, containsName, fold, nameTerms, NOT_OURS, UNSPACED } from "./draft-request.js";
 
 // Pinned natively by model_tests.rs (`the_fixed_ask_text_matches_the_webview_exactly`).
@@ -72,6 +73,7 @@ export const ASK_SYSTEM = [
   "K: a person is scheduled this many Sundays in a row; the church rules suggest a check-in, which is about care, not performance.",
   "G: part of the check couldn't be verified; then how many reads didn't complete, and s if the check is too old to treat as current.",
   "U: a Sunday lead is scheduled for the role, but their answer or serving time couldn't be confirmed.",
+  "A: a kids team has fewer confirmed people at a service time than the church rules ask; then the role, the time, how many are confirmed, how many the rules ask for, how many more are asked with no answer yet, how many more have a request not sent yet, and u if some confirmed people aren't placed at a time. Pending isn't counted, and ages aren't checked.",
   "Lines under an N finding list people on that role's team; none means no one else on the team was found.",
   "Each person line has s no overlap found, c possible conflict, v availability needs confirmation or x left out; then reasons:",
   "t on the team with no overlap found, u an unanswered request elsewhere at this time, p penciled in elsewhere with the request not sent, q pending elsewhere at this time, o confirmed elsewhere at this time, b a blockout covers this time, r a blockout that can't be checked, a other schedules couldn't be read, e records say not on the team, not eligible or not available, n a detail couldn't be verified.",
@@ -355,8 +357,11 @@ const CHOICE: Record<DecisionChoice, string> = { "covered-outside": "o", "not-ne
 interface Line { text: string; drop: number }
 /** Fact lines for the leader's question. Returns null when nothing has been checked yet. */
 export function buildAskContext(session: AskSession, sources: AskSources, options: AskOptions = {}): AskContext | null {
-  const { brief, names, organization } = sources;
-  if (!brief) return null;
+  const { names, organization } = sources;
+  if (!sources.brief) return null;
+  // Background checks stay on this Mac (review M2/M3): no line about one is ever part of a question.
+  const brief = forModels(sources.brief);
+  const keptHere = sources.brief.findings.some(f => f.kind === "background-check") || sources.brief.not_checked.some(l => l.startsWith(BACKGROUND_LINE));
   const people = new Map<string, string>(), roles = new Map<string, string>();
   const lines: Line[] = [], links: AskLink[] = [];
   const add = (drop: number, ...fields: (string | number)[]) => lines.push({ text: fields.join(" | "), drop });
@@ -400,6 +405,10 @@ export function buildAskContext(session: AskSession, sources: AskSources, option
       case "pending": add(0, id, "W", r, where, person(f.person_id), f.notification === "sent" ? "s" : "n"); break;
       case "streak": add(0, id, "K", person(f.person_id), f.sundays ?? "?"); break;
       case "worth-a-look": add(0, id, "G", brief.sources.failed.length, f.stale ? "s" : "-"); break;
+      // Kids rules: counts only for the team (background checks never reach here).
+      case "too-few-confirmed":
+        add(0, id, "A", r, where, f.confirmed?.length ?? 0, f.needed ?? "?", f.asked?.length ?? 0, f.not_sent?.length ?? 0, ...(f.tone === "look" ? ["u"] : []));
+        break;
       default: add(0, id, "U", r, where);
     }
     // Team leaders: oversight, not a Sunday assignment. Absent from the brief means the read didn't complete.
@@ -445,6 +454,7 @@ export function buildAskContext(session: AskSession, sources: AskSources, option
     ...(n ? [`${n} Planning Center ${n === 1 ? "read" : "reads"} didn't complete.`] : []),
     ...(brief.findings.some(f => f.kind === "worth-a-look" || f.kind === "lead-unverified") ? ["Some coverage couldn't be verified."] : []),
     ...(dropped ? ["Some details were left out to keep the question short."] : []),
+    ...(keptHere ? ["Background checks are shown on the Sunday page only; they're never sent to an AI."] : []),
     ...(attention && (attention.gaps.length || attention.stale || attention.status === "worth-a-look") ? ["Part of the fictional email import needs a closer look."] : []),
   ];
   const context: AskContext = Object.freeze({

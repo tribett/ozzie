@@ -74,6 +74,12 @@ function finding(row: Row): string | null {
       const n = num(row["sundays_in_a_row"]);
       return `${person} is scheduled ${n === null ? "several" : n} Sundays in a row. Your Church rules suggest a check-in, which is about care, not performance.`;
     }
+    case "fewer confirmed than the church rules ask": {
+      const c = num(row["confirmed"]) ?? 0, needed = num(row["needed"]), asked = num(row["asked_no_answer"]) ?? 0, unsent = num(row["request_not_sent"]) ?? 0;
+      return `${role}${at(row["time"])} has ${plural(c, "confirmed person", "confirmed people")}${needed === null ? "" : `, and your Church rules ask for at least ${needed}`}.` +
+        `${asked ? ` ${plural(asked, "more is", "more are")} asked with no answer yet.` : ""}${unsent ? ` ${plural(unsent, "more has", "more have")} a request not sent yet.` : ""}` +
+        " Pending isn't counted, and Ozzie doesn't check ages.";
+    }
     case "part of the check couldn't be verified": {
       const n = num(row["reads_not_completed"]) ?? 0;
       return `Part of this check couldn't be verified: ${plural(n, "Planning Center read", "Planning Center reads")} didn't complete.${row["too_old_to_treat_as_current"] === true ? " The check is also too old to treat as current." : ""}`;
@@ -155,7 +161,8 @@ function summary(tool: string, p: Row): string | null {
       const sunday = str(p["sunday"]);
       const d = num(p["needs_a_decision"]) ?? 0, w = num(p["worth_a_look"]) ?? 0, failed = num(p["reads_not_completed"]) ?? 0;
       const mode = p["mode"] === "recording" ? " This is a saved recording, not a current check." : p["mode"] === "fictional" ? " This is fictional example data." : "";
-      return `For ${sunday && sunday !== "not known" ? `Sunday ${sunday}` : "this Sunday"}, this check found ${plural(d, "item", "items")} that need${d === 1 ? "s" : ""} a decision and ${w} worth a look.${failed ? ` ${plural(failed, "Planning Center read", "Planning Center reads")} didn't complete.` : ""}${mode}`;
+      const kept = p["kept_on_this_mac"] === "some findings are shown only in Ozzie on this Mac" ? " Some findings are shown only in Ozzie on this Mac, on the Sunday page." : "";
+      return `For ${sunday && sunday !== "not known" ? `Sunday ${sunday}` : "this Sunday"}, this check found ${plural(d, "item", "items")} that need${d === 1 ? "s" : ""} a decision and ${w} worth a look.${failed ? ` ${plural(failed, "Planning Center read", "Planning Center reads")} didn't complete.` : ""}${kept}${mode}`;
     }
     case "sunday.open_needs": {
       const rows = Array.isArray(p["needs"]) ? p["needs"] as Row[] : [];

@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { connection, type ConnectionStatus } from "./connection.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
 import { AiSettings } from "./ai-settings.js";
-import { ConnectForm, SundayPlanFields, useConnectionControl } from "./planning-center-forms.js";
+import { ConnectForm, useConnectionControl } from "./planning-center-forms.js";
+import { SundayPicker } from "./sunday-picker.js";
 import { quietLine, scheduleLine } from "./proactive-page.js";
 import { Icon } from "./icons.js";
 import type { Autostart } from "./background.js";
@@ -15,8 +17,42 @@ export function grantedCopy(status: ConnectionStatus | null): string {
   return "What's granted shows here once the connection has been checked.";
 }
 
-/** Settings: Planning Center, wording help, automatic checks, saved recordings and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart }: {
+export const SHARE_BODY = "An AI app on this Mac, such as Claude, can use the same facts from Ozzie's last check that Ask Ozzie uses. People, roles and rooms are shown to it as labels like [Person 1]; their names stay here.";
+export const SHARE_HOW = [
+  "While this is on, Ozzie keeps one copy of its last check on this Mac, with every name replaced by a label. Ozzie checks it again for names before saving it.",
+  "An AI app set up to use it can read that copy and a list of what Ozzie ran and how it ended. It can't check Planning Center, change anything or send anything.",
+  "What that app keeps or does with what it reads is up to that app and its privacy terms, not Ozzie.",
+  "The steps for setting up an AI app are in Ozzie's guide for other AI apps, in Ozzie's open-source files.",
+] as const;
+
+/**
+ * How many recordings are saved, and deleting them. Deleting asks once first (Sunday can't be shown from them
+ * afterwards); the question opens under the button, which says so to VoiceOver. `confirming`: start open (tests).
+ */
+export function SavedRecordings({ count, onDelete, sharing, confirming = false }: {
+  count: number; onDelete?: (() => void) | undefined; sharing: boolean; confirming?: boolean;
+}) {
+  const [confirm, setConfirm] = useState(confirming);
+  const it = count === 1 ? "it" : "them";
+  return <>
+    <div className="find-next">
+      <span className="bold">{count === 0 ? "No saved recordings for this organization." : `${count} saved for this organization.`}</span>
+      {count > 0 && onDelete && <button type="button" className="btn btn-secondary btn-sm" aria-expanded={confirm} aria-controls="delete-recordings"
+        onClick={() => setConfirm(!confirm)}>Delete saved recordings</button>}
+    </div>
+    {count > 0 && onDelete && confirm && <div id="delete-recordings" className="decide" role="group" aria-labelledby="delete-recordings-q">
+      <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved recording" : `all ${count} saved recordings`} from this Mac? Sunday can't be shown
+        from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""} Planning Center doesn't change.</p>
+      <div className="find-next">
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => { setConfirm(false); onDelete(); }}>Yes, delete {it}</button>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(false)}>Keep {it}</button>
+      </div>
+    </div>}
+  </>;
+}
+
+/** Settings: Planning Center, AI help, automatic checks, other AI apps, saved recordings and guided setup, in that order. */
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** The automatic-check schedule, summarized here and changed under What runs automatically. */
@@ -25,6 +61,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   autostart?: Autostart | undefined;
   /** Debug builds only: which answering loop Ask Ozzie uses, for comparison. Never shown in a release build. */
   developer?: { loop: "pi" | "ts"; onLoop: (loop: "pi" | "ts") => void } | undefined;
+  /** "Use Ozzie's last check in other AI apps" (share-check.ts), off by default; `problem` when turning it on or off failed. */
+  sharing?: { on: boolean; onChange: (on: boolean) => void; problem?: string | null } | undefined;
 }) {
   const control = useConnectionControl(settings, onStatus, status);
   const { ready, working, pending, registered, run } = control;
@@ -43,7 +81,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
       </section>
       <section className="find" aria-labelledby="sunday-title">
         <h3 id="sunday-title" className="settings-t">Which Sunday</h3>
-        <SundayPlanFields settings={settings} onSettings={onSettings} />
+        {/* The same picker as guided setup: upcoming plans once connected, with typing the plan by hand folded below. */}
+        <SundayPicker connected={status?.state === "connected"} settings={settings} onSettings={onSettings} />
       </section>
       <section className="find" aria-labelledby="operations-title">
         <h3 id="operations-title" className="settings-t">Rooms, follow-ups and group events</h3>
@@ -59,7 +98,7 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
     </section>
 
     <section className="settings-sec" aria-labelledby="ai-title">
-      <h2 id="ai-title" className="h3">Wording help</h2>
+      <h2 id="ai-title" className="h3">AI help</h2>
       <AiSettings onChange={c => onModel?.(c)} labelledBy="ai-title" />
     </section>
 
@@ -79,21 +118,35 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
       </div>
     </section>}
 
+    {sharing && <section className="settings-sec" aria-labelledby="other-ai-title">
+      <h2 id="other-ai-title" className="h3">Other AI apps</h2>
+      <div className="find">
+        <p className="find-body">{SHARE_BODY}</p>
+        <div className="stack-tight">
+          <label className="confirmation"><input type="checkbox" checked={sharing.on} onChange={e => sharing.onChange(e.target.checked)} />
+            <span>Use Ozzie's last check in other AI apps</span></label>
+          <p className="small">Off unless you turn it on. Turning it off removes the copy.</p>
+          {sharing.problem && <p role="alert" className="problem">{sharing.problem}</p>}
+        </div>
+        <details className="listen-more">
+          <summary>See how this works</summary>
+          <ul className="small">{SHARE_HOW.map(line => <li key={line}>{line}</li>)}</ul>
+        </details>
+      </div>
+    </section>}
+
     <section className="settings-sec" aria-labelledby="saved-title">
       <h2 id="saved-title" className="h3">Saved recordings</h2>
       <div className="find">
         <p className="find-body">Each check saves a recording so Sunday can still be shown if Planning Center can't be reached. Recordings include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each Sunday.</p>
-        <div className="find-next">
-          <span className="bold">{recordingCount === 0 ? "No saved recordings for this organization." : `${recordingCount} saved for this organization.`}</span>
-          {recordingCount > 0 && onDeleteRecordings && <button type="button" className="btn btn-secondary btn-sm" onClick={onDeleteRecordings}>Delete saved recordings</button>}
-        </div>
+        <SavedRecordings count={recordingCount} onDelete={onDeleteRecordings} sharing={Boolean(sharing?.on)} />
       </div>
     </section>
 
     {onSetup && <section className="settings-sec" aria-labelledby="setup-again">
       <h2 id="setup-again" className="h3">Guided setup</h2>
       <div className="find">
-        <p className="find-body">Walk through connecting Planning Center, choosing the Sunday, wording help and automatic checks, one step at a time.</p>
+        <p className="find-body">Walk through connecting Planning Center, choosing the Sunday, AI help and automatic checks, one step at a time.</p>
         <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSetup}>Walk through setup again</button></div>
       </div>
     </section>}

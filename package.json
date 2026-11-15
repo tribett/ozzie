@@ -15,6 +15,7 @@
     "build:web": "vite build --config product/web/vite.config.ts product/web",
     "build:desktop-ui": "vite build --config product/desktop/vite.config.ts product/desktop",
     "build:desktop": "cd product/desktop && tauri build --bundles app --no-sign",
+    "build:mcp": "vite build --config core/mcp/vite.config.ts",
     "test:native": "cargo +1.99.1 test --manifest-path core/native-auth/Cargo.toml --locked",
     "test:keychain": "cargo +1.99.1 test --manifest-path core/native-auth/Cargo.toml --locked --test keychain_canary -- --ignored"
   },

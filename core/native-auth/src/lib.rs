@@ -3,6 +3,7 @@ pub mod agent;
 pub mod callback;
 pub mod credentials;
 pub mod fixed;
+pub mod hosted;
 pub mod ledger;
 pub mod lifetime;
 pub mod model;
@@ -10,9 +11,11 @@ pub mod name_guard;
 pub mod oauth;
 pub mod provider;
 pub mod responsibilities;
+pub mod shared_check;
 
 pub mod source;
 
 pub mod sunday;
 pub mod sunday_check;
+pub mod sunday_picker;
 pub mod sunday_read;

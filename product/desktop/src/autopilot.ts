@@ -7,6 +7,7 @@ import type { SundayCapture, SundayRules } from "../../../core/src/sunday-captur
 import { acceptModelReply, buildRewordRequest, templateDraft } from "../../../core/src/draft-request.js";
 import { acceptAskReply, AskSession, buildAskContext, prepareAsk, restoreAnswer } from "../../../core/src/ask.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
+import { BACKGROUND_CHECKS, kidsTeams } from "../../../core/src/kids-rules.js";
 import type { TaskOutcome } from "../../../core/src/harness/contract.js";
 import { ASK_SKILL, type HarnessData } from "../../../core/src/harness/index.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
@@ -74,6 +75,19 @@ async function harnessSteps(settings: Settings, rules: SundayRules, status: Conn
   await log(rows ? `ledger: tasks=${rows.length} last=${rows[0]?.state ?? "-"}` : "ledger: unavailable");
 }
 
+/**
+ * Debug builds only (OZZIE_DEV_KIDS_TEAMS, validated natively as `team_id:min` pairs): the autopilot run marks these
+ * teams as kids teams on top of the saved Church rules. Nothing is saved; release builds never send a value.
+ */
+export function devKidsRules(rules: SundayRules, spec: string | undefined): SundayRules {
+  if (!spec) return rules;
+  const kidsTeams = spec.split(",").flatMap(pair => {
+    const [team_id, min] = pair.split(":");
+    return team_id && min ? [{ team_id, min_confirmed: Number(min) }] : [];
+  });
+  return kidsTeams.length ? { ...rules, kidsTeams } : rules;
+}
+
 export async function runAutopilot(settings: Settings, rules: SundayRules, operations: boolean, show: (c: SundayCapture) => void, harness?: AutopilotHarness) {
   try {
     await log("start");
@@ -102,10 +116,18 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
     await log(`connection: ${status?.state ?? "none"} org=${status?.organization ?? "-"} scopes=${status?.scopes ?? "-"}`);
     if (status?.state !== "connected") return;
 
+    // The setup picker's two read-only lists: counts and outcomes only, never a name or title.
+    try {
+      const types = await sundaySource.serviceTypes();
+      const plans = settings.serviceTypeId ? await sundaySource.upcomingPlans(settings.serviceTypeId) : null;
+      await log(`picker: service_types=${types.items.length} more=${types.more} upcoming_plans=${plans ? plans.items.length : "-"} ` +
+        `more=${plans ? plans.more : "-"} has_current_plan=${plans ? plans.items.some(p => p.id === settings.planId) : "-"}`);
+    } catch (e) { await log(`picker: error ${code(e)}`); }
+
     const route = await model.setRoute("managed");
     await log(`model: configured=${route.configured} route=${route.route}`);
 
-    const read = () => sundaySource.check(settings.serviceTypeId, settings.planId);
+    const read = () => sundaySource.check(settings.serviceTypeId, settings.planId, rules);
     const capture = harness ? await harness.recorder.check(read, "manual") : await read();
     show(capture);
     const ops = sundayOperations(capture, rules);
@@ -114,6 +136,12 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
     await log(`check: reads=${capture.reads.length} outcomes=${JSON.stringify(outcomes)} names=${Object.keys(capture.names).length}`);
     const brief = buildSundayBrief(capture, rules, new Date().toISOString());
     await log(`brief: status=${brief.status} findings=${brief.findings.map(f => f.kind + (f.people ? `[s${f.people.suggestions.length}/c${f.people.conflicts.length}/u${f.people.unverified.length}/x${f.people.left_out.length}]` : "")).join(",")}`);
+    // Kids rules: counts and fixed states only, never a name, id or a background check's details.
+    const checks = capture.reads.filter(r => r.collection === BACKGROUND_CHECKS);
+    const kidsFound = brief.findings.filter(f => f.kind === "too-few-confirmed" || f.kind === "background-check");
+    await log(`kids: teams=${kidsTeams(rules).length} background_reads=${checks.length} outcomes=${JSON.stringify(checks.reduce<Record<string, number>>((a, r) => ({ ...a, [r.outcome]: (a[r.outcome] ?? 0) + 1 }), {}))} ` +
+      `rows=${checks.reduce((n, r) => n + (Array.isArray(r.body?.data) ? r.body.data.length : 0), 0)} findings=${kidsFound.map(f => `${f.kind}:${f.tone}${f.check ? `:${f.check}` : ""}`).join(",") || "none"} ` +
+      `not_checked=${brief.not_checked.filter(l => /kids|background/i.test(l)).length}`);
 
     // Same-data fallback: the latest saved recording for this org and plan must load and give the same findings.
     const saved = (await sundaySource.recordings(settings.organization)).filter(r => r.plan_id === settings.planId);

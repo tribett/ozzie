@@ -483,3 +483,43 @@ On save and load, beyond re-projecting every body:
 - Verified live (2026-11-13, test organization): `Plan.sort_date` is local
   wall-clock time with a floating `Z` (plan 92902197, 9:30 AM Eastern:
   `2026-11-22T09:30:00Z`).
+
+## Kids rules: People background checks (2026-11-14)
+
+Church rules can mark teams as kids teams (no team is assumed). Two rules follow, both evaluated in the
+webview (`core/src/kids-rules.ts`):
+
+- **At least N confirmed people at each service time** (default 2, range 1–10): from `team_members`,
+  `plan_times` and `needed_positions` already read. No new read. Pending is never confirmed; Services has no
+  age, so this counts confirmed people, never adults.
+- **A current background check before serving with kids**: one new read, below, only while that rule is on.
+
+| Collection | Version | Path | Fixed query | Parent |
+|---|---|---|---|---|
+| `people_background_checks` | People 2025-11-10 | `/people/v2/people/{person}/background_checks` | `filter=complete_clear` | Person |
+
+- **Who:** people on this plan whose `team_members` row is on a kids team, status C or U, in plan order, at most
+  40 (anyone past that is listed as not checked). The webview passes the kids team ids (`check_sunday`'s
+  optional `kids_team_ids`, at most 10 distinct numeric ids, validated natively; Church rules keep at most 10).
+  None set: no read. Read last, after every other read. The capture records the list as `kids_teams` (absent
+  when empty).
+- **Consent:** the `people` scope of the opt-in operations consent. Without it each read is `not-requested`.
+- **Identity:** `SundayRead.people_person_id` (same id space as `person_id`), never `person_id` or
+  `groups_person_id`. Recordings refuse a background read for anyone not confirmed or pending on one of the
+  capture's `kids_teams` on this plan.
+- **Kept:** `status` (always `complete_clear`: kept to prove the filter held), `current`, `expires_on`
+  (date or null), and the `person` link. Dropped: `note`, `report_url`, `completed_at`, `status_updated_at`,
+  `created_by`, links, included rows. A page with any other status, another or no person, a non-date expiry,
+  another row type, a different `meta.parent`, or a next link without the exact filter is refused whole.
+- **Meaning:** a person has a current check when a row has `current: true` and no expiry (null) or one after the
+  Sunday's date. A row without a `current` or `expires_on` field couldn't be read. Otherwise: "no current background check on file", or "expires before Sunday" (Worth a look
+  when it expires on the Sunday itself). A failed, refused or partial read is listed as not checked, never as
+  no check; when every read that answered is empty, each finding is Worth a look (the login may not see them).
+- **Never to a model:** background-check findings and their "not checked" lines stay on this Mac: the agent
+  tools, Ask, procedures and the shared check read the brief through `forModels` (`core/src/kids-rules.ts`),
+  and the fixed vocabulary has no word for them. Kids-team counts may go, as placeholders and counts.
+- Verified from the live published documentation (People 2025-11-10 OpenAPI and vertex): the path, the
+  `filter` enum (including `complete_clear`), the attributes, `meta.parent` `Person`, the `people` OAuth
+  scope. Not yet verified live: that People person ids equal Services person ids here (as they do for Groups),
+  whether a login without background-check access gets 403 or an empty list, and the meaning of `current` and
+  of a null `expires_on` in reads.

@@ -29,6 +29,8 @@ pub const MAX_WORKFLOWS: usize = 10;
 pub const MAX_GROUPS: usize = 20;
 /// Booked Calendar events whose conflict records are read.
 pub const MAX_CONFLICT_EVENTS: usize = 20;
+/// People scheduled on kids teams whose People background checks are read.
+pub const MAX_BACKGROUND_PEOPLE: usize = MAX_PEOPLE;
 const PER_PAGE: u16 = 100;
 /// Whole-check budget. Reads not started in time are recorded as `timeout`, never dropped.
 pub const BUDGET_MS: u64 = 180_000;
@@ -89,6 +91,11 @@ pub struct SundayCapture {
     /// Local display only; never model input. Absent when empty (and in older recordings).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// The kids team ids this check was given (Church rules, background-check rule on). Background
+    /// checks are read, and kept in a recording, only for people confirmed or pending on them.
+    /// Absent when empty (and in older recordings).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kids_teams: Vec<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -110,6 +117,9 @@ pub struct SundayRead {
     /// The Person whose group memberships were read (same id space as `person_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups_person_id: Option<String>,
+    /// The Person whose People background checks were read (same id space as `person_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people_person_id: Option<String>,
     /// The time window a windowed read asked for (the plan's Sunday, every UTC offset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<Window>,
@@ -183,7 +193,7 @@ pub fn rfc3339(ms: u64) -> String {
     )
 }
 /// Inverse of [`rfc3339`] for exactly that spelling; anything else is refused.
-fn parse_rfc3339(text: &str) -> Option<u64> {
+pub(crate) fn parse_rfc3339(text: &str) -> Option<u64> {
     let b = text.as_bytes();
     if b.len() != 24 || [4, 7, 10, 13, 16, 19, 23].map(|i| b[i]) != *b"--T::.Z" {
         return None;
@@ -225,14 +235,16 @@ impl ReadNames {
 /// `Err` for invalid ids, an unavailable HTTP client, a failed organization check, or
 /// cancellation; individual source failures are recorded per read inside the capture.
 /// The capture's `names` keep only the people it is about; `ReadNames` holds every name read,
-/// for the name guard only.
+/// for the name guard only. `kids_teams` are the Services team ids the church marked as kids
+/// teams with the background-check rule on (Church rules); empty means no background-check read.
 pub fn check_sunday(
     auth: &AuthController,
     service_type_id: &str,
     plan_id: &str,
+    kids_teams: &[String],
     cancelled: &AtomicBool,
 ) -> Result<(SundayCapture, ReadNames), SourceError> {
-    if !numeric_id(service_type_id) || !numeric_id(plan_id) {
+    if !numeric_id(service_type_id) || !numeric_id(plan_id) || !kids_teams_valid(kids_teams) {
         return Err(SourceError::InvalidRequest);
     }
     let http = NativeSourceHttp::new()?;
@@ -240,10 +252,18 @@ pub fn check_sunday(
         auth,
         service_type_id,
         plan_id,
+        kids_teams,
         cancelled,
         &http,
         &SystemClock(Instant::now()),
     )
+}
+/// At most MAX_TEAMS distinct numeric team ids.
+fn kids_teams_valid(kids_teams: &[String]) -> bool {
+    let distinct: BTreeSet<&str> = kids_teams.iter().map(String::as_str).collect();
+    kids_teams.len() <= MAX_TEAMS
+        && distinct.len() == kids_teams.len()
+        && kids_teams.iter().all(|id| numeric_id(id))
 }
 
 /// Ordered, de-duplicated ids with a hard cap.
@@ -349,6 +369,7 @@ impl Check<'_> {
             workflow_id: target.workflow_id.clone(),
             group_id: target.group_id.clone(),
             groups_person_id: target.groups_person_id.clone(),
+            people_person_id: target.people_person_id.clone(),
             window: target.window.clone(),
             offset,
             checked_at: String::new(),
@@ -676,15 +697,65 @@ fn operations(
     Ok(())
 }
 
+/// People confirmed or pending on one of `kids_teams`, from a `team_members` read, in row order.
+fn scheduled_on<'a>(read: &'a SundayRead, kids_teams: &[String]) -> Vec<&'a str> {
+    let Some(body) = &read.body else {
+        return Vec::new();
+    };
+    body["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            matches!(
+                row["attributes"]["status"].as_str(),
+                Some("C" | "U" | "Confirmed" | "Unconfirmed")
+            ) && row["relationships"]["team"]["data"]["id"]
+                .as_str()
+                .is_some_and(|team| kids_teams.iter().any(|kids| kids == team))
+        })
+        .filter_map(|row| row["relationships"]["person"]["data"]["id"].as_str())
+        .collect()
+}
+/// People background checks, last: for each person confirmed or pending on this plan on a team
+/// the church marked as a kids team, in plan order and bounded, their cleared checks only.
+/// Nobody else's checks are read, and nothing is read without a kids team.
+fn background_checks(
+    check: &mut Check<'_>,
+    members: &[usize],
+    kids_teams: &[String],
+) -> Result<(), SourceError> {
+    if kids_teams.is_empty() {
+        return Ok(());
+    }
+    let mut people = Bounded::new(MAX_BACKGROUND_PEOPLE);
+    for &index in members {
+        for person in scheduled_on(&check.reads[index], kids_teams) {
+            // Past the bound, a person's checks are simply not read: the webview names them
+            // as not checked. The plan's own team_members read is never marked truncated.
+            people.add(person);
+        }
+    }
+    for person in &people.ids {
+        check.pages(
+            Collection::PeopleBackgroundChecks,
+            &Target::people_person(person),
+            false,
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn run(
     auth: &AuthController,
     service_type_id: &str,
     plan_id: &str,
+    kids_teams: &[String],
     cancelled: &AtomicBool,
     http: &dyn SourceHttp,
     clock: &dyn Clock,
 ) -> Result<(SundayCapture, ReadNames), SourceError> {
-    if !numeric_id(service_type_id) || !numeric_id(plan_id) {
+    if !numeric_id(service_type_id) || !numeric_id(plan_id) || !kids_teams_valid(kids_teams) {
         return Err(SourceError::InvalidRequest);
     }
     let started_at = rfc3339(clock.now_ms());
@@ -741,6 +812,7 @@ pub(crate) fn run(
         on_plan.extend(check.related(index, "person", "Person"));
     }
     operations(&mut check, &people, &on_plan)?;
+    background_checks(&mut check, &members, kids_teams)?;
     // Names only for people this capture is about: everyone on the plan, and the bounded set
     // of people whose own schedules and blockouts were planned. Nobody else's name is kept.
     let mut named: BTreeSet<String> = people.ids.into_iter().collect();
@@ -759,6 +831,7 @@ pub(crate) fn run(
         names: check.names,
         // Every label names a row of a stored body: only answered pages supply them.
         labels: check.labels,
+        kids_teams: kids_teams.to_vec(),
     };
     Ok((capture, ReadNames(check.read_names.into_iter().collect())))
 }
@@ -824,6 +897,9 @@ fn consistent(capture: &SundayCapture) -> bool {
     let groups: BTreeSet<&str> = of(Collection::GroupsPersonMemberships)
         .flat_map(|r| related_ids(r, "group", "Group"))
         .collect();
+    let kids_people: BTreeSet<&str> = of(Collection::TeamMembers)
+        .flat_map(|r| scheduled_on(r, &capture.kids_teams))
+        .collect();
     let on_plan: BTreeSet<&str> = of(Collection::TeamMembers)
         .flat_map(|r| related_ids(r, "person", "Person"))
         .collect();
@@ -843,6 +919,8 @@ fn consistent(capture: &SundayCapture) -> bool {
             "groups_group_events" => from(&read.group_id, &groups),
             "calendar_conflicts" => from(&read.event_id, &booked),
             "groups_person_memberships" => from(&read.groups_person_id, &on_plan),
+            // Only someone confirmed or pending on a kids team this check was given.
+            "people_background_checks" => from(&read.people_person_id, &kids_people),
             _ => true,
         });
     let operations: Vec<&SundayRead> = capture
@@ -892,6 +970,7 @@ fn collection_of(read: &SundayRead) -> Option<Collection> {
         ("people_workflow_snoozed_cards", false) => Collection::PeopleWorkflowSnoozedCards,
         ("groups_person_memberships", false) => Collection::GroupsPersonMemberships,
         ("groups_group_events", false) => Collection::GroupsGroupEvents,
+        ("people_background_checks", false) => Collection::PeopleBackgroundChecks,
         _ => return None,
     })
 }
@@ -927,6 +1006,7 @@ fn valid_capture(capture: &SundayCapture) -> bool {
                 .iter()
                 .all(|read| read.window.is_none() || read.window == window)
         }
+        && kids_teams_valid(&capture.kids_teams)
         && consistent(capture)
 }
 fn valid_read(capture: &SundayCapture, binding: &Binding, read: &SundayRead) -> bool {
@@ -944,6 +1024,7 @@ fn valid_read(capture: &SundayCapture, binding: &Binding, read: &SundayRead) -> 
         workflow_id: read.workflow_id.clone(),
         group_id: read.group_id.clone(),
         groups_person_id: read.groups_person_id.clone(),
+        people_person_id: read.people_person_id.clone(),
         window: read.window.clone(),
     };
     let Ok(request) = SourceRequest::capture_at(

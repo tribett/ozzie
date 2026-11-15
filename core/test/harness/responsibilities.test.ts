@@ -2,8 +2,9 @@
 // turning a typed request into a plan. Fake clocks only (every function takes `now`); no I/O.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_QUIET_HOURS, inQuietHours } from "../../src/schedule.js";
 import {
-  CHANGE_GAP_MS, changeEligible, defaultPlan, dueNow, FAST_MIN_GAP_MS, FAST_SLOT_MS, lifetimeEnded, limitsLeft, localInstant, MIN_GAP_MS, MISSED_AFTER_MS,
+  BRIEFING_WEEKDAYS, CHANGE_GAP_MS, changeEligible, defaultPlan, dueNow, includesSundayReady, settledPlan, FAST_MIN_GAP_MS, FAST_SLOT_MS, lifetimeEnded, limitsLeft, localInstant, MIN_GAP_MS, MISSED_AFTER_MS,
   nearDeadlineTimes, nextSlot, parseRequest, quietDeferral, RECHECK_MS, refusedUntil, RETRY_MS, retryAt, RUN_TIMEOUT_MS, scheduledSlots, TEMPLATE_IDS, TEMPLATES,
   untilLifetime, upcomingWeekday, usage, validPlan, wallInstant, type LocalState, type Plan, type Responsibility, type RunRow,
 } from "../../src/harness/responsibilities.js";
@@ -64,8 +65,36 @@ describe("templates", () => {
     // On a Monday the Sunday is six days away.
     expect(defaultPlan("keep-sunday-covered", "2026-11-16T15:00:00.000Z", ZONE).lifetime).toEqual({ kind: "until", until: "2026-11-22", ends_at: "2026-11-23T05:00:00.000Z" });
     expect(defaultPlan("watch-room-bookings", SAT, ZONE)).toMatchObject({ schedule: { weekdays: [4], on_change: false }, lifetime: { kind: "until-stopped" } });
-    expect(defaultPlan("morning-briefing", SAT, ZONE)).toMatchObject({ schedule: { time: "06:45", weekdays: [] }, lifetime: { kind: "until-stopped" }, report: "every-check" });
     for (const id of TEMPLATE_IDS) expect(validPlan(defaultPlan(id, SAT, ZONE), SAT)).toBe(true);
+  });
+
+  it("Morning briefing: 7:00 AM on weekdays (owner, October 26), outside the default quiet hours", () => {
+    expect(BRIEFING_WEEKDAYS).toEqual([1, 2, 3, 4, 5]);
+    expect(defaultPlan("morning-briefing", SAT, ZONE)).toMatchObject({ schedule: { time: "07:00", weekdays: [1, 2, 3, 4, 5] }, lifetime: { kind: "until-stopped" }, report: "every-check" });
+    const r = responsibility(defaultPlan("morning-briefing", SAT, ZONE));
+    // Saturday 10:00 to the next Saturday: Monday through Friday at 7:00 New York, none on the weekend.
+    expect(scheduledSlots(r, SAT, at(SAT, 7 * 24 * 60), ZONE)).toEqual([
+      "2026-11-16T12:00:00.000Z", "2026-11-17T12:00:00.000Z", "2026-11-18T12:00:00.000Z", "2026-11-19T12:00:00.000Z", "2026-11-20T12:00:00.000Z",
+    ]);
+    expect(inQuietHours(DEFAULT_QUIET_HOURS, "2026-11-16T12:00:00.000Z", ZONE)).toBe(false);
+  });
+
+  it("Thursday's briefing includes the full Sunday Ready brief, on the church's own date", () => {
+    expect(includesSundayReady("2026-11-19T12:00:00.000Z", ZONE)).toBe(true);
+    expect(includesSundayReady("2026-11-18T12:00:00.000Z", ZONE)).toBe(false);
+    // 11:30 PM Wednesday in New York is already Thursday in UTC: still Wednesday's briefing.
+    expect(includesSundayReady("2026-11-19T04:30:00.000Z", ZONE)).toBe(false);
+  });
+
+  it("moves a saved briefing to the settled default only while it still has the earlier default time and days", () => {
+    const earlier = responsibility({ ...defaultPlan("morning-briefing", SAT, ZONE), schedule: { time: "06:45", weekdays: [], on_change: false } });
+    expect(settledPlan(earlier)).toEqual({ ...defaultPlan("morning-briefing", SAT, ZONE), lifetime: earlier.lifetime, limits: earlier.limits });
+    expect(settledPlan({ ...earlier, schedule: { ...earlier.schedule, time: "06:30" } })).toBeNull();
+    expect(settledPlan({ ...earlier, schedule: { ...earlier.schedule, weekdays: [1, 3] } })).toBeNull();
+    expect(settledPlan({ ...earlier, status: "ended" })).toBeNull();
+    expect(settledPlan(responsibility(sundayPlan()))).toBeNull();
+    // One confirmed before zones were kept takes the zone given.
+    expect(settledPlan({ ...earlier, zone: null }, "America/Chicago")?.zone).toBe("America/Chicago");
   });
 });
 
@@ -319,7 +348,11 @@ describe("turning a request into a plan (no model)", () => {
     expect(plan("Watch for group night clashes every Wednesday at 8am").plan).toMatchObject({
       template: "group-night-clashes", schedule: { time: "08:00", weekdays: [3] }, lifetime: { kind: "until-stopped" },
     });
-    expect(plan("Please give me a morning briefing every day at 6:30").plan).toMatchObject({ template: "morning-briefing", schedule: { time: "06:30" } });
+    expect(plan("Please give me a morning briefing every day at 6:30").plan).toMatchObject({ template: "morning-briefing", schedule: { time: "06:30", weekdays: [] } });
+    expect(plan("Give me a morning briefing daily").plan.schedule.weekdays).toEqual([]);
+    expect(plan("Give me a morning briefing every morning").plan.schedule.weekdays).toEqual([]);
+    expect(plan("Give me a morning briefing on weekdays at 7:30").plan).toMatchObject({ schedule: { time: "07:30", weekdays: [1, 2, 3, 4, 5] } });
+    expect(plan("Give me a morning briefing from now on").plan.schedule.weekdays).toEqual([1, 2, 3, 4, 5]);
     expect(plan("Keep watch on Sunday coverage weekly and tell me every time you check").plan).toMatchObject({ report: "every-check", lifetime: { kind: "until-stopped" } });
   });
 

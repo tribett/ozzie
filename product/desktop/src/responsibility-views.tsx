@@ -1,17 +1,18 @@
 // What Ozzie keeps an eye on, on screen: the plan a person confirms (from Ask or "Set up something
-// new"), the list on What runs automatically, and what comes to the person on Today ("What Ozzie is
-// keeping an eye on" and "Ozzie noticed"). Every word is fixed local copy (responsibility-words.ts);
+// new"), the list on What runs automatically, and what comes to the person on Today (each "Ozzie
+// noticed" card and each responsibility's line, grouped by today-groups.ts). Every word is fixed local copy (responsibility-words.ts);
 // names appear only on this Mac, resolved from the current check.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
-  defaultPlan, TEMPLATE_IDS, TEMPLATES, untilLifetime, upcomingWeekday, validPlan, addDays, limitsLeft,
-  type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type TemplateId,
+  BRIEFING_WEEKDAYS, defaultPlan, TEMPLATE_IDS, TEMPLATES, untilLifetime, upcomingWeekday, validPlan, addDays, limitsLeft,
+  type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type RunRow, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { Autostart } from "./background.js";
 import type { NoticedItem, Runner, RunnerView } from "./responsibility-runner.js";
 import {
-  accountsText, assumedText, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT, NOTICE_WORDS, noticedBadge, noticedChanges,
-  noticedTitle, ONLY_WHILE, PURPOSE, refusalText, REPORT_CHOICES, reportText, runText, scheduleText, statusText, STOP_TEXT, WATCHES, whenText,
+  accountsText, assumedText, daysText, foundText, isWeekdays, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT, NOTICE_WORDS, noticedBadge, noticedChanges,
+  noticedTitle, ONLY_WHILE, preparedTitle, PURPOSE, refusalText, REPORT_CHOICES, reportText, runText, scheduleText, statusText, STOP_TEXT, SUNDAY_OFFER,
+  SUNDAY_TOGETHER, WATCHES, whenText,
 } from "./responsibility-words.js";
 import { Icon } from "./icons.js";
 import { zoneLabel } from "./proactive-page.js";
@@ -65,6 +66,9 @@ export interface PlanActions {
 }
 const errorCode = (e: unknown) => typeof e === "string" ? e : "unavailable";
 const TONE: Record<string, string> = { ok: "b-ok", muted: "b-muted", attn: "b-attn", look: "b-look" };
+const REPORTS = new Set<NoticedItem["kind"]>(["found", "clear", "briefing"]);
+/** The report a run made, when Ozzie still has it. */
+const reportFor = (run: RunRow | undefined, view: RunnerView) => run ? view.noticed.find(i => i.run_id === run.run_id && REPORTS.has(i.kind)) ?? null : null;
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /** The lifetimes offered when changing a plan: its own date, the chosen Sunday, the coming two Sundays, and until stopped. */
@@ -92,6 +96,15 @@ export function PlanEditor({ plan, context, onDone, onCancel, doneLabel = "Use t
       <input id={`time-${draft.template}`} type="time" value={draft.schedule.time}
         onChange={e => setDraft({ ...draft, schedule: { ...draft.schedule, time: e.target.value } })} />
     </div>
+    {draft.template === "morning-briefing" && <div className="row rule-row">
+      <label htmlFor={`days-${draft.template}`}>On</label>
+      <select id={`days-${draft.template}`} className="input" value={isWeekdays(draft.schedule.weekdays) ? "weekdays" : draft.schedule.weekdays.length ? "chosen" : "every"}
+        onChange={e => setDraft({ ...draft, schedule: { ...draft.schedule, weekdays: e.target.value === "weekdays" ? [...BRIEFING_WEEKDAYS] : e.target.value === "every" ? [] : plan.schedule.weekdays } })}>
+        <option value="weekdays">Weekdays (Monday to Friday)</option>
+        <option value="every">Every day</option>
+        {plan.schedule.weekdays.length > 0 && !isWeekdays(plan.schedule.weekdays) && <option value="chosen">{daysText(plan.schedule.weekdays)}</option>}
+      </select>
+    </div>}
     {weekly && <div className="row rule-row">
       <label htmlFor={`day-${draft.template}`}>Every</label>
       <select id={`day-${draft.template}`} className="input" value={draft.schedule.weekdays[0] ?? 0}
@@ -127,7 +140,7 @@ export function PlanRows({ plan, context }: { plan: Plan; context: PlanContext }
     <div className="sp-row sp-2"><span className="sp-h">Accounts</span><span>{accountsText(plan.template, context.organization)}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">When it checks</span><span>{scheduleText(plan, at(plan, context))}{zoneNote(plan.zone, context)} {ONLY_WHILE}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">When it tells you</span><span>{reportText(plan)}</span></div>
-    <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(plan.lifetime, plan.template)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(plan.lifetime, plan.template, plan.schedule.weekdays)}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">Limits</span><span>{limitsText(plan, context.modelReady)}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">How to stop</span><span>{STOP_TEXT}</span></div>
   </div>;
@@ -250,7 +263,12 @@ export function TemplatePicker({ context, actions, onCancel }: { context: PlanCo
 
 // ---- What runs automatically -------------------------------------------------------------------------
 
-function ResponsibilityCard({ r, view, context, runner }: { r: Responsibility; view: RunnerView; context: PlanContext; runner: Runner }) {
+function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
+  r: Responsibility; view: RunnerView; context: PlanContext; runner: Runner;
+  /** Its title's heading level: 4 inside the Sunday item. */
+  level?: 3 | 4;
+}) {
+  const Title = level === 4 ? "h4" : "h3";
   const [editing, setEditing] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -267,16 +285,16 @@ function ResponsibilityCard({ r, view, context, runner }: { r: Responsibility; v
   const act = (work: () => Promise<unknown>) => { setProblem(null); void work().catch(e => setProblem(refusalText(errorCode(e)))); };
   return <section className="find responsibility" aria-label={r.title}>
     <div className="find-top"><span className={`badge ${TONE[status.tone]}`}>{status.label}</span><span className="find-where">{accountsText(r.template, context.organization).replace(/\. Reads only\.$/u, "")}</span></div>
-    <h3 className="find-title">{r.title}</h3>
+    <Title className="find-title">{r.title}</Title>
     {editing
       ? <PlanEditor plan={plan} context={context} doneLabel="Save changes" onCancel={() => setEditing(false)}
         onDone={p => { setEditing(false); act(() => runner.edit(r.id, p)); }} />
       : <div className="sp">
         <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{WATCHES[r.template]}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">When</span><span>{scheduleText(plan, at(plan, context))}{zoneNote(plan.zone, context)}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template, r.schedule.weekdays)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now) : "Not yet."}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now, reportFor(r.runs[0], view)) : "Not yet."}</span></div>
         {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
           <span>{next ? whenText(next, now) : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Today</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} checks used in the last 24 hours.</span></div>
@@ -299,26 +317,56 @@ function ResponsibilityCard({ r, view, context, runner }: { r: Responsibility; v
   </section>;
 }
 
-/** The home for responsibilities on What runs automatically. */
-export function ResponsibilityList({ view, context, runner, actions }: {
-  view: RunnerView; context: PlanContext; runner: Runner; actions: PlanActions;
+/** Keep Sunday covered isn't on: offered in the Sunday item, opening its plan to confirm. */
+function KeepSundayOffer({ context, actions }: { context: PlanContext; actions: PlanActions }) {
+  const [open, setOpen] = useState(false);
+  if (open) return <PlanCard plan={defaultPlan("keep-sunday-covered", context.now(), context.zone, planOptions(context))} context={context} actions={actions} />;
+  return <section className="find" aria-labelledby="keep-sunday-offer">
+    <div className="find-top"><span className="badge b-muted">Not on</span></div>
+    <h4 id="keep-sunday-offer" className="find-title">{TEMPLATES["keep-sunday-covered"].title}</h4>
+    <p className="find-body">{SUNDAY_OFFER}</p>
+    <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>Set up {TEMPLATES["keep-sunday-covered"].title}</button></div>
+  </section>;
+}
+
+/**
+ * The home for responsibilities on What runs automatically. `sunday`: the regular Sunday check
+ * (proactive-page.tsx), shown first as one Sunday item with Keep Sunday covered (or an offer to set it
+ * up), so the two things that check Sunday read as one; the rest follow.
+ */
+export function ResponsibilityList({ view, context, runner, actions, sunday }: {
+  view: RunnerView; context: PlanContext; runner: Runner; actions: PlanActions; sunday?: ReactNode;
 }) {
   const [picking, setPicking] = useState(false);
   const active = view.items.filter(r => r.status !== "ended");
   const ended = view.items.filter(r => r.status === "ended").slice(0, 3);
+  const grouped = sunday !== undefined;
+  const keep = grouped ? active.find(r => r.template === "keep-sunday-covered") ?? null : null;
+  const others = active.filter(r => r !== keep);
+  // Pause everything pauses the regular Sunday check too (proactive.ts pauseWithEverything), so it is
+  // offered whenever anything runs automatically, that check alone included.
+  const stops = grouped && active.length ? "the regular Sunday check and everything else here" : grouped ? "the regular Sunday check" : active.length ? "everything here" : null;
   return <section className="stack responsibilities" aria-labelledby="resp-title">
     <div className="row resp-head">
       <h2 id="resp-title" className="h3">What Ozzie is keeping an eye on</h2>
       <span className="spacer" />
-      {view.items.length > 0 && (view.paused_all
+      {view.paused_all
         ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void runner.pauseAll(false); }}>Resume everything</button>
-        : <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void runner.pauseAll(true); }}>Pause everything</button>)}
+        : stops && <button type="button" className="btn btn-secondary btn-sm" aria-describedby="pause-scope" onClick={() => { void runner.pauseAll(true); }}>Pause everything</button>}
     </div>
     <p className="small">Ozzie keeps checking while its window is closed; it stays in the menu bar. Nothing runs after you quit Ozzie or while this Mac is asleep, and it catches up once when it can. Ozzie keeps an eye on one of each kind at a time; change it rather than setting up another.</p>
+    {stops && !view.paused_all && <p id="pause-scope" className="small">Pause everything stops {stops} from running until you resume.</p>}
     {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it keeps an eye on couldn't be read on this Mac right now.</p>}
     {view.paused_all && <p className="panel-info" role="status"><Icon name="info" small />Everything is paused. Nothing runs automatically until you resume.</p>}
-    {view.available && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “Keep an eye on Sunday”, or set one up here.</p>}
-    {active.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} />)}
+    {grouped && <section className="sunday-watch" aria-labelledby="sunday-watch-title">
+      <h3 id="sunday-watch-title" className="sunday-watch-h">Keeping an eye on Sunday</h3>
+      <p className="small">{SUNDAY_TOGETHER}</p>
+      {sunday}
+      {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} />
+        : view.available && <KeepSundayOffer context={context} actions={actions} />}
+    </section>}
+    {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “Keep an eye on Sunday”, or set one up here.</p>}
+    {others.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} />)}
     {picking
       ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
@@ -330,58 +378,89 @@ export function ResponsibilityList({ view, context, runner, actions }: {
 
 // ---- Today -------------------------------------------------------------------------------------------
 
-/** "What Ozzie is keeping an eye on": each active one, its next check and its last result. */
-export function WatchStrip({ view, now, onAutomatic }: { view: RunnerView; now: string; onAutomatic: () => void }) {
-  const active = view.items.filter(r => r.status === "active");
-  return <section className="watch-strip" aria-labelledby="watch-title">
-    <h2 id="watch-title" className="h3">What Ozzie is keeping an eye on</h2>
-    {active.length === 0
-      ? <p className="small">Nothing yet. Ask Ozzie, “Keep an eye on Sunday,” and it will check without being asked again.
-        <button type="button" className="btn btn-quiet btn-sm" onClick={onAutomatic}>Set one up</button></p>
-      : <ul className="list watch-list">{active.map(r => {
-        const last = r.runs.find(x => x.outcome);
-        const next = view.next[r.id];
-        return <li key={r.id}><Icon name="repeat" small /><span><strong>{r.title}</strong>
-          {view.paused_all ? " · paused with everything" : next ? ` · next check ${whenText(next, now)}` : ""}
-          {last ? ` · last: ${last.outcome === "ok" ? last.noticed ? `${last.noticed} to look at` : "nothing new" : "couldn't finish"}` : ""}</span></li>;
-      })}</ul>}
-    {active.length > 0 && <button type="button" className="btn btn-quiet btn-sm" onClick={onAutomatic}>Change what Ozzie keeps an eye on</button>}
-  </section>;
+/**
+ * One responsibility's line on Today (In progress): when it checks next and what it found last, labeled
+ * as everywhere else (things to decide, Worth a look apart); without the run's report, "findings".
+ */
+export function watchLine(r: Responsibility, view: RunnerView, now: string): string {
+  const last = r.runs.find(x => x.outcome);
+  const next = view.next[r.id];
+  const when = r.status === "paused" ? "Paused" : view.paused_all ? "Paused with everything" : view.running === r.id ? "Checking now"
+    : next ? `Next check ${whenText(next, now)}` : "";
+  const report = reportFor(last, view);
+  const labeled = report ? foundText(report) : "";
+  const found = last ? `last check: ${last.outcome !== "ok" ? "couldn't finish" : labeled || (!report && last.noticed ? `${last.noticed} ${last.noticed === 1 ? "finding" : "findings"}` : "nothing new")}`
+    : "not checked yet";
+  return when ? `${when} · ${found}` : found.charAt(0).toUpperCase() + found.slice(1);
 }
 
-function NoticedCard({ item, view, names, now, onOpen }: { item: NoticedItem; view: RunnerView; names: Readonly<Record<string, string>>; now: string; onOpen: (page: "sunday" | "automatic" | "connection") => void }) {
-  const badge = noticedBadge(item);
-  const changes = noticedChanges(item, names);
-  const ready = view.prepared[item.id];
-  const notice = item.notice ? NOTICE_WORDS[item.notice] : null;
+type Clipboard = { writeText(text: string): Promise<void> } | undefined;
+const systemClipboard = (): Clipboard => typeof navigator === "undefined" ? undefined : navigator.clipboard;
+/** True only once the text is on the clipboard; a missing or refusing clipboard is false, never success. */
+export async function copyText(text: string, clipboard: Clipboard = systemClipboard()): Promise<boolean> {
+  if (!clipboard) return false;
+  try { await clipboard.writeText(text); return true; } catch { return false; }
+}
+
+/** "Copy draft". A copy that didn't work says so and is never shown as copied. */
+export function CopyDraft({ text, describedBy }: { text: string; describedBy?: string | undefined }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const copy = async () => setState(await copyText(text) ? "copied" : "failed");
+  return <div className="stack-tight copy-draft">
+    <div><button type="button" className="btn btn-secondary btn-sm" aria-describedby={describedBy} onClick={() => { void copy(); }}>
+      {state === "copied" ? "Copied — send it yourself" : "Copy draft"}</button></div>
+    {state === "failed" && <p role="alert" className="problem">The draft couldn't be copied. Select its text and copy it yourself.</p>}
+  </div>;
+}
+
+/**
+ * Something Ozzie noticed while keeping an eye on things, as a Today card: what it found, what it
+ * prepared (a summary, and a drafted note to copy), and where to go next. `children` adds Today's own
+ * controls under the card's actions.
+ */
+export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prepared = false, written = null, sundayReady = null, children }: {
+  item: NoticedItem; view: RunnerView; names: Readonly<Record<string, string>>; now: string;
+  onOpen: (page: "sunday" | "automatic" | "connection") => void; titleId?: string;
+  /** Its age on Today, which also says when it came: the noticed time isn't repeated. */
+  age?: string | null;
+  /** Shown under Ready to review: its badge says it is ready rather than repeating the decision in its title. */
+  prepared?: boolean;
+  /**
+   * Only what the AI wrote for this report, named for what was written: its decisions, changes and notes
+   * are on Today's Sunday card, so they aren't repeated here.
+   */
+  written?: { summary: string | null; draft: string | null } | null;
+  /** Thursday's briefing: the full Sunday Ready brief, shown inside it (only on a briefing marked Thursday's). */
+  sundayReady?: ReactNode;
+  children?: ReactNode;
+}) {
+  const own = written !== null;
+  const badge = prepared || own ? { label: "Ready", tone: "ok" as const } : noticedBadge(item);
+  const changes = own ? [] : noticedChanges(item, names);
+  const ready = written ?? view.prepared[item.id];
+  const notice = !own && item.notice ? NOTICE_WORDS[item.notice] : null;
   const page = item.kind === "couldnt-check" && item.access ? "connection" : item.kind === "missed" || item.kind === "limit" || item.kind === "couldnt-check" ? "automatic" : "sunday";
-  return <article className="find noticed">
+  return <article className="find noticed" aria-labelledby={titleId}>
     <div className="find-top"><span className={`badge ${TONE[badge.tone]}`}>{badge.label}</span>
-      <span className="find-where">{TEMPLATES[item.template].title} · {whenText(item.at, now)}</span></div>
-    <p className="find-title">{noticedTitle(item, now)}</p>
+      {item.overnight && !own && <span className="badge b-muted"><Icon name="clock" small />Overnight</span>}
+      <span className="find-where">{own ? "Ozzie prepared" : "Ozzie noticed"} · {TEMPLATES[item.template].title}{age ? "" : ` · ${whenText(item.at, now)}`}</span>
+      {age && <span className="find-age">{age}</span>}</div>
+    <h3 id={titleId} className="find-title">{written ? preparedTitle(written) : noticedTitle(item, now)}</h3>
     {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
+    {item.kind === "briefing" && item.sunday_ready && sundayReady}
     {ready?.summary && <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>}
-    {ready?.draft && <div className="draft"><span className="badge b-draft">Draft only. Nothing has been sent.</span>
-      <div className="draft-body">{ready.draft.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div></div>}
-    {item.drafts ? <p className="small">{item.drafts === 1 ? "1 note is" : `${item.drafts} notes are`} ready for you to review and send yourself.</p> : null}
+    {ready?.draft && <div className="draft" role="region" aria-label="Draft note">
+      <span className="badge b-draft">Draft only. Nothing has been sent.</span>
+      <div className="draft-body">{ready.draft.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>
+      <CopyDraft text={ready.draft} describedBy={titleId} /></div>}
+    {item.drafts && !own ? <p className="small">{item.drafts === 1 ? "1 note is" : `${item.drafts} notes are`} ready for you to review and send yourself.</p> : null}
     <div className="find-next">
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen(page)}>
+      <button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={() => onOpen(page)}>
         {page === "sunday" ? "Open Sunday" : page === "connection" ? "Open Settings" : "Open What runs automatically"}</button>
       {notice && <span className="small">{notice}</span>}
     </div>
+    {children}
   </article>;
-}
-
-/** "Ozzie noticed": what it found while you were away, newest first. */
-export function NoticedFeed({ view, names, now, onOpen, limit = 4 }: {
-  view: RunnerView; names: Readonly<Record<string, string>>; now: string; onOpen: (page: "sunday" | "automatic" | "connection") => void; limit?: number;
-}) {
-  const shown = view.noticed.filter(i => i.kind !== "clear").slice(0, limit);
-  if (!shown.length) return null;
-  return <section className="stack noticed-feed" aria-labelledby="noticed-title">
-    <h2 id="noticed-title" className="h3">Ozzie noticed</h2>
-    {shown.map(i => <NoticedCard key={i.id} item={i} view={view} names={names} now={now} onOpen={onOpen} />)}
-  </section>;
 }
 
 // ---- Open at login -----------------------------------------------------------------------------------

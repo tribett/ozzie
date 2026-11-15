@@ -20,7 +20,7 @@ const capital = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`;
  */
 export const scheduleLine = (prefs: ProactivePrefs) =>
   `${capital(every(prefs.intervalMinutes))}${prefs.runOnLaunch ? ", and when Ozzie opens" : ""}. Nothing runs after you quit Ozzie.`;
-/** "9:30 PM to 6:30 AM. Notices wait until they end." */
+/** "9:00 PM to 7:00 AM. Notices wait until they end." */
 export const quietLine = (prefs: ProactivePrefs) =>
   `${clock(prefs.quietStart)} to ${clock(prefs.quietEnd)}. Notices wait until they end${prefs.urgentDuringQuiet ? ", except urgent ones" : ""}.`;
 const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -48,7 +48,8 @@ const why: Record<RunTrigger, string> = {
 };
 const notice: Record<NonNullable<HistoryEntry["notice"]>, string | null> = {
   sent: "Notice sent", held: "Notice waiting for quiet hours to end", "sent-later": "Notice sent after quiet hours",
-  "in-app": "Seen in Ozzie", unavailable: "The Mac didn't show the notice", none: null,
+  "in-app": "Seen in Ozzie", unavailable: "The Mac didn't show the notice", briefing: "Kept for your briefing, as your Church rules say",
+  handed: "Keep Sunday covered is checking this", responsibility: "Keep Sunday covered took care of the notice", none: null,
 };
 const RECENT_MS = 24 * 3_600_000;
 
@@ -81,14 +82,21 @@ function Entry({ entry, names }: { entry: HistoryEntry; names: Names }) {
   </li>;
 }
 
-/** "What runs automatically": the recurring Sunday check, its limits, its controls and what it found. */
+/**
+ * "What runs automatically": what Ozzie keeps an eye on, with the regular Sunday check (its limits, its
+ * controls and what it found) beside Keep Sunday covered as one Sunday item, then what changed and the
+ * schedule and quiet hours.
+ */
 export function ProactivePage({ view, names, organization, planId, readiness, busy, now, churchTimeZone = null, onCheckNow, onPause, onResume, onPrefs, responsibilities = null }: {
   view: ProactiveView; names: Names; organization: string; planId: string; readiness: Readiness; busy: boolean; now: string;
   /** The church's IANA zone from the latest real check of this organization; null when no check has read it. */
   churchTimeZone?: string | null;
   onCheckNow: () => void; onPause: () => void; onResume: () => void; onPrefs: (p: ProactivePrefs) => void;
-  /** What Ozzie keeps an eye on (responsibility-views ResponsibilityList), shown first. */
-  responsibilities?: React.ReactNode;
+  /**
+   * What Ozzie keeps an eye on (responsibility-views ResponsibilityList), shown first. It is handed the
+   * regular Sunday check to show under "Keeping an eye on Sunday", beside Keep Sunday covered.
+   */
+  responsibilities?: ((regular: React.ReactNode) => React.ReactNode) | null;
 }) {
   const { prefs, schedule } = view;
   const last = schedule.last_run;
@@ -115,14 +123,9 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
         : running ? "Checking now…"
           : schedule.next_run_at ? `${time(schedule.next_run_at)}${schedule.failures ? ", trying again after a problem" : ""}.` : "Not scheduled.";
 
-  return <div className="col">
-    <p className="eyebrow">What runs automatically</p>
-    <h1 className="h1">What Ozzie does on its own</h1>
-    <p className="lede">Ozzie keeps an eye on what you ask, even with its window closed, and tells you privately when something needs you. It only reads.</p>
-    {responsibilities}
-    <h2 className="h3">The regular Sunday check</h2>
-    <p className="small">While Ozzie is running on this Mac, it checks Sunday coverage in Planning Center and tells you when something changes.</p>
-
+  // Its card title sits under "Keeping an eye on Sunday": a level below it either way.
+  const Title = responsibilities ? "h4" : "h3";
+  const regular = <>
     {recentMissed && <p className="panel-warn" role="status"><Icon name="clock" small />
       A scheduled check was missed at {time(recentMissed.scheduled_for!)}. Ozzie was closed or this Mac was asleep, so it checked again when it could.</p>}
     {last?.outcome === "failed" && !schedule.paused && <p className="panel-warn" role="status"><Icon name="info" small />
@@ -133,9 +136,9 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
 
     <section className="find" aria-labelledby="job-title">
       <div className="find-top">{state}<span className="find-where">Planning Center Services</span></div>
-      <h2 id="job-title" className="find-title">Check Sunday coverage in Planning Center</h2>
+      <Title id="job-title" className="find-title">The regular Sunday check</Title>
       <div className="sp">
-        <div className="sp-row sp-2"><span className="sp-h">What it does</span><span>Reads open positions, who is scheduled and service times for the Sunday chosen in Settings, then compares them with the last check.</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">What it does</span><span>Reads open roles, who is scheduled and service times for the Sunday chosen in Settings, then compares them with the last check.</span></div>
         <div className="sp-row sp-2"><span className="sp-h">What it can do</span><span>Reads only. It never changes Planning Center or sends messages.</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Account</span><span>Planning Center organization {organization || "not set yet"}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">When</span><span>{prefs.runOnLaunch ? `When Ozzie opens, then ${every(prefs.intervalMinutes)}` : capital(every(prefs.intervalMinutes))} while Ozzie is running on this Mac, even with its window closed. Nothing runs after you quit it.</span></div>
@@ -152,6 +155,17 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
           : <button type="button" className="btn btn-secondary" onClick={onPause}>Pause automatic checks</button>}
       </div>
     </section>
+  </>;
+
+  return <div className="col">
+    <p className="eyebrow">What runs automatically</p>
+    <h1 className="h1">What Ozzie does on its own</h1>
+    <p className="lede">Ozzie keeps an eye on what you ask, even with its window closed, and tells you privately when something needs you. It only reads.</p>
+    {responsibilities ? responsibilities(regular) : <section className="stack" aria-labelledby="sunday-watch-title">
+      <h2 id="sunday-watch-title" className="h3">Keeping an eye on Sunday</h2>
+      <p className="small">While Ozzie is running on this Mac, the regular Sunday check reads Sunday coverage in Planning Center and tells you when something changes.</p>
+      {regular}
+    </section>}
 
     <section className="stack runs-list" aria-labelledby="changes-title">
       <h2 id="changes-title" className="h3">What changed recently</h2>
@@ -163,7 +177,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
     <section className="find form runs-prefs" aria-labelledby="prefs-title">
       <h2 id="prefs-title" className="h3">Schedule and quiet hours</h2>
       <div className="row rule-row">
-        <label htmlFor="interval">Check every</label>
+        <label htmlFor="interval">Regular Sunday check every</label>
         <select id="interval" className="input" value={prefs.intervalMinutes} onChange={e => set({ intervalMinutes: Number(e.target.value) })}>
           {intervals.map(m => <option key={m} value={m}>{m === 60 ? "1 hour" : every(m).replace(/^every /, "")}</option>)}
         </select>

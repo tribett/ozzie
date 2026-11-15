@@ -98,7 +98,12 @@ export const ASK_FAILURES = Object.freeze({
   steps: "That needed more steps than Ozzie allows for one question. Try asking about one thing at a time.",
   today: "Ozzie has reached today's allowance for AI help, so it didn't ask the AI. Everything else still works, and it can ask again tomorrow.",
   allowance: "Ozzie has reached its allowance for AI help on this Mac, so it didn't ask the AI. Everything else still works.",
+  // Ozzie managed (model.ts PAUSED_TEXT, with what happened to this question).
+  paused: "Your church's AI help is paused until the allowance resets or your church changes plan, so Ozzie didn't ask the AI. Checks, lists, Church rules and briefings keep working.",
   ledger: "Ozzie's record of its work isn't available, so it didn't ask the AI.",
+  // Ozzie managed refused the question as holding a phone number or email address.
+  contact: "That question looks like it holds a phone number or email address, so Ozzie managed didn't send it to the AI. Try asking again without it.",
+  slowDown: "The AI service asked Ozzie to slow down. Try again in a minute.",
   unfinished: "Ozzie couldn't finish that just now.",
   cancelled: "You stopped this question. Ozzie won't show an answer for it.",
 });
@@ -107,6 +112,9 @@ export function askFailureText(code: FailureCode | null, native?: string): strin
   if (native === "ledger-unavailable") return ASK_FAILURES.ledger;
   if (native === "daily-limit") return ASK_FAILURES.today;
   if (native === "budget") return ASK_FAILURES.allowance;
+  if (native === "allowance-paused") return ASK_FAILURES.paused;
+  if (native === "contact-detail") return ASK_FAILURES.contact;
+  if (native === "rate-limited") return ASK_FAILURES.slowDown;
   if (code === "egress") return ASK_FAILURES.egress;
   if (code === "fidelity") return ASK_FAILURES.fidelity;
   if (code === "invalid-task") return ASK_FAILURES.invalid;

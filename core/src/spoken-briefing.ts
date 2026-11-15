@@ -74,10 +74,38 @@ function needsPeople(f: Finding, ctx: Ctx): string {
   return `${pos.name} still needs ${f.remaining === 1 ? "one more person" : `${f.remaining} more people`}${at}. ${help}${unchecked}`;
 }
 
+/** Kids team count: confirmed people only (pending isn't counted), never "adults". */
+function fewConfirmed(f: Finding, ctx: Ctx): string {
+  const pos = f.position!, c = f.confirmed?.length ?? 0, asked = f.asked?.length ?? 0;
+  const at = pos.interval ? ` at the ${clock(pos.interval.starts_at, ctx.timeZone)} service` : " this Sunday";
+  const who = c === 0 ? "No confirmed people" : `Only ${one(c, "confirmed person", "confirmed people")}`;
+  const more = asked ? ` ${asked === 1 ? "One more is asked but hasn't" : `${asked} more are asked but haven't`} answered.` : "";
+  const unsure = f.tone === "look" ? " Planning Center doesn't show which service time some confirmed people serve, so it's worth a look." : "";
+  return `${who} in ${pos.name}${at}. Your Church rules ask for at least ${f.needed ?? 2}.${more}${unsure}`;
+}
+/**
+ * Background check: only "no current check on file" or when it runs out relative to Sunday. Never a name, even with
+ * names turned on (review L3): a briefing can be heard by anyone in the room. The Sunday page shows who.
+ */
+function background(f: Finding): string {
+  const one = `One person on ${f.position?.name ?? "a kids team"}`;
+  switch (f.check) {
+    case "expires-before-sunday": return `${one} has a background check on file that expires before Sunday.`;
+    case "expires-on-sunday": return `${one} has a background check on file that expires on Sunday.`;
+    default: return `${one} has no current background check on file.${f.tone === "look" ? " Your Planning Center login may not be able to see background checks." : ""}`;
+  }
+}
+/** A Sunday item that needs a decision, by kind. */
+function decision(f: Finding, ctx: Ctx): string {
+  return f.kind === "too-few-confirmed" ? fewConfirmed(f, ctx) : f.kind === "background-check" ? background(f) : needsPeople(f, ctx);
+}
+
 function look(f: Finding, ctx: Ctx, stale: boolean): string {
   const name = ctx.nameOf(f.person_id);
   const pos = f.position?.name ?? "";
   switch (f.kind) {
+    case "too-few-confirmed": return fewConfirmed(f, ctx);
+    case "background-check": return background(f);
     case "pending":
       return `${name ? `${name} hasn't accepted ${pos} yet.` : `Someone scheduled for ${pos} hasn't accepted yet.`} ${f.notification === "sent"
         ? "The request was sent; there's no answer yet." : "Planning Center shows the request hasn't been sent yet."}`;
@@ -149,7 +177,7 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
     (f.uncertain ? looks : decisions).push(f.uncertain ? `Worth a look: ${text}` : text);
   }
   const sundayDecisions = open.filter(i => i.finding.tone === "decision")
-    .map((i, n) => again(i, `${n === 0 && i.state !== "reopened" ? "For Sunday, " : ""}${needsPeople(i.finding, ctx)}`));
+    .map((i, n) => again(i, `${n === 0 && i.state !== "reopened" ? "For Sunday, " : ""}${decision(i.finding, ctx)}`));
   decisions.push(...sundayDecisions);
   const operations = sunday ? operationsLines(input.operations) : { decisions: [], looks: [] };
   decisions.push(...operations.decisions);

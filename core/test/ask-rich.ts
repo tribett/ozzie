@@ -3,7 +3,7 @@
 // native fact-line grammar, so the two sides cannot drift apart.
 import { AskSession, buildAskContext } from "../src/ask.js";
 import { buildSundayBrief } from "../src/sunday-brief.js";
-import { nov22Capture, PEOPLE, TEAMS } from "../src/fictional-sunday.js";
+import { nov22Capture, PEOPLE, TEAMS, withFictionalBackgroundChecks } from "../src/fictional-sunday.js";
 import { decide } from "../src/sunday-decisions.js";
 
 export function richContext() {
@@ -12,6 +12,10 @@ export function richContext() {
   capture.reads.find(r => r.collection === "team_leaders" && r.team_id === TEAMS.greeter)!.outcome = "timeout";
   const rules = { sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery Lead" }], checkInAfterSundaysInARow: 3 };
   const brief = buildSundayBrief(capture, rules, "2026-11-20T15:05:00Z");
+  // Kids rules (A and B lines): Nursery and Lyrics marked as kids teams, with their background-check reads.
+  const kidsRules = { ...rules, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 2 }, { team_id: TEAMS.lyrics, min_confirmed: 1 }] };
+  brief.findings.push(...buildSundayBrief(withFictionalBackgroundChecks(nov22Capture()), kidsRules, "2026-11-20T15:05:00Z").findings
+    .filter(f => f.kind === "too-few-confirmed" || f.kind === "background-check"));
   for (const f of brief.findings) {
     if (f.position?.name === "Greeter") f.position = { ...f.position, name: "Greeters (9:30) & Hosts" };
     if (f.position?.name === "Lyrics") f.position = { ...f.position, name: "Prayer Team" };

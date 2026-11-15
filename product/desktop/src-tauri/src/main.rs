@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use ozzie_native_auth::agent::{self, AgentError, AgentStepReply};
+use ozzie_native_auth::hosted::{self, Account, HostedConfig, ManagedError};
 use ozzie_native_auth::ledger::{LedgerError, TaskLedger, TaskRow};
 use ozzie_native_auth::model::{
     self as model_route, AskRequest, DraftRequest, KeychainKeys, ModelError, ModelStatus, Route,
 };
 use ozzie_native_auth::name_guard::NameGuard;
+use ozzie_native_auth::shared_check::{self, ShareError};
 use ozzie_native_auth::{
     callback::CallbackServer,
     credentials::MacKeychain,
@@ -12,11 +14,13 @@ use ozzie_native_auth::{
     provider::{NativeHttp, PcoProvider},
     source::SourceError,
     sunday_check::{self, ReadNames, RecordingEntry, RecordingError, SundayCapture},
+    sunday_picker::{self, Choices, PlanChoice, ServiceTypeChoice},
 };
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 use ozzie_native_auth::lifetime;
@@ -40,6 +44,8 @@ enum ConsumerError {
     NotConnected,
     /// The Sunday check did not finish; carries the sanitized source reason only.
     SundayCheck(&'static str),
+    /// Setup's list of service types or upcoming plans wasn't read; the sanitized reason only.
+    SundayChoices(&'static str),
     Recording(RecordingError),
     /// Disconnect waited for an in-flight read and gave up: access was not yet revoked
     /// and the saved connection was not deleted. The read itself was cancelled.
@@ -123,9 +129,56 @@ impl SessionNames {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
-/// One Sunday check at a time; a second request is refused rather than interleaved.
+/// The Sunday check and setup's picker share one Planning Center connection, so they take turns:
+/// one check or one picker read at a time. A second check is refused rather than interleaved. A
+/// check waits out a picker read (one page, bounded by `CHECK_WAITS_FOR_PICKER`) so it never
+/// records `busy` gaps because setup was listing plans; a picker read waits for a running check up
+/// to `sunday_picker::WAIT_FOR_CONTROLLER`, then answers `busy`.
 #[derive(Clone, Default)]
-struct SundayChecks(Arc<AtomicBool>);
+struct SundayChecks(Arc<(Mutex<Option<Reader>>, Condvar)>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reader {
+    Check,
+    Picker,
+}
+/// Longer than a picker read can take: its own wait for the connection plus the identity check
+/// and one page, each under the native five-second timeout.
+const CHECK_WAITS_FOR_PICKER: Duration = Duration::from_secs(30);
+/// A held turn; dropping it lets the next reader in.
+struct Turn(SundayChecks);
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let (held, freed) = &*(self.0).0;
+        *held.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        freed.notify_all();
+    }
+}
+impl SundayChecks {
+    fn take(&self, reader: Reader, wait: Duration) -> Result<Turn, SourceError> {
+        let (held, freed) = &*self.0;
+        let deadline = Instant::now() + wait;
+        let mut current = held.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match *current {
+                None => {
+                    *current = Some(reader);
+                    return Ok(Turn(self.clone()));
+                }
+                Some(Reader::Check) if reader == Reader::Check => return Err(SourceError::Busy),
+                Some(_) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(SourceError::Busy);
+                    }
+                    current = freed
+                        .wait_timeout(current, left)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0;
+                }
+            }
+        }
+    }
+}
 struct Running(Arc<AtomicBool>);
 impl Drop for Running {
     fn drop(&mut self) {
@@ -295,16 +348,18 @@ async fn check_sunday(
     app: tauri::AppHandle,
     service_type_id: String,
     plan_id: String,
+    // Church rules: kids teams with the background-check rule on. Their scheduled people's cleared
+    // People background checks are read; absent or empty, none are. Validated natively.
+    kids_team_ids: Option<Vec<String>>,
 ) -> Result<SundayCapture, ConsumerError> {
     let consumer = consumer.inner().clone();
     let checks = checks.inner().clone();
     let names = names.inner().clone();
+    let kids_team_ids = kids_team_ids.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        checks
-            .0
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| ConsumerError::SundayCheck(SourceError::Busy.reason()))?;
-        let _running = Running(checks.0.clone());
+        let _turn = checks
+            .take(Reader::Check, CHECK_WAITS_FOR_PICKER)
+            .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
         let auth = consumer
             .0
             .lock()
@@ -316,9 +371,14 @@ async fn check_sunday(
             return Err(ConsumerError::NotConnected);
         }
         // Disconnecting or quitting cancels the controller, which ends the check.
-        let (capture, read) =
-            sunday_check::check_sunday(&auth, &service_type_id, &plan_id, &AtomicBool::new(false))
-                .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
+        let (capture, read) = sunday_check::check_sunday(
+            &auth,
+            &service_type_id,
+            &plan_id,
+            &kids_team_ids,
+            &AtomicBool::new(false),
+        )
+        .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
         names.remember(&capture);
         // The guard also learns names the capture pruned; `read` itself is dropped here.
         names.remember_read(&read);
@@ -328,6 +388,62 @@ async fn check_sunday(
             let _ = sunday_check::save_recording(&dir, &capture);
         }
         Ok(capture)
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// This session's verified Planning Center connection, or NotConnected.
+fn connected_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerError> {
+    let auth = consumer
+        .0
+        .lock()
+        .map_err(|_| ConsumerError::NativeUnavailable)?
+        .as_ref()
+        .map(|s| s.auth.clone())
+        .ok_or(ConsumerError::NotConnected)?;
+    if auth.status()?.state != ConnectionState::Connected {
+        return Err(ConsumerError::NotConnected);
+    }
+    Ok(auth)
+}
+/// A picker read's turn on the connection, shared with the Sunday check (see `SundayChecks`).
+fn picker_turn(checks: &SundayChecks) -> Result<Turn, ConsumerError> {
+    checks
+        .take(Reader::Picker, sunday_picker::WAIT_FOR_CONTROLLER)
+        .map_err(|error| ConsumerError::SundayChoices(error.reason()))
+}
+/// Setup's Sunday picker: the connected church's service types. One read-only page; nothing
+/// is saved. Disconnecting cancels the controller, which ends the read.
+#[tauri::command]
+async fn list_service_types(
+    consumer: tauri::State<'_, Consumer>,
+    checks: tauri::State<'_, SundayChecks>,
+) -> Result<Choices<ServiceTypeChoice>, ConsumerError> {
+    let consumer = consumer.inner().clone();
+    let checks = checks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _turn = picker_turn(&checks)?;
+        let auth = connected_auth(&consumer)?;
+        sunday_picker::service_types(&auth, &AtomicBool::new(false))
+            .map_err(|error| ConsumerError::SundayChoices(error.reason()))
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// Setup's Sunday picker: one service type's upcoming plans, soonest first. Read-only.
+#[tauri::command]
+async fn list_upcoming_plans(
+    consumer: tauri::State<'_, Consumer>,
+    checks: tauri::State<'_, SundayChecks>,
+    service_type_id: String,
+) -> Result<Choices<PlanChoice>, ConsumerError> {
+    let consumer = consumer.inner().clone();
+    let checks = checks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _turn = picker_turn(&checks)?;
+        let auth = connected_auth(&consumer)?;
+        sunday_picker::upcoming_plans(&auth, &service_type_id, &AtomicBool::new(false))
+            .map_err(|error| ConsumerError::SundayChoices(error.reason()))
     })
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
@@ -390,14 +506,99 @@ fn model_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, ModelError> {
         .app_data_dir()
         .map_err(|_| ModelError::NotConfigured)
 }
-/// Which model route is set up. Keys are only checked for presence, never returned.
+/// The model route's status with Ozzie managed added: whether this Mac is connected, and the church's
+/// plan and usage, read from ozzie.church at most once a minute (offline: the last reading and when).
+/// Keys and the device token are only checked for presence, never returned.
+fn full_status(dir: &std::path::Path) -> ModelStatus {
+    let mut status = model_route::status(dir, &KeychainKeys);
+    let hosted = HostedConfig::current();
+    let account = hosted::account(&hosted, &KeychainKeys, dir, sunday_check::unix_ms());
+    hosted::attach(&mut status, account);
+    status
+}
+/// Which model route is set up, and Ozzie managed's plan and usage when this Mac is connected.
 #[tauri::command]
 async fn model_status(app: tauri::AppHandle) -> Result<ModelStatus, ModelError> {
+    tauri::async_runtime::spawn_blocking(move || Ok(full_status(&model_dir(&app)?)))
+        .await
+        .map_err(|_| ModelError::ProviderFailure)?
+}
+/// One Ozzie managed connect at a time; Cancel, Disconnect and quitting stop the one waiting.
+#[derive(Clone, Default)]
+struct ManagedConnect {
+    busy: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+}
+/// Connects this Mac to Ozzie managed (hosted.rs): opens ozzie.church's sign-in in the browser, waits
+/// up to five minutes for the loopback callback, exchanges the one-time code natively and keeps the
+/// device token in the Keychain. Returns the church's plan and usage, never the token. `busy` while
+/// another connect waits.
+#[tauri::command]
+async fn managed_connect(
+    managed: tauri::State<'_, ManagedConnect>,
+    app: tauri::AppHandle,
+) -> Result<Account, ManagedError> {
+    let managed = managed.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        Ok(model_route::status(&model_dir(&app)?, &KeychainKeys))
+        managed
+            .busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| ManagedError::Busy)?;
+        let _running = Running(managed.busy.clone());
+        managed.cancel.store(false, Ordering::SeqCst);
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| ManagedError::Unavailable)?;
+        let hosted = HostedConfig::current();
+        let clock =
+            ozzie_native_auth::oauth::system_clock().map_err(|_| ManagedError::Unavailable)?;
+        let attempt = hosted::ConnectAttempt::begin(&hosted, clock())?;
+        // ozzie.church's connect address with a challenge, a state, the loopback port and a fixed
+        // label only. The one-time code and the device token are never passed to a process.
+        let opened = std::process::Command::new("/usr/bin/open")
+            .arg(attempt.url())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if !opened.is_ok_and(|status| status.success()) {
+            return Err(ManagedError::BrowserUnavailable);
+        }
+        hosted::connect(
+            &attempt,
+            &hosted,
+            &KeychainKeys,
+            &managed.cancel,
+            &*clock,
+            &dir,
+        )
     })
     .await
-    .map_err(|_| ModelError::ProviderFailure)?
+    .map_err(|_| ManagedError::Unavailable)?
+}
+/// Stops a connect that is waiting for the browser.
+#[tauri::command]
+fn managed_connect_cancel(managed: tauri::State<'_, ManagedConnect>) {
+    managed.cancel.store(true, Ordering::SeqCst);
+}
+/// Disconnects this Mac from Ozzie managed: tells ozzie.church to revoke its device token (best
+/// effort), then deletes the token from the Keychain. Returns the model status afterwards.
+#[tauri::command]
+async fn managed_disconnect(
+    managed: tauri::State<'_, ManagedConnect>,
+    app: tauri::AppHandle,
+) -> Result<ModelStatus, ManagedError> {
+    managed.cancel.store(true, Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| ManagedError::Unavailable)?;
+        hosted::disconnect(&HostedConfig::current(), &KeychainKeys, &dir)?;
+        Ok(full_status(&dir))
+    })
+    .await
+    .map_err(|_| ManagedError::Unavailable)?
 }
 /// Rewords one placeholder-only draft. The request already passed the placeholder boundary
 /// in the webview; this is the app's only non-GET request and it never goes to Planning Center.
@@ -568,6 +769,76 @@ async fn ledger_list(
         .await
         .map_err(|_| LedgerError::Unavailable)
 }
+/// "Use Ozzie's last check in other AI apps" (Settings; off by default). `envelopes` are the shared
+/// tools' results from the webview (core/mcp/snapshot.ts) and `copy_id` the random id of the
+/// labels they use. shared_check.rs checks each result as agent_step checks a tool message, against
+/// every name this session has shown, adds the task ledger's newest name-free rows (none when the
+/// ledger is unavailable) and writes `shared-check.json` in the app data folder for Ozzie's
+/// read-only server (core/mcp), with the facts' own check time. `off` while sharing is off;
+/// `invalid` leaves the last file as it was. Never reads Planning Center.
+#[tauri::command]
+async fn share_last_check(
+    ledger: tauri::State<'_, Ledger>,
+    names: tauri::State<'_, SessionNames>,
+    app: tauri::AppHandle,
+    envelopes: Vec<String>,
+    copy_id: String,
+) -> Result<(), ShareError> {
+    let tasks = ledger
+        .get()
+        .map(|l| l.list(shared_check::MAX_TASKS))
+        .unwrap_or_default();
+    let names = names.inner().snapshot();
+    in_app_data(app, move |dir| {
+        shared_check::share(
+            dir,
+            &envelopes,
+            &tasks,
+            &names,
+            &copy_id,
+            sunday_check::unix_ms(),
+        )
+    })
+    .await
+}
+/// Runs one shared-check file operation in the app data folder, off the main thread.
+async fn in_app_data<T: Send + 'static>(
+    app: tauri::AppHandle,
+    work: impl FnOnce(&std::path::Path) -> Result<T, ShareError> + Send + 'static,
+) -> Result<T, ShareError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| ShareError::Unavailable)?;
+        work(&dir)
+    })
+    .await
+    .map_err(|_| ShareError::Unavailable)?
+}
+/// Whether the leader has sharing on, as kept natively (shared_check.rs `is_on`).
+#[tauri::command]
+async fn sharing_check_status(app: tauri::AppHandle) -> Result<bool, ShareError> {
+    in_app_data(app, |dir| Ok(shared_check::is_on(dir))).await
+}
+/// Turning sharing on. Nothing is shared until the webview shares the check on screen.
+#[tauri::command]
+async fn start_sharing_check(app: tauri::AppHandle) -> Result<(), ShareError> {
+    in_app_data(app, shared_check::start).await
+}
+/// Turning sharing off: no more shares, and the shared file (and any half-written one) removed so
+/// other AI apps have nothing to read. `unavailable` when something couldn't be removed; the next
+/// start of the app tries again.
+#[tauri::command]
+async fn stop_sharing_check(app: tauri::AppHandle) -> Result<(), ShareError> {
+    in_app_data(app, shared_check::stop).await
+}
+/// Nothing current to share (no check on screen, another church's, Planning Center disconnected,
+/// recordings deleted, a refused share): removes the shared file. Sharing stays on.
+#[tauri::command]
+async fn clear_shared_check(app: tauri::AppHandle) -> Result<(), ShareError> {
+    in_app_data(app, shared_check::clear).await
+}
 /// Chooses the route. Never accepts a key: keys go into the Keychain outside this IPC, and an own
 /// provider's key is read only from the account bound to the base URL's host (`ModelStatus`
 /// `key_account`), so changing the URL here can't send a saved key anywhere else. A model id
@@ -591,7 +862,7 @@ async fn set_model_route(
         }
         let dir = model_dir(&app)?;
         model_route::save_config(&dir, route, base_url.as_deref(), model.as_deref())?;
-        Ok(model_route::status(&dir, &KeychainKeys))
+        Ok(full_status(&dir))
     })
     .await
     .map_err(|_| ModelError::ProviderFailure)?
@@ -608,6 +879,8 @@ struct DevDefaults {
     autopilot: bool,
     /// Debug builds only: the autopilot also opts in to rooms, follow-ups and group events (asks for consent).
     autopilot_operations: bool,
+    /// Debug builds only: `team_id:min` pairs the autopilot marks as kids teams (OZZIE_DEV_KIDS_TEAMS, e.g. "7593352:2").
+    kids_teams: String,
 }
 /// Validated values only; anything missing or malformed is an empty string.
 #[cfg(any(debug_assertions, test))]
@@ -628,6 +901,18 @@ fn dev_defaults_from(get: impl Fn(&str) -> Option<String>) -> DevDefaults {
         plan_id: id("OZZIE_PCO_PLAN"),
         autopilot: get("OZZIE_DEV_AUTOPILOT").as_deref() == Some("1"),
         autopilot_operations: get("OZZIE_DEV_OPERATIONS").as_deref() == Some("1"),
+        kids_teams: get("OZZIE_DEV_KIDS_TEAMS")
+            .filter(|v| {
+                v.len() <= 200
+                    && v.split(',').all(|pair| {
+                        pair.split_once(':').is_some_and(|(team, min)| {
+                            numeric_id(team)
+                                && matches!(min.parse::<u8>(), Ok(1..=10))
+                                && !min.starts_with('0')
+                        })
+                    })
+            })
+            .unwrap_or_default(),
     }
 }
 /// Debug builds only: one name-free autopilot line to the developer's terminal. Release: no-op.
@@ -677,6 +962,7 @@ fn main() {
         .manage(SundayChecks::default())
         .manage(SessionNames::default())
         .manage(Ledger::default())
+        .manage(ManagedConnect::default())
         .manage(local_tools::LocalTools::default())
         .manage(Smoke {
             enabled: smoke,
@@ -686,6 +972,11 @@ fn main() {
         // launch left admitted or running.
         .setup(|app| {
             let _ = app.state::<Ledger>().0.set(open_ledger(app.handle()));
+            // A shared copy left while sharing is off (a failed removal, a crash) is removed at
+            // every start, with any half-written one; a failure here is tried again next start.
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = shared_check::startup(&dir);
+            }
             always_on::setup(app)?;
             Ok(())
         })
@@ -697,12 +988,17 @@ fn main() {
             check_saved_connection,
             disconnect_planning_center,
             check_sunday,
+            list_service_types,
+            list_upcoming_plans,
             list_sunday_recordings,
             load_sunday_recording,
             delete_sunday_recordings,
             dev_defaults,
             dev_log,
             model_status,
+            managed_connect,
+            managed_connect_cancel,
+            managed_disconnect,
             reword_draft,
             ask_ozzie,
             agent_step,
@@ -710,12 +1006,22 @@ fn main() {
             ledger_transition,
             ledger_event,
             ledger_list,
+            share_last_check,
+            sharing_check_status,
+            start_sharing_check,
+            stop_sharing_check,
+            clear_shared_check,
             set_model_route,
             notify_sunday_attention,
             local_tools::speak_briefing,
             local_tools::stop_briefing,
+            local_tools::prepare_card_reader,
             local_tools::read_card_text,
             local_tools::cancel_card_reading,
+            local_tools::voice_status_check,
+            local_tools::listen_for_question,
+            local_tools::stop_listening,
+            local_tools::cancel_listening,
             always_on::background_info,
             always_on::background_next_due,
             always_on::autostart_get,
@@ -745,6 +1051,9 @@ fn main() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             cleanup.stop();
+            app.state::<ManagedConnect>()
+                .cancel
+                .store(true, Ordering::SeqCst);
             app.state::<local_tools::LocalTools>().stop();
             if smoke {
                 println!("native-lifecycle: stopped; callback work cancelled and joined");
@@ -764,6 +1073,54 @@ mod tests {
             SUNDAY_NOTICE_BODY,
             "Sunday coverage needs attention. Open Ozzie to see details."
         );
+    }
+
+    #[test]
+    fn a_check_waits_out_a_picker_read_and_never_runs_beside_another_check() {
+        let checks = SundayChecks::default();
+        let long = Duration::from_secs(5);
+        // Setup is listing plans when a scheduled check starts: the check waits, then runs.
+        let picker = checks.take(Reader::Picker, long).unwrap();
+        std::thread::scope(|scope| {
+            let check = scope.spawn(|| checks.take(Reader::Check, CHECK_WAITS_FOR_PICKER));
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(!check.is_finished(), "the check waits for the picker read");
+            drop(picker);
+            let running = check.join().unwrap().expect("the check runs, not busy");
+            // A second check is refused at once rather than interleaved.
+            let started = Instant::now();
+            assert_eq!(
+                checks.take(Reader::Check, long).err(),
+                Some(SourceError::Busy)
+            );
+            assert!(started.elapsed() < Duration::from_millis(50));
+            // A picker read waits for the check up to its bound, then answers busy.
+            let started = Instant::now();
+            assert_eq!(
+                checks
+                    .take(Reader::Picker, Duration::from_millis(100))
+                    .err(),
+                Some(SourceError::Busy)
+            );
+            assert!(started.elapsed() >= Duration::from_millis(100));
+            let picker = scope.spawn(|| checks.take(Reader::Picker, long));
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(!picker.is_finished());
+            drop(running);
+            let reading = picker
+                .join()
+                .unwrap()
+                .expect("the picker reads after the check");
+            // Picker reads take turns with each other too.
+            let next = scope.spawn(|| checks.take(Reader::Picker, long).is_ok());
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(!next.is_finished());
+            drop(reading);
+            assert!(next.join().unwrap());
+        });
+        assert!(checks.take(Reader::Check, long).is_ok());
+        assert_eq!(sunday_picker::WAIT_FOR_CONTROLLER, Duration::from_secs(10));
+        assert!(CHECK_WAITS_FOR_PICKER > sunday_picker::WAIT_FOR_CONTROLLER * 2);
     }
 
     #[test]
@@ -804,5 +1161,25 @@ mod tests {
         ]));
         assert_eq!(fields(bad), ["", "", "", ""]);
         assert_eq!(fields(dev_defaults_from(|_| None)), ["", "", "", ""]);
+        let kids = |v: &'static str| {
+            dev_defaults_from(move |key: &str| {
+                (key == "OZZIE_DEV_KIDS_TEAMS").then(|| v.to_string())
+            })
+            .kids_teams
+        };
+        assert_eq!(kids("7593352:2"), "7593352:2");
+        assert_eq!(kids("7593352:2,6938634:1"), "7593352:2,6938634:1");
+        for bad in [
+            "7593352",
+            "7593352:0",
+            "7593352:11",
+            "7593352:02",
+            "0759:2",
+            "7593352:2,",
+            "x:2",
+            "7593352:2;rm",
+        ] {
+            assert_eq!(kids(bad), "", "{bad}");
+        }
     }
 }

@@ -47,7 +47,7 @@ async function readWith(texts: (CardTextResult | Error)[], count = texts.length)
 
 describe("reading visitor cards on this Mac", () => {
   it("fills what was read cleanly, flags what wasn't, and lets go of each photo's file once read", async () => {
-    const { controller, states, suggested, recognizer, pending } = await readWith([{ status: "read", text: CARD_A }, { status: "read", text: CARD_B }]);
+    const { controller, states, suggested, recognizer, pending } = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }, { status: "read", text: CARD_B, unclearLines: [] }]);
     const [a, b] = cardsOf(controller);
     expect(fieldsOf(a!)).toEqual({
       name: { text: "Riley Thornbury", state: "typed" }, phone: { text: "(555) 014-2290", state: "typed" },
@@ -73,9 +73,30 @@ describe("reading visitor cards on this Mac", () => {
   });
 
   it("a card the reader fails on is left for typing; the others still read", async () => {
-    const { controller, states } = await readWith([new Error("closed reason only"), { status: "read", text: CARD_A }]);
+    const { controller, states } = await readWith([new Error("closed reason only"), { status: "read", text: CARD_A, unclearLines: [] }]);
     expect(states).toEqual({ 1: "failed", 2: "read" });
     expect(cardsOf(controller)[0]!.fields.name.state).toBe("unreviewed");
+  });
+
+  it("a line this Mac couldn't read clearly keeps its words only as a flagged suggestion to check", async () => {
+    // CARD_A's lines: 0 name, 1 phone, 2 email, 3 blank, 4-5 request.
+    const { controller, ticket, suggested } = await readWith([{ status: "read", text: CARD_A, unclearLines: [1, 5] }]);
+    const [card] = cardsOf(controller);
+    expect(fieldsOf(card!)).toEqual({
+      name: { text: "Riley Thornbury", state: "typed" }, phone: { text: "(555) 014-2290", state: "unclear" },
+      email: { text: "riley.t@example.com", state: "typed" }, request: { text: "Please pray for my\nnew job starting Monday.", state: "unclear" },
+    });
+    expect(suggested).toEqual({ 1: ["name", "phone", "email", "request"] });
+    // Checking the card keeps them marked unclear in the copied list unless the person clears the mark.
+    checkCard(controller, ticket, card!);
+    expect(listFor(controller).text).toContain("Phone: (555) 014-2290 (unclear on the card, worth a look)");
+  });
+
+  it("a reading without well-formed unclear lines is not trusted: the card is left for typing", async () => {
+    const odd = [undefined, null, "1", [-1], [1.5], ["1"]] as unknown as number[][];
+    const { controller, states } = await readWith(odd.map(unclearLines => ({ status: "read", text: CARD_A, unclearLines })));
+    expect(Object.values(states)).toEqual(Array(odd.length).fill("failed"));
+    for (const card of cardsOf(controller)) expect(card.fields.name.state).toBe("unreviewed");
   });
 
   it("drops a reading that arrives after the review was discarded, and the photos' addresses are revoked", async () => {
@@ -88,7 +109,7 @@ describe("reading visitor cards on this Mac", () => {
     });
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     review.controller.discard(review.ticket);
-    release({ status: "read", text: CARD_A });
+    release({ status: "read", text: CARD_A, unclearLines: [] });
     await run;
     expect(cardsOf(review.controller)).toEqual([]);
     expect(pending).toEqual([null, null]);
@@ -98,7 +119,7 @@ describe("reading visitor cards on this Mac", () => {
 
 describe("checking and finishing", () => {
   it("a person's check makes empty fields blank on the card and keeps unclear ones marked", async () => {
-    const { controller, ticket } = await readWith([{ status: "read", text: CARD_C }]);
+    const { controller, ticket } = await readWith([{ status: "read", text: CARD_C, unclearLines: [] }]);
     expect(cardsOf(controller)[0]!.fields.email.state).toBe("unreviewed");
     expect(checkCard(controller, ticket, cardsOf(controller)[0]!)).toBe("ok");
     const card = cardsOf(controller)[0]!;
@@ -110,7 +131,7 @@ describe("checking and finishing", () => {
   });
 
   it("copies the plain list exactly as reviewed", async () => {
-    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A }, { status: "read", text: CARD_B }]);
+    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }, { status: "read", text: CARD_B, unclearLines: [] }]);
     for (const card of cardsOf(controller)) checkCard(controller, ticket, card);
     const { text, count } = listFor(controller);
     expect(count).toBe(2);
@@ -143,10 +164,14 @@ describe("the review page", () => {
     expect(html).toContain("discards these cards right away");
     expect(html).toContain("Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.");
     expect(render(controller, null, { recognizer: "not-available" })).toContain("This Mac can&#x27;t read card text, so please type each card.");
+    expect(html).not.toContain("Getting this Mac ready");
+    // The first preparation on a Mac can take a while; it never uses a card.
+    expect(render(controller, null, { recognizer: "preparing" }))
+      .toContain("Getting this Mac ready to read cards. The first time can take a minute or two; nothing from your cards is used for this.");
   });
 
   it("puts possible matches and unclear readings first, marks every field until a person checks the card, and holds the copy until then", async () => {
-    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A }, { status: "read", text: CARD_B }]);
+    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }, { status: "read", text: CARD_B, unclearLines: [] }]);
     const ui = { reading: { 1: "read", 2: "read" } as const, suggested: { 1: ["name", "phone", "email", "request"] as const, 2: ["name", "phone", "email", "request"] as const } };
     const html = render(controller, ticket, ui);
     const first = html.indexOf("Look at these first");
@@ -167,8 +192,18 @@ describe("the review page", () => {
     expect(checked).toMatch(/<button type="button" class="btn btn-primary">Copy the reviewed list/);
   });
 
+  it("shows words this Mac couldn't read clearly as a suggestion to check, worth a look", async () => {
+    const { controller, ticket } = await readWith([{ status: "read", text: CARD_A, unclearLines: [1, 5] }]);
+    const html = render(controller, ticket, { reading: { 1: "read" }, suggested: { 1: ["name", "phone", "email", "request"] } });
+    expect(html.match(/Ozzie couldn&#x27;t read this clearly — check it against the card\./g)!.length).toBe(2);
+    expect(html.match(/Worth a look<\/span>/g)!.length).toBe(2);
+    expect(html).toContain('value="(555) 014-2290"');
+    expect(html).toContain("Card 1: the phone and request are hard to read.");
+    expect(html).toContain("Looks right — keep the unclear parts marked");
+  });
+
   it("lists repeated names in the batch as possibly the same person, never merged", async () => {
-    const { controller } = await readWith([{ status: "read", text: CARD_B }, { status: "read", text: CARD_B }]);
+    const { controller } = await readWith([{ status: "read", text: CARD_B, unclearLines: [] }, { status: "read", text: CARD_B, unclearLines: [] }]);
     expect(lookFirst(cardsOf(controller), {}).map(x => x.text)).toContain("Cards 1 and 2 have the same name. They may be the same person.");
   });
 

@@ -6,7 +6,7 @@ body { background: #FAF6EE; }
 .oz .main { overflow-y: auto; padding-bottom: 64px; }
 .oz .col { width: 100%; margin: 0 auto; }
 .oz .logo { width: 132px; }
-.oz .side { position: sticky; top: 0; height: 100vh; }
+.oz .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .oz .banner { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 10px; background: var(--accent-tint); color: var(--accent-ink); font-size: 14.5px; }
 .oz .banner.dashed { background: transparent; border: 1.5px dashed var(--control); color: var(--ink-2); }
 .oz .problem { color: var(--danger); background: var(--danger-tint); padding: 12px 14px; border-radius: 10px; }
@@ -57,6 +57,7 @@ body { background: #FAF6EE; }
 .oz .draft-to { margin: 2px 0 12px; }
 .oz .rule-team { display: flex; flex-direction: column; }
 .oz .rule-note { margin: 4px 0 0 192px; }
+.oz .rule-kids .rule-team { margin-top: 12px; }
 /* What runs automatically */
 .oz .sp-row.sp-2 { grid-template-columns: 150px minmax(0, 1fr); }
 .oz .runs-list .list li { align-items: baseline; }
@@ -93,6 +94,14 @@ body { background: #FAF6EE; }
 .oz .ask-input:disabled { color: var(--ink-3); }
 .oz .composer:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
 .oz .ask-note { margin: -6px 16px 16px; display: flex; gap: 8px; align-items: flex-start; }
+/* Speaking a question (Ask): the microphone button and its one-line status. */
+.oz .ask-mic { width: 36px; height: 36px; margin-right: 6px; }
+.oz .ask-mic:disabled { opacity: .45; cursor: default; }
+.oz .ask-mic:disabled:hover { background: transparent; }
+.oz .ask-mic.is-on { background: var(--accent-tint); color: var(--accent-ink); border-color: var(--accent); }
+.oz .ask-mic:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.oz .ask-voice { margin: -8px 16px 12px; }
+.oz .ask-voice:empty { display: none; }
 .oz .ask-panel .panel-info p { color: var(--ink); }
 .oz .ask-panel .msg-oz .av .ic { width: 18px; height: 18px; color: var(--accent); }
 .oz .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -227,12 +236,109 @@ body { background: #FAF6EE; }
 .oz .responsibility .find-next .small { color: var(--ink-2); }
 .oz .template-list li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
 .oz .resp-ended > summary { cursor: pointer; font-size: 14px; color: var(--ink-2); }
-.oz .watch-strip { display: flex; flex-direction: column; gap: 6px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--sunken); }
-.oz .watch-list li { display: flex; gap: 8px; align-items: flex-start; font-size: 14.5px; }
-.oz .watch-strip > .btn-quiet, .oz .watch-strip p .btn-quiet { align-self: flex-start; margin-left: -10px; }
+/* What runs automatically: the regular Sunday check and Keep Sunday covered, grouped as one Sunday item */
+.oz .sunday-watch { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; background: var(--sunken); border: 1px solid var(--line); }
+.oz .sunday-watch-h { font: 500 20px/1.25 var(--f-display); color: var(--ink); }
+.oz .sunday-watch > .small { margin-top: -6px; color: var(--ink-2); text-wrap: pretty; }
+.oz .sunday-watch .find-title { font-size: 21px; }
 .oz .noticed .find-title { font-size: 16px; }
 .oz .noticed-summary { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); font-size: 14.5px; }
 /* In the narrow Ask panel a plan's rows stack: label over value. */
 .oz .ask-panel .plan-card .sp-row.sp-2 { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 8px 0; }
 .oz .ask-panel .plan-card .find-title { font-size: 20px; }
 .oz .ask-panel .plan-card .find-next { gap: 8px; }
+/* Finding feedback (finding-feedback.tsx): quiet controls under Why I flagged this; a chosen per-kind setting reads as on. */
+.oz .find-feedback { margin-top: 2px; }
+.oz .find-feedback > .find-next { flex-wrap: wrap; gap: 2px 4px; }
+.oz .find-feedback .btn-quiet[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-ink); }
+.oz .find-feedback > .small { margin-top: 4px; color: var(--ink-2); }
+.oz .feedback-note { align-items: center; flex-wrap: wrap; }
+.oz .feedback-note > span:not(.spacer) { min-width: 0; flex: 1 1 18rem; }
+.oz .set-aside .list li, .oz .from-cards .rule-entry { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.oz .set-aside .list li > span, .oz .from-cards .rule-entry > .stack-tight { flex: 1 1 16rem; min-width: 0; }
+.oz .from-cards h3.bold { margin-top: 12px; font-size: 15px; }
+.oz .sunday-ready { margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); }
+.oz .sunday-ready > .bold + .small { margin-top: 2px; }
+.oz .sunday-ready .small.bold { margin-top: 8px; color: var(--ink); }
+/* Today: three groups (heading and item count), each card's age, and setting an item aside */
+.oz .today-group { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.oz .today-group-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: 6px; }
+.oz .today-count { font: 600 13px/1 var(--f-ui); color: var(--ink-2); background: var(--sunken); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; white-space: nowrap; }
+.oz .today .find-title { font-size: 20px; }
+.oz .find-age { margin-left: auto; flex: none; white-space: nowrap; font-size: 13.5px; font-weight: 500; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.oz .today-empty { padding: 14px 18px; border: 1.5px dashed var(--line-strong); border-radius: 14px; color: var(--ink-2); font-size: 15px; text-wrap: pretty; }
+.oz .today-calm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14.5px; color: var(--ink-2); }
+.oz .today-calm .ic { color: var(--accent); }
+.oz .today-later { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.oz .today-later > .btn-quiet:first-child, .oz .today-more > .btn-quiet { margin-left: -10px; }
+.oz .today-watch .find-body { margin-top: 4px; font-size: 14.5px; }
+.oz .today-notes { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; margin-top: 10px; font-size: 14.5px; color: var(--ink-2); }
+.oz .today-notes > span:last-child { flex: 1 1 16rem; min-width: 0; }
+.oz .today-writeup > summary .ic { transition: transform .12s ease-out; }
+.oz .today-writeup[open] > summary .ic { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .oz .today-writeup > summary .ic { transition: none; } }
+.oz .fictional-note { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; }
+.oz .fictional-note .ic { margin-top: 2px; }
+.oz .copy-draft { margin-top: 14px; }
+.oz .today-aside { padding: 4px 18px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--sunken); }
+.oz .today-aside > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 15px; color: var(--ink-2); list-style: none; border-radius: 6px; }
+.oz .today-aside > summary::-webkit-details-marker { display: none; }
+.oz .today-aside > summary .ic { transition: transform .12s ease-out; }
+.oz .today-aside[open] > summary .ic { transform: rotate(90deg); }
+.oz .today-aside .list li { align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.oz .today-aside-t { flex: 1 1 220px; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .oz .today-aside > summary .ic { transition: none; } }
+/* Setup: choosing the Sunday from the upcoming plans, with typing the ids by hand folded below */
+.oz .picker { display: flex; flex-direction: column; gap: 14px; }
+.oz .picker-status { display: flex; align-items: center; gap: 8px; font-size: 14.5px; color: var(--ink-2); }
+.oz .picker-type { display: flex; flex-direction: column; gap: 6px; }
+.oz .picker-type .field-l { margin-bottom: 0; }
+.oz .picker-type select.input { max-width: 420px; }
+.oz .picker-plans { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.oz .picker-plans legend { padding: 0; margin-bottom: 6px; }
+.oz .picker-plans .choice { align-items: center; padding: 12px 16px; cursor: pointer; }
+.oz .picker-plans .choice:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.oz .picker-plans .choice > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.oz .picker-plans .choice-d { overflow-wrap: anywhere; }
+.oz .picker-problem { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.oz .picker-hand { padding-top: 4px; border-top: 1px solid var(--line); }
+.oz .picker-hand > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 14.5px; color: var(--accent); list-style: none; border-radius: 6px; }
+.oz .picker-hand > summary::-webkit-details-marker { display: none; }
+.oz .picker-hand > summary .ic { transition: transform .12s ease-out; }
+.oz .picker-hand[open] > summary .ic { transform: rotate(90deg); }
+.oz .picker-hand-body { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+@media (prefers-reduced-motion: reduce) { .oz .picker-hand > summary .ic { transition: none; } }
+/* Narrow windows and large text (200% zoom of a laptop window): the sidebar becomes a rail of icons. Each label stays
+   for VoiceOver (visually hidden) and shows beside its icon on hover or keyboard focus; counts sit on their icons. */
+@media (max-width: 760px) {
+  .oz .shell, .oz .shell.shell-2, .oz .shell.shell-ask { grid-template-columns: 72px minmax(0, 1fr); }
+  .oz .side { padding: 16px 10px; gap: 16px; z-index: 5; }
+  .oz .brand { padding: 0; display: flex; justify-content: center; }
+  .oz .logo { width: 44px; height: 44px; object-fit: cover; object-position: 0 50%; }
+  .oz .nav-i, .oz .ask-entry { justify-content: center; padding: 0; gap: 0; position: relative; margin: 0; }
+  .oz .nav-label, .oz .side-org { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .oz .nav-i .count { position: absolute; top: 2px; right: 0; min-width: 20px; height: 20px; padding: 0 5px; font-size: 12px; margin: 0; }
+  .oz .nav-i:is(:hover, :focus-visible)::after {
+    /* Fixed at its own place (no offsets), so the rail's scrolling never clips it; then moved to the icon's right. */
+    content: attr(data-label); position: fixed; transform: translateX(calc(50% + 36px)); z-index: 30;
+    padding: 6px 10px; border-radius: 8px; background: var(--ink); color: var(--paper); font: 600 14px/1.2 var(--f-ui); white-space: nowrap; pointer-events: none; box-shadow: var(--shadow);
+  }
+  .oz .side-foot { padding: 0; align-items: center; }
+  .oz .quiet-note { justify-content: center; }
+  /* A long button label ("Looks right — keep the unclear parts marked") wraps instead of running out of its card. */
+  .oz .btn { height: auto; min-height: 44px; white-space: normal; text-align: center; line-height: 1.25; padding-top: 8px; padding-bottom: 8px; }
+  .oz .btn-sm { min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
+}
+/* Spacing and alignment */
+/* A finding's top row keeps its age on the same line: where it is wraps inside its own space first. */
+.oz .find-top > .find-where { flex: 1 1 10rem; min-width: 0; }
+/* The controls under Why I flagged this: every wrapped row lines its words up with the card's text, close to the row above. */
+.oz .find-feedback > .find-next { margin-top: 6px; margin-left: -14px; }
+.oz .find-feedback > .find-next > .btn-quiet:first-child { margin-left: 0; }
+/* A sentence, then the checkbox it explains. */
+.oz .find-body + .stack-tight { margin-top: 12px; }
+.oz .draft > p.small:last-child { margin-top: 12px; }
+/* Kids teams: a team's count sits under its checkbox; the background-check rule is set apart from the teams. */
+.oz .rule-kids .kids-count { margin: 6px 0 4px 34px; }
+.oz .rule-kids .kids-count label { min-width: 146px; }
+.oz .rule-kids .kids-background { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }

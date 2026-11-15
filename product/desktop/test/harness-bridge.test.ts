@@ -49,7 +49,9 @@ describe("the model step over native agent_step", () => {
 
   it("tells a spent allowance, today's allowance and an unavailable record apart in the Ask panel (review C9)", async () => {
     for (const [native, text] of [["budget", ASK_FAILURES.allowance], ["daily-limit", ASK_FAILURES.today], ["ledger-unavailable", ASK_FAILURES.ledger],
-      ["denied", ASK_FAILURES.denied], ["invalid-task", ASK_FAILURES.invalid], ["limit", ASK_FAILURES.steps], ["rate-limited", ASK_FAILURES.unfinished]] as const) {
+      ["denied", ASK_FAILURES.denied], ["invalid-task", ASK_FAILURES.invalid], ["limit", ASK_FAILURES.steps],
+      // Ozzie managed's own refusals each say what happened (hosted review 2026-11-14), never "couldn't finish".
+      ["rate-limited", ASK_FAILURES.slowDown], ["contact-detail", ASK_FAILURES.contact], ["provider-failure", ASK_FAILURES.unfinished]] as const) {
       const notes = new StepNotes();
       const failing = fakeLedger(() => Promise.reject(native));
       const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "ts", step: agentStep(failing.invoke, notes) });
@@ -60,13 +62,25 @@ describe("the model step over native agent_step", () => {
     expect(`${ASK_FAILURES.today} ${ASK_FAILURES.allowance}`).toMatch(/today's allowance for AI help.*its allowance for AI help/u);
   });
 
+  it("says a paused Ozzie managed allowance as its own message, and never retries it (hosted Ozzie)", async () => {
+    expect(stepFailure("allowance-paused")).toBe("limit");
+    const notes = new StepNotes();
+    let asked = 0;
+    const paused = fakeLedger(() => { asked += 1; return Promise.reject("allowance-paused"); });
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "ts", step: agentStep(paused.invoke, notes) });
+    const turn = await askOzzie(h, "Who could cover Greeter?", { skills, notes });
+    expect(turn).toEqual({ state: "problem", code: "limit", text: ASK_FAILURES.paused });
+    expect(asked).toBe(1);
+    expect(ASK_FAILURES.paused).toBe("Your church's AI help is paused until the allowance resets or your church changes plan, so Ozzie didn't ask the AI. Checks, lists, Church rules and briefings keep working.");
+  });
+
   it("sends the request as is and throws an object with the mapped code", async () => {
     const reply: AgentStepReply = { content: "Fine.", tool_calls: [], finish: "stop" };
     const ok = fakeLedger(() => reply);
     const request: AgentStepRequest = { task_id: "00000000-0000-4000-8000-000000000001", messages: [{ role: "user", content: "Hi" }], tools: [], max_tokens: 700 };
     await expect(agentStep(ok.invoke)(request, new AbortController().signal)).resolves.toEqual(reply);
     expect(ok.log).toEqual([["agent_step", { request }]]);
-    for (const [native, code] of [["egress", "egress"], ["budget", "limit"], ["not-configured", "no-model"], ["rate-limited", "transport"]] as const) {
+    for (const [native, code] of [["egress", "egress"], ["budget", "limit"], ["not-configured", "no-model"], ["rate-limited", "transport"], ["contact-detail", "egress"]] as const) {
       const failing = fakeLedger(() => Promise.reject(native));
       const error = await agentStep(failing.invoke)(request, new AbortController().signal).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(StepFailure);

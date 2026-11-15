@@ -47,6 +47,18 @@ describe("placeholder boundary", () => {
 
   it("ordinary roles are not over-redacted", () => {
     expect(templateDraft(ctx, capture.names).role.sent).toBe("Greeter");
+    for (const role of ["Room 12", "Parking Lot B", "Kids 4-5", "Grades 1, 2 & 3"]) expect(templateDraft(withRole(role), capture.names).role.sent, role).toBe(role);
+  });
+
+  it("a role that could read as contact details, or is too long for a note, is sent as [Role] and restored exactly", () => {
+    // Ozzie managed refuses a reword with contact details (hosted review 2026-11-14, S5): "Rooms 101, 102 & 103" is nine
+    // digits in short groups. A run of three digits, seven in all, or an @ (raw or NFKC) keeps the role on this Mac.
+    for (const role of ["Rooms 101, 102 & 103", "Section 1100-1200", "Kids Grades 1, 2, 3, 4, 5, 6, 7", "Room １０１", "Help desk @ lobby", "Hall ﹫ east", "x".repeat(301)]) {
+      const draft = templateDraft(withRole(role), capture.names);
+      expect(draft.role.sent, role).toBe("[Role]");
+      expect(buildRewordRequest(draft, "warmer", capture.names).user).not.toContain(role);
+      expect(restoreDraft(draft, withRole(role), capture.names, "Pat")).toContain(role);
+    }
   });
 
   it("restores only its own three labels, using the trimmed first name", () => {

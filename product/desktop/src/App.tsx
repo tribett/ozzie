@@ -13,9 +13,10 @@ import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
 import { ConnectionPage } from "./connection-page.js";
 import { TodayPage } from "./today-page.js";
+import { sundayCount, sundayCountText } from "./today-groups.js";
 import { Icon } from "./icons.js";
 import { model } from "./model.js";
-import { responsibilityAutopilot, runAutopilot } from "./autopilot.js";
+import { devKidsRules, responsibilityAutopilot, runAutopilot } from "./autopilot.js";
 import { loadRules, loadSettings, saveRules, saveSettings, sundayProblem, sundaySource, type RecordingSummary } from "./sunday-source.js";
 import { browserStore, desktopProactive, proactiveReadiness, type ProactiveHooks } from "./proactive.js";
 import { ProactivePage, useProactiveView } from "./proactive-page.js";
@@ -33,8 +34,11 @@ import { CardsPage } from "./cards-page.js";
 import { SetupFlow, setupMemory } from "./setup-flow.js";
 import { invoke } from "@tauri-apps/api/core";
 import { autostart, background, startProbe } from "./background.js";
-import { createRunner, nativeResponsibilities, responsibilityStep, type RunnerHooks } from "./responsibility-runner.js";
+import { createRunner, handChanges, nativeResponsibilities, responsibilityStep, type RunnerHooks } from "./responsibility-runner.js";
 import { ResponsibilityList, useRunnerView, type PlanActions, type PlanContext } from "./responsibility-views.js";
+import { feedbackOf } from "../../../core/src/finding-feedback.js";
+import type { FeedbackSource } from "./finding-feedback.js";
+import { useSharing } from "./share-check.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "automatic" | "activity" | "connection";
 const nav: { id: Page; label: string; icon: string }[] = [
@@ -142,8 +146,8 @@ export function App() {
       // A scheduled check shows its result unless the person is looking at the fictional example.
       if (trigger !== "manual" && !current.current.fictional) { setCapture(c); setNow(new Date().toISOString()); }
     },
-    // Something got worse: a responsibility that watches for changes may check sooner.
-    onChanges: changes => { void runner.changes(changes); },
+    // Something got worse: Keep Sunday covered may check sooner, and then sends the one notice about it.
+    onChanges: handChanges(runner),
   }), []);
   useEffect(() => () => proactive.stop(), []);
   // Seen in Ozzie only while the window is on screen: with it closed, Ozzie keeps running in the menu bar.
@@ -162,7 +166,8 @@ export function App() {
       const s = runnerState.current;
       return {
         ready: s.readiness === "ready", granted: grantedFor(s.fictional ? null : s.capture, false, s.status), rules: s.rules,
-        zone: s.zone, macZone: macZone(), quiet: { start: s.prefs.quietStart, end: s.prefs.quietEnd }, urgentWithinHours: s.prefs.urgentWithinHours,
+        zone: s.zone, macZone: macZone(), quiet: { start: s.prefs.quietStart, end: s.prefs.quietEnd }, urgentDuringQuiet: s.prefs.urgentDuringQuiet,
+        urgentWithinHours: s.prefs.urgentWithinHours,
         modelReady: s.modelReady,
       };
     },
@@ -224,7 +229,7 @@ export function App() {
       if (d.autopilot) {
         setSetup("closed");
         setPage("sunday");
-        void runAutopilot(merged(loadSettings()), loadRules(), Boolean(d.autopilotOperations), c => { setCapture(c); setFictional(false); refreshRecordings(); },
+        void runAutopilot(merged(loadSettings()), devKidsRules(loadRules(), d.kidsTeams), Boolean(d.autopilotOperations), c => { setCapture(c); setFictional(false); refreshRecordings(); },
           { recorder, loop: chosenLoop })
           .then(() => model.status().then(s => setModelReady(s.configured)).catch(() => undefined))
           .finally(() => {
@@ -269,6 +274,8 @@ export function App() {
     ? createAppHarness({ workspace_id: workspace, data: dataNow.current, skills: procedures, session: harnessSession, loop, recorder }) : null,
   [procedures, workspace, loop, harnessSession, recorder]);
   useEffect(() => { harness?.update(harnessData); }, [harness, harnessData]);
+  // "Use Ozzie's last check in other AI apps" (Settings): off unless the leader turns it on; only this church's check.
+  const sharing = useSharing(harnessData, harnessSession, ledgerVersion, { organization: org, status });
   const ask: AskFn | null = useMemo(() => harness && procedures
     ? (typed, signal) => askOzzie(harness, typed, { signal, recorder, skills: procedures, sender: "" })
       .finally(() => { void recorder.idle().then(() => setLedgerVersion(v => v + 1)); })
@@ -320,23 +327,33 @@ export function App() {
     start: plan => runner.create(plan), edit: (id, plan) => runner.edit(id, plan),
     onSettings: () => { setSetup("closed"); setPage("connection"); }, onAutomatic: () => setPage("automatic"),
   };
+  // What the person tells Ozzie on finding cards: kept with the Church rules, applied to the check on screen and every later one.
+  const feedback: FeedbackSource = { entries: feedbackOf(rules), onEntries: next => setRules(r => ({ ...r, feedback: next })) };
   // "Keep an eye on Sunday" in Ask becomes a plan to confirm: read here, with no model.
   const plans: PlanHooks = { parse: typed => parseRequest(typed, new Date().toISOString(), scheduleZone, { sunday: chosenSunday }), context: planContext, actions: planActions };
   const dark = useDarkAppearance();
-
+  // Closing Ask puts keyboard focus back on the button that opens it, rather than nowhere.
+  const askEntry = useRef<HTMLButtonElement>(null);
+  const closeAsk = () => { setAskOpen(false); askEntry.current?.focus(); };
+  // Things to decide, the same number as Today's Sunday card and the Sunday page (Worth a look is listed there, not counted here).
+  const sundayBadge = sundayCount(open);
+  const automaticCount = page !== "automatic" ? automatic.unseen + watch.unseen : 0;
+  // A narrow window (or large text) shows the sidebar as icons; each label stays for VoiceOver and shows beside its icon on hover or keyboard focus.
   return <div className={`oz app${dark ? " dark" : ""}`}>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
       <aside className="side">
         <div className="brand"><img className="logo" src="/ozzie.svg" alt="Ozzie by FlockConnect" /></div>
-        <nav className="nav">{nav.map(n => <a key={n.id} href={`#${n.id}`} className="nav-i" aria-current={!showSetup && page === n.id ? "page" : undefined}
-          onClick={e => { e.preventDefault(); if (showSetup) setSetup("closed"); setFocusProcedure(null); setPage(n.id); }}><Icon name={n.icon} />{n.label}
-          {n.id === "sunday" && open && open.decisions + open.looks > 0 && <span className="count">{open.decisions + open.looks}</span>}
-          {n.id === "automatic" && page !== "automatic" && automatic.unseen + watch.unseen > 0 && <span className="count">{automatic.unseen + watch.unseen}</span>}</a>)}</nav>
-        <button type="button" className="btn btn-secondary ask-entry" aria-expanded={askOpen} aria-controls="ask-panel" onClick={() => setAskOpen(!askOpen)}>
-          <AskIcon />Ask Ozzie</button>
+        <nav className="nav">{nav.map(n => <a key={n.id} href={`#${n.id}`} className="nav-i" data-label={n.label} aria-current={!showSetup && page === n.id ? "page" : undefined}
+          onClick={e => { e.preventDefault(); if (showSetup) setSetup("closed"); setFocusProcedure(null); setPage(n.id); }}><Icon name={n.icon} /><span className="nav-label">{n.label}</span>
+          {n.id === "sunday" && sundayBadge > 0 && <span className="count"><span aria-hidden="true">{sundayBadge}</span>
+            <span className="sr-only">, {sundayCountText(sundayBadge)}</span></span>}
+          {n.id === "automatic" && automaticCount > 0 && <span className="count"><span aria-hidden="true">{automaticCount}</span>
+            <span className="sr-only">, {automaticCount} new</span></span>}</a>)}</nav>
+        <button type="button" ref={askEntry} className="btn btn-secondary ask-entry" aria-expanded={askOpen} aria-controls="ask-panel"
+          onClick={() => setAskOpen(!askOpen)}><AskIcon /><span className="nav-label">Ask Ozzie</span></button>
         <div className="side-foot">
-          <p className="quiet-note"><Icon name="lock" small />Reads only. Names Ozzie reads stay on this Mac.</p>
-          <p className="small">{connected ? `Planning Center · org ${status!.organization}` : "Planning Center not connected"}</p>
+          <p className="quiet-note"><Icon name="lock" small /><span className="nav-label">Reads only. Names Ozzie reads stay on this Mac.</span></p>
+          <p className="small side-org">{connected ? `Planning Center organization ${status!.organization}` : "Planning Center not connected"}</p>
         </div>
       </aside>
       <main className="main">
@@ -345,7 +362,7 @@ export function App() {
           onExample={() => { endSetup("sunday"); void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }} />}
         {!showSetup && <>
         {page === "today" && <TodayPage brief={brief} names={capture?.names} sundayDecisions={decisions} operations={operations} onSunday={() => setPage("sunday")}
-          watch={{ view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} />}
+          watch={{ view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} />}
         {page === "sunday" && <SundayPage brief={brief} names={capture?.names ?? {}} busy={busy} problem={problem} sender=""
           connected={connected} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady}
           decisions={decisions} onDecisions={setDecisions} operations={operations}
@@ -354,7 +371,7 @@ export function App() {
           onExample={() => { void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }}
           onLaterExample={fictional && capture?.completed_at === nov22Capture().completed_at
             ? () => { void act(() => Promise.resolve(withFictionalOperations(nov22LaterCapture())), true); } : undefined}
-          onHow={procedures ? showProcedure : undefined} />}
+          onHow={procedures ? showProcedure : undefined} feedback={feedback} onSettings={() => setPage("connection")} />}
         {page === "cards" && <CardsPage people={capture?.names ?? {}} workspace={org || "this-mac"} />}
         {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}
@@ -362,17 +379,18 @@ export function App() {
         {page === "automatic" && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId}
           readiness={readiness} busy={busy} now={now} churchTimeZone={churchZone}
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={p => proactive.setPrefs(p)}
-          responsibilities={<ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} />} />}
+          responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} />} />}
         {page === "activity" && <ActivityPage capture={capture} notGranted={operationsAsked.get() && status?.scopes === "services"}
           tasks={tasks} procedures={procedures} trigger={triggers.get} />}
         {page === "connection" && <ConnectionPage status={status} settings={settings} onSettings={setSettings} onStatus={setStatus}
           recordingCount={recordings.length} onModel={setModelReady} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}
+          sharing={sharing.settings}
           onAutomatic={() => setPage("automatic")} onSetup={() => setSetup("open")} autostart={autostart}
-          onDeleteRecordings={() => { if (org) void sundaySource.deleteRecordings(org).finally(() => { refreshRecordings(); if (capture?.kind === "recording") setCapture(null); }); }} />}
+          onDeleteRecordings={() => { sharing.forget(); if (org) void sundaySource.deleteRecordings(org).finally(() => { refreshRecordings(); if (capture?.kind === "recording") setCapture(null); }); }} />}
         </>}
       </main>
-      <AskPanel open={askOpen} onClose={() => setAskOpen(false)} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
+      <AskPanel open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
         page={showSetup ? "setup" : page} plans={plans} />
     </div>
   </div>;

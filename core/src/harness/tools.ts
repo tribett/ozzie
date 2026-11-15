@@ -25,6 +25,7 @@ import type { AttentionReport } from "../attention-import/index.js";
 import { roomRules, type SundayOperations } from "../operations-capture.js";
 import type { BriefPerson, Finding, SundayBrief } from "../sunday-brief.js";
 import { LIVE_CHECK_VALID_MS, type SundayCapture, type SundayRules } from "../sunday-capture.js";
+import { backgroundChecksOn, forModels } from "../kids-rules.js";
 import { applyDecisions, type DecidedItem, type DecisionChoice, type SundayDecision } from "../sunday-decisions.js";
 import { HARNESS_LIMITS, NATIVE_TOOL_ALLOWLIST, type Completeness, type ToolEnvelope, type ToolName, type ToolSpec } from "./contract.js";
 import { envelopeProblems, sentenceFits, TOOL_SPEC_LIST } from "./fixed.js";
@@ -145,14 +146,24 @@ const reasonWords = (reasons: readonly string[]) => [...new Set(reasons.map(r =>
 const STATUS = ["no overlap found", "availability needs confirmation", "possible conflict", "left out"] as const;
 type Status = (typeof STATUS)[number];
 const cautious = (a: Status, b: Status): Status => STATUS.indexOf(a) >= STATUS.indexOf(b) ? a : b;
-const KIND: Record<Finding["kind"], string> = {
+/** Background checks never reach these tools (forModels, review M2/M3): there is no word for one here. */
+const KIND: Record<Exclude<Finding["kind"], "background-check">, string> = {
   "needs-people": "needs people", "lead-missing": "no scheduled lead", "lead-unverified": "lead couldn't be confirmed",
   pending: "pending", streak: "check-in suggested", "worth-a-look": "part of the check couldn't be verified",
+  "too-few-confirmed": "fewer confirmed than the church rules ask",
 };
+/** A finding's kind in fixed words. A background check never gets here (forModels); if one did, the tool fails closed. */
+const kindWord = (kind: Finding["kind"]): string => {
+  if (kind === "background-check") throw new ToolFailure("denied");
+  return KIND[kind];
+};
+/** Said in the overview whenever the background-check rule is on, whatever it found: those findings stay on this Mac. */
+const KEPT_ON_THIS_MAC = "some findings are shown only in Ozzie on this Mac";
 const CHOICE: Record<DecisionChoice, string> = {
   "covered-outside": "covered outside Planning Center", "not-needed": "not needed this Sunday", "lead-expected": "no scheduled lead expected",
 };
 const UNDESCRIBED = "a part of the check Ozzie can't describe";
+const AGES = "confirmed people counted; ages not checked";
 const byLabel = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 const byId = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 
@@ -231,7 +242,8 @@ export class HarnessTools {
   #services(): { brief: SundayBrief; capture: SundayCapture; org: string; zone: string | null } {
     const { brief, capture } = this.#data;
     if (!brief || !capture || !brief.checked_at) throw new ToolFailure("unverified");
-    return { brief, capture, org: capture.organization, zone: brief.time_zone };
+    // Every tool reads the brief as models may see it: background checks stay on this Mac (review M2/M3).
+    return { brief: forModels(brief), capture, org: capture.organization, zone: brief.time_zone };
   }
   #stale(checkedAt: string | null): boolean {
     const { mode, brief } = this.#data;
@@ -308,7 +320,7 @@ export class HarnessTools {
     const { brief, zone } = this.#services();
     const decided = this.#decided();
     const findings = brief.findings.map(f => {
-      const base: Record<string, unknown> = { kind: KIND[f.kind], tone: f.tone === "decision" ? "needs a decision" : "worth a look" };
+      const base: Record<string, unknown> = { kind: kindWord(f.kind), tone: f.tone === "decision" ? "needs a decision" : "worth a look" };
       switch (f.kind) {
         case "needs-people": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN }); break;
         case "lead-missing": case "lead-unverified": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone) }); break;
@@ -316,12 +328,16 @@ export class HarnessTools {
           request: f.notification === "sent" ? "request sent, no answer yet" : "request not sent yet" }); break;
         case "streak": Object.assign(base, { person: this.#person(f.person_id), sundays_in_a_row: f.sundays ?? NOT_KNOWN }); break;
         case "worth-a-look": Object.assign(base, { reads_not_completed: brief.sources.failed.length, too_old_to_treat_as_current: !!f.stale }); break;
+        // Counts only: who is confirmed or pending stays on this Mac.
+        case "too-few-confirmed": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), confirmed: f.confirmed?.length ?? 0,
+          needed: f.needed ?? NOT_KNOWN, asked_no_answer: f.asked?.length ?? 0, request_not_sent: f.not_sent?.length ?? 0, ages: AGES }); break;
       }
       return { ...base, ...this.#decision(decided.get(f.id)) };
     });
     return this.#servicesResult({
       mode: this.#data.mode, sunday: brief.plan.date ?? NOT_KNOWN, reads: brief.sources.reads, reads_not_completed: brief.sources.failed.length,
       needs_a_decision: brief.findings.filter(f => f.tone === "decision").length, worth_a_look: brief.findings.filter(f => f.tone === "look").length,
+      ...(backgroundChecksOn(this.#data.rules) ? { kept_on_this_mac: KEPT_ON_THIS_MAC } : {}),
       findings,
     }, "findings");
   }
@@ -333,7 +349,7 @@ export class HarnessTools {
       if (f.kind === "needs-people") {
         const p = f.people;
         return [{
-          kind: KIND[f.kind], role: this.#role(f), time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN,
+          kind: kindWord(f.kind), role: this.#role(f), time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN,
           confirmed: [...new Set(f.confirmed ?? [])].sort(byId).map(id => this.#person(id)),
           people_listed: { no_overlap_found: p?.suggestions.length ?? 0, possible_conflict: p?.conflicts.length ?? 0,
             needs_confirmation: p?.unverified.length ?? 0, left_out: p?.left_out.length ?? 0 },
@@ -342,7 +358,7 @@ export class HarnessTools {
       }
       if (f.kind === "lead-missing" || f.kind === "lead-unverified") {
         return [{
-          kind: KIND[f.kind], role: this.#role(f), time: span(f.position?.interval, zone),
+          kind: kindWord(f.kind), role: this.#role(f), time: span(f.position?.interval, zone),
           ...(f.kind === "lead-missing" ? { scheduled_to_lead_not_accepted: [...new Set(f.pending_leads ?? [])].sort(byId).map(id => this.#person(id)) } : {}),
           team_leaders: this.#leaders(f), ...this.#decision(decided.get(f.id)),
         }];

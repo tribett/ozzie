@@ -84,12 +84,32 @@ export const TEMPLATES: Readonly<Record<TemplateId, Template>> = Object.freeze({
     cadence: "weekly", on_change: false, defaults: { time: "09:00", weekdays: [3], report: "decisions-only", lifetime: "until-stopped" },
     near_deadline: [], max: { checks_per_day: 3, ai_steps_per_day: 6 },
   },
+  // Owner decision, October 26: 7:00 AM on weekdays, just as the default quiet hours end.
   "morning-briefing": {
     id: "morning-briefing", title: "Morning briefing", skill_id: "sunday-ready", watches: ["briefing"], needs: ["services"],
-    cadence: "daily", on_change: false, defaults: { time: "06:45", weekdays: [], report: "every-check", lifetime: "until-stopped" },
+    cadence: "daily", on_change: false, defaults: { time: "07:00", weekdays: [1, 2, 3, 4, 5], report: "every-check", lifetime: "until-stopped" },
     near_deadline: [], max: { checks_per_day: 3, ai_steps_per_day: 6 },
   },
 });
+/** Monday to Friday. */
+export const BRIEFING_WEEKDAYS: readonly number[] = Object.freeze([1, 2, 3, 4, 5]);
+/** Thursday's scheduled briefing includes the full Sunday Ready brief (owner decision, October 26). */
+export const SUNDAY_READY_WEEKDAY = 4;
+/** Whether a briefing at `at` is Thursday's, on the church's own date. */
+export const includesSundayReady = (at: string, zone: string) => weekdayOf(localDate(at, zone)) === SUNDAY_READY_WEEKDAY;
+/** The morning briefing's default before that decision: every day at 6:45, inside the settled quiet hours. */
+const EARLIER_BRIEFING = { time: "06:45", weekdays: [] as number[] };
+/**
+ * A saved morning briefing still on the earlier default time and days, moved to the settled default;
+ * null for anything a person changed (or anything else). Its lifetime, limits and report stay as they were.
+ */
+export function settledPlan(r: Pick<Responsibility, "template" | "schedule" | "report" | "lifetime" | "limits" | "zone" | "status">, zone?: string): Plan | null {
+  if (r.template !== "morning-briefing" || r.status === "ended" || r.schedule.time !== EARLIER_BRIEFING.time || r.schedule.weekdays.length !== EARLIER_BRIEFING.weekdays.length) return null;
+  const t = TEMPLATES["morning-briefing"];
+  const planZone = r.zone ?? zone;
+  if (!planZone) return null;
+  return { template: r.template, schedule: { ...r.schedule, time: t.defaults.time, weekdays: [...t.defaults.weekdays] }, report: r.report, lifetime: r.lifetime, limits: r.limits, zone: planZone };
+}
 
 /** A scheduled time passed by more than this without a run was missed (Mac asleep, Ozzie closed), not just late. */
 export const MISSED_AFTER_MS = 5 * 60_000;
@@ -355,7 +375,7 @@ const UNTIL = "(?:until|till|til|through|thru)";
 /** Asking Ozzie to take something on, firmly enough to stand alone. */
 const STRONG = /\b(?:keep (?:an )?eye on|keep watch|keep track of|keep checking|let me know (?:if|when|whether)|tell me (?:if|when|whether)|alert me|notify me|remind me|(?:every|each) (?:week|day|morning)|weekly|daily|from now on)\b/u;
 /** Words that ask only together with something to watch. */
-const WEAK = new RegExp(`\\b(?:watch(?:ing)?|monitor(?:ing)?|${UNTIL}|(?:every|each) ${DAY})\\b`, "u");
+const WEAK = new RegExp(`\\b(?:watch(?:ing)?|monitor(?:ing)?|${UNTIL}|(?:every|each) ${DAY}|(?:on|every|each) week ?days?)\\b`, "u");
 const QUESTION = /^(?:what|who|whom|whose|which|why|how|where|when|is|are|was|were|does|do|did|has|have)\b/u;
 const TOPICS: readonly [TemplateId, RegExp][] = [
   ["watch-room-bookings", /\b(?:rooms?|room bookings?|bookings?|reservations?)\b/u],
@@ -448,6 +468,11 @@ export function parseRequest(typed: string, now: string, zone: string, options: 
   // "Every Wednesday", "on Mondays"; never "on Sunday" (that names what to watch, not when).
   const days = [...new Set([...text.matchAll(new RegExp(`\\b(?:(?:every|each) ${DAY}|on ${DAY}s)\\b`, "gu"))].map(m => DAYS.indexOf((m[1] ?? m[2])!)))].sort();
   if (days.length) plan.schedule.weekdays = days;
+  // A daily one may be asked for on weekdays or every day; the morning briefing's default is weekdays.
+  else if (TEMPLATES[template].cadence === "daily") {
+    if (/\b(?:week ?days?|monday (?:to|through|thru) friday)\b/u.test(text)) plan.schedule.weekdays = [...BRIEFING_WEEKDAYS];
+    else if (/\b(?:(?:every|each) (?:day|morning)|daily)\b/u.test(text)) plan.schedule.weekdays = [];
+  }
   if (/\b(?:every time|each time|after (?:each|every) check|always tell me)\b/u.test(text)) plan.report = "every-check";
   return validPlan(plan, now) ? { kind: "plan", plan, assumed } : { kind: "ask", need: "when", template, choices: [defaultPlan(template, now, zone, options).lifetime, { kind: "until-stopped" }] };
 }

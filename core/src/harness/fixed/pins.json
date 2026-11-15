@@ -23,8 +23,8 @@
     },
     "sunday-ready": {
       "file": "core/skills/sunday-ready.md",
-      "file_sha256": "2f27133f7b7c73c539e87baf3353ac84ade20a96acd1c210b6dd0ac73d32c35f",
-      "system_sha256": "4552e97e04d1609078e935c9539202364dd2798a2213584a0079acdc775e3e7c"
+      "file_sha256": "f6d267c2c48f5dc4f34ce83b56cb3741b25dd27df88c68c0bad8fa75ae97a72f",
+      "system_sha256": "9f7df0bfa59244a89870abaa945233af11a58b8b77c1e49199bba00a167c3eea"
     },
     "who-could-help": {
       "file": "core/skills/who-could-help.md",

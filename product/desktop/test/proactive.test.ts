@@ -7,11 +7,11 @@ import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSun
 import { sundayProblem, type Settings } from "../src/sunday-source.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import type { SundayCapture } from "../../../core/src/sunday-capture.js";
+import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 
 const settings: Settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" };
 const status = (state: ConnectionStatus["state"]): ConnectionStatus => ({ state, organization: "1001", checked_at_ms: null, source: "", problem: null });
-const rules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
+const rules: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
 const ZONE = "America/Chicago";
 
 /** The fictional Sunday, read at `iso`, optionally changed. */
@@ -111,8 +111,8 @@ describe("proactive Sunday checks while Ozzie is open", () => {
   });
 
   it("holds the notice during quiet hours and sends it once after they end", async () => {
-    // 03:00Z is 9:00 PM in Chicago; quiet hours start at 9:30 PM.
-    const h = harness("2026-11-21T03:00:00Z");
+    // 02:30Z is 8:30 PM in Chicago; quiet hours start at 9:00 PM.
+    const h = harness("2026-11-21T02:30:00Z");
     await h.launch();
     h.changeTo(decline);
     h.set("2026-11-21T04:00:00Z");
@@ -121,10 +121,10 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     expect(h.p.view().history[0]).toMatchObject({ kind: "changes", notice: "held" });
     expect(h.p.view().schedule.held).not.toBeNull();
 
-    h.set("2026-11-21T12:20:00Z"); // 6:20 AM, still quiet (the overdue check it runs finds nothing new)
+    h.set("2026-11-21T12:50:00Z"); // 6:50 AM, still quiet (the overdue check it runs finds nothing new)
     await h.p.tick();
     expect(h.notify).not.toHaveBeenCalled();
-    h.set("2026-11-21T12:31:00Z"); // 6:31 AM
+    h.set("2026-11-21T13:01:00Z"); // 7:01 AM
     await h.p.tick();
     expect(h.notify).toHaveBeenCalledTimes(1);
     expect(h.p.view().history.find(e => e.kind === "changes")!.notice).toBe("sent-later");
@@ -188,6 +188,54 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     await h.p.tick();
     expect(h.notify).toHaveBeenCalledTimes(1);
     expect(h.p.view().history[0]!.notice).toBe("sent");
+  });
+
+  it("Put this in the briefing: a kind the person keeps for the briefing changes in Ozzie but sends no notice", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    h.context.rules = { ...rules, feedback: [{ type: "urgency", id: "u", kind: "needs-people", at: "2026-11-20T14:00:00Z", level: "briefing" }] };
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    expect(h.p.view().history[0]).toMatchObject({ kind: "changes", notice: "briefing" });
+    expect(h.p.view().history[0]!.changes!.map(c => c.kind)).toEqual(["confirmed-declined", "need-increased"]);
+  });
+
+  it("Always tell me right away: outside the urgent window it still waits for quiet hours, unless urgent ones are let through", async () => {
+    for (const [urgentDuringQuiet, expected] of [[false, "held"], [true, "sent"]] as const) {
+      const h = harness("2026-11-21T02:30:00Z");
+      h.p.setPrefs({ ...h.p.view().prefs, urgentDuringQuiet, urgentWithinHours: 1 });
+      h.context.rules = { ...rules, feedback: [{ type: "urgency", id: "r", kind: "needs-people", at: "2026-11-20T14:00:00Z", level: "right-away" }] };
+      await h.launch();
+      h.changeTo(decline);
+      h.set("2026-11-21T04:00:00Z"); // 10:00 PM in Chicago
+      await h.p.tick();
+      expect(h.p.view().history[0]!.notice).toBe(expected);
+    }
+    // Without the rule, a change outside the window waits even with urgent ones let through.
+    const h = harness("2026-11-21T02:30:00Z");
+    h.p.setPrefs({ ...h.p.view().prefs, urgentDuringQuiet: true, urgentWithinHours: 1 });
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-21T04:00:00Z");
+    await h.p.tick();
+    expect(h.p.view().history[0]!.notice).toBe("held");
+  });
+
+  it("moves saved quiet hours still on the earlier default to 9:00 PM to 7:00 AM, once, and never changes a person's own", () => {
+    const earlier = memoryStore();
+    earlier.set("ozzie.proactive.prefs.v1", JSON.stringify({ intervalMinutes: 30, runOnLaunch: true, quietStart: "21:30", quietEnd: "06:30", urgentDuringQuiet: false, urgentWithinHours: 48 }));
+    const h = harness("2026-11-20T15:00:00Z", earlier);
+    expect(h.p.view().prefs).toMatchObject({ intervalMinutes: 30, quietStart: "21:00", quietEnd: "07:00" });
+    // Then a person picks 9:30 PM to 6:30 AM on purpose: it stays after a restart.
+    h.p.setPrefs({ ...h.p.view().prefs, quietStart: "21:30", quietEnd: "06:30" });
+    expect(harness("2026-11-20T15:00:00Z", earlier).p.view().prefs).toMatchObject({ quietStart: "21:30", quietEnd: "06:30" });
+    const own = memoryStore();
+    own.set("ozzie.proactive.prefs.v1", JSON.stringify({ intervalMinutes: 60, runOnLaunch: true, quietStart: "22:00", quietEnd: "06:30", urgentDuringQuiet: false, urgentWithinHours: 48 }));
+    expect(harness("2026-11-20T15:00:00Z", own).p.view().prefs).toMatchObject({ quietStart: "22:00", quietEnd: "06:30" });
+    // Nothing saved yet: the settled default.
+    expect(harness("2026-11-20T15:00:00Z").p.view().prefs).toMatchObject({ quietStart: "21:00", quietEnd: "07:00" });
   });
 
   it("reports a failed check once, retries with backoff, and never sends a notice for it", async () => {
@@ -300,6 +348,106 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     expect(h.p.view().unseen).toBe(1);
     h.p.markSeen();
     expect(h.p.view().unseen).toBe(0);
+  });
+});
+
+describe("changes handed to Keep Sunday covered", () => {
+  beforeEach(() => invoke.mockReset());
+  /** A hand-off the test settles: `true` when Keep Sunday covered decided the notice itself. */
+  function handOff() {
+    let settle: (decided: boolean) => void = () => {};
+    const onChanges = vi.fn(() => new Promise<boolean>(resolve => { settle = resolve; }));
+    return { onChanges, settle: (decided: boolean) => settle(decided) };
+  }
+  const changed = async (h: ReturnType<typeof harness>, at: string) => { h.changeTo(decline); h.set(at); await h.p.tick(); };
+  const entry = (h: ReturnType<typeof harness>) => h.p.view().history.find(e => e.kind === "changes")!;
+
+  it("says which Sunday and whether it has a notice, then sends none when Keep Sunday covered decided one", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    const hand = handOff();
+    h.hooks.onChanges = hand.onChanges;
+    await h.launch();
+    await changed(h, "2026-11-20T16:00:00Z");
+    expect(hand.onChanges).toHaveBeenCalledWith(expect.any(Array), { plan_id: settings.planId, notice: true });
+    expect(entry(h).notice).toBe("handed");
+    hand.settle(true);
+    await vi.waitFor(() => expect(entry(h).notice).toBe("responsibility"));
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("sends its own notice after all when Keep Sunday covered didn't decide one", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    const hand = handOff();
+    h.hooks.onChanges = hand.onChanges;
+    await h.launch();
+    await changed(h, "2026-11-20T16:00:00Z");
+    hand.settle(false);
+    await vi.waitFor(() => expect(entry(h).notice).toBe("sent"));
+    expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("the fallback respects quiet hours: held, then sent once when they end", async () => {
+    const h = harness("2026-11-21T02:30:00Z");
+    const hand = handOff();
+    h.hooks.onChanges = hand.onChanges;
+    await h.launch();
+    await changed(h, "2026-11-21T04:00:00Z");
+    hand.settle(false);
+    await vi.waitFor(() => expect(entry(h).notice).toBe("held"));
+    expect(h.notify).not.toHaveBeenCalled();
+    h.set("2026-11-21T13:01:00Z");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(entry(h).notice).toBe("sent-later");
+  });
+
+  it("paused while it waited: no notice, as a held one is dropped", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    const hand = handOff();
+    h.hooks.onChanges = hand.onChanges;
+    await h.launch();
+    await changed(h, "2026-11-20T16:00:00Z");
+    h.p.pause();
+    hand.settle(false);
+    await vi.waitFor(() => expect(entry(h).notice).toBe("none"));
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("seen in Ozzie while it waited: that counts as being told", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    const hand = handOff();
+    h.hooks.onChanges = hand.onChanges;
+    await h.launch();
+    await changed(h, "2026-11-20T16:00:00Z");
+    h.set("2026-11-20T16:01:00Z");
+    h.p.markSeen();
+    hand.settle(false);
+    await vi.waitFor(() => expect(entry(h).notice).toBe("in-app"));
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("Ozzie closed before Keep Sunday covered decided: the notice waits like a held one and goes out once", async () => {
+    const store = memoryStore();
+    const first = harness("2026-11-20T15:00:00Z", store);
+    first.hooks.onChanges = handOff().onChanges;
+    await first.launch();
+    await changed(first, "2026-11-20T16:00:00Z");
+    expect(entry(first).notice).toBe("handed");
+    first.p.stop();
+    const second = harness("2026-11-20T16:10:00Z", store);
+    second.changeTo(decline);
+    await second.launch();
+    expect(second.notify).toHaveBeenCalledTimes(1);
+    expect(entry(second).notice).toBe("sent-later");
+  });
+
+  it("nothing handed over (no promise back): the notice goes out straight away, as before", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    h.hooks.onChanges = vi.fn(() => undefined);
+    await h.launch();
+    await changed(h, "2026-11-20T16:00:00Z");
+    expect(entry(h).notice).toBe("sent");
+    expect(h.notify).toHaveBeenCalledTimes(1);
   });
 });
 

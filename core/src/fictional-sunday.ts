@@ -107,6 +107,20 @@ export function nov22Capture(): SundayCapture {
   };
 }
 
+/**
+ * People background-check reads (kids rules) for the people scheduled on Nursery and Lyrics, as the native
+ * check reads them (cleared checks only): Blake has none current on file; Cameron's runs out the day before.
+ */
+export function withFictionalBackgroundChecks(capture: SundayCapture): SundayCapture {
+  const checks = (person: string, data: unknown[]): SundayRead => read("people_background_checks",
+    { data, meta: { count: data.length, total_count: data.length } }, { people_person_id: person });
+  return { ...capture, reads: [...capture.reads,
+    checks(PEOPLE.nurseryConfirmed, []),
+    checks(PEOPLE.lyricsPending, [{ type: "BackgroundCheck", id: "951", attributes: { status: "complete_clear", current: true, expires_on: "2026-11-21" },
+      relationships: { person: rel("Person", PEOPLE.lyricsPending) } }]),
+  ] };
+}
+
 export const LATER = "2026-11-20T17:15:00Z";
 
 /**

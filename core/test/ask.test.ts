@@ -109,8 +109,10 @@ describe("Ask facts", () => {
       "F4 | W | [Role 3] | 2026-11-22 09:30-10:30 | [Person 9] | n",
       "F5 | K | [Person 6] | 3",
       "F6 | G | 1 | -",
-      "F7 | U | [Role 2] | 2026-11-22 09:30-10:30",
-      "F7 | L | [Person 8]",
+      "F7 | A | [Role 2] | 2026-11-22 09:30-10:30 | 1 | 2 | 0 | 0",
+      "F8 | A | [Role 3] | 2026-11-22 09:30-10:30 | 0 | 1 | 0 | 1",
+      "F9 | U | [Role 2] | 2026-11-22 09:30-10:30",
+      "F9 | L | [Person 8]",
     ].join("\n"));
     expect([...rich.roles]).toEqual([["[Role 1]", "Greeters (9:30) & Hosts"], ["[Role 2]", "Nursery"], ["[Role 3]", "Prayer Team"]]);
     expect(rich.facts).not.toMatch(/Tom|husband|555|Riley|Prayer|Greeter|Nursery/);

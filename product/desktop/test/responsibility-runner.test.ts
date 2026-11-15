@@ -8,11 +8,14 @@ import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayChange } from "../../../core/src/sunday-changes.js";
+import type { FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import {
-  createRunner, nativeResponsibilities, refusalOf, responsibilityStep, type Prepared, type ResponsibilityNative, type RunnerContext,
+  createRunner, handChanges, nativeResponsibilities, refusalOf, responsibilityStep, type Prepared, type ResponsibilityNative, type RunnerContext,
 } from "../src/responsibility-runner.js";
 import { noticedChanges, noticedTitle } from "../src/responsibility-words.js";
 import { StepFailure } from "../src/harness-bridge.js";
+import { createProactive } from "../src/proactive.js";
+import { sundayProblem } from "../src/sunday-source.js";
 import { fakeNative as fakeInvoke } from "./harness-fakes.js";
 
 const ET = "America/New_York";
@@ -154,6 +157,10 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(h.fake.calls).toEqual(["create keep-sunday-covered", "begin start", "end ok - 4 1"]);
     const item = h.runner.view().noticed[0]!;
     expect(item).toMatchObject({ kind: "found", trigger: "start", decisions: 2, looks: 2, drafts: 1, notice: "in-app" });
+    // Which run and which check it came from (ids and a time only), so Today can tell it is about the Sunday on screen.
+    expect(item.run_id).toBe(h.runner.view().items[0]!.runs[0]!.run_id);
+    expect(item.check).toEqual({ plan_id: nov22Capture().plan_id, completed_at: FRI });
+    expect(item.drafted).toBe(false);
     expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 2 things need a decision.");
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.check).toHaveBeenCalledTimes(1);
@@ -218,7 +225,11 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     await h.runner.tick();
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.runner.view().noticed[0]).toMatchObject({ kind: "briefing", trigger: "scheduled", notice: "held" });
-    h.set("2026-11-21T11:31:00.000Z");
+    // Quiet hours end at 7:00 AM (owner decision, October 26): 6:59 still holds it.
+    h.set("2026-11-21T11:59:00.000Z");
+    await h.runner.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    h.set("2026-11-21T12:01:00.000Z");
     await h.runner.tick();
     expect(h.notify).toHaveBeenCalledWith("briefing-ready");
     expect(h.runner.view().noticed[0]!.notice).toBe("sent-later");
@@ -320,7 +331,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     h.prepare.mockResolvedValue({ status: "verified", code: null, summary: "Avery Brightwater declined Greeter.", draft: "Hi Avery, could you help?", ai_steps: 2 });
     await h.start(sunday());
     const item = h.runner.view().noticed[0]!;
-    expect(item).toMatchObject({ summarized: true, drafts: 2 });
+    expect(item).toMatchObject({ summarized: true, drafted: true, drafts: 2 });
     expect(h.runner.view().prepared[item.id]).toEqual({ summary: "Avery Brightwater declined Greeter.", draft: "Hi Avery, could you help?" });
     expect(h.prepare).toHaveBeenCalledTimes(1);
     const stored = h.store.dump();
@@ -564,9 +575,102 @@ describe("pausing", () => {
     await h.runner.pauseAll(true);
     expect(h.runner.view().noticed[0]!.notice).toBe("none");
     await h.runner.pauseAll(false);
-    h.set("2026-11-21T11:31:00.000Z");
+    h.set("2026-11-21T12:01:00.000Z");
     await h.runner.tick();
     expect(h.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("the settled briefing defaults (owner decision, October 26)", () => {
+  const THU = "2026-11-19T15:00:00.000Z";
+  const worse: SundayChange = { id: "need-opened:x", kind: "need-opened", effect: "worse", urgency: "attention", position: "Greeter", from: 0, to: 1 };
+
+  it("moves a saved briefing still on the earlier 6:45 every-day default to 7:00 AM on weekdays, once", async () => {
+    const h = setup();
+    const r = await h.start({ ...defaultPlan("morning-briefing", FRI, ET), schedule: { time: "06:45", weekdays: [], on_change: false } });
+    expect(h.fake.items.find(x => x.id === r.id)!.schedule).toEqual({ time: "07:00", weekdays: [1, 2, 3, 4, 5], on_change: false });
+    expect(h.lines).toContain("responsibility: settled defaults template=morning-briefing");
+    // A person who then picks 6:45 every day keeps it.
+    await h.runner.edit(r.id, { ...defaultPlan("morning-briefing", FRI, ET), schedule: { time: "06:45", weekdays: [], on_change: false } });
+    await h.runner.tick();
+    expect(h.fake.items.find(x => x.id === r.id)!.schedule).toMatchObject({ time: "06:45", weekdays: [] });
+    // Anything a person chose is never moved.
+    const other = setup();
+    const own = await other.start({ ...defaultPlan("morning-briefing", FRI, ET), schedule: { time: "06:30", weekdays: [], on_change: false } });
+    expect(other.fake.items.find(x => x.id === own.id)!.schedule.time).toBe("06:30");
+  });
+
+  it("Thursday's briefing includes the full Sunday Ready brief; Friday's doesn't", async () => {
+    const h = setup();
+    h.set(THU);
+    await h.start(defaultPlan("morning-briefing", THU, ET));
+    const thursday = h.runner.view().noticed[0]!;
+    expect(thursday).toMatchObject({ kind: "briefing", sunday_ready: true });
+    expect(noticedTitle(thursday, THU)).toBe("Your morning briefing is ready. Today it includes the full Sunday Ready brief.");
+    h.set("2026-11-20T12:00:00.000Z"); // Friday 7:00 AM in New York
+    await h.runner.tick();
+    const friday = h.runner.view().noticed[0]!;
+    expect(friday).toMatchObject({ kind: "briefing", trigger: "scheduled" });
+    expect(friday.sunday_ready).toBeUndefined();
+  });
+
+  it("what came up overnight is labelled Overnight and brought into the morning briefing, not sent as its own notice", async () => {
+    const h = setup({ urgentWithinHours: 1 });
+    h.set(THU);
+    await h.start(sunday());
+    await h.start(defaultPlan("morning-briefing", THU, ET));
+    // 11:00 PM Thursday in New York: quiet hours. A decline brings the Sunday check sooner.
+    h.set("2026-11-20T04:00:00.000Z");
+    h.changeTo(decline);
+    await h.runner.changes([worse]);
+    const night = h.runner.view().noticed.find(i => i.trigger === "change")!;
+    expect(night).toMatchObject({ kind: "found", overnight: true, notice: "held" });
+    expect(h.notify).not.toHaveBeenCalled();
+    // 7:00 AM Friday: the briefing runs and brings it in. One notice, the briefing's.
+    h.set("2026-11-20T12:00:00.000Z");
+    await h.runner.tick();
+    expect(h.notify.mock.calls).toEqual([["briefing-ready"]]);
+    expect(h.runner.view().noticed.find(i => i.id === night.id)!.notice).toBe("in-briefing");
+    const briefing = h.runner.view().noticed.find(i => i.kind === "briefing" && i.trigger === "scheduled")!;
+    expect(briefing.overnight_count).toBe(1);
+    expect(noticedTitle(briefing, "2026-11-20T12:00:00.000Z")).toBe("Your morning briefing is ready. One thing came up overnight; it's marked Overnight.");
+  });
+});
+
+describe("the person's Church rules on notices", () => {
+  const briefingRule: FeedbackEntry = { type: "urgency", id: "u", kind: "needs-people", at: FRI, level: "briefing" };
+  const rightAway: FeedbackEntry = { type: "urgency", id: "r", kind: "needs-people", at: FRI, level: "right-away" };
+  const rulesWith = (feedback: FeedbackEntry[]) => ({ sundayLeads: [], checkInAfterSundaysInARow: 3, feedback });
+
+  it("Put this in the briefing: open roles that get worse show in Ozzie but bring no notice", async () => {
+    const h = setup({ rules: rulesWith([briefingRule]) });
+    await h.start(sunday());
+    h.set("2026-11-20T17:00:00.000Z");
+    h.changeTo(decline);
+    await h.runner.tick();
+    expect(h.notify).not.toHaveBeenCalled();
+    const item = h.runner.view().noticed[0]!;
+    expect(item).toMatchObject({ kind: "found", notice: "briefing" });
+    expect(noticedChanges(item, names)).toContain("Avery Brightwater declined Greeter after confirming.");
+  });
+
+  it("Always tell me right away: quiet hours still hold it, unless the person let urgent notices through", async () => {
+    for (const [urgentDuringQuiet, expected] of [[false, "held"], [true, "sent"]] as const) {
+      const h = setup({ rules: rulesWith([rightAway]), urgentWithinHours: 1, urgentDuringQuiet });
+      await h.start(sunday());
+      h.set("2026-11-21T04:00:00.000Z"); // 11:00 PM Friday in New York
+      h.changeTo(decline);
+      await h.runner.changes([{ id: "need-increased:x", kind: "need-increased", effect: "worse", urgency: "attention", position: "Greeter", from: 1, to: 2 }]);
+      expect(h.runner.view().noticed.find(i => i.trigger === "change")!.notice).toBe(expected);
+      expect(h.notify).toHaveBeenCalledTimes(expected === "sent" ? 1 : 0);
+    }
+    // Without the rule, a change outside the church's urgent window waits, even with urgent notices let through.
+    const h = setup({ urgentWithinHours: 1, urgentDuringQuiet: true });
+    await h.start(sunday());
+    h.set("2026-11-21T04:00:00.000Z");
+    h.changeTo(decline);
+    await h.runner.changes([{ id: "need-increased:x", kind: "need-increased", effect: "worse", urgency: "attention", position: "Greeter", from: 1, to: 2 }]);
+    expect(h.runner.view().noticed.find(i => i.trigger === "change")!.notice).toBe("held");
   });
 });
 
@@ -624,5 +728,195 @@ describe("the native bridge", () => {
     await expect(step(request, new AbortController().signal)).rejects.toMatchObject({ code: "limit" });
     expect(log).toEqual([["responsibility_agent_step", { runId: "run-1", request }]]);
     await expect(step(request, AbortSignal.abort())).rejects.toBeInstanceOf(StepFailure);
+  });
+});
+
+describe("one change, one notice: the regular Sunday check and Keep Sunday covered together", () => {
+  /** Both controllers wired as App.tsx wires them, on one clock, each with its own notice. */
+  function together(start: string, over: Partial<RunnerContext> = {}) {
+    let now = start;
+    let change: ((c: SundayCapture) => void) | undefined;
+    /** Keep Sunday covered's own check fails (and so it can't share the regular check's). */
+    let runnerCheckFails = false;
+    const clock = () => now;
+    const fake = fakeStore(clock);
+    const sundayNotice = vi.fn(async () => {});
+    const runnerNotice = vi.fn(async (kind: string) => { void kind; });
+    const context: RunnerContext = {
+      ready: true, granted: ["services"], rules: { sundayLeads: [], checkInAfterSundaysInARow: 3 }, zone: ET, macZone: ET,
+      quiet: DEFAULT_QUIET_HOURS, urgentWithinHours: 48, modelReady: false, ...over,
+    };
+    const proactive = createProactive({
+      store: memoryStore(), now: clock, timeZone: () => ET, check: async () => captureAt(now, change), notify: sundayNotice, problem: sundayProblem,
+      timers: { setInterval: () => 0, clearInterval: () => {} },
+    });
+    const runner = createRunner({ native: fake.native, store: memoryStore(), now: clock, notify: runnerNotice });
+    const settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: nov22Capture().plan_id };
+    const status = { state: "connected", organization: "1001", checked_at_ms: null, source: "", problem: null } as const;
+    proactive.start({
+      context: () => ({ settings, rules: context.rules, status }), onStatus: () => {},
+      onCapture: c => { if (!runnerCheckFails) runner.captured(c); }, onChanges: handChanges(runner),
+    });
+    runner.start({
+      context: () => context, check: () => runnerCheckFails ? Promise.reject("network") : proactive.checkNow("automatic"), prepare: async () => null,
+    });
+    const regular = () => proactive.view().history.find(e => e.kind === "changes");
+    return {
+      proactive, runner, fake, context, regular,
+      set: (iso: string) => { now = iso; },
+      changeTo: (f?: (c: SundayCapture) => void) => { change = f; },
+      failRunnerChecks: () => { runnerCheckFails = true; },
+      /** Every notice either one sent. */
+      notices: () => [...sundayNotice.mock.calls.map(() => "sunday-attention"), ...runnerNotice.mock.calls.map(([k]) => k)],
+      /** One regular check, then whatever it handed to Keep Sunday covered, until its notice is decided. */
+      check: async () => {
+        await proactive.tick();
+        await runner.tick();
+        await vi.waitFor(() => expect(regular()?.notice).not.toBe("handed"));
+      },
+    };
+  }
+  const settle = async (h: ReturnType<typeof together>) => { await h.proactive.tick(); await h.runner.tick(); };
+
+  it("with Keep Sunday covered active for this Sunday, its run sends the one notice; the regular check sends none", async () => {
+    const h = together(FRI);
+    await settle(h);
+    await h.runner.create(sunday());
+    await h.runner.tick();
+    expect(h.notices()).toEqual([]);
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.notices()).toEqual(["needs-decision"]);
+    expect(h.regular()).toMatchObject({ trigger: "scheduled", notice: "responsibility" });
+    const item = h.runner.view().noticed.find(i => i.trigger === "change")!;
+    expect(item).toMatchObject({ kind: "found", notice: "sent", check: { plan_id: nov22Capture().plan_id } });
+    expect(noticedChanges(item, names)).toContain("Avery Brightwater declined Greeter after confirming.");
+  });
+
+  it("without a responsibility, the regular check sends its notice as before, straight away", async () => {
+    const h = together(FRI);
+    await settle(h);
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.proactive.tick();
+    expect(h.regular()).toMatchObject({ notice: "sent" });
+    expect(h.notices()).toEqual(["sunday-attention"]);
+  });
+
+  it("Keep Sunday covered paused: the regular check sends its notice", async () => {
+    const h = together(FRI);
+    await settle(h);
+    const r = await h.runner.create(sunday());
+    await h.runner.tick();
+    await h.runner.pause(r.id);
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.regular()).toMatchObject({ notice: "sent" });
+    expect(h.notices()).toEqual(["sunday-attention"]);
+    expect(h.fake.calls.filter(c => c.startsWith("begin"))).toEqual(["begin start"]);
+  });
+
+  it("Keep Sunday covered over its limit for the day: the regular check's notice goes out instead", async () => {
+    const h = together(FRI);
+    await settle(h);
+    await h.runner.create(sunday());
+    await h.runner.tick();
+    h.fake.refuse.always = "checks-limit";
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.fake.calls.filter(c => c.startsWith("begin"))).toEqual(["begin start", "begin change"]);
+    expect(h.regular()).toMatchObject({ notice: "sent" });
+    expect(h.notices()).toEqual(["sunday-attention"]);
+  });
+
+  it("Keep Sunday covered's run failed: the regular check's notice is the one notice; the failure shows in Ozzie", async () => {
+    const h = together(FRI);
+    await settle(h);
+    await h.runner.create(sunday());
+    await h.runner.tick();
+    h.failRunnerChecks();
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "couldnt-check", trigger: "change", code: "provider-failure", notice: "none" });
+    expect(h.regular()).toMatchObject({ notice: "sent" });
+    expect(h.notices()).toEqual(["sunday-attention"]);
+  });
+
+  it("Keep Sunday covered couldn't start (its store unreadable): the regular check's notice is the one notice", async () => {
+    const h = together(FRI);
+    await settle(h);
+    await h.runner.create(sunday());
+    await h.runner.tick();
+    h.fake.refuse.next = "unavailable";
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "couldnt-check", trigger: "change", code: "unavailable", notice: "none" });
+    expect(h.regular()).toMatchObject({ notice: "sent" });
+    expect(h.notices()).toEqual(["sunday-attention"]);
+  });
+
+  it("a later failure with nothing handed over still says Ozzie couldn't check, as before", async () => {
+    const h = setup();
+    await h.start(sunday());
+    h.failWith("network");
+    h.set(at(FRI, 45));
+    await h.runner.changes([{ id: "need-opened:x", kind: "need-opened", effect: "worse", urgency: "attention", position: "Greeter", from: 0, to: 1 }]);
+    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "couldnt-check", trigger: "change", notice: "sent" });
+    expect(h.notify.mock.calls).toEqual([["couldnt-check"]]);
+  });
+
+  it("during quiet hours the one notice waits, and goes out once when they end", async () => {
+    // Thursday 9:30 PM in New York: quiet hours.
+    const h = together("2026-11-20T02:30:00.000Z");
+    await settle(h);
+    await h.runner.create(defaultPlan("keep-sunday-covered", "2026-11-20T02:30:00.000Z", ET));
+    await h.runner.tick();
+    h.set("2026-11-20T03:30:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.notices()).toEqual([]);
+    expect(h.regular()).toMatchObject({ notice: "responsibility" });
+    expect(h.runner.view().noticed.find(i => i.trigger === "change")).toMatchObject({ notice: "held", overnight: true });
+    expect(h.proactive.view().schedule.held).toBeNull();
+    // 7:01 AM Friday.
+    h.set("2026-11-20T12:01:00.000Z");
+    await settle(h);
+    await settle(h);
+    expect(h.notices()).toEqual(["needs-decision"]);
+  });
+
+  it("with a morning briefing, what came up overnight is folded into it: still one notice", async () => {
+    const h = together("2026-11-20T02:30:00.000Z");
+    await settle(h);
+    await h.runner.create(defaultPlan("keep-sunday-covered", "2026-11-20T02:30:00.000Z", ET));
+    await h.runner.create(defaultPlan("morning-briefing", "2026-11-20T02:30:00.000Z", ET));
+    await h.runner.tick();
+    h.set("2026-11-20T03:30:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.notices()).toEqual([]);
+    h.set("2026-11-20T12:01:00.000Z");
+    await settle(h);
+    await settle(h);
+    expect(h.notices()).toEqual(["briefing-ready"]);
+    expect(h.runner.view().noticed.find(i => i.trigger === "change")!.notice).toBe("in-briefing");
+  });
+
+  it("Put this in the briefing: neither one sends a notice", async () => {
+    const h = together(FRI, { rules: { sundayLeads: [], checkInAfterSundaysInARow: 3, feedback: [{ type: "urgency", id: "u", kind: "needs-people", at: FRI, level: "briefing" }] } });
+    await settle(h);
+    await h.runner.create(sunday());
+    await h.runner.tick();
+    h.set("2026-11-20T16:00:00.000Z");
+    h.changeTo(decline);
+    await h.check();
+    expect(h.regular()).toMatchObject({ notice: "briefing" });
+    expect(h.runner.view().noticed.find(i => i.trigger === "change")).toMatchObject({ notice: "briefing" });
+    expect(h.notices()).toEqual([]);
   });
 });

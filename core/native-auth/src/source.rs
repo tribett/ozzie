@@ -136,6 +136,16 @@ pub enum Collection {
     PeopleWorkflowSnoozedCards,
     GroupsPersonMemberships,
     GroupsGroupEvents,
+    /// One person's cleared People background checks (`filter=complete_clear`), for the kids
+    /// rule "a current background check before serving with kids". Capture only, and only for
+    /// people scheduled on a team the church marked as a kids team.
+    PeopleBackgroundChecks,
+    // Setup's Sunday picker (sunday_picker.rs): in-process only, never on the stdin protocol, and
+    // never part of a Sunday capture. They come before a plan is chosen, so they name less of one.
+    /// The church's Services service types (`/services/v2/service_types`), with no plan context.
+    ServiceTypes,
+    /// One service type's upcoming plans (`filter=future`), with no plan id.
+    UpcomingPlans,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -150,6 +160,10 @@ enum Scope {
     Group,
     /// A Person read through Groups; kept apart from Services `person_id` scopes.
     GroupsPerson,
+    /// A Person read through People (background checks); kept apart like `GroupsPerson`.
+    PeoplePerson,
+    /// A service type's plans, before one is chosen (`/service_types/{id}/plans`).
+    ServiceTypePlans,
 }
 impl Collection {
     /// Contract name recorded in a Sunday capture.
@@ -173,6 +187,9 @@ impl Collection {
             Self::PeopleWorkflowSnoozedCards => "people_workflow_snoozed_cards",
             Self::GroupsPersonMemberships => "groups_person_memberships",
             Self::GroupsGroupEvents => "groups_group_events",
+            Self::PeopleBackgroundChecks => "people_background_checks",
+            Self::ServiceTypes => "service_types",
+            Self::UpcomingPlans => "upcoming_plans",
         }
     }
     pub fn product(self) -> Product {
@@ -183,7 +200,8 @@ impl Collection {
             Self::PeopleWorkflows
             | Self::PeopleWorkflowSteps
             | Self::PeopleWorkflowReadyCards
-            | Self::PeopleWorkflowSnoozedCards => Product::People,
+            | Self::PeopleWorkflowSnoozedCards
+            | Self::PeopleBackgroundChecks => Product::People,
             Self::GroupsPersonMemberships | Self::GroupsGroupEvents => Product::Groups,
             _ => Product::Services,
         }
@@ -213,6 +231,19 @@ impl Collection {
             | Self::PeopleWorkflowSnoozedCards => Scope::Workflow,
             Self::GroupsGroupEvents => Scope::Group,
             Self::GroupsPersonMemberships => Scope::GroupsPerson,
+            Self::PeopleBackgroundChecks => Scope::PeoplePerson,
+            // `/services/v2/service_types`: the Services Organization is its parent.
+            Self::ServiceTypes => Scope::Organization,
+            Self::UpcomingPlans => Scope::ServiceTypePlans,
+        }
+    }
+    /// Which Sunday ids a request names: (service type, plan). Every Sunday read names both;
+    /// the picker's reads come before a plan is chosen and must leave the rest empty.
+    fn context(self) -> (bool, bool) {
+        match self {
+            Self::ServiceTypes => (false, false),
+            Self::UpcomingPlans => (true, false),
+            _ => (true, true),
         }
     }
     /// The breaker key for this read: its product and endpoint. Reads that differ only in a
@@ -260,6 +291,9 @@ impl Collection {
             Self::PeopleWorkflowReadyCards | Self::PeopleWorkflowSnoozedCards => "cards",
             Self::GroupsPersonMemberships => "memberships",
             Self::GroupsGroupEvents => "events",
+            Self::PeopleBackgroundChecks => "background_checks",
+            Self::ServiceTypes => "service_types",
+            Self::UpcomingPlans => "plans",
         }
     }
     fn resource(self) -> &'static str {
@@ -281,16 +315,21 @@ impl Collection {
             Self::PeopleWorkflowReadyCards | Self::PeopleWorkflowSnoozedCards => "WorkflowCard",
             Self::GroupsPersonMemberships => "Membership",
             Self::GroupsGroupEvents => "Event",
+            Self::PeopleBackgroundChecks => "BackgroundCheck",
+            Self::ServiceTypes => "ServiceType",
+            Self::UpcomingPlans => "Plan",
         }
     }
 }
-/// Reads whose rows carry a free-text display `name` (a room, follow-up workflow or step).
-/// Such names can name a person ("Follow-up for ..."), so they never stay in a body: the
-/// projection moves each into the page's local `labels` as `<prefix>:<row id>`.
-pub(crate) const LABELLED: [(&str, Collection); 3] = [
+/// Reads whose rows carry a free-text display `name` (a room, follow-up workflow or step, or
+/// a service type). Such names can name a person ("Follow-up for ..."), so they never stay in
+/// a body: the projection moves each into the page's local `labels` as `<prefix>:<row id>`.
+/// A capture never reads service types, so a recording can't hold a `service_type:` label.
+pub(crate) const LABELLED: [(&str, Collection); 4] = [
     ("room", Collection::CalendarRooms),
     ("workflow", Collection::PeopleWorkflows),
     ("step", Collection::PeopleWorkflowSteps),
+    ("service_type", Collection::ServiceTypes),
 ];
 /// Longest label kept, in characters.
 pub(crate) const LABEL_CHARS: usize = 120;
@@ -341,6 +380,7 @@ pub(crate) struct Target {
     pub(crate) workflow_id: Option<String>,
     pub(crate) group_id: Option<String>,
     pub(crate) groups_person_id: Option<String>,
+    pub(crate) people_person_id: Option<String>,
     pub(crate) window: Option<Window>,
 }
 impl Target {
@@ -377,6 +417,12 @@ impl Target {
     pub(crate) fn groups_person(id: &str) -> Self {
         Self {
             groups_person_id: Some(id.into()),
+            ..Self::default()
+        }
+    }
+    pub(crate) fn people_person(id: &str) -> Self {
+        Self {
+            people_person_id: Some(id.into()),
             ..Self::default()
         }
     }
@@ -419,6 +465,8 @@ pub struct SourceRequest {
     pub(crate) group_id: Option<String>,
     #[serde(skip)]
     pub(crate) groups_person_id: Option<String>,
+    #[serde(skip)]
+    pub(crate) people_person_id: Option<String>,
     #[serde(skip)]
     pub(crate) window: Option<Window>,
     #[serde(skip)]
@@ -480,6 +528,7 @@ impl SourceRequest {
             workflow_id: target.workflow_id.clone(),
             group_id: target.group_id.clone(),
             groups_person_id: target.groups_person_id.clone(),
+            people_person_id: target.people_person_id.clone(),
             window: target.window.clone(),
             profile: Profile::Capture,
         };
@@ -502,6 +551,7 @@ impl SourceRequest {
             (Scope::Workflow, &self.workflow_id),
             (Scope::Group, &self.group_id),
             (Scope::GroupsPerson, &self.groups_person_id),
+            (Scope::PeoplePerson, &self.people_person_id),
         ];
         let scope = self.collection.scope();
         let scoped = ids.iter().all(|(owner, id)| {
@@ -515,12 +565,15 @@ impl SourceRequest {
             Some(window) => self.collection.windowed() && window.valid(),
             None => !self.collection.windowed(),
         };
+        // Each Sunday id the collection names is a valid id; one it doesn't name is empty.
+        let (names_type, names_plan) = self.collection.context();
+        let context = |id: &str, named: bool| if named { numeric_id(id) } else { id.is_empty() };
         if self.version != 1
             || !text(&self.workspace, 128, true)
             || !text(&self.client_id, 256, false)
             || !numeric_id(&self.organization)
-            || !numeric_id(&self.service_type_id)
-            || !numeric_id(&self.plan_id)
+            || !context(&self.service_type_id, names_type)
+            || !context(&self.plan_id, names_plan)
             || !(1..=100).contains(&self.per_page)
             || self.offset > MAX_OFFSET
             || (self.profile == Profile::Protocol && !self.collection.protocol())
@@ -565,6 +618,9 @@ impl SourceRequest {
             Collection::PeopleWorkflowReadyCards => fixed(&[("where[stage]", "ready")]),
             Collection::PeopleWorkflowSnoozedCards => fixed(&[("where[stage]", "snoozed")]),
             Collection::GroupsGroupEvents => fixed(&window),
+            // Cleared checks only: an unfinished or not-cleared check never reaches this Mac.
+            Collection::PeopleBackgroundChecks => fixed(&[("filter", "complete_clear")]),
+            Collection::UpcomingPlans => fixed(&[("filter", "future"), ("order", "sort_date")]),
             _ => Vec::new(),
         }
     }
@@ -582,6 +638,11 @@ impl SourceRequest {
                 "Person",
                 self.groups_person_id.as_deref().unwrap_or_default(),
             ),
+            Scope::PeoplePerson => (
+                "Person",
+                self.people_person_id.as_deref().unwrap_or_default(),
+            ),
+            Scope::ServiceTypePlans => ("ServiceType", &self.service_type_id),
         }
     }
     fn path(&self) -> String {
@@ -609,6 +670,10 @@ impl SourceRequest {
             Scope::Workflow => under("workflows", &self.workflow_id),
             Scope::Group => under("groups", &self.group_id),
             Scope::GroupsPerson => under("people", &self.groups_person_id),
+            Scope::PeoplePerson => under("people", &self.people_person_id),
+            Scope::ServiceTypePlans => {
+                format!("{prefix}/service_types/{}/{segment}", self.service_type_id)
+            }
         }
     }
     pub fn url(&self) -> String {
@@ -768,6 +833,7 @@ const OPERATIONS_TYPES: &[&str] = &[
     "WorkflowCard",
     "Membership",
     "Event",
+    "BackgroundCheck",
 ];
 // Calendar 2026-06-22 (applies to every version): bookings may link redacted stubs in place of
 // an event the user cannot see.
@@ -1026,6 +1092,8 @@ enum Fact {
     Instant,
     /// Null or an instant (due, snooze and lifecycle times that are often unset).
     MaybeInstant,
+    /// Null or a calendar date, `YYYY-MM-DD` (a background check's `expires_on`).
+    MaybeDate,
     NotificationInstant,
     Flag,
     TimeType,
@@ -1049,6 +1117,7 @@ impl Fact {
             }),
             Self::Instant => instant(v),
             Self::MaybeInstant => v.is_null() || instant(v),
+            Self::MaybeDate => v.is_null() || v.as_str().is_some_and(date),
             Self::NotificationInstant => v.is_null() || notification_instant(v),
             Self::Flag => v.is_boolean(),
             Self::TimeType => v
@@ -1115,6 +1184,7 @@ impl SourceRequest {
     /// type of the read's profile); operations reads name the exact targets per key.
     fn relationship_types(&self, key: &str) -> &'static [&'static str] {
         match (self.collection, key) {
+            (Collection::UpcomingPlans, _) => &["ServiceType"],
             (Collection::CalendarResourceBookings, "event") => EVENT,
             (Collection::CalendarResourceBookings, "event_instance") => EVENT_INSTANCE,
             (Collection::CalendarResourceBookings, "resource") => RESOURCE,
@@ -1135,6 +1205,7 @@ impl SourceRequest {
             (Collection::CalendarEventConflicts, _) => EVENT,
             (Collection::PeopleWorkflowSteps, _) => WORKFLOW,
             (Collection::GroupsPersonMemberships, "person") => PERSON,
+            (Collection::PeopleBackgroundChecks, _) => PERSON,
             (Collection::GroupsPersonMemberships | Collection::GroupsGroupEvents, _) => GROUP,
             _ => self.types(),
         }
@@ -1212,6 +1283,28 @@ impl SourceRequest {
                 ("ends_at", true, Fact::Instant),
                 ("canceled", false, Fact::Flag),
             ],
+            // Whether a cleared check is current and when it expires. `note`, `report_url`,
+            // `completed_at`, `status_updated_at` and `created_by` are dropped; `status` is kept
+            // only to prove the filter held (`confirm`), so it is always `complete_clear`.
+            Collection::PeopleBackgroundChecks => &[
+                ("status", true, Fact::Code),
+                ("current", false, Fact::Flag),
+                ("expires_on", false, Fact::MaybeDate),
+            ],
+            // A service type's `name` becomes a local label; whether it is archived or deleted
+            // decides if it is offered. Permissions, sequence and every other setting are dropped.
+            Collection::ServiceTypes => &[
+                ("name", false, Fact::Label),
+                ("archived_at", false, Fact::MaybeInstant),
+                ("deleted_at", false, Fact::MaybeInstant),
+            ],
+            // The plan facts the Sunday check's own plan read keeps; an undated plan isn't offered.
+            Collection::UpcomingPlans => &[
+                ("dates", false, Fact::Text),
+                ("sort_date", false, Fact::MaybeInstant),
+                ("title", false, Fact::Text),
+                ("series_title", false, Fact::Text),
+            ],
         }
     }
     fn relationships(&self) -> &'static [&'static str] {
@@ -1260,6 +1353,11 @@ impl SourceRequest {
             }
             Collection::GroupsPersonMemberships => &["group", "person"],
             Collection::GroupsGroupEvents => &["group"],
+            // Who the check is for; `created_by` (whoever entered it) is dropped.
+            Collection::PeopleBackgroundChecks => &["person"],
+            Collection::ServiceTypes => &[],
+            // Kept only to confirm each plan is the requested service type's.
+            Collection::UpcomingPlans => &["service_type"],
         }
     }
     /// Included resource types this read asked for. Protocol reads never keep `included`.
@@ -1359,6 +1457,16 @@ fn confirm(request: &SourceRequest, row: &Value) -> Result<(), SourceError> {
         }
         Collection::GroupsPersonMemberships => parent("person", &request.groups_person_id),
         Collection::GroupsGroupEvents => parent("group", &request.group_id) && inside(),
+        // Exactly the requested person, and only a cleared check: Planning Center ignoring the
+        // filter would otherwise hand this Mac a check's other outcome. A check the church entered
+        // by hand comes back `manual_clear` for the `complete_clear` filter (seen live 2026-11-14;
+        // not in Planning Center's documented status list), so both cleared statuses count.
+        Collection::PeopleBackgroundChecks => {
+            parent("person", &request.people_person_id)
+                && matches!(attribute("status"), Some("complete_clear" | "manual_clear"))
+        }
+        // A plan of another service type isn't one the person can choose here.
+        Collection::UpcomingPlans => parent("service_type", &Some(request.service_type_id.clone())),
         _ => true,
     };
     if kept {
@@ -1703,8 +1811,57 @@ impl SourceHttp for NativeSourceHttp {
             .take((MAX_OUTPUT + 1) as u64)
             .read_to_end(&mut bytes)
             .map_err(|_| SourceError::ProviderFailure)?;
-        project_page(request, &bytes, &response_headers)
+        let page = project_page(request, &bytes, &response_headers);
+        #[cfg(debug_assertions)]
+        if page.is_err() && std::env::var("OZZIE_DEV_SHAPES").as_deref() == Ok("1") {
+            debug_shape(request, &bytes);
+        }
+        page
     }
+}
+
+/// Debug builds only, with OZZIE_DEV_SHAPES=1: when Ozzie refuses a page, print its structure to the developer's
+/// terminal — keys, value kinds, digits as 9 and string lengths, never a value (only `type` and `status` codes).
+#[cfg(debug_assertions)]
+fn debug_shape(request: &SourceRequest, bytes: &[u8]) {
+    fn shape(key: &str, v: &Value) -> Value {
+        match v {
+            Value::Object(m) => {
+                Value::Object(m.iter().map(|(k, v)| (k.clone(), shape(k, v))).collect())
+            }
+            Value::Array(a) => Value::Array(a.iter().take(3).map(|v| shape(key, v)).collect()),
+            Value::String(text) if key == "type" || key == "status" => Value::String(
+                text.chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .take(40)
+                    .collect(),
+            ),
+            Value::String(text)
+                if text
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || "-:.TZ+".contains(c)) =>
+            {
+                Value::String(
+                    text.chars()
+                        .map(|c| if c.is_ascii_digit() { '9' } else { c })
+                        .collect(),
+                )
+            }
+            Value::String(text) => Value::String(format!("<text {}>", text.chars().count())),
+            Value::Number(_) => Value::String("<number>".into()),
+            other => other.clone(),
+        }
+    }
+    let outline = serde_json::from_slice::<Value>(bytes).map(|v| shape("", &v).to_string());
+    eprintln!(
+        "dev-shape: {} {}",
+        request.collection.label(),
+        outline
+            .unwrap_or_else(|_| "<not json>".into())
+            .chars()
+            .take(3000)
+            .collect::<String>()
+    );
 }
 
 #[cfg(test)]

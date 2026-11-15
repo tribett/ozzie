@@ -4,8 +4,8 @@
 // never given free text that a person typed. It only rewords a placeholder-form draft that this
 // module produced itself (its own template, or a model reply it has checked), using one of a
 // fixed set of choices. The only source text sent is the position name, and if any roster name
-// part appears in it, the whole position name is replaced with [Role]. Names are put back on
-// this Mac only.
+// part appears in it (or it could read as contact details, or is too long for a note), the whole
+// position name is replaced with [Role]. Names are put back on this Mac only.
 import type { Finding } from "./sunday-brief.js";
 
 export const REWORDINGS = { warmer: "Make it warmer.", shorter: "Make it shorter.", casual: "Make it more casual.", formal: "Make it a little more formal." } as const;
@@ -61,10 +61,21 @@ export function containsName(text: string, names: Record<string, string>): boole
       : new RegExp(`(?<!\\p{L})${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\p{L})`, "u").test(t)));
 }
 
+/**
+ * A role name the note can't carry as it is: one that could read as contact details under the shared contact rule
+ * (any run of three or more digits, seven or more digits in all, or an @, raw or NFKC: "Rooms 101, 102 & 103"), which
+ * Ozzie managed's reword check refuses, or one too long for a note (ozzie.church takes notes of at most 1,200
+ * characters). The template's own words around the role hold no digits or @, so the role alone decides.
+ */
+const roleUnfit = (name: string) =>
+  name.length > 300 ||
+  [name, name.normalize("NFKC")].some(text => /\p{Nd}{3}/u.test(text) || (text.match(/\p{Nd}/gu) ?? []).length >= 7 || text.includes("@"));
+
 /** Ozzie's own first wording, already in placeholder form. */
 export function templateDraft(ctx: DraftContext, names: Record<string, string>): PlaceholderDraft {
   const original = ctx.finding.position?.name ?? "a Sunday role";
-  const role = containsName(original, names) ? "[Role]" : original;
+  // [Role] is restored to the exact role name on this Mac.
+  const role = containsName(original, names) || roleUnfit(original) ? "[Role]" : original;
   const interval = ctx.finding.position?.interval;
   const when = interval ? new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }) : "this Sunday";
   return mint([

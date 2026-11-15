@@ -8,7 +8,7 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import { Answer, ASK_NOTE, AskPanel, HowItWorks, TurnBody, type Turn } from "../src/ask-panel.js";
+import { Answer, ASK_NOTE, AskPanel, HowItWorks, isCardsRequest, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
 import { App } from "../src/App.js";
 import { askOzzie, createAppHarness, type AskTurn, type ShownAnswer } from "../src/harness-bridge.js";
 import { ASK_FAILURES } from "../src/harness-words.js";
@@ -118,6 +118,22 @@ describe("Ask Ozzie panel", () => {
     expect(text(body({ id: 1, question: "q", state: "cancelled", text: ASK_FAILURES.cancelled }))).toContain("You stopped this question.");
   });
 
+  it("tells VoiceOver one short status per turn instead of reading the whole thread again", async () => {
+    const answer = await shown();
+    expect(turnAnnouncement(undefined)).toBe("");
+    expect(turnAnnouncement({ id: 1, question: "q", state: "asking" })).toBe("Reading what Ozzie already has…");
+    expect(turnAnnouncement({ id: 1, question: "q", state: "cancelled", text: ASK_FAILURES.cancelled })).toBe(ASK_FAILURES.cancelled);
+    const said = turnAnnouncement({ id: 1, question: "Who could cover Greeter?", state: "answered", answer });
+    expect(said).toBe(`Ozzie answered: ${answer.body.split(/\n{2,}/u)[0]}`);
+    expect(said).not.toContain(answer.procedure!.body.slice(0, 40));
+    const unsure: ShownAnswer = { ...answer, notCovered: true, draft: "Hi Riley" };
+    expect(turnAnnouncement({ id: 1, question: "q", state: "answered", answer: unsure })).toMatch(/Worth a look\. A draft note is below\.$/u);
+    // The thread itself is no longer a live region; only the status line is.
+    const html = panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
+    expect(html).not.toMatch(/class="thread ask-thread"[^>]*aria-live/u);
+    expect(html).toContain(`<p class="sr-only" role="status" aria-live="polite">Ozzie answered: `);
+  });
+
   it("no longer uses the old fact-sheet route", () => {
     const source = readFileSync(new URL("../src/ask-panel.tsx", import.meta.url), "utf8");
     expect(source).not.toMatch(/prepareAsk|acceptAskReply|buildAskContext|restoreAnswer|model\.ask|ask_ozzie/u);
@@ -127,14 +143,67 @@ describe("Ask Ozzie panel", () => {
 
   it("is reachable from every screen through the sidebar, closed by default on a narrow window", () => {
     const html = renderToStaticMarkup(React.createElement(App));
-    expect(html).toMatch(/<button[^>]*aria-controls="ask-panel"[^>]*>.*Ask Ozzie<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-controls="ask-panel"[^>]*>.*Ask Ozzie<\/span><\/button>/);
     expect(html).toMatch(/<aside id="ask-panel"[^>]*hidden=""/);
     expect(html).toContain("shell shell-2");
   });
 
   it("uses none of the words people shouldn't see", async () => {
     const answer = await shown();
-    const all = [panel(), panel({ brief: null, modelReady: false }), panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] })];
+    const all = [panel(), panel({ brief: null, modelReady: false }), panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] }),
+      panel({ initialVoice: { status: "ready" } }), panel({ initialVoice: { status: "no-permission", what: "speech" } })];
     for (const html of all) expect(text(html)).not.toMatch(HIDDEN_WORDS);
+  });
+});
+
+describe("speaking a question in Ask", () => {
+  const mic = (html: string) => /<button type="button" class="ibtn ask-mic[^"]*"[^>]*>/.exec(html)?.[0] ?? "";
+
+  it("offers a labelled microphone button with a keyboard shortcut and a one-line privacy hint", () => {
+    const html = panel({ initialVoice: { status: "ready" } });
+    const button = mic(html);
+    expect(button).toContain('aria-label="Speak your question"');
+    expect(button).toContain('aria-keyshortcuts="Meta+Shift+L"');
+    expect(button).toContain('aria-describedby="ask-voice-line"');
+    expect(button).not.toContain("disabled");
+    expect(html).toContain("Speak instead of typing (⌘⇧L). Your words become text on this Mac. No audio is kept or sent.");
+    // The words go into the box for the person; the Ask button stays theirs to press.
+    expect(html).toMatch(/<button type="submit" class="btn btn-primary btn-sm" disabled="">Ask<\/button>/);
+  });
+
+  it("stays off and says why when this Mac can't listen or Ozzie isn't allowed to", () => {
+    const unavailable = panel({ initialVoice: { status: "not-available" } });
+    expect(mic(unavailable)).toContain('disabled=""');
+    expect(unavailable).toContain("This Mac can&#x27;t turn speech into text on its own, so speaking a question is off. Type your question instead.");
+    expect(unavailable).not.toContain("No audio is kept or sent");
+    const refused = panel({ initialVoice: { status: "no-permission", what: "microphone" } });
+    expect(mic(refused)).toContain('disabled=""');
+    expect(refused).toContain("System Settings › Privacy &amp; Security › Microphone");
+    // Before the check, and when nothing can be asked yet, the button is off too.
+    expect(mic(panel())).toContain('disabled=""');
+    expect(mic(panel({ initialVoice: { status: "ready" }, brief: null, modelReady: false }))).toContain('disabled=""');
+  });
+
+  it("points visitor-card requests to the Visitor cards page without asking any AI model", () => {
+    for (const typed of ["Read these visitor cards", "Can you enter the newcomer cards from Sunday?", "guest card", "Scan our connection cards"]) {
+      expect(isCardsRequest(typed)).toBe(true);
+    }
+    for (const typed of ["Who could cover Greeter?", "Draft a note about the card table", "Discover cards"]) {
+      expect(isCardsRequest(typed)).toBe(false);
+    }
+    const turn: Turn = { id: 1, question: "Read these visitor cards", state: "cards" };
+    const html = body(turn);
+    expect(html).toContain("Visitor cards are read on this Mac, on the Visitor cards page");
+    expect(html).toContain("Nothing from them goes to an AI model or into Planning Center.");
+    expect(html).toContain(">Open Visitor cards<");
+    // Already on that page: no button to where the person already is.
+    expect(renderToStaticMarkup(React.createElement(TurnBody, { turn, page: "cards", onOpen: () => {} }))).not.toContain("Open Visitor cards");
+    expect(panel({ initialTurns: [turn] })).toContain("Visitor cards are read on this Mac");
+  });
+
+  it("checks nothing natively until the panel is on screen", async () => {
+    panel({ initialVoice: { status: "ready" } });
+    const { invoke } = await import("@tauri-apps/api/core");
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,7 @@ const paths: Record<string, string> = {
   link: "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1m2 5a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
   lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
   spinner: "M12 3a9 9 0 1 0 9 9",
+  chev: "m9 6 6 6-6 6",
 };
 export function Icon({ name, small, spin }: { name: string; small?: boolean; spin?: boolean }) {
   return <svg className={`ic${small ? " ic-sm" : ""}${spin ? " spin" : ""}`} viewBox="0 0 24 24" aria-hidden="true"><path d={paths[name] ?? paths.dot!} /></svg>;

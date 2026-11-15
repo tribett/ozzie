@@ -172,6 +172,8 @@ struct Bench {
     http: FakeHttp,
     ledger: TaskLedger,
     day: u64,
+    /// A debug build's, pointing at the real ozzie.church (no device token here, so never used).
+    hosted: HostedConfig,
     /// TASK's model events once set up.
     setup: Vec<String>,
 }
@@ -202,6 +204,7 @@ impl Bench {
             http: FakeHttp::default(),
             ledger,
             day: DAY,
+            hosted: HostedConfig::from_env(true, None),
             setup: Vec::new(),
         };
         bench.setup = bench.model_events(TASK);
@@ -271,6 +274,7 @@ impl Bench {
             names,
             ledger: &self.ledger,
             day: self.day,
+            hosted: &self.hosted,
         }
     }
     fn step_on(
@@ -313,11 +317,16 @@ impl Bench {
     }
 }
 
+/// AI Gateway's zero data retention confirmation, as every live reply carries it (model.rs
+/// `retention_confirmed`).
+fn confirmed() -> Value {
+    json!({"gateway":{"enabledZeroDataRetention":true}})
+}
 fn text_reply(text: &str) -> String {
-    json!({"choices":[{"message":{"role":"assistant","content":text},"finish_reason":"stop"}],"usage":{"prompt_tokens":40,"completion_tokens":9}}).to_string()
+    json!({"choices":[{"message":{"role":"assistant","content":text,"provider_metadata":confirmed()},"finish_reason":"stop"}],"usage":{"prompt_tokens":40,"completion_tokens":9}}).to_string()
 }
 fn tool_reply(calls: Value, finish: &str) -> String {
-    json!({"choices":[{"message":{"role":"assistant","content":null,"tool_calls":calls},"finish_reason":finish}],"usage":{"prompt_tokens":50,"completion_tokens":12}}).to_string()
+    json!({"choices":[{"message":{"role":"assistant","content":null,"tool_calls":calls,"provider_metadata":confirmed()},"finish_reason":finish}],"usage":{"prompt_tokens":50,"completion_tokens":12}}).to_string()
 }
 fn call(name: &str, arguments: &str) -> Value {
     json!({"id":"toolu_provider_01","type":"function","function":{"name":name,"arguments":arguments}})
@@ -2004,12 +2013,12 @@ fn replies_are_checked_before_the_webview_sees_them() {
         assert_eq!(bench.model_events(TASK), ["1", "1 egress"], "{why}");
     }
     let malformed: Vec<(&str, String)> = vec![
-        ("no choices", json!({"usage": {}}).to_string()),
-        ("no message", json!({"choices": [{"finish_reason": "stop"}]}).to_string()),
-        ("number content", json!({"choices": [{"message": {"content": 5}, "finish_reason": "stop"}]}).to_string()),
-        ("object calls", json!({"choices": [{"message": {"content": "", "tool_calls": {}}, "finish_reason": "tool_calls"}]}).to_string()),
+        ("no choices", json!({"usage": {}, "provider_metadata": confirmed()}).to_string()),
+        ("no message", json!({"choices": [{"finish_reason": "stop"}], "provider_metadata": confirmed()}).to_string()),
+        ("number content", json!({"choices": [{"message": {"content": 5, "provider_metadata": confirmed()}, "finish_reason": "stop"}]}).to_string()),
+        ("object calls", json!({"choices": [{"message": {"content": "", "tool_calls": {}, "provider_metadata": confirmed()}, "finish_reason": "tool_calls"}]}).to_string()),
         ("nameless call", tool_reply(json!([{"id": "x", "type": "function", "function": {"arguments": "{}"}}]), "tool_calls")),
-        ("filtered", json!({"choices": [{"message": {"content": "[Person 1]"}, "finish_reason": "content_filter"}]}).to_string()),
+        ("filtered", json!({"choices": [{"message": {"content": "[Person 1]", "provider_metadata": confirmed()}, "finish_reason": "content_filter"}]}).to_string()),
         ("nothing", text_reply("")),
         ("not json", "<html>".to_owned()),
     ];
@@ -2064,7 +2073,7 @@ fn replies_are_checked_before_the_webview_sees_them() {
         Finish::ToolCalls
     );
     // A truncated reply keeps its checked text and drops tool calls that may be cut off.
-    let truncated = json!({"choices": [{"message": {"content": "[Person 1] is", "tool_calls": [call("sunday__open_needs", "{\"service_ti")]}, "finish_reason": "length"}]}).to_string();
+    let truncated = json!({"choices": [{"message": {"content": "[Person 1] is", "tool_calls": [call("sunday__open_needs", "{\"service_ti")], "provider_metadata": confirmed()}, "finish_reason": "length"}]}).to_string();
     let bench = Bench::new("reply-length").answering(vec![(200, truncated)]);
     let reply = bench.step(base(), &names).ok().unwrap();
     assert_eq!(
@@ -2073,7 +2082,7 @@ fn replies_are_checked_before_the_webview_sees_them() {
     );
     assert_eq!(bench.model_events(TASK)[1], "1 length");
     let named_truncation =
-        json!({"choices": [{"message": {"content": "Riley is"}, "finish_reason": "length"}]})
+        json!({"choices": [{"message": {"content": "Riley is", "provider_metadata": confirmed()}, "finish_reason": "length"}]})
             .to_string();
     let bench = Bench::new("reply-length-name").answering(vec![(200, named_truncation)]);
     assert_eq!(bench.step(base(), &names).err(), Some(AgentError::Egress));
@@ -2584,6 +2593,7 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
         AgentError::ProviderFailure,
         AgentError::InvalidRequest,
         AgentError::ModelNotAllowed,
+        AgentError::AllowancePaused,
     ]
     .iter()
     .map(|e| serde_json::to_string(e).unwrap())
@@ -2602,7 +2612,8 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
             "\"rate-limited\"",
             "\"provider-failure\"",
             "\"invalid-request\"",
-            "\"model-not-allowed\""
+            "\"model-not-allowed\"",
+            "\"allowance-paused\""
         ]
     );
     // A malformed IPC request is one code, whatever serde would have quoted.
@@ -2627,6 +2638,7 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
         AgentError::ModelNotAllowed,
         AgentError::RateLimited,
         AgentError::InvalidRequest,
+        AgentError::AllowancePaused,
     ]
     .map(Err);
     for result in replies.iter().chain(&errors) {
@@ -2639,5 +2651,379 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
     assert_eq!(
         Bench::new("outcomes").ledger.list(1)[0].state,
         RunState::Running
+    );
+}
+
+// ---- Ozzie managed through ozzie.church (hosted.rs) ---------------------------------------------------
+
+const DEVICE_TOKEN: &str = hosted::fake::FAKE_TOKENS[0];
+/// A Mac connected to Ozzie managed that also holds the owner's gateway key (a developer's Mac).
+fn connected_keys() -> hosted::fake::MemoryKeys {
+    hosted::fake::MemoryKeys::with(&[
+        (hosted::MANAGED_TOKEN_ACCOUNT, DEVICE_TOKEN),
+        ("vercel-ai-gateway", GATEWAY_KEY),
+    ])
+}
+/// The body ozzie.church gets: the request as sent, plus `kind`.
+fn hosted_body(value: &Value, kind: &str) -> Value {
+    let mut body = value.clone();
+    body["kind"] = json!(kind);
+    body
+}
+
+#[test]
+fn with_a_device_token_a_managed_step_goes_to_ozzie_church_with_the_checked_request() {
+    let names = roster();
+    let config = RouteConfig::managed();
+    let keys = connected_keys();
+    for (debug, label) in [(false, "release"), (true, "debug")] {
+        let bench = Bench::round(&format!("hosted-{label}"));
+        let hosted = HostedConfig::from_env(debug, None);
+        let env = StepEnv {
+            keys: &keys,
+            hosted: &hosted,
+            ..bench.env(&config, &names)
+        };
+        let value = after_tool_round();
+        let reply =
+            agent_step_using(&env, &parse_request(value.clone()).unwrap(), &bench.http).unwrap();
+        assert_eq!(
+            (reply.finish, reply.content.as_str()),
+            (Finish::Stop, NOT_COVERED)
+        );
+        let sent = bench.http.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].url, "https://ozzie.church/api/v1/agent-step",
+            "{label}"
+        );
+        // The device token, never the gateway key, and no gateway reporting tags.
+        assert_eq!(sent[0].key.as_deref(), Some(DEVICE_TOKEN));
+        assert!(sent[0].headers.is_empty());
+        // The exact request the checks accepted (contract shape, dotted tool names), plus its kind.
+        assert_eq!(sent[0].body, hosted_body(&value, "ask"));
+        assert!(
+            sent[0].body.get("model").is_none() && sent[0].body.get("providerOptions").is_none()
+        );
+        // Recorded and counted as any step is.
+        assert_eq!(
+            bench.model_events(TASK)[2..],
+            ["2".to_owned(), "2 stop".to_owned()]
+        );
+        assert_eq!(bench.dir.calls(), 1);
+        assert_eq!(bench.dir.usage_of("managed", "agent_steps"), 1);
+        assert_eq!(bench.dir.usage_of("managed", "prompt_tokens"), 40);
+    }
+}
+
+#[test]
+fn a_hosted_reply_is_read_by_the_same_checks_and_a_procedure_step_says_so() {
+    let names = roster();
+    let config = RouteConfig::managed();
+    let keys = connected_keys();
+    let hosted = HostedConfig::from_env(false, None);
+    // A tool call comes back in the gateway's wire shape and is minted here as before.
+    let bench = Bench::new("hosted-tools").answering(vec![(
+        200,
+        tool_reply(
+            json!([call("sunday__who_could_help", ROLE_ARGUMENT)]),
+            "tool_calls",
+        ),
+    )]);
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    let reply = agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).unwrap();
+    assert_eq!(reply.finish, Finish::ToolCalls);
+    assert_eq!(reply.tool_calls[0].id, "call_1_0");
+    assert_eq!(reply.tool_calls[0].name, "sunday.who_could_help");
+    // A reply naming someone this session has shown is dropped here, whatever the server let through.
+    let bench =
+        Bench::new("hosted-named").answering(vec![(200, text_reply("Ask Riley Thornbury."))]);
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    assert_eq!(
+        agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).err(),
+        Some(AgentError::Egress)
+    );
+    // A procedure task is "procedure".
+    let bench = Bench::new("hosted-procedure");
+    let skill = "00000000-0000-4000-8000-000000000099";
+    run(&bench.ledger, skill, "skill", "who-could-help");
+    let value = json!({
+        "task_id": skill,
+        "messages": [
+            {"role": "system", "content": system_for("who-could-help")},
+            {"role": "user", "content": fixed::procedure_prompt()},
+        ],
+        "tools": [spec("sunday.open_needs"), spec("sunday.who_could_help"), spec("drafts.prepare_note")],
+        "max_tokens": 600,
+    });
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    agent_step_using(&env, &parse_request(value.clone()).unwrap(), &bench.http).unwrap();
+    assert_eq!(
+        bench.http.sent.lock().unwrap()[0].body,
+        hosted_body(&value, "procedure")
+    );
+}
+
+#[test]
+fn ozzie_church_refusals_are_closed_codes_and_a_paused_allowance_is_its_own() {
+    let names = roster();
+    let config = RouteConfig::managed();
+    let keys = connected_keys();
+    let hosted = HostedConfig::from_env(false, None);
+    let cases = [
+        (
+            402,
+            r#"{"error":"allowance-paused"}"#,
+            AgentError::AllowancePaused,
+            "limit",
+        ),
+        (
+            402,
+            r#"{"error":"payment-required"}"#,
+            AgentError::ProviderFailure,
+            "provider-failure",
+        ),
+        (
+            401,
+            r#"{"error":"unauthorized"}"#,
+            AgentError::NotConfigured,
+            "no-model",
+        ),
+        (
+            403,
+            r#"{"error":"forbidden"}"#,
+            AgentError::ProviderFailure,
+            "provider-failure",
+        ),
+        // Each code the Mac can explain is its own (review of 2026-11-14), never provider-failure.
+        (
+            429,
+            r#"{"error":"rate-limited"}"#,
+            AgentError::RateLimited,
+            "transport",
+        ),
+        (429, r#"{"error":"step-limit"}"#, AgentError::Limit, "limit"),
+        (
+            400,
+            r#"{"error":"contact-detail"}"#,
+            AgentError::ContactDetail,
+            "egress",
+        ),
+        (
+            400,
+            r#"{"error":"invalid-request"}"#,
+            AgentError::ProviderFailure,
+            "provider-failure",
+        ),
+        (
+            500,
+            "Riley Thornbury 555-123-4567",
+            AgentError::ProviderFailure,
+            "provider-failure",
+        ),
+        (
+            200,
+            "not json",
+            AgentError::ProviderFailure,
+            "provider-failure",
+        ),
+    ];
+    for (status, body, expected, outcome) in cases {
+        let bench = Bench::new("hosted-errors").answering(vec![(status, body.into())]);
+        let env = StepEnv {
+            keys: &keys,
+            hosted: &hosted,
+            ..bench.env(&config, &names)
+        };
+        let error = agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).err();
+        assert_eq!(error, Some(expected), "{status} {body}");
+        assert_eq!(
+            bench.model_events(TASK),
+            ["1".to_owned(), format!("1 {outcome}")],
+            "{status}"
+        );
+        // Sent, so spent; nothing from the body is carried.
+        assert_eq!(bench.dir.calls(), 1);
+        let text = serde_json::to_string(&error).unwrap();
+        assert!(
+            !text.contains("Riley") && !text.contains(DEVICE_TOKEN),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn without_a_device_token_a_release_build_never_uses_the_gateway_key() {
+    let names = roster();
+    let config = RouteConfig::managed();
+    let gateway_only = hosted::fake::MemoryKeys::with(&[("vercel-ai-gateway", GATEWAY_KEY)]);
+    let bench = Bench::new("hosted-release");
+    let release = HostedConfig::from_env(false, None);
+    let env = StepEnv {
+        keys: &gateway_only,
+        hosted: &release,
+        ..bench.env(&config, &names)
+    };
+    assert_eq!(
+        agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).err(),
+        Some(AgentError::NotConfigured)
+    );
+    // Nothing sent, spent or taken, and the gateway key was never even looked up.
+    assert_eq!(bench.sent(), 0);
+    assert!(!bench.usage.exists());
+    assert_eq!(bench.model_events(TASK), bench.setup);
+    assert_eq!(
+        *gateway_only.looked.lock().unwrap(),
+        [hosted::MANAGED_TOKEN_ACCOUNT]
+    );
+    // A debug build keeps the developer's direct path to AI Gateway with that key.
+    let debug = HostedConfig::from_env(true, None);
+    let env = StepEnv {
+        keys: &gateway_only,
+        hosted: &debug,
+        ..bench.env(&config, &names)
+    };
+    agent_step_using(&env, &parse_request(base()).unwrap(), &bench.http).unwrap();
+    let sent = bench.http.sent.lock().unwrap();
+    assert_eq!(
+        sent[0].url,
+        "https://ai-gateway.vercel.sh/v1/chat/completions"
+    );
+    assert_eq!(sent[0].key.as_deref(), Some(GATEWAY_KEY));
+    assert_eq!(
+        sent[0].body["providerOptions"]["gateway"]["zeroDataRetention"],
+        json!(true)
+    );
+}
+
+#[test]
+fn every_native_check_still_runs_before_the_device_token_is_read() {
+    let names = roster();
+    let config = RouteConfig::managed();
+    let keys = connected_keys();
+    let hosted = HostedConfig::from_env(false, None);
+    let unlisted = {
+        let mut v = base();
+        v["tools"] = json!([spec("planning_center.write")]);
+        v
+    };
+    for (bench, value) in [
+        (
+            Bench::new("hosted-checks"),
+            with_user("Can Riley Thornbury cover [Role 1]?"),
+        ),
+        (
+            Bench::new("hosted-checks"),
+            with_user("Call 555-123-4567 about [Role 1]"),
+        ),
+        (Bench::new("hosted-checks"), unlisted),
+        (
+            Bench::round("hosted-checks"),
+            with_tool_content(&envelope_with("Riley Thornbury")),
+        ),
+    ] {
+        let env = StepEnv {
+            keys: &keys,
+            hosted: &hosted,
+            ..bench.env(&config, &names)
+        };
+        assert_eq!(
+            agent_step_using(&env, &parse_request(value).unwrap(), &bench.http).err(),
+            Some(AgentError::Egress)
+        );
+        assert_eq!(bench.sent(), 0);
+        assert!(!bench.usage.exists());
+        assert_eq!(bench.model_events(TASK), bench.setup);
+    }
+    assert_eq!(keys.lookups.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_managed_step_reaches_the_fake_ozzie_church_end_to_end() {
+    let names = roster();
+    let server = hosted::fake::FakeServer::start();
+    server.with(|s| s.valid = vec![DEVICE_TOKEN.into()]);
+    let hosted = HostedConfig::from_env(true, Some(&server.base));
+    let config = RouteConfig::managed();
+    let keys = connected_keys();
+    let http = NativeModelHttp::for_route(model::Route::Managed, &hosted).unwrap();
+    let bench = Bench::new("hosted-e2e");
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    let reply = agent_step_using(&env, &parse_request(base()).unwrap(), &http).unwrap();
+    assert_eq!(reply.finish, Finish::Stop);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        (requests[0].method.as_str(), requests[0].path.as_str()),
+        ("POST", hosted::AGENT_STEP_PATH)
+    );
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some(format!("Bearer {DEVICE_TOKEN}").as_str())
+    );
+    assert_eq!(requests[0].json(), hosted_body(&base(), "ask"));
+    assert!(
+        requests[0]
+            .headers
+            .iter()
+            .all(|(name, _)| name != "ai-reporting-tags")
+    );
+    // ozzie.church refuses a gateway reply without the zero data retention confirmation; should
+    // one reach this Mac anyway, it is refused here too, and the step is recorded as failed.
+    let unconfirmed = json!({"choices":[{"message":{"role":"assistant","content":r#"{"answer":"not-covered"}"#},"finish_reason":"stop"}],"usage":{"prompt_tokens":40,"completion_tokens":9}}).to_string();
+    server.with(|s| s.replies.push_back((200, unconfirmed)));
+    let bench = Bench::new("hosted-e2e-unconfirmed");
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    assert_eq!(
+        agent_step_using(&env, &parse_request(base()).unwrap(), &http).err(),
+        Some(AgentError::ProviderFailure)
+    );
+    assert_eq!(bench.model_events(TASK)[1], "1 provider-failure");
+    // The church's allowance runs out: the next step is paused, said as its own code.
+    server.with(|s| s.paused = true);
+    let bench = Bench::new("hosted-e2e-paused");
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    assert_eq!(
+        agent_step_using(&env, &parse_request(base()).unwrap(), &http).err(),
+        Some(AgentError::AllowancePaused)
+    );
+    // A revoked token: connect again.
+    server.with(|s| {
+        s.paused = false;
+        s.valid.clear();
+    });
+    let bench = Bench::new("hosted-e2e-revoked");
+    let env = StepEnv {
+        keys: &keys,
+        hosted: &hosted,
+        ..bench.env(&config, &names)
+    };
+    assert_eq!(
+        agent_step_using(&env, &parse_request(base()).unwrap(), &http).err(),
+        Some(AgentError::NotConfigured)
     );
 }

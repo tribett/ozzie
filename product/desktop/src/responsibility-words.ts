@@ -37,7 +37,7 @@ export const WATCHES: Readonly<Record<TemplateId, string>> = Object.freeze({
   "watch-room-bookings": "Room bookings on Sunday that overlap under your room rules.",
   "follow-ups-without-owner": "Follow-ups in Planning Center People that are overdue with no one assigned.",
   "group-night-clashes": "Group meetings at the same time as someone is serving on Sunday.",
-  "morning-briefing": "What still needs you before Sunday, brought together at the time you choose each morning.",
+  "morning-briefing": "What still needs you before Sunday, brought together each morning at the time you choose. Thursday's includes the full Sunday Ready brief.",
 });
 /** The template picker's one line for each. */
 export const PURPOSE: Readonly<Record<TemplateId, string>> = Object.freeze({
@@ -45,8 +45,15 @@ export const PURPOSE: Readonly<Record<TemplateId, string>> = Object.freeze({
   "watch-room-bookings": "Checks each week for room bookings that overlap.",
   "follow-ups-without-owner": "Checks each week for overdue follow-ups that no one owns.",
   "group-night-clashes": "Checks each week for group meetings that clash with serving.",
-  "morning-briefing": "Prepares Today's briefing each morning at the time you choose, if this Mac is awake and Ozzie is running.",
+  "morning-briefing": "Prepares Today's briefing each weekday at 7:00 AM, or the time you choose, if this Mac is awake and Ozzie is running. Thursday's includes the full Sunday Ready brief.",
 });
+/**
+ * How the two things that check Sunday fit together, on What runs automatically. The regular Sunday check
+ * (proactive.ts) is the steady baseline; Keep Sunday covered (on_change, near_deadline) builds on it.
+ */
+export const SUNDAY_TOGETHER = "The regular Sunday check reads Planning Center on a schedule and tells you when something changes. Keep Sunday covered builds on it as Sunday gets close: it checks more often, checks sooner when the regular check finds a change, tells you when something needs a decision, and prepares notes.";
+/** Offered in the Sunday item when Keep Sunday covered isn't on. */
+export const SUNDAY_OFFER = "It checks more often as Sunday gets close, tells you when something needs a decision, and prepares notes. You confirm a short plan before anything starts.";
 /** Every automatic check depends on this; said wherever a plan says when it checks. */
 export const ONLY_WHILE = "Only while this Mac is awake and Ozzie is running.";
 /** What the run checks, finishing "Ozzie couldn't check …". */
@@ -69,8 +76,11 @@ export function missingAccess(template: TemplateId, granted: readonly string[]):
   return `${where}, which this connection doesn't include yet. Add rooms, follow-ups and group events under Settings first; Ozzie won't widen its access on its own.`;
 }
 
-function daysText(weekdays: readonly number[]): string {
+/** Monday to Friday, as a schedule says it. */
+export const isWeekdays = (weekdays: readonly number[]) => weekdays.length === 5 && [1, 2, 3, 4, 5].every((d, i) => weekdays[i] === d);
+export function daysText(weekdays: readonly number[]): string {
   if (!weekdays.length) return "Every day";
+  if (isWeekdays(weekdays)) return "Weekdays";
   if (weekdays.length === 1) return `Every ${DAY_NAMES[weekdays[0]!]}`;
   return list(weekdays.map(d => `${DAY_NAMES[d]}s`));
 }
@@ -84,9 +94,11 @@ export function scheduleText(plan: Pick<Plan, "template" | "schedule" | "lifetim
   const extra = nearDeadlineTimes(plan, at.now, at.zone);
   return base + (extra.length ? ` Also at ${list(extra.map(clockText))} in the two days before Sunday.` : "");
 }
-export function lifetimeText(lifetime: Lifetime, template: TemplateId): string {
+/** `weekdays`: a daily one kept to chosen days (the morning briefing on weekdays) doesn't run every day. */
+export function lifetimeText(lifetime: Lifetime, template: TemplateId, weekdays: readonly number[] = []): string {
   if (lifetime.kind === "until") return `Until the end of ${dateText(lifetime.until)}. Then it stops on its own.`;
-  return TEMPLATES[template].cadence === "weekly" ? "Weekly until you stop it." : "Every day until you stop it.";
+  if (TEMPLATES[template].cadence === "weekly") return "Weekly until you stop it.";
+  return weekdays.length ? `${daysText(weekdays)} until you stop it.` : "Every day until you stop it.";
 }
 /** A short lifetime label for choices: "After Sunday, November 22", "Until you stop it". */
 export function lifetimeChoice(lifetime: Lifetime): string {
@@ -135,14 +147,41 @@ const RUN_WHY: Readonly<Record<RunTrigger, string>> = Object.freeze({
   start: "when it started", scheduled: "on schedule", "catch-up": "catching up after a missed check", retry: "trying again after a problem",
   change: "because something changed", manual: "Check now",
 });
-/** One run in What runs automatically. */
-export function runText(run: RunRow, now?: string): string {
+/**
+ * What one check found, each count with its own label: "2 things to decide and 1 worth a look". Things to
+ * decide are the same count as Sunday's everywhere else; Worth a look is never added into it.
+ */
+export function foundText(item: Pick<NoticedItem, "template" | "decisions" | "looks" | "findings">): string {
+  const parts: string[] = [];
+  if (item.decisions) parts.push(count(item.decisions, "thing to decide", "things to decide"));
+  // A group night clash is that template's Worth a look: counted once, by what it is.
+  if (item.looks && item.template !== "group-night-clashes") parts.push(`${item.looks} worth a look`);
+  if (item.findings?.rooms) parts.push(count(item.findings.rooms, "room booking overlap", "room booking overlaps"));
+  if (item.findings?.follow_ups) parts.push(count(item.findings.follow_ups, "follow-up without an owner", "follow-ups without an owner"));
+  if (item.findings?.groups) parts.push(count(item.findings.groups, "group meeting clash", "group meeting clashes"));
+  return list(parts);
+}
+/** The run's own report, when Ozzie still has it: what it found, labeled. */
+const reportOf = (run: RunRow, report?: NoticedItem | null) => report && report.run_id === run.run_id ? report : null;
+/**
+ * One run in What runs automatically. With the run's report, what it found is labeled the same way as
+ * everywhere else; without it, the store's single number is called findings so it can't be read as
+ * Sunday's things to decide.
+ */
+export function runText(run: RunRow, now?: string, report?: NoticedItem | null): string {
   const at = whenText(run.started_at, now);
   if (!run.outcome) return `${at}, ${RUN_WHY[run.trigger]}. Checking now…`;
   if (run.outcome === "interrupted") return `${at}, ${RUN_WHY[run.trigger]}. Stopped before it finished.`;
   if (run.outcome === "failed") return `${at}, ${RUN_WHY[run.trigger]}. Couldn't finish: ${problemText(run.code)}.`;
-  const found = run.noticed ? `${count(run.noticed, "thing needs", "things need")} you` : "nothing new needs a decision";
+  const own = reportOf(run, report);
+  const labeled = own ? foundText(own) : "";
+  const found = labeled || (!own && run.noticed ? count(run.noticed, "finding", "findings") : "nothing new needs a decision");
   return `${at}, ${RUN_WHY[run.trigger]}. Finished: ${found}${run.drafts ? `; ${count(run.drafts, "note", "notes")} ready to review` : ""}.`;
+}
+/** The title of what the AI wrote for a report whose decisions are on the Sunday card: what was written, never the decisions again. */
+export function preparedTitle(ready: { summary: string | null; draft: string | null }): string {
+  return ready.summary && ready.draft ? "Ozzie wrote up where Sunday stands and drafted a note."
+    : ready.draft ? "Ozzie drafted a note for Sunday." : "Ozzie wrote up where Sunday stands.";
 }
 /** Why a run couldn't finish or couldn't start, finishing "Couldn't finish: …". Says only what is known. */
 export function problemText(code: string | null | undefined): string {
@@ -192,7 +231,11 @@ export function noticedTitle(item: NoticedItem, now?: string): string {
       return `${title}: ${parts.length ? list(parts) : "something changed"}.`;
     }
     case "clear": return `${title}: checked at ${AT_TIME(item.at, now)}. Nothing new needs a decision.`;
-    case "briefing": return "Your morning briefing is ready.";
+    case "briefing": {
+      const n = item.overnight_count ?? 0;
+      return `Your morning briefing is ready.${item.sunday_ready ? " Today it includes the full Sunday Ready brief." : ""}${n
+        ? ` ${n === 1 ? "One thing" : `${n} things`} came up overnight; ${n === 1 ? "it's" : "they're"} marked Overnight.` : ""}`;
+    }
     case "couldnt-check": {
       const at = AT_TIME(item.scheduled_for ?? item.at, now);
       const why = item.code === "denied" && item.access ? "this connection doesn't include what it needs" : problemText(item.code);
@@ -239,5 +282,6 @@ export function noticedBadge(item: NoticedItem): { label: string; tone: "attn" |
 }
 export const NOTICE_WORDS: Readonly<Record<NonNullable<NoticedItem["notice"]>, string | null>> = Object.freeze({
   sent: "Notice sent", held: "Notice waiting for quiet hours to end", "sent-later": "Notice sent after quiet hours", "in-app": "Seen in Ozzie",
-  unavailable: "The Mac didn't show the notice", none: null,
+  unavailable: "The Mac didn't show the notice", briefing: "Kept for your briefing, as your Church rules say", "in-briefing": "Brought into your morning briefing",
+  none: null,
 });

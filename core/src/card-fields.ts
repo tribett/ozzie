@@ -47,21 +47,28 @@ function shaped(field: "name" | "phone" | "email", value: string): Suggestion {
   return pattern.test(value) && fits(field, value) ? { text: value, unclear: false } : unclear;
 }
 
+/** A suggestion and the recognized lines it was read from. */
+interface Sourced { readonly suggestion: Suggestion; readonly from: readonly number[] }
+const unsourced = (suggestion: Suggestion): Sourced => ({ suggestion, from: [] });
+
 /**
  * Only a labeled line counts. An unlabeled number or address may be the church's own, printed on
  * the card, so it is never taken as the visitor's. Two labeled lines are unclear.
  */
-function contact(field: "phone" | "email", lines: readonly string[]): Suggestion {
-  const labeled = lines.filter(l => labelOf(l) === field);
-  if (labeled.length > 1) return unclear;
-  return labeled.length === 1 ? shaped(field, valueOf(field, labeled[0]!)) : none;
+function single(field: "name" | "phone" | "email", lines: readonly string[]): Sourced {
+  const labeled = lines.flatMap((l, i) => labelOf(l) === field ? [i] : []);
+  if (labeled.length > 1) return unsourced(unclear);
+  if (!labeled.length) return unsourced(none);
+  const value = valueOf(field, lines[labeled[0]!]!);
+  return { suggestion: shaped(field, field === "name" ? value.replace(/\s+/g, " ") : value), from: labeled };
 }
 
-function request(lines: readonly string[]): Suggestion {
+function request(lines: readonly string[]): Sourced {
   const start = lines.findIndex(l => labelOf(l) === "request");
-  if (start < 0) return none;
-  if (lines.slice(start + 1).some(l => labelOf(l) === "request")) return unclear;
+  if (start < 0) return unsourced(none);
+  if (lines.slice(start + 1).some(l => labelOf(l) === "request")) return unsourced(unclear);
   const body: string[] = [];
+  const from = [start];
   const first = valueOf("request", lines[start]!);
   if (first) body.push(first);
   let end = lines.length;
@@ -74,27 +81,34 @@ function request(lines: readonly string[]): Suggestion {
     if (field !== null || OTHER.test(line)) { end = i; cut = field !== null && !colonLabel(field, line); break; }
     if (!line.trim()) { if (body.length) { end = i; break; } continue; }
     body.push(line.trim());
+    from.push(i);
   }
   const text = body.join("\n");
-  if (!text) return cut ? unclear : none;
-  if (!fits("request", text)) return unclear;
+  if (!text) return { suggestion: cut ? unclear : none, from };
+  if (!fits("request", text)) return { suggestion: unclear, from };
   // Any unlabeled words after where the request stopped may still be part of it: never show a
   // possibly shortened request as a clean reading.
   const after = lines.slice(end).some(l => l.trim() && labelOf(l) === null && !OTHER.test(l));
-  return { text, unclear: cut || after || !REQUEST_SAFE.test(text) };
+  return { suggestion: { text, unclear: cut || after || !REQUEST_SAFE.test(text) }, from };
 }
 
-/** Conservative field suggestions from recognized card text. Unclear readings are flagged, never repaired. */
-export function suggestFields(recognized: string): Suggestions {
+/**
+ * Conservative field suggestions from recognized card text. Unclear readings are flagged, never repaired.
+ * `unclearLines` are the lines of `recognized` (from 0) the reader couldn't read clearly: a field read
+ * from any of them keeps its text only as a suggestion to check against the card, flagged unclear.
+ */
+export function suggestFields(recognized: string, unclearLines: readonly number[] = []): Suggestions {
   if (typeof recognized !== "string") return blankAll(none);
   if (recognized.length > RECOGNIZED_TEXT_MAX) return blankAll(unclear);
   const lines = recognized.split(/\r\n|\r|\n/);
-  const names = lines.filter(l => labelOf(l) === "name");
+  const hard = new Set(unclearLines);
+  const flagged = ({ suggestion, from }: Sourced): Suggestion =>
+    from.some(i => hard.has(i)) ? { text: suggestion.text, unclear: true } : suggestion;
   return {
-    name: names.length > 1 ? unclear : names.length ? shaped("name", valueOf("name", names[0]!).replace(/\s+/g, " ")) : none,
-    phone: contact("phone", lines),
-    email: contact("email", lines),
-    request: request(lines),
+    name: flagged(single("name", lines)),
+    phone: flagged(single("phone", lines)),
+    email: flagged(single("email", lines)),
+    request: flagged(request(lines)),
   };
 }
 

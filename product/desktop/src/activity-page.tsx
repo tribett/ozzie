@@ -4,7 +4,7 @@ import { taskLine, taskSteps, type CheckTrigger, type TaskRow } from "./harness-
 import { Icon } from "./icons.js";
 
 const what: Record<string, string> = {
-  plan: "Read this Sunday's plan", plan_times: "Read the service times", needed_positions: "Read the open positions",
+  plan: "Read this Sunday's plan", plan_times: "Read the service times", needed_positions: "Read the open roles",
   team_members: "Read who is scheduled", team_position_assignments: "Read who is on a team",
   team_leaders: "Read a team's leaders", person_schedules: "Read one person's other schedules", person_blockouts: "Read one person's blockouts",
   calendar_rooms: "Read the list of rooms", calendar_resource_bookings: "Read room bookings for this Sunday",
@@ -13,6 +13,7 @@ const what: Record<string, string> = {
   groups_person_memberships: "Read one person's groups", groups_group_events: "Read one group's events this Sunday",
   calendar_conflicts: "Read one event's room conflicts",
   organization: "Read the church's time zone",
+  people_background_checks: "Read whether one person has a current background check",
 };
 /**
  * `notGranted`: Ozzie asked Planning Center for Calendar, People and Groups, and it granted Services
@@ -72,7 +73,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
         <p className="checkline">{capture.kind === "recording" ? "Saved recording" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
         <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>
           <span className="log-t">{new Date(r.checked_at).toLocaleTimeString()}</span>
-          <span>{activityLabel(r.collection)}{r.offset ? ` (page from ${r.offset})` : ""}</span>
+          <span>{activityLabel(r.collection)}{r.offset ? " (continued)" : ""}</span>
           <span className="small">{activityOutcome(r.outcome, notGranted)}</span>
         </li>)}</ol>
       </>}

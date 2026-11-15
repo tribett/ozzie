@@ -127,7 +127,14 @@ export function rescheduleFor(state: ScheduleState, settings: ScheduleSettings, 
 
 // Quiet hours: per person, in this Mac's local time. During them notices wait; in-app attention never does.
 export interface QuietHours { start: string; end: string }
-export const DEFAULT_QUIET_HOURS: QuietHours = { start: "21:30", end: "06:30" };
+/** Owner decision, October 26: 9:00 PM to 7:00 AM unless the person changes it. */
+export const DEFAULT_QUIET_HOURS: QuietHours = { start: "21:00", end: "07:00" };
+/** The default before that decision was applied. Saved quiet hours still equal to it were never chosen by anyone. */
+export const EARLIER_DEFAULT_QUIET_HOURS: QuietHours = { start: "21:30", end: "06:30" };
+/** Saved quiet hours, moved to the settled default only when they still equal the earlier default. */
+export function settledQuietHours(quiet: QuietHours): QuietHours {
+  return quiet.start === EARLIER_DEFAULT_QUIET_HOURS.start && quiet.end === EARLIER_DEFAULT_QUIET_HOURS.end ? { ...DEFAULT_QUIET_HOURS } : quiet;
+}
 
 /** "HH:MM" (24-hour, two digits each) → minutes after midnight, or null. */
 export function parseClock(value: string): number | null {

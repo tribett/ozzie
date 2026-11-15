@@ -33,13 +33,14 @@ const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 
 /** agent_step's closed error vocabulary (agent.rs AgentError), as Tauri rejects with it: a bare string. */
 export type AgentErrorCode = "egress" | "denied" | "limit" | "invalid-task" | "ledger-unavailable" | "not-configured" | "budget" | "daily-limit"
-  | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer";
+  | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail";
 /** The FailureCodes a model step can end a task with (the loops keep exactly these from a step's error). */
 export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity";
 /**
  * Each native code as the loop's FailureCode (review 2026-11-14 C9). The ledger being unavailable is "transport" and
- * a spent allowance (the route's call cap, or today's agent steps) is "limit"; the Ask panel tells both apart by the
- * native code itself (StepNotes), so each gets its own plain message.
+ * a spent allowance (the route's call cap, today's agent steps, or the church's Ozzie managed allowance, which pauses
+ * AI help) is "limit"; the Ask panel tells them apart by the native code itself (StepNotes), so each gets its own
+ * plain message.
  */
 const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   egress: "egress", denied: "denied", limit: "limit", budget: "limit", "daily-limit": "limit", "invalid-task": "invalid-task",
@@ -47,6 +48,10 @@ const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   "rate-limited": "transport", "provider-failure": "transport", "invalid-request": "transport",
   // The model's final reply wasn't the closed answer form, or chose a fact the task never read (structured answers).
   "invalid-answer": "fidelity",
+  // Ozzie managed: the church's allowance on ozzie.church is spent, so AI help is paused (never retried).
+  "allowance-paused": "limit",
+  // Ozzie managed: ozzie.church refused the step as holding a phone number or email address; nothing went to the AI.
+  "contact-detail": "egress",
 });
 const nativeCode = (error: unknown): AgentErrorCode | null => {
   const raw = typeof error === "string" ? error : typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;

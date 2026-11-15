@@ -1,0 +1,101 @@
+{
+  "object": "chat.completion",
+  "model": "anthropic/claude-haiku-5.5",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "I'll read the saved Sunday check. The tool takes a \"part\" parameter, so I'll start with the full check.",
+        "tool_calls": [
+          {
+            "id": "toolu_01Jo6mxHHL2Y8BR17d87JPnQ",
+            "type": "function",
+            "function": {
+              "name": "read_check",
+              "arguments": "{\"part\":\"all\"}"
+            }
+          }
+        ],
+        "provider_metadata": {
+          "anthropic": {
+            "usage": {
+              "input_tokens": 386,
+              "output_tokens": 84,
+              "output_tokens_details": {
+                "thinking_tokens": 0
+              },
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "service_tier": "standard",
+              "inference_geo": "global",
+              "speed": "standard"
+            },
+            "cacheCreationInputTokens": 0,
+            "stopSequence": null,
+            "iterations": null,
+            "container": null,
+            "contextManagement": null
+          },
+          "gateway": {
+            "routing": {
+              "originalModelId": "anthropic/claude-haiku-5.5",
+              "resolvedProvider": "anthropic",
+              "fallbacksAvailable": [
+                "vertexAnthropic"
+              ],
+              "canonicalSlug": "anthropic/claude-haiku-5.5",
+              "finalProvider": "anthropic",
+              "modelAttemptCount": 1,
+              "totalProviderAttemptCount": 1
+            },
+            "cost": "0.0000806",
+            "marketCost": "0.0000806",
+            "surchargeCost": "0.0002",
+            "gatewayCost": "0.0002806",
+            "inferenceCost": "0.0000806",
+            "inputInferenceCost": "0.0000386",
+            "outputInferenceCost": "0.000042",
+            "zeroDataRetentionCost": "0.0001",
+            "providerAllowlistCost": "0.0001",
+            "enabledZeroDataRetention": true,
+            "enabledDisallowPromptTraining": true
+          }
+        }
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 386,
+    "completion_tokens": 84,
+    "total_tokens": 470,
+    "cost": 0.0000806,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": null,
+      "upstream_inference_prompt_cost": 0,
+      "upstream_inference_completions_cost": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "market_cost": 0.0000806,
+    "surcharge_cost": 0.0002,
+    "gateway_cost": 0.0002806,
+    "zero_data_retention_cost": 0.0001,
+    "provider_allowlist_cost": 0.0001
+  }
+}

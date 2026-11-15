@@ -13,7 +13,8 @@ A short summary of where this Sunday stands, from Planning Center.
 3. List the roles that still need people, with how many more Planning Center says are needed, and any role with no scheduled lead.
 4. Note requests that are still pending, and whether Planning Center shows the request as sent. Pending is not the same as asked.
 5. Mention anyone the Church rules suggest checking in with. A check-in is about care, not performance.
-6. End with what wasn't checked, so nothing unread looks all clear.
+6. If the Church rules name any kids teams, say where fewer confirmed people are scheduled than the rules ask. Pending isn't confirmed, and Ozzie doesn't check ages. If the overview says some findings are shown only in Ozzie on this Mac, say so, and never guess what they are.
+7. End with what wasn't checked, so nothing unread looks all clear.
 
 Uncertain items are "Worth a look". Ozzie doesn't decide anything or contact anyone; you do.
 

@@ -2,7 +2,9 @@
 // findings carry person ids; the desktop view resolves names locally at render time.
 import { evaluateCoverage, type CandidateAssessment, type CoverageResult, type PositionAssessment, type ServingInterval } from "./coverage.js";
 import { churchTimeZone, planDate, planStart } from "./church-time.js";
-import { captureToCoverage, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
+import { applyFeedback, briefTarget, feedbackOf, type CorrectionEntry, type StopEntry } from "./finding-feedback.js";
+import { kidsFindings } from "./kids-rules.js";
+import { captureToCoverage, isKidsRead, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
 
 export interface BriefPerson { person_id: string; reasons: string[] }
 export interface Finding {
@@ -10,7 +12,7 @@ export interface Finding {
   id: string;
   /** Stable across checks (team and position, assignment or person; never a row index). Decisions are kept by this. */
   key: string;
-  kind: "needs-people" | "lead-missing" | "lead-unverified" | "pending" | "streak" | "worth-a-look";
+  kind: "needs-people" | "lead-missing" | "lead-unverified" | "pending" | "streak" | "worth-a-look" | "too-few-confirmed" | "background-check";
   /** "decision" = Needs a decision; "look" = Worth a look. Never a score. */
   tone: "decision" | "look";
   position?: { id: string; team_id: string; name: string; interval: ServingInterval | null };
@@ -29,6 +31,16 @@ export interface Finding {
   unread?: string[];
   /** The check is too old to treat as current (worth-a-look). */
   stale?: boolean;
+  /** too-few-confirmed: the confirmed people the Church rules ask for at this service time (kids-rules.ts). */
+  needed?: number;
+  /** too-few-confirmed: people pending at this time whose request was sent (asked, no answer yet) or not sent yet. */
+  asked?: string[];
+  not_sent?: string[];
+  /** background-check: what Planning Center People shows. Never a check's status, dates or other details. */
+  check?: "none-current" | "expires-before-sunday" | "expires-on-sunday";
+  /** Where and when this finding's facts were read, when that isn't the Services check (background-check). */
+  source?: string;
+  checked_at?: string;
   /** "Why I flagged this": the rule, the source facts and when they were read. Name-free. */
   why: string[];
 }
@@ -50,6 +62,8 @@ export interface SundayBrief {
   stale: boolean;
   sources: { reads: number; failed: { collection: string; outcome: string }[] };
   findings: Finding[];
+  /** Findings the person's Church rules set aside ("Stop flagging this", "This isn't right"), and which entry did. Absent when none. */
+  hidden?: { finding: Finding; entry: StopEntry | CorrectionEntry }[];
   positions: PositionStatus[];
   not_checked: string[];
 }
@@ -127,7 +141,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   // Calendar, People and Groups reads are reported by the operations check (operations-capture),
   // so a turned-off or refused room read never makes the Services picture look incomplete. So is the
   // church's time zone: only rooms and group meetings depend on it, never Services coverage.
-  const services = capture.reads.filter(r => !isOperationsRead(r) && r.collection !== ORGANIZATION_COLLECTION);
+  const services = capture.reads.filter(r => !isOperationsRead(r) && !isKidsRead(r) && r.collection !== ORGANIZATION_COLLECTION);
   const time_zone = churchTimeZone(capture);
   const checkTimes = services.map(r => r.checked_at).sort();
   const checked_at = checkTimes[0] ?? null;
@@ -218,6 +232,11 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       ],
     });
   }
+  // Church rules for kids teams: confirmed people per service time, and background checks (kids-rules.ts).
+  const teamNames = new Map<string, string>();
+  for (const p of mapped.positions) teamNames.set(p.team_id, teamNames.has(p.team_id) ? `${teamNames.get(p.team_id)!}, ${p.name}` : p.name);
+  const kids = kidsFindings(capture, rules, { teamNames, sundayDate: planDate(mapped.plan.sort_date), zone: time_zone });
+  findings.push(...kids.findings);
   const unread = unreadParts(services);
   const scopeIssues = result.issues.filter(i => i.person_id === null && i.code !== "observation-unverified" && i.code !== "lead-unverified");
   if (scopeIssues.length || failed.length || stale) findings.push({
@@ -229,12 +248,15 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       ...[...new Set(scopeIssues.map(i => i.message))],
     ],
   });
+  // What the person said on earlier cards, applied to this check. A check that couldn't be completed always shows.
+  const kept = applyFeedback(findings, f => briefTarget(f, capture.plan_id, mapped.plan.dates), feedbackOf(rules));
   return {
     mode: fictional ? "fictional" : capture.kind,
     plan: { id: capture.plan_id, ...mapped.plan, date: planDate(mapped.plan.sort_date), starts_at: planStart(mapped.plan.sort_date, time_zone) },
     time_zone, checked_at, completed_at: capture.completed_at, status: result.status, stale,
     sources: { reads: services.length, failed },
-    findings,
+    findings: kept.shown,
+    ...(kept.hidden.length ? { hidden: kept.hidden.map(h => ({ finding: h.item, entry: h.entry })) } : {}),
     positions: result.positions.map(p => {
       const pos = label(p.position_id);
       return { team_id: pos.team_id, name: pos.name, remaining: p.remaining_need, pending: inSlot(pos.team_id, pos.name, "U").length, lead: p.lead };
@@ -244,6 +266,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       ...(capture.reads.some(r => r.collection.startsWith("groups_")) ? [] : ["Groups events weren't part of this check."]),
       ...unreadGroups(capture.reads),
       "Whether someone is willing to serve isn't something Planning Center records.",
+      ...kids.not_checked,
       ...unread,
       ...(failed.length ? ["Some Planning Center reads didn't complete; see What happened."] : []),
       ...(stale ? ["Anything changed in Planning Center since this check isn't shown. Check again before relying on it."] : []),

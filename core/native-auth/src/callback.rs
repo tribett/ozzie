@@ -118,6 +118,23 @@ impl Drop for CallbackServer {
     }
 }
 fn read_callback(stream: &mut TcpStream) -> Result<String, AuthError> {
+    let target = read_loopback_get(stream, "127.0.0.1:42819", "/oauth/callback")
+        .ok_or(AuthError::InvalidCallback)?;
+    Ok(format!(
+        "{}{}",
+        &REDIRECT_URI[..REDIRECT_URI.len() - "/oauth/callback".len()],
+        target.as_str()
+    ))
+}
+/// One loopback request head, read within two seconds and 8 KiB: `GET <path>?… HTTP/1.1` with
+/// exactly one Host header equal to `host`, no Origin, no Transfer-Encoding and no body. Returns
+/// the request target (path and query); anything else is None. Shared by the Planning Center
+/// receiver here and the Ozzie managed receiver (hosted.rs).
+pub(crate) fn read_loopback_get(
+    stream: &mut TcpStream,
+    host: &str,
+    path: &str,
+) -> Option<zeroize::Zeroizing<String>> {
     let mut bytes = zeroize::Zeroizing::new(Vec::new());
     let mut byte = [0u8; 1];
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -125,66 +142,65 @@ fn read_callback(stream: &mut TcpStream) -> Result<String, AuthError> {
         && bytes.len() < 8192
         && !bytes.ends_with(b"\r\n\r\n")
     {
-        if stream
-            .read(&mut byte)
-            .map_err(|_| AuthError::InvalidCallback)?
-            == 0
-        {
-            return Err(AuthError::InvalidCallback);
+        if stream.read(&mut byte).ok()? == 0 {
+            return None;
         }
         bytes.push(byte[0]);
     }
     if !bytes.ends_with(b"\r\n\r\n") {
-        return Err(AuthError::InvalidCallback);
+        return None;
     }
-    let text = std::str::from_utf8(&bytes).map_err(|_| AuthError::InvalidCallback)?;
+    let text = std::str::from_utf8(&bytes).ok()?;
     let mut lines = text.split("\r\n");
-    let request = lines.next().ok_or(AuthError::InvalidCallback)?;
+    let request = lines.next()?;
     let parts: Vec<_> = request.split(' ').collect();
     if parts.len() != 3
         || parts[0] != "GET"
         || parts[2] != "HTTP/1.1"
-        || !parts[1].starts_with("/oauth/callback?")
+        || !parts[1]
+            .strip_prefix(path)
+            .is_some_and(|rest| rest.starts_with('?'))
     {
-        return Err(AuthError::InvalidCallback);
+        return None;
     }
     let mut hosts = 0;
     for line in lines.filter(|line| !line.is_empty()) {
-        let (name, value) = line.split_once(':').ok_or(AuthError::InvalidCallback)?;
+        let (name, value) = line.split_once(':')?;
         if name.eq_ignore_ascii_case("host") {
             hosts += 1;
-            if value.trim() != "127.0.0.1:42819" {
-                return Err(AuthError::InvalidCallback);
+            if value.trim() != host {
+                return None;
             }
         }
         if name.eq_ignore_ascii_case("origin")
             || name.eq_ignore_ascii_case("transfer-encoding")
             || (name.eq_ignore_ascii_case("content-length") && value.trim() != "0")
         {
-            return Err(AuthError::InvalidCallback);
+            return None;
         }
     }
     if hosts != 1 {
-        return Err(AuthError::InvalidCallback);
+        return None;
     }
-    Ok(format!(
-        "{}{}",
-        &REDIRECT_URI[..REDIRECT_URI.len() - "/oauth/callback".len()],
-        parts[1]
-    ))
+    Some(zeroize::Zeroizing::new(parts[1].to_owned()))
 }
 fn respond(stream: &mut TcpStream, success: bool) {
-    let (status, body) = if success {
-        (
+    if success {
+        write_page(
+            stream,
             "200 OK",
             "<!doctype html><title>Ozzie</title><p>Connection checked. Return to Ozzie.</p>",
-        )
+        );
     } else {
-        (
+        write_page(
+            stream,
             "400 Bad Request",
             "<!doctype html><title>Ozzie</title><p>This connection could not be checked. Return to Ozzie.</p>",
-        )
-    };
+        );
+    }
+}
+/// A fixed page: no caching, no referrer, nothing loaded, never framed, connection closed.
+pub(crate) fn write_page(stream: &mut TcpStream, status: &str, body: &str) {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nConnection: close\r\n\r\n{body}",
         body.len()

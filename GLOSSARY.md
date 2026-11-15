@@ -51,3 +51,31 @@ _Avoid_: Log, audit trail, session history
 **Ongoing responsibility**:
 An outcome a leader has asked Ozzie to keep working toward over time, within agreed limits. Ozzie may choose permitted steps toward that outcome; the leader retains decisions outside those limits.
 _Avoid_: Blanket permission, fixed routine (unless the procedure itself is fixed)
+
+**Kids team**:
+A Services team the church marks in Church rules as serving with kids. Kids rules apply only to kids teams: at least N confirmed people at each service time, and a current background check on file for anyone scheduled. No team is a kids team until the church marks it.
+_Avoid_: Adults (Ozzie counts confirmed people; it doesn't check ages), children's ministry check
+
+**Feedback entry**:
+A Church rules entry made from a finding card: a correction ("This isn't right"), a stop ("Stop flagging this"), an always ("Always do this"), or a notice choice for a kind of finding ("Always tell me right away", "Put this in the briefing"). Each is listed on Church rules and can be undone or deleted; nothing is learned silently.
+_Avoid_: Learned preference (on user surfaces), training, memory
+
+**Set aside**:
+A Today item the leader has moved out of the way until a stated time ("until tomorrow", "until Monday"). It comes back on time and is never counted as handled.
+_Avoid_: Dismiss, snooze-forever, done
+
+**Overnight**:
+The label on an item that came up during quiet hours. It waits for the morning briefing instead of interrupting.
+_Avoid_: Missed, late
+
+**Sunday Ready brief**:
+The full summary of where the coming Sunday stands, shown in Thursday's morning briefing.
+_Avoid_: Sunday report card, readiness score
+
+**Ozzie managed**:
+The paid hosted AI route at ozzie.church. The Mac connects in the browser; every request requires zero data retention and a reply without its confirmation is refused.
+_Avoid_: Cloud Ozzie, Ozzie AI key
+
+**Shared check**:
+The placeholder-only copy of Ozzie's last saved check that another AI app on the same Mac can read when the leader turns on "Use Ozzie's last check in other AI apps". It holds no names and no background-check facts. In UI copy, use "Ozzie's last check in other AI apps".
+_Avoid_: MCP, connector, export (on user surfaces)

@@ -13,20 +13,31 @@ import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
 import { ASK_FAILURES, basedOnBrief } from "./harness-words.js";
 import { Icon } from "./icons.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
+import { isVoiceShortcut, listenInto, LISTENING_NOTE, nativeVoice, VOICE_HINT, VOICE_SHORTCUT, voiceOff, type Voice, type VoiceStatus } from "./voice.js";
 
-type Page = "sunday" | "today" | "connection";
+type Page = "sunday" | "today" | "connection" | "cards";
 type PlanRequest = Exclude<Parsed, { kind: "none" }>;
-export type Turn = { id: number; question: string } & ({ state: "asking" } | AskTurn | { state: "plan"; parsed: PlanRequest });
+export type Turn = { id: number; question: string } & ({ state: "asking" } | AskTurn | { state: "plan"; parsed: PlanRequest } | { state: "cards" });
 /** Taking something on from Ask: the deterministic reading of a request, and the plan card's needs. */
 export interface PlanHooks { parse: (typed: string) => Parsed; context: PlanContext; actions: PlanActions }
 /** One question, start to finish. Production: askOzzie over the app's Harness. */
 export type AskFn = (typed: string, signal: AbortSignal) => Promise<AskTurn>;
+
+/**
+ * Visitor, newcomer or guest cards are read on the Visitor cards page, on this Mac. Ask points
+ * there without any AI model: the question isn't sent anywhere.
+ */
+export const isCardsRequest = (typed: string) => /\b(?:visitor|newcomer|guest|welcome|connect(?:ion)?)\s+cards?\b/i.test(typed);
+export const CARDS_POINTER = "Visitor cards are read on this Mac, on the Visitor cards page: choose the photos there and check each card against its photo. Nothing from them goes to an AI model or into Planning Center.";
 
 export const ASK_NOTE = "Ozzie replaces the names it read from Planning Center with labels before asking the AI. It can't recognise a name it never read, so please don't type other personal details.";
 const time = (iso: string | null) => iso ? new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "an unknown time";
 
 export function AskIcon() {
   return <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm4 5h.01M12 10h.01M15 10h.01" /></svg>;
+}
+function MicIcon() {
+  return <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm-6-3a6 6 0 0 0 12 0M12 18v3m-3 0h6" /></svg>;
 }
 const BasedOn = ({ text }: { text: string }) => <p className="ask-based"><Icon name="check" small />{text}</p>;
 
@@ -80,14 +91,38 @@ export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page:
 /** The set-up panel shown when no AI model is set up, in the panel and in a turn. */
 function NeedsModel({ page, onOpen }: { page: string | undefined; onOpen: (page: Page) => void }) {
   return <div className="panel-info"><Icon name="info" /><div className="stack-tight">
-    <p>{page === "connection" ? "Ask Ozzie needs an AI model. Set one up in Wording help on this page." : "Ask Ozzie needs an AI model. Set one up under Settings."} Everything else works without it.</p>
+    <p>{page === "connection" ? "Ask Ozzie needs an AI model. Set one up in AI help on this page." : "Ask Ozzie needs an AI model. Set one up under Settings."} Everything else works without it.</p>
     {page !== "connection" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("connection")}>Open Settings</button></div>}</div></div>;
+}
+
+/**
+ * What VoiceOver hears when a turn settles: one short status, not the whole thread. An answer is read as its words (it
+ * is this person's own screen); the procedure, steps and draft stay on screen to move through, and are never re-read
+ * when they open.
+ */
+export function turnAnnouncement(turn: Turn | undefined): string {
+  if (!turn) return "";
+  switch (turn.state) {
+    case "asking": return "Reading what Ozzie already has…";
+    case "plan": return "Ozzie prepared a plan. Nothing starts until you confirm it.";
+    case "cards": return "Visitor cards are read on the Visitor cards page, on this Mac.";
+    case "no-model": return "Ask Ozzie needs an AI model. Set one up under Settings.";
+    case "refused": case "problem": case "cancelled": return turn.text;
+    case "answered": {
+      const a = turn.answer;
+      const first = a.body.split(/\n{2,}/u)[0]?.trim() ?? "";
+      const more = [a.notCovered || a.gaps.length ? "Worth a look." : "", a.draft ? "A draft note is below." : ""].filter(Boolean).join(" ");
+      return [first ? `Ozzie answered: ${first}` : "Ozzie answered.", more].filter(Boolean).join(" ");
+    }
+  }
 }
 
 /** Ozzie's side of one question. */
 export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined }) {
   switch (turn.state) {
     case "plan": return plans ? <div className="body"><PlanTurn parsed={turn.parsed} context={plans.context} actions={plans.actions} /></div> : null;
+    case "cards": return <div className="body"><p>{CARDS_POINTER}</p>
+      {page !== "cards" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("cards")}><Icon name="user" small />Open Visitor cards</button></div>}</div>;
     case "asking": return <div className="body"><p className="small"><Icon name="spinner" small spin /> Reading what Ozzie already has…</p></div>;
     case "refused": return <div className="body"><p>{turn.text}</p>{!/nothing was sent/i.test(turn.text) && <p className="small">Nothing was sent.</p>}</div>;
     case "no-model": return <div className="body"><NeedsModel page={page} onOpen={onOpen} /></div>;
@@ -109,11 +144,20 @@ export function AskPanel(props: {
   initialTurns?: Turn[];
   /** Taking something on ("Keep an eye on Sunday"): needs no AI model and nothing checked yet. */
   plans?: PlanHooks;
+  /** Speaking a question on this Mac. Production: the native listener. */
+  voice?: Voice;
+  /** Whether listening is possible, before the check (tests and restored views). */
+  initialVoice?: VoiceStatus;
 }) {
   const { brief, modelReady } = props;
+  const voice = props.voice ?? nativeVoice;
   const [turns, setTurns] = useState<Turn[]>(props.initialTurns ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(() => (props.initialTurns ?? []).some(t => t.state === "asking"));
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(props.initialVoice ?? null);
+  const [listening, setListening] = useState<"no" | "on" | "ending">("no");
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const listeningRef = useRef(false);
   const nextId = useRef(1 + Math.max(0, ...(props.initialTurns ?? []).map(t => t.id)));
   const running = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -123,12 +167,47 @@ export function AskPanel(props: {
   useEffect(() => { lastRef.current?.scrollIntoView?.({ block: "start" }); }, [turns]);
   // A question still running when the panel goes away is stopped.
   useEffect(() => () => running.current?.abort(), []);
+  // Each time Ask opens: can this Mac listen? (Checking never asks the person anything.)
+  // Closing Ask while listening stops it and keeps nothing.
+  useEffect(() => {
+    if (!props.open) { if (listeningRef.current) void voice.cancel().catch(() => undefined); return; }
+    let live = true;
+    voice.status().then(s => { if (live) setVoiceStatus(s); }, () => { if (live) setVoiceStatus({ status: "not-available" }); });
+    return () => { live = false; };
+  }, [props.open, voice]);
+  useEffect(() => () => { if (listeningRef.current) void voice.cancel().catch(() => undefined); }, [voice]);
   const ready = Boolean(brief && modelReady && props.ask);
   const canType = ready || Boolean(props.plans);
+  const micUsable = canType && !busy && voiceStatus?.status === "ready";
   const update = (id: number, turn: AskTurn) => setTurns(all => all.map(t => t.id === id ? { id, question: t.question, ...turn } as Turn : t));
 
+  /** The microphone button and ⌘⇧L: start listening, or finish. The words only fill the box. */
+  const toggleVoice = async () => {
+    if (listening === "on") { setListening("ending"); void voice.stop().catch(() => undefined); return; }
+    if (listening !== "no" || !micUsable) return;
+    const before = input;
+    listeningRef.current = true;
+    setVoiceNote(null);
+    setListening("on");
+    const after = await listenInto(voice, before, setInput);
+    listeningRef.current = false;
+    setListening("no");
+    setInput(after.text);
+    setVoiceNote(after.note);
+    if (after.status) setVoiceStatus(after.status);
+    const box = inputRef.current;
+    if (box && after.text !== before) { box.focus(); box.setSelectionRange?.(after.text.length, after.text.length); }
+  };
+
   const ask = async (typed: string) => {
-    if (!canType || busy || !typed.trim()) return;
+    if (!canType || busy || listening !== "no" || !typed.trim()) return;
+    setVoiceNote(null);
+    // Cards are read on their own page, on this Mac. Nothing is sent anywhere.
+    if (isCardsRequest(typed)) {
+      setInput("");
+      setTurns(all => [...all, { id: nextId.current++, question: typed.trim(), state: "cards" }]);
+      return;
+    }
     // A request to take something on becomes a plan to confirm. Nothing is sent anywhere.
     const parsed = props.plans?.parse(typed) ?? { kind: "none" as const };
     if (parsed.kind !== "none") {
@@ -153,12 +232,18 @@ export function AskPanel(props: {
     finally { if (running.current === controller) running.current = null; setBusy(false); }
   };
 
-  const chips = ready && !busy ? suggestedQuestions(brief) : [];
+  const chips = ready && !busy && listening === "no" ? suggestedQuestions(brief) : [];
+  const off = voiceOff(voiceStatus);
+  const voiceLine = listening === "on" ? LISTENING_NOTE : listening === "ending" ? "Finishing the last words…"
+    : voiceNote ?? off ?? (voiceStatus?.status === "ready" && canType ? VOICE_HINT : null);
   return <aside id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
-    onKeyDown={e => { if (e.key === "Escape") props.onClose(); }}>
+    onKeyDown={e => {
+      if (e.key === "Escape") props.onClose();
+      else if (isVoiceShortcut(e)) { e.preventDefault(); void toggleVoice(); }
+    }}>
     <div className="convo-head"><AskIcon />Ask Ozzie<span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close Ask Ozzie" onClick={props.onClose}><Icon name="x" /></button></div>
-    <div className="thread ask-thread" aria-live="polite">
+    <div className="thread ask-thread">
       <p className="small">Ask about what Ozzie has already read. Ozzie prepares and explains; you decide.</p>
       {/* No button to the page already on screen. */}
       {!brief && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
@@ -177,13 +262,21 @@ export function AskPanel(props: {
     <form className="composer" onSubmit={e => { e.preventDefault(); void ask(input); }}>
       <label htmlFor="ask-input" className="sr-only">Your question</label>
       <textarea id="ask-input" ref={inputRef} className="ask-input" rows={2} maxLength={MAX_QUESTION_CHARS} value={input} disabled={!canType || busy}
-        placeholder={ready ? "Ask about this Sunday…" : canType ? "Ask Ozzie to keep an eye on something…" : "Ask Ozzie isn't available yet"}
-        onChange={e => setInput(e.target.value)}
+        readOnly={listening !== "no"}
+        placeholder={listening !== "no" ? "Listening…" : ready ? "Ask about this Sunday…" : canType ? "Ask Ozzie to keep an eye on something…" : "Ask Ozzie isn't available yet"}
+        onChange={e => { setInput(e.target.value); setVoiceNote(null); }}
         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} />
       <div className="composer-row"><span className="small">{input.length ? `${input.length}/${MAX_QUESTION_CHARS}` : ""}</span><span className="spacer" />
         {busy && <button type="button" className="btn btn-secondary btn-sm" onClick={() => running.current?.abort()}>Cancel this question</button>}
-        <button type="submit" className="btn btn-primary btn-sm" disabled={!canType || busy || !input.trim()}>{busy ? <Icon name="spinner" small spin /> : null}Ask</button></div>
+        <button type="button" className={`ibtn ask-mic${listening !== "no" ? " is-on" : ""}`}
+          aria-label={listening !== "no" ? "Stop listening" : "Speak your question"}
+          aria-keyshortcuts={VOICE_SHORTCUT} aria-describedby="ask-voice-line"
+          title={listening !== "no" ? "Stop listening (⌘⇧L)" : "Speak your question (⌘⇧L)"}
+          disabled={listening === "ending" || (listening === "no" && !micUsable)} onClick={() => { void toggleVoice(); }}><MicIcon /></button>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={!canType || busy || listening !== "no" || !input.trim()}>{busy ? <Icon name="spinner" small spin /> : null}Ask</button></div>
     </form>
+    <p className="small ask-voice" id="ask-voice-line" role="status" aria-live="polite">{voiceLine ?? ""}</p>
+    <p className="sr-only" role="status" aria-live="polite">{props.open ? turnAnnouncement(turns.at(-1)) : ""}</p>
     <p className="small ask-note"><Icon name="lock" small />{ASK_NOTE}</p>
   </aside>;
 }
