@@ -117,7 +117,7 @@ export function reportText(plan: Pick<Plan, "template" | "report">): string {
 export function limitsText(plan: Pick<Plan, "limits">, modelReady: boolean): string {
   const checks = `At most ${count(plan.limits.checks_per_day, "check", "checks")} a day.`;
   return modelReady
-    ? `${checks} Uses the AI at most ${plan.limits.ai_steps_per_day} times a day to write a short summary; names never reach it.`
+    ? `${checks} Uses the AI at most ${plan.limits.ai_steps_per_day} times a day to write a short summary; it sees labels, not the names Ozzie read.`
     : `${checks} No AI model is set up, so Ozzie reports what Planning Center shows without a written summary.`;
 }
 export const STOP_TEXT = "Stop it any time in What runs automatically.";

@@ -202,6 +202,11 @@ body { background: #FAF6EE; }
 /* What runs automatically: the facts table sits inside its card without a second box */
 .oz .find .sp { border: 0; border-radius: 0; padding: 0; margin-top: 10px; background: transparent; }
 .oz .runs-list .log li { grid-template-columns: 150px minmax(0, 1fr) auto; }
+/* One change entry: its notice label is capped and wraps, so a long one ("Keep Sunday covered took care of the notice") never squeezes the change text. Only the entry itself, not the change lines inside it. */
+.oz .runs-list .log > li { grid-template-columns: 150px minmax(0, 1fr) minmax(0, 150px); }
+.oz .runs-list .log > li > .small:last-child { text-align: right; }
+/* A change line inside an entry: the badge is only as wide as its word, so the sentence keeps the room. */
+.oz .runs-list .log li li { grid-template-columns: 124px minmax(0, 1fr); }
 .oz .banner { align-items: flex-start; }
 .oz .banner > .ic { flex: none; margin-top: 3px; }
 .oz .granted { margin: 10px 0 4px; }

@@ -109,7 +109,7 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion = "
       attempt(() => save(correctionEntry(target, note, now()), `Got it. I've set this aside ${occasion} and kept your note.`));
     }}>
       <label className="field-l" htmlFor={`${id}-note`}>What should Ozzie have seen? (optional)</label>
-      <input id={`${id}-note`} className="input" value={note} maxLength={NOTE_MAX} autoFocus placeholder="A few words, for example: she moved to the 11:00 service"
+      <input id={`${id}-note`} className="input" value={note} maxLength={NOTE_MAX} autoFocus placeholder="A few words, for example: they moved to the 11:00 service"
         onChange={e => { setNote(e.target.value); setProblem(""); }} />
       <p className="input-help">Kept on this Mac and never sent to an AI. This hides it {occasion} only; it comes back if {source} changes.</p>
       {problem && <p role="alert" className="problem">{problem}</p>}

@@ -42,12 +42,12 @@ const plain = (reasons: string[]) => [...new Set(reasons.map(r => plainReasons.f
 const unranked = (people: BriefPerson[], names: Names) => [...people].sort((a, b) => nameOf(names, a.person_id).localeCompare(nameOf(names, b.person_id)));
 const alphabetical = (ids: string[], names: Names) => [...ids].sort((a, b) => nameOf(names, a).localeCompare(nameOf(names, b)));
 
-const CHOICE_TEXT: Record<DecisionChoice, { button: string; question: string; save: string; done: (role: string) => string; earlier: string }> = {
-  "covered-outside": { button: "Covered outside Planning Center", question: "Who or what is covering it?", save: "Mark it covered for this Sunday",
+const CHOICE_TEXT: Record<DecisionChoice, { button: string; question: string; example: string; save: string; done: (role: string) => string; earlier: string }> = {
+  "covered-outside": { button: "Covered outside Planning Center", question: "Who or what is covering it?", example: "A few words, for example: a parent from the class is covering", save: "Mark it covered for this Sunday",
     done: role => `${role}: covered outside Planning Center.`, earlier: "covered outside Planning Center" },
-  "not-needed": { button: "Not needed this Sunday", question: "Why isn't it needed this Sunday?", save: "Mark it not needed this Sunday",
+  "not-needed": { button: "Not needed this Sunday", question: "Why isn't it needed this Sunday?", example: "A few words, for example: one service this week, so one greeter is enough", save: "Mark it not needed this Sunday",
     done: role => `${role} isn't needed this Sunday.`, earlier: "not needed this Sunday" },
-  "lead-expected": { button: "Yes, that's expected", question: "Why is that expected?", save: "Mark it expected for this Sunday",
+  "lead-expected": { button: "Yes, that's expected", question: "Why is that expected?", example: "A few words, for example: the team leads itself on fifth Sundays", save: "Mark it expected for this Sunday",
     done: role => `${role}: no scheduled lead expected this Sunday.`, earlier: "no scheduled lead expected" },
 };
 
@@ -203,7 +203,7 @@ export function LeaderNote({ finding, leader, names, sender, sunday = null, onCl
 }) {
   const ctx = { finding, leader_id: leader, sunday };
   const [body, setBody] = useState(() => restoreEscalation(escalationDraft(ctx), ctx, names, sender));
-  return <DraftBox label="Draft note to the team's leader" to={`${nameOf(names, leader)} (team leader in Planning Center)`} body={body} onBody={setBody} onClose={onClose}
+  return <DraftBox label="Draft note to the team's leader" to={Object.hasOwn(names, leader) && names[leader] ? `${names[leader]} (team leader in Planning Center)` : "the team's leader in Planning Center"} body={body} onBody={setBody} onClose={onClose}
     footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
 }
 
@@ -232,7 +232,7 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
     try { onSave(reason); } catch (error) { setProblem(error instanceof Error ? error.message : "That couldn't be saved."); }
   }}>
     <label className="field-l" htmlFor={id}>{text.question}</label>
-    <input id={id} className="input" value={reason} maxLength={REASON_MAX} autoFocus placeholder="A few words, for example: a parent from the class is covering"
+    <input id={id} className="input" value={reason} maxLength={REASON_MAX} autoFocus placeholder={text.example}
       onChange={e => { setReason(e.target.value); setProblem(""); }} />
     <p className="input-help">Kept on this Mac. It applies to this Sunday only, and this comes back if Planning Center changes.</p>
     {problem && <p role="alert" className="problem">{problem}</p>}

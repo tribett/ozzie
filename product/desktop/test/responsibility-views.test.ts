@@ -63,7 +63,7 @@ describe("the plan Ozzie shows before taking something on", () => {
       "When it checks Every day at 7:00 AM, and sooner when something changes. Also at 12:00 PM and 5:00 PM in the two days before Sunday.",
       "When it tells you Only when something needs a decision. A private notice on this Mac with no names or details; quiet hours hold it until they end.",
       "Until Until the end of Sunday, November 22. Then it stops on its own.",
-      "Limits At most 6 checks a day. Uses the AI at most 12 times a day to write a short summary; names never reach it.",
+      "Limits At most 6 checks a day. Uses the AI at most 12 times a day to write a short summary; it sees labels, not the names Ozzie read.",
       "How to stop Stop it any time in What runs automatically.",
       "You didn't say how long, so this ends after Sunday, November 22. Change it if you meant every week.",
       "Ozzie only reads. It won't change Planning Center or contact anyone; you decide what happens next.",
