@@ -70,7 +70,17 @@ describe("the Siri actions' source", () => {
   it("opens only Ozzie's Today and Sunday links, in the Ozzie it came with", () => {
     const src = code(read(ACTIONS));
     expect([...src.matchAll(/"ozzie:\/\/([^"]*)"/gu)].map(m => m[1]).sort()).toEqual([...OPENABLE_PAGES].sort());
-    expect(src).toMatch(/NSWorkspace\.shared\.open\(\[[^\]]*\], withApplicationAt:/u);
+    // The Ozzie that holds this extension, found from the extension's own bundle by ozzie(of:) (checked below).
+    expect(src).toMatch(/NSWorkspace\.shared\.open\(\[[^\]]*\], withApplicationAt: ozzie\(of: Bundle\.main\.bundleURL\),/u);
+    expect([...src.matchAll(/withApplicationAt:/gu)]).toHaveLength(1);
+  });
+
+  it("is never answered or opened from a locked Mac: every action requires authentication (review I, L2; review J, L3)", () => {
+    const intents = [...code(read(ACTIONS)).matchAll(/^struct (\w+): AppIntent \{\n([\s\S]*?)^\}$/gmu)];
+    expect(intents.map(m => m[1]).sort()).toEqual(["IsSundayCoveredIntent", "OpenSundayPageIntent", "OpenTodayPageIntent"]);
+    for (const [, name, body] of intents) {
+      expect(body, name).toMatch(/^ {4}static let authenticationPolicy: IntentAuthenticationPolicy = \.requiresAuthentication$/mu);
+    }
   });
 
   it("speaks plainly: action names, descriptions and phrases in Ozzie's own words, each phrase naming the app", () => {
@@ -133,9 +143,12 @@ if (appexWhy) console.warn(`Skipping the built Siri actions test: ${appexWhy}`);
 describe.skipIf(appexWhy !== null)("the built Siri actions (binaries/OzzieIntents.appex)", () => {
   it("carry this build's answers and the metadata Siri and Shortcuts find them by", () => {
     const metadata = JSON.parse(readFileSync(join(APPEX, "Contents/Resources/Metadata.appintents/extract.actionsdata"), "utf8")) as {
-      actions: Record<string, { title?: { key?: string } }>; autoShortcuts: { actionIdentifier: string; phraseTemplates: { key: string }[] }[];
+      actions: Record<string, { title?: { key?: string }; authenticationPolicy?: unknown }>;
+      autoShortcuts: { actionIdentifier: string; phraseTemplates: { key: string }[] }[];
     };
     expect(Object.keys(metadata.actions).sort()).toEqual(["IsSundayCoveredIntent", "OpenSundayPageIntent", "OpenTodayPageIntent"]);
+    // 1 is .requiresAuthentication: never answered or opened from a locked Mac (review I, L2; review J, L3).
+    for (const [name, action] of Object.entries(metadata.actions)) expect(action.authenticationPolicy, name).toBe(1);
     expect(metadata.autoShortcuts.map(s => s.actionIdentifier).sort()).toEqual(["IsSundayCoveredIntent", "OpenSundayPageIntent", "OpenTodayPageIntent"]);
     for (const s of metadata.autoShortcuts) for (const p of s.phraseTemplates) expect(p.key).toContain("${applicationName}");
     const info = spawnSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", join(APPEX, "Contents/Info.plist")]);
@@ -146,7 +159,8 @@ describe.skipIf(appexWhy !== null)("the built Siri actions (binaries/OzzieIntent
 });
 
 // The check program: the Siri actions' own Swift (shared answers and actions, without the extension's entry point)
-// with a small main that calls what each action's perform() calls, for a home folder given on the command line.
+// with a small main that calls what each action's perform() calls, for a home folder given on the command line, and
+// (`ozzie`) the Ozzie that an extension at a given path came with.
 const CHECK_MAIN = `import Foundation
 @main
 enum SiriActionsCheck {
@@ -161,6 +175,10 @@ enum SiriActionsCheck {
             case .link(let url): print("link \\(url.absoluteString)")
             case .said(let sentence): print("said \\(sentence)")
             }
+        case "ozzie":
+            let appex = URL(fileURLWithPath: args[2], isDirectory: args[2].hasSuffix("/"))
+            let app = SiriActions.ozzie(of: appex)
+            print(app.isFileURL ? app.path : "<not a file>")
         default: exit(64)
         }
     }
@@ -173,6 +191,13 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
   let helperCurrent = false;
   beforeAll(async () => {
     const script = await answersScript();
+    // A helper that is built but older than core/mcp fails the run rather than quietly dropping the comparison with
+    // it (review I, L5). Only a helper that isn't built here at all leaves the comparison to core/mcp/shortcuts.ts.
+    if (existsSync(HELPER)) {
+      expect(readFileSync(HELPER).includes(Buffer.from(script, "utf8")),
+        `binaries/ozzie-shortcuts-${triple} is older than core/mcp: run \`pnpm build:shortcuts\`, then \`cargo build\` in product/desktop/src-tauri`).toBe(true);
+      helperCurrent = true;
+    } else console.warn("Comparing the Siri actions with core/mcp/shortcuts.ts only: the ozzie-shortcuts helper isn't built here");
     writeFileSync(join(work, "answers.js"), script);
     writeFileSync(join(work, "check.swift"), CHECK_MAIN);
     const arch = process.arch === "arm64" ? "arm64" : "x86_64";
@@ -180,8 +205,6 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
       "-o", CHECK, new URL(SHARED, SRC).pathname, new URL(ACTIONS, SRC).pathname, join(work, "check.swift"),
       "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__ozzie_answers", "-Xlinker", join(work, "answers.js")], { timeout: 240_000 });
     expect(compiled.status, compiled.stderr.toString()).toBe(0);
-    helperCurrent = existsSync(HELPER) && readFileSync(HELPER).includes(Buffer.from(script, "utf8"));
-    if (!helperCurrent) console.warn("Comparing the Siri actions with core/mcp/shortcuts.ts only: the ozzie-shortcuts helper isn't built here or is older than core/mcp");
   }, 300_000);
   afterAll(() => { rmSync(work, { recursive: true, force: true }); });
 
@@ -239,15 +262,28 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
     expect(check(h)).toContain("2 open spots across 2 roles");
   });
 
-  it("says only that it's turned off without the switch, even beside a copy, and when the switch is a link", async () => {
+  it("says only that it's turned off without the switch, even beside a copy, and when the switch is a link, a pipe or a folder", async () => {
     const { home: h, folder } = home(false);
     writeFileSync(join(folder, SHORTCUTS_FILE), await copy(), { mode: 0o600 });
-    expect(check(h)).toBe(OFF);
-    expect(helper(h) ?? OFF).toBe(OFF);
+    // Every action, each finishing within check()'s own time limit: a pipe for a switch can't hold one up.
+    const off = (marker: string) => {
+      expect(check(h), marker).toBe(OFF);
+      expect(helper(h) ?? OFF, marker).toBe(OFF);
+      expect(check(h, "open-today"), marker).toBe(`said ${OFF}`);
+      expect(check(h, "open-sunday"), marker).toBe(`said ${OFF}`);
+    };
+    off("none");
+    const marker = join(folder, SHORTCUTS_ON_FILE);
     writeFileSync(join(folder, "elsewhere"), "");
-    symlinkSync(join(folder, "elsewhere"), join(folder, SHORTCUTS_ON_FILE));
-    expect(check(h)).toBe(OFF);
-  });
+    symlinkSync(join(folder, "elsewhere"), marker);
+    off("link");
+    rmSync(marker);
+    expect(spawnSync("/usr/bin/mkfifo", [marker]).status).toBe(0);
+    off("pipe");
+    rmSync(marker);
+    mkdirSync(marker);
+    off("folder");
+  }, 120_000);
 
   it("reads a copy that's missing, a link, a pipe, a folder or too large as no saved check", async () => {
     const { home: h, folder } = home(true);
@@ -273,6 +309,15 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
     expect(check(on, "open-sunday")).toBe("link ozzie://sunday");
     expect(check(off, "open-today")).toBe(`said ${OFF}`);
     expect(check(off, "open-sunday")).toBe(`said ${OFF}`);
+  });
+
+  it("opens a page in the Ozzie that holds the actions: three folders up from the extension, with or without a trailing slash", () => {
+    // The opening itself (NSWorkspace) is checked by hand on an installed copy.
+    for (const app of ["/x/Ozzie.app", "/x/My Apps/Ozzie.app"]) {
+      for (const appex of [`${app}/Contents/Extensions/OzzieIntents.appex`, `${app}/Contents/Extensions/OzzieIntents.appex/`]) {
+        expect(check(appex, "ozzie"), appex).toBe(app);
+      }
+    }
   });
 
   it("writes nothing", async () => {

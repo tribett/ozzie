@@ -153,20 +153,62 @@ describe("connecting and reading", () => {
     expect(calendars.state().access).toBe("not-available");
   });
 
-  it("picks up macOS's answer when the window comes forward, without asking and only while nothing is decided", async () => {
+  it("checks nothing when the window comes forward for a leader who never asked (review J, L2)", async () => {
+    // Every account that never asked reads "not-determined"; coming forward must not start the helper for each one.
     const { f, calendars } = setup();
     await calendars.load();
     f.answers.calendar_apple_status = "full";
     const before = f.calls.length;
     await calendars.refreshAccess();
-    expect(f.calls.slice(before).map(c => c[0])).toEqual(["calendar_apple_status", "calendar_apple_calendars"]);
-    expect(calendars.state()).toMatchObject({ access: "full" });
-    expect(calendars.state().calendars?.map(c => c.title)).toEqual(["Church", "Home"]);
-    // Decided already: nothing is asked of native code again.
+    await calendars.refreshAccess();
+    expect(f.calls.length).toBe(before);
+    expect(calendars.state().access).toBe("not-determined");
+  });
+
+  it("picks up macOS's answer when the window comes forward after an ask that came back undecided, without asking again", async () => {
+    for (const ask of ["not-determined", new Error("timeout")]) {
+      const { f, calendars } = setup({ calendar_apple_ask: ask });
+      await calendars.load();
+      await calendars.connectApple();
+      expect(calendars.state()).toMatchObject({ access: "not-determined", asking: false });
+      // Still undecided when the window first comes forward: checked again the next time too.
+      let before = f.calls.length;
+      await calendars.refreshAccess();
+      expect(f.calls.slice(before).map(c => c[0])).toEqual(["calendar_apple_status"]);
+      f.answers.calendar_apple_status = "full";
+      before = f.calls.length;
+      await calendars.refreshAccess();
+      expect(f.calls.slice(before).map(c => c[0])).toEqual(["calendar_apple_status", "calendar_apple_calendars"]);
+      expect(calendars.state()).toMatchObject({ access: "full" });
+      expect(calendars.state().calendars?.map(c => c.title)).toEqual(["Church", "Home"]);
+      // Decided now: nothing is asked of native code again, and macOS's question was asked only from the click.
+      const after = f.calls.length;
+      await calendars.refreshAccess();
+      expect(f.calls.length).toBe(after);
+      expect(f.calls.filter(c => c[0] === "calendar_apple_ask")).toHaveLength(1);
+    }
+  });
+
+  it("checks nothing when the window comes forward while an ask is still waiting on the person", async () => {
+    let answer: (access: string) => void = () => undefined;
+    let asks = 0;
+    const { f, calendars } = setup({
+      calendar_apple_ask: () => ++asks === 1 ? "not-determined" : new Promise<string>(resolve => { answer = resolve; }),
+    });
+    await calendars.load();
+    // The first ask came back undecided, so coming forward would check; the second is still open.
+    await calendars.connectApple();
+    const asking = calendars.connectApple();
+    expect(calendars.state().asking).toBe(true);
+    const before = f.calls.length;
+    await calendars.refreshAccess();
+    expect(f.calls.length).toBe(before);
+    answer("full");
+    await asking;
+    expect(calendars.state()).toMatchObject({ access: "full", asking: false });
     const after = f.calls.length;
     await calendars.refreshAccess();
     expect(f.calls.length).toBe(after);
-    expect(f.calls.some(c => c[0] === "calendar_apple_ask")).toBe(false);
   });
 
   it("calls only the calendar commands", async () => {

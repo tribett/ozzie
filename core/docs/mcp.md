@@ -114,28 +114,59 @@ half-written one, and every start of Ozzie removes a copy left while sharing is 
 can't be removed, Settings says "Ozzie couldn't remove the shared copy. Try turning it off again."
 and the next start tries again.
 
-## Set it up in Claude Desktop
+## Ready-made setup
 
-1. In Ozzie, open **Settings → Other AI apps** and turn on **Use Ozzie's last check in other AI apps**.
-   Ozzie then shows the setup text for this Mac, with a **Copy setup text** button. It names the helper
-   inside this copy of Ozzie, with no arguments:
+In Ozzie, open **Settings → Other AI apps** and turn on **Use Ozzie's last check in other AI apps**. Ozzie then asks
+**Which app?** and shows that app's own steps and exact text for this Mac, with a **Copy** button. Every text names
+the helper inside this copy of Ozzie, run with no arguments, and nothing else. The list and the texts are
+`core/mcp/setup.ts`.
 
-   ```json
-   {
-     "mcpServers": {
-       "ozzie": {
-         "command": "/Applications/Ozzie.app/Contents/MacOS/ozzie-share"
-       }
-     }
-   }
-   ```
+| App | What Ozzie gives | Where the format comes from |
+|---|---|---|
+| Claude | **Add Ozzie to Claude**: Ozzie hands Claude a small setup file and Claude asks whether to install it. By hand: the setup text for Settings → Developer → Edit Config. | The file format and the settings file: Anthropic's documentation and its `mcpb` tool's published schema. Clicked through on a Mac on 2026-11-16 with the notarized 0.1.6 and Claude for Mac 5.11492.5: Claude showed Ozzie's description and four tools with Install, its warning for files it hasn't verified, and a second question; after Install it started the helper and listed its tools. |
+| Claude Code | `claude mcp add --scope user ozzie -- '<helper>'` | Run on a Mac on 2026-11-16 against the released helper, in a throwaway settings folder: added, and listed as connected. |
+| Codex | `codex mcp add ozzie -- '<helper>'` | Run on a Mac on 2026-11-16 against the released helper, in a throwaway settings folder: added and listed. |
+| Cursor | the setup text for `mcp.json` in the `.cursor` folder | Cursor's documentation, read 2026-11-16. Not run. |
+| VS Code | `code --add-mcp '{"name":"ozzie","type":"stdio","command":"<helper>"}'` | VS Code's documentation, read 2026-11-16. Not run. The steps first have VS Code install its `code` command. |
+| LM Studio | the setup text for its `mcp.json` | LM Studio's documentation, read 2026-11-16. Not run. |
+| Gemini CLI | `gemini mcp add --scope user ozzie '<helper>'` | Gemini CLI's documentation, read 2026-11-16. Not run. |
+| Another app | the setup text most apps read, and the helper's path alone | The shape Claude, Cursor and LM Studio share. |
 
-2. In Claude Desktop, open Settings → Developer → Edit Config
-   (`~/Library/Application Support/Claude/claude_desktop_config.json`), paste it (beside any servers
-   already listed) and save.
+A line for Terminal quotes the helper's path as one shell word, so a folder name with spaces, quotes or `$` in it is
+handed over as written and nothing in it is run (`core/test/mcp/setup.test.ts` runs each line through `/bin/sh`).
 
-3. Restart Claude Desktop. In Ozzie, check Sunday (or open the fictional example). Then ask Claude, for
-   example, "What still needs attention for Sunday in Ozzie?"
+### Add Ozzie to Claude
+
+Claude for Mac opens files ending in `.mcpb` (a zip holding a `manifest.json`) and asks the person whether to install
+them. **Add Ozzie to Claude** has native make `Ozzie.mcpb` in Ozzie's cache folder and open it with Claude
+(`product/desktop/src-tauri/src/share_bundle.rs`). Claude warns, as for every file of this kind, that it hasn't verified
+the file and that an extension can reach everything on the computer; Settings says so before the person meets it.
+
+- The file holds no program: a manifest and a one-line note. The manifest's command is the path of the helper
+  inside this copy of Ozzie, with no arguments, so what Claude starts is the helper that came with this Ozzie and
+  nothing is copied out of it. If Ozzie moves or is removed, add it again.
+- The page hands native nothing. The helper's path, the manifest and where the file goes are decided natively; a
+  path in a temporary copy or on a disk image, or one holding a line break or `${`, gets no file at all.
+- Ozzie installs nothing in Claude and changes none of Claude's files. Whether to install it is asked in Claude, and
+  the person decides there.
+- Nothing is shared by adding it. The helper reads Ozzie's copy only while sharing is on, as with any other setup.
+
+By hand in Claude, the setup text is:
+
+```json
+{
+  "mcpServers": {
+    "ozzie": {
+      "command": "/Applications/Ozzie.app/Contents/MacOS/ozzie-share",
+      "args": []
+    }
+  }
+}
+```
+
+In Claude, open Settings → Developer → Edit Config, paste it beside any apps already listed, save, then quit Claude
+and open it again. In Ozzie, check Sunday (or open the fictional example). Then ask Claude, for example, "What still
+needs attention for Sunday in Ozzie?"
 
 Run Ozzie from the Applications folder: a downloaded app that macOS runs from a temporary copy has a
 path that changes, and one opened straight from its disk image goes away when the disk is ejected, so
@@ -234,6 +265,10 @@ and has no override for the copy's path.
 - `product/desktop/test/other-ai-apps-setup.test.ts`: the setup text names only the helper, the steps
   are plain words and say what the other app will and won't see; a temporary copy or a disk image asks
   to move Ozzie first.
+- `core/test/mcp/setup.test.ts` and `product/desktop/src-tauri/src/share_bundle_tests.rs`: each app's exact text
+  for a helper path (Terminal lines run through `/bin/sh`), the manifest of the file Claude opens equal on both
+  sides to one saved example, the zip read back by macOS's own `unzip`, a save that follows no link at its own folder or file, and an
+  open that names only Claude and that file.
 - `core/native-auth/src/shared_check_tests.rs`: one checked result per shared tool, names and contact
   details refused, a refused share leaves the last file, 0600, no task ids, the facts' own check time,
   the copy id's shape, nothing written while off, turning it off and clearing remove the copy and any

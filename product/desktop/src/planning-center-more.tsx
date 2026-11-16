@@ -9,7 +9,7 @@ import type { ConnectionControl } from "./planning-center-forms.js";
 export const MORE_COPY = {
   forms: {
     title: "People forms",
-    body: "Ozzie can tell you how many new submissions came in on the People forms you choose, and who sent them. It never reads the answers people gave.",
+    body: "Ozzie can tell you how many new submissions came in on the People forms you choose, and whom each is for. It never reads the answers people gave.",
   },
   checkIns: {
     title: "Check-Ins",

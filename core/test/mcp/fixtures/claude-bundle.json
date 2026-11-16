@@ -1,0 +1,45 @@
+{
+  "manifest_version": "0.3",
+  "name": "ozzie",
+  "display_name": "Ozzie",
+  "version": "0.0.0",
+  "description": "Read Ozzie's last Sunday check on this Mac. Read-only, with labels like [Person 1] instead of names.",
+  "long_description": "Lets Claude read the last check Ozzie saved on this Mac, only while \"Use Ozzie's last check in other AI apps\" is on in Ozzie's Settings. People, roles and rooms appear as labels like [Person 1]; the names Ozzie read from Planning Center stay in Ozzie. It can't check Planning Center, change anything or send anything. It starts the helper inside Ozzie on this Mac, so if Ozzie moves or is removed, add it again from Ozzie's Settings.",
+  "author": {
+    "name": "Ozzie",
+    "url": "https://ozzie.church"
+  },
+  "homepage": "https://ozzie.church",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/about.txt",
+    "mcp_config": {
+      "command": "/Applications/Ozzie.app/Contents/MacOS/ozzie-share",
+      "args": []
+    }
+  },
+  "tools": [
+    {
+      "name": "sunday_readiness",
+      "description": "Where the coming Sunday stands at Ozzie's last check, with labels instead of names."
+    },
+    {
+      "name": "rooms_follow_ups_groups",
+      "description": "Room bookings that overlap, follow-ups without an owner and group meetings at serving times, at Ozzie's last check."
+    },
+    {
+      "name": "church_rules",
+      "description": "The Church rules Ozzie checks against, in words."
+    },
+    {
+      "name": "what_happened",
+      "description": "What Ozzie ran recently and how it ended."
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin"
+    ]
+  },
+  "license": "Apache-2.0"
+}

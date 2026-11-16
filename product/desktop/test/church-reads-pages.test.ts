@@ -1,6 +1,7 @@
 // People forms, Check-Ins and Registrations on Settings, Today, Sunday and Church rules: the grant as the webview reads
 // it, each opt-in's plain-English explanation, the facts with source and check time, and the autopilot's name-free
 // lines. Fictional fixed data only; every name and id is invented.
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -176,6 +177,11 @@ describe("Today, Sunday and Church rules", () => {
     expect(t).toContain("This isn't right");
     // Whom a form is for is shown on this Mac, folded away; one whose person isn't named is only counted.
     expect(t).toContain("Who they're for Dana Fictional, Emery Fictional and 1 more not named here");
+    // Review J H1: a child's name does arrive in Planning Center's answer and is dropped on arrival, so "never kept".
+    // (Shown once "Where this comes from" is opened, so read from the card's source.)
+    const card = readFileSync(new URL("../src/church-reads-view.tsx", import.meta.url), "utf8");
+    expect(card).toContain("never the answers. A child's name is never kept. Names stay on this Mac.");
+    expect(card).not.toContain("never read or kept");
     expect(t).not.toContain("Who sent them");
     // Worth a look can be stopped for a team, and never offers to interrupt.
     expect(t).toContain("Stop flagging this");

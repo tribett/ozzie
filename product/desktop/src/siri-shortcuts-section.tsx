@@ -9,12 +9,12 @@ import { useEffect, useState } from "react";
 import { copySetup, temporaryPath } from "./other-ai-apps-setup.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
 
-export const SIRI_BODY = "Ask Ozzie from Spotlight, the Shortcuts app or Siri without opening this window, for example \"Is Sunday covered?\" The answer comes from Ozzie's last saved check on this Mac and always says when that check was made.";
+export const SIRI_BODY = "Ask Ozzie from Spotlight without opening this window, for example \"Is Sunday covered?\" The answer comes from Ozzie's last saved check on this Mac and always says when that check was made.";
 export const SIRI_SEES = "Siri and Shortcuts hear counts and times from Ozzie's last check: open spots and how many roles they're in, how many people are pending, with and without a request sent, teams without a confirmed lead, kids teams with fewer confirmed people than your Church rules ask, what Ozzie isn't sure of as Worth a look, how many you marked as handled, whether part of the check couldn't be read or was too long to say in full, that some findings are shown only in Ozzie when your Church rules keep them there, and when it was checked.";
 export const SIRI_NEVER = "They never hear a name, a role, team or room name, a background check or anything you asked Ozzie. Answering reads nothing from Planning Center, uses no AI help, and can't change or send anything. Siri hears your question as it hears any other; what Apple keeps is up to Apple.";
 export const SIRI_HOW = [
   "While this is on, Ozzie keeps a small copy of its last check's Sunday overview on this Mac. People and roles appear in it only as labels like [Role 1], and answers don't say even those, only counts and times.",
-  "When Siri or a shortcut asks, a small part of Ozzie reads that copy and answers. It doesn't open Ozzie's window or check Planning Center again.",
+  "When Spotlight or a shortcut asks, a small part of Ozzie reads that copy and answers. It doesn't open Ozzie's window or check Planning Center again.",
   "macOS lets Ozzie's own actions in Siri and Shortcuts read only that copy among Ozzie's files: not your saved recordings, not the copy for other AI apps, not your documents, and nothing from Planning Center.",
   "When the check is more than 30 minutes old, a saved recording, Ozzie's fictional example, or marked with a time later than this Mac's clock, the answer says so. When there's no current check, it says that instead.",
   "A link like ozzie://sunday only opens that page in Ozzie, and only while this is on. A link can't ask Ozzie anything or change anything.",
@@ -26,12 +26,12 @@ export const SIRI_HOW = [
 export const ACTION_NAMES = ["Is Sunday covered", "Open Ozzie's Sunday page", "Open Ozzie's Today page"] as const;
 export const ACTIONS_READY = "Once Ozzie is in your Applications folder and has been opened from there, press \u2318 Space, type one of these and choose Run:";
 export const ACTION_PHRASES = ["Is Sunday covered in Ozzie?", "Open Sunday in Ozzie", "Open Today in Ozzie"] as const;
-export const ACTIONS_IN_SHORTCUTS = "They are also in the Shortcuts app under Ozzie as Is Sunday covered, Open Ozzie's Sunday page and Open Ozzie's Today page, to use in shortcuts of your own.";
+export const ACTIONS_IN_SHORTCUTS = "They are also listed in the Shortcuts app under Ozzie as Is Sunday covered, Open Ozzie's Sunday page and Open Ozzie's Today page, to use in shortcuts of your own.";
 /**
  * Owner's spoken test and the coordinator's typed ones, 2026-11-16, macOS 27.2: the newest Siri ran neither Ozzie's
  * actions nor another app's of the same kind, while Spotlight ran Ozzie's. Said plainly rather than promised.
  */
-export const ACTIONS_SIRI = `Siri: you can try saying "${"Is Sunday covered in Ozzie?"}". The newest Siri (checked on macOS 27.2) doesn't yet run actions like these from apps, Ozzie's included; Spotlight and Shortcuts do.`;
+export const ACTIONS_SIRI = `Siri: on macOS 27.2, Siri didn't run Ozzie's actions when this was checked. Asked "${"Is Sunday covered in Ozzie?"}", it may answer by itself, without Ozzie's check. Use Spotlight instead.`;
 export const ACTIONS_NOT_FOUND = "If Spotlight or Shortcuts doesn't find them, move Ozzie to your Applications folder, open it from there, and try again.";
 export const BY_HAND = "Make the shortcuts yourself instead";
 export const ASK_NAME = "Is Sunday covered";
@@ -44,12 +44,12 @@ export const ASK_STEPS = [
   `Choose File > New Shortcut and name it "${ASK_NAME}".`,
   "Add the Run Shell Script action and replace its text with the command below.",
   "Add the Show Result action, so the answer is shown. Add Speak Text too if you'd like it read aloud.",
-  `Ask Siri "${ASK_NAME}?", or run it from Spotlight or the Shortcuts app.`,
+  `Run it from Spotlight or the Shortcuts app.`,
 ] as const;
 export const OPEN_STEPS = [
   `Choose File > New Shortcut and name it "${OPEN_NAME}".`,
   "Add the Open URLs action with the link below.",
-  `Ask Siri "${OPEN_NAME}", or run it from Spotlight or the Shortcuts app.`,
+  `Run it from Spotlight or the Shortcuts app.`,
 ] as const;
 export const SHORTCUTS_MISSING = "Ozzie couldn't find the part of itself that answers Siri and Shortcuts. Installing Ozzie again puts it back.";
 export const SHORTCUTS_MOVE = "Move Ozzie to your Applications folder and open it from there first. Right now it runs from a temporary copy or a disk that can be ejected, so a shortcut couldn't rely on finding it.";

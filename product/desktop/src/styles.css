@@ -39,6 +39,9 @@ body { background: #FAF6EE; }
 .oz .find-next span:not(.find-next-l) { color: var(--ink-2); }
 .oz .reword { gap: 8px; }
 .oz .chip[disabled] { opacity: .55; cursor: default; }
+/* Settings, Other AI apps: which app the setup is for */
+.oz .setup-apps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.oz .setup-apps .chip[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-ink); border-color: var(--accent); }
 /* Sunday decisions, Worth a look, rooms and follow-ups */
 .oz .find.is-look { border-left: 4px solid var(--look); }
 .oz .find.is-reopened { border-left: 4px solid var(--attn); }

@@ -36,6 +36,7 @@ mod card_picker;
 mod draft_apps;
 mod local_tools;
 // The small program another AI app starts to read Ozzie's shared check (helpers/share.swift).
+mod share_bundle;
 mod share_helper;
 // Siri and Shortcuts: the switch, the copy their helper answers from (helpers/shortcuts.swift), and
 // the pages an ozzie:// link opens.
@@ -1188,6 +1189,7 @@ fn main() {
             local_tools::stop_listening,
             local_tools::cancel_listening,
             share_helper::share_helper_path,
+            share_bundle::add_to_claude,
             shortcuts::shortcuts_status,
             shortcuts::start_shortcuts,
             shortcuts::stop_shortcuts,

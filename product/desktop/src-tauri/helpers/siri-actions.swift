@@ -60,9 +60,9 @@ enum SiriActions {
         return answers.isOn(home: home) ? .link(page.link) : .said(answers.offSentence)
     }
 
-    /// The Ozzie this extension came with: Ozzie.app/Contents/Extensions/OzzieIntents.appex, three folders up.
-    static var ozzie: URL {
-        Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    /// The Ozzie an extension at `appex` came with: Ozzie.app/Contents/Extensions/OzzieIntents.appex, three folders up.
+    static func ozzie(of appex: URL) -> URL {
+        appex.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
     /// Opens `page` in this Ozzie, bringing it forward; throws the sentence to say when it doesn't open.
@@ -75,7 +75,7 @@ enum SiriActions {
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             do {
-                _ = try await NSWorkspace.shared.open([link], withApplicationAt: ozzie, configuration: configuration)
+                _ = try await NSWorkspace.shared.open([link], withApplicationAt: ozzie(of: Bundle.main.bundleURL), configuration: configuration)
             } catch {
                 throw SaidInstead(sentence: cannotOpen)
             }

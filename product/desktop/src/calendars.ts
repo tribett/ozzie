@@ -151,6 +151,9 @@ export function createCalendars(deps: CalendarDeps = {}) {
   const set = (patch: Partial<CalendarState>) => { state = { ...state, ...patch }; for (const l of listeners) l(); };
   // Reads are applied in the order they were started, so an older read never replaces a newer one.
   let generation = 0;
+  // The leader asked and macOS's question came back unanswered: only then is it worth reading again on focus.
+  // Every account that never asked is "not-determined" too, and isn't checked (review J, L2).
+  let answerPending = false;
 
   const listCalendars = async () => {
     try {
@@ -221,20 +224,23 @@ export function createCalendars(deps: CalendarDeps = {}) {
       // macOS's question can sit unanswered until the ask gives up. That isn't "this copy can't read calendars":
       // what macOS has decided (still nothing) is asked for again, without asking the person, so the button comes back.
       if (access === "not-available") { try { access = await call<AppleAccess>("calendar_apple_status"); } catch { /* not available */ } }
+      answerPending = access === "not-determined";
       set({ access, asking: false });
       if (access === "full") await listCalendars();
     },
 
     /**
      * macOS's question can be answered long after the ask gave up (live run 2026-11-16: the owner answered an hour
-     * later and Settings still showed the button). When the window comes forward and nothing is decided yet, what
-     * macOS has decided is read again. Never asks the person anything.
+     * later and Settings still showed the button). When the window comes forward after such an ask and nothing is
+     * decided yet, what macOS has decided is read again. Never asks the person anything, and does nothing for a leader
+     * who never asked or while an ask is still open.
      */
     async refreshAccess() {
-      if (state.access !== "not-determined" || state.asking) return;
+      if (!answerPending || state.access !== "not-determined" || state.asking) return;
       let access: AppleAccess = state.access;
       try { access = await call<AppleAccess>("calendar_apple_status"); } catch { return; }
       if (access === state.access || state.asking) return;
+      answerPending = false;
       set({ access });
       if (access === "full") await listCalendars();
     },

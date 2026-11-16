@@ -18,7 +18,7 @@
 		</dict>
 	</array>
 	<!-- Siri hears "Ozzie" as "Aussie" (the owner's spoken test, 2026-11-16) and then doesn't match Ozzie's Siri
-	     actions, whose phrases must name the app. These are other spellings Siri treats as this app's name. -->
+	     actions, whose phrases must name the app. These are other spellings for Siri to treat as this app's name (not shown to change anything on macOS 27.2). -->
 	<key>INAlternativeAppNames</key>
 	<array>
 		<dict>

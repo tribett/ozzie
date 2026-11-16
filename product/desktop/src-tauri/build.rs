@@ -246,6 +246,7 @@ fn siri_actions(arch: &str, out: &str) {
     let _ = std::fs::remove_dir_all(&products);
     // Only what xcodebuild needs from the environment: none of cargo's or tauri's variables, which
     // Xcode would otherwise read as build settings.
+    // xcodebuild still leaves its logs in the user's Library/Developer/Xcode/DerivedData folder.
     let mut xcodebuild = Command::new(developer.join("usr/bin/xcodebuild"));
     xcodebuild
         .env_clear()

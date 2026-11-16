@@ -112,7 +112,7 @@ function FormCard({ fact, names, feedback }: { fact: FormFact; names: Names; fee
       {open && <ul className="list why">
         <li><Icon name="dot" small />You asked Ozzie to watch this form on Church rules.</li>
         <li><Icon name="dot" small />Planning Center People shows {fact.at_least ? "at least " : ""}{fact.count} {fact.count === 1 ? "submission" : "submissions"} created since {fact.since_words}{fact.at_least ? "; there were more than Ozzie reads at once" : ""}.</li>
-        <li><Icon name="dot" small />Ozzie reads when each was sent and whom it's for, never the answers. A child's name is never read or kept. Names stay on this Mac.</li>
+        <li><Icon name="dot" small />Ozzie reads when each was sent and whom it's for, never the answers. A child's name is never kept. Names stay on this Mac.</li>
       </ul>}
     </div>
     <FindingFeedback target={formTarget(fact)} feedback={feedback} urgency={false} occasion="while the same submissions stand" source="the submissions" />
@@ -207,7 +207,7 @@ export function ChurchReadsRules({ rules, onChange, capture, status }: {
   return <>
     <section className="find rule-forms" aria-labelledby="forms-rules-title">
       <h2 id="forms-rules-title" className="h3">People forms</h2>
-      <p className="find-body">Choose forms to watch, and Ozzie tells you how many new submissions came in on each, and who sent them. It never reads the answers.</p>
+      <p className="find-body">Choose forms to watch, and Ozzie tells you how many new submissions came in on each, and whom each is for. It never reads the answers.</p>
       <label className="confirmation" htmlFor="forms-on">
         <input id="forms-on" type="checkbox" checked={on} onChange={e => onChange(withFormsOn(rules, e.target.checked))} />
         <span>Watch People forms for new submissions</span>

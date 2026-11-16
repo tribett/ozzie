@@ -178,7 +178,17 @@ describe("Settings", () => {
     // Siri isn't promised: the newest Siri ran neither Ozzie's actions nor another app's (live, 2026-11-16).
     expect(ACTIONS_READY).not.toMatch(/Siri/u);
     expect(ACTIONS_SIRI).toContain(`"${ACTION_PHRASES[0]}"`);
-    expect(ACTIONS_SIRI).toMatch(/doesn't yet run/u);
+    // Review J M1, L1: nobody is told to try Siri (it answered that phrase by itself, without Ozzie's check), nothing
+    // forecasts what Siri will do, and Shortcuts is said to list the actions, which is what was seen.
+    expect(ACTIONS_SIRI).toMatch(/didn't run Ozzie's actions when this was checked/u);
+    expect(ACTIONS_SIRI).toMatch(/may answer by itself, without Ozzie's check\. Use Spotlight instead\.$/u);
+    expect(ACTIONS_SIRI).not.toMatch(/you can try|\byet\b|Shortcuts do/u);
+    expect(SIRI_BODY).not.toMatch(/Siri|Shortcuts app/u);
+    expect(SIRI_HOW.join(" ")).not.toMatch(/When Siri/u);
+    // The app never speaks as "we" (review L L7).
+    expect(ACTIONS_SIRI).not.toMatch(/\bwe\b/iu);
+    expect(ACTIONS_IN_SHORTCUTS).toMatch(/^They are also listed in the Shortcuts app/u);
+    for (const step of [...ASK_STEPS, ...OPEN_STEPS]) expect(step).not.toMatch(/Ask Siri/u);
     expect(words.indexOf(ACTIONS_READY)).toBeLessThan(words.indexOf(SCRIPTS_SETTING));
     // The steps by hand, Allow Running Scripts with them, are folded away under the fallback.
     const fallback = html.indexOf(`<details class="listen-more"><summary>${BY_HAND}</summary>`);

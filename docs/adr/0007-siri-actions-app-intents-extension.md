@@ -80,6 +80,7 @@ Ozzie the extension came with rather than to whichever app claims `ozzie://`.
 - build.rs runs xcodebuild on `intents/OzzieIntents.xcodeproj`: one target, the three Swift files, and the answers
   script linked in with `-sectcreate`.
 - Xcode is found from DEVELOPER_DIR when that is set; otherwise from xcode-select; otherwise /Applications/Xcode.app.
+- xcodebuild leaves its logs in the user's Library/Developer/Xcode/DerivedData folder (`OzzieIntents-<hash>`).
 - Xcode supplies the list of protocols the compiler extracts constants for and writes `Metadata.appintents`. Calling
   swiftc and the metadata tool by hand would mean copying an internal list that changes with Xcode.
 - Without Xcode, build.rs removes any older copy and prints a warning. `cargo build`, `cargo test` and `tauri dev`
@@ -116,8 +117,8 @@ steps by hand, as before.
   three App Shortcuts with their seven phrases, and listed the three actions in Shortcuts' index. From Spotlight, typed
   by their names, "Is Sunday covered" answered with the helper's own sentence (and the off sentence while the switch
   was off), and the two open actions brought Ozzie forward on the right page.
-- **Not run by Siri.** The newest Siri heard "Is Sunday covered in Ozzie?" correctly (after "Aussie" and "Ozzy" were
-  added as other names for the app) and answered it as a general question; typed, it said it could not run the
+- **Not run by Siri.** The newest Siri heard "Is Sunday covered in Ozzie?" correctly ("Aussie" and "Ozzy" had
+  been added as other names for the app by then; that they made the difference wasn't shown) and answered it as a general question; typed, it said it could not run the
   command or open a page inside Ozzie. A control with another Developer ID app's App Shortcut phrase got "Sorry, I
   don't understand." So on this macOS the new Siri runs no plain App Shortcuts from apps like these. Apple's Siri
   preview documentation describes a different route (intents marked as Siri tools, or schema intents) that it says is
