@@ -53,6 +53,7 @@ import { calendarsConnected, createCalendars, useCalendarState } from "./calenda
 import { CalendarSettings } from "./calendar-settings.js";
 import { createChurchSources, useChurchSources } from "./church-sources.js";
 import { ChurchListsPage } from "./church-lists-page.js";
+import { createWindowVisible } from "./window-visible.js";
 import { ChurchOwnWords } from "./church-own-words.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
@@ -72,16 +73,11 @@ const runner = createRunner({
   log: line => { if (debugRunner.lines) void invoke("dev_log", { line }).catch(() => undefined); },
 });
 const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-/** Whether the window is on screen: being "seen in Ozzie" needs a person who can see it. */
+/** Whether the window is on screen: being "seen in Ozzie" needs a person who can see it (window-visible.ts). */
+const onScreen = createWindowVisible(typeof document === "undefined" ? undefined : document, typeof window === "undefined" ? undefined : window);
 function useWindowVisible(): boolean {
-  const visible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
-  const [shown, setShown] = useState(visible);
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const changed = () => setShown(visible());
-    document.addEventListener("visibilitychange", changed);
-    return () => document.removeEventListener("visibilitychange", changed);
-  }, []);
+  const [shown, setShown] = useState(onScreen.visible);
+  useEffect(() => onScreen.subscribe(setShown), []);
   return shown;
 }
 
@@ -307,7 +303,7 @@ export function App() {
   // The native timer wakes the page (even with the window closed), reports Mac sleep, Pause everything
   // from the menu bar, and the window coming back (a briefing that was announced opens Today).
   useEffect(() => {
-    const openToday = () => { if (runner.view().open_today && document.visibilityState !== "hidden") { setPage("today"); runner.clearOpenToday(); } };
+    const openToday = () => { if (runner.view().open_today && onScreen.visible()) { setPage("today"); runner.clearOpenToday(); } };
     const stop = background.on({
       tick: () => { void runner.tick(); void proactive.tick(); },
       wake: (slept, at) => runner.wake(slept, at),
