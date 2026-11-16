@@ -282,12 +282,19 @@ export function backgroundTitle(name: string, check: Finding["check"]): string {
 /** The Sunday a finding belongs to, for "This isn't right" (that Sunday only). */
 export interface Occurrence { id: string; label: string | null }
 
-function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDecide, onHow, feedback = null, occurrence }: {
+/**
+ * Something App shows beside a card, for its kind of finding and, when it has one, its team and position (SundayPage's
+ * `beside`); this page knows nothing of what.
+ */
+export type Beside = (p: { kind: string; team_id?: string; position_id?: string; name?: string }) => ReactNode;
+
+function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDecide, onHow, feedback = null, occurrence, beside }: {
   item: DecidedItem; names: Names; checkedAt: string | null; sender: string; sunday: string | null; canReword: boolean;
   onDecide: (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) => void;
   onHow?: ((procedure: string) => void) | undefined;
   feedback?: FeedbackControls | null;
   occurrence: Occurrence;
+  beside?: Beside | undefined;
 }) {
   const { finding } = item;
   const target = briefTarget(finding, occurrence.id, occurrence.label);
@@ -386,6 +393,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReminding(true)}>Prepare a reminder</button></div>}
     {reminding && <ReminderNote finding={finding} names={names} sender={sender} onClose={() => setReminding(false)} />}
     {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} sunday={sunday} onClose={() => setLeaderFor(null)} />}
+    {beside?.({ kind: finding.kind, ...(finding.position ? { team_id: finding.position.team_id, position_id: finding.position.id, name: finding.position.name } : {}) })}
     <Why finding={finding} checkedAt={checkedAt} onHow={onHow ? () => onHow(procedureFor(finding)) : undefined} />
     <FindingFeedback target={target} feedback={feedback} />
   </article>;
@@ -583,6 +591,8 @@ export function SundayPage(props: {
   feedback?: FeedbackSource | null;
   /** Last Sunday in Check-Ins against the kids rules (church-reads-view.tsx), when Check-Ins was part of the check. */
   church?: ReactNode;
+  /** Shown on an open card for its team or position: App passes the church's own lists here (church-own-words.tsx). */
+  beside?: Beside | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
   // "Your name for notes" from Settings, put in on this Mac after any rewording; [Your name] when none is set.
@@ -633,7 +643,7 @@ export function SundayPage(props: {
       <h2 id="sunday-open-title" className="sr-only">Open for this Sunday</h2>
       {notice}
       {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword} onDecide={onDecide} onHow={props.onHow}
-        feedback={controls} occurrence={occurrence} />)}
+        feedback={controls} occurrence={occurrence} beside={props.beside} />)}
       {brief.findings.length === 0 && <p className="lede">{brief.hidden?.length ? "Nothing open in what was read, apart from what your Church rules set aside below."
         : "No open needs, pending requests or Church-rule check-ins in what was read."}</p>}
       {brief.findings.length > 0 && open.length === 0 && <p className="lede">Everything left is something you resolved yourself, below.</p>}

@@ -2583,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "ozzie-desktop"
-version = "0.1.6"
+version = "0.1.8"
 dependencies = [
  "libc",
  "objc2",
@@ -2593,6 +2593,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "syn 2.0.119",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

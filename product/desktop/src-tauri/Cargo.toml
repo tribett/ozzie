@@ -1,6 +1,6 @@
 [package]
 name = "ozzie-desktop"
-version = "0.1.6"
+version = "0.1.8"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
@@ -26,6 +26,9 @@ semver = "1.0"
 [dev-dependencies]
 # The mock runtime, so the updater tests run the plugin's own checks without a window.
 tauri = { version = "=2.12.4", features = ["tray-icon", "test"] }
+# Already locked through tauri's macros: church_sources_tests.rs reads church_sources.rs's imports and paths as Rust
+# reads them (review U, finding 4). Tests only; no new download.
+syn = { version = "=2.0.119", features = ["full", "visit"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Already locked through tauri; used to keep App Nap from pausing scheduled checks, for the

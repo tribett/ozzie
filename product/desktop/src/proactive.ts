@@ -10,9 +10,10 @@ import {
   DEFAULT_QUIET_HOURS, DEFAULT_SCHEDULE, finishRun, holdNotice, inQuietHours, launchSchedule, newSchedule, noticeDecision, parseClock,
   pauseSchedule, releaseHeld, rescheduleFor, resumeSchedule, settledQuietHours, startManual, tickSchedule, type RunTrigger, type ScheduleState,
 } from "../../../core/src/schedule.js";
-import { feedbackOf, foundOf, rightAwayChanges, routeChanges } from "../../../core/src/finding-feedback.js";
+import { changeFindingKind, feedbackOf, foundOf, rightAwayChanges, routeChanges } from "../../../core/src/finding-feedback.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
+import { THIS_MAC_ONLY, thisMacOnly, type NoticeOptions } from "./phone-notice.js";
 
 /**
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
@@ -29,8 +30,14 @@ export async function verifiedSundayCheck(ctx: { settings: Settings; status: Con
   return sundaySource.check(ctx.settings.serviceTypeId, ctx.settings.planId, ctx.rules);
 }
 
-/** Lock-screen privacy: the title and body are fixed in native code; the webview passes no text at all. */
-export const notifySundayAttention = () => invoke<void>("notify_sunday_attention");
+/**
+ * Lock-screen privacy: the title and body are fixed in native code; the webview passes no text at all. Its one word,
+ * "this Mac only", keeps the phone line of "A notice on your phone" back (phone-notice.ts); it never adds one.
+ */
+export const notifySundayAttention = (options?: NoticeOptions) =>
+  options?.localOnly ? invoke<void>("notify_sunday_attention", { localOnly: true }) : invoke<void>("notify_sunday_attention");
+/** Whether the Sunday notice for these changes stays on this Mac: every one is about a background check. Kinds only. */
+const macOnlyFor = (changes: readonly SundayChange[]) => thisMacOnly(changes.map(c => c.finding?.kind ?? changeFindingKind(c.kind)));
 
 /**
  * On launch nothing is connected in memory yet, so automatic checks would wait forever: check the saved sign-in once
@@ -111,7 +118,8 @@ export interface ProactiveDeps {
    * `source` overrides how the ledger records it (a responsibility's run is automatic, though it asks like Check now).
    */
   check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic") => Promise<SundayCapture>;
-  notify: () => Promise<void>;
+  /** The Sunday notice; `THIS_MAC_ONLY` when only background checks brought it (its phone line stays back). */
+  notify: (options?: NoticeOptions) => Promise<void>;
   /** Fixed local copy for a failed check. */
   problem: (error: unknown) => string;
   timers: { setInterval: (fn: () => void, ms: number) => unknown; clearInterval: (handle: unknown) => void };
@@ -236,8 +244,9 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
   snapshot = build();
   const emit = () => { save(); snapshot = build(); listeners.forEach(l => l()); };
   const add = (entry: HistoryEntry) => { history = [entry, ...history].slice(0, HISTORY_LIMIT); };
-  const deliver = async (): Promise<"sent" | "unavailable"> => {
-    try { await deps.notify(); return "sent"; } catch { return "unavailable"; }
+  /** `macOnly`: only background checks brought it, so "A notice on your phone" leaves it on this Mac. */
+  const deliver = async (macOnly: boolean): Promise<"sent" | "unavailable"> => {
+    try { await (macOnly ? deps.notify(THIS_MAC_ONLY) : deps.notify()); return "sent"; } catch { return "unavailable"; }
   };
 
   /** Compare with what was last known for this Sunday and decide on one notice. Never throws. */
@@ -264,7 +273,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const routed = routeChanges(all, entries);
     const listed = all.filter(c => !routed.stopped.includes(c));
     if (!listed.length) return;
-    const found = { worse: routed.notify.length > 0, urgent: routed.urgent };
+    const found = { worse: routed.notify.length > 0, urgent: routed.urgent, macOnly: macOnlyFor(routed.notify) };
     // Keep Sunday covered is handed the Sunday's own changes. A new finding told right away is this check's notice
     // to send, so then nothing is handed over and one notice goes out.
     const own = routed.notify.some(c => c.kind === "finding-new");
@@ -281,9 +290,9 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     add({ at: now, kind: "changes", ...about, changes: listed, notice });
   }
   /** Send the notice now, or hold it for quiet hours (unless the person let urgent ones through). */
-  async function decide(found: { worse: boolean; urgent: boolean }, now: string): Promise<NonNullable<HistoryEntry["notice"]>> {
+  async function decide(found: { worse: boolean; urgent: boolean; macOnly: boolean }, now: string): Promise<NonNullable<HistoryEntry["notice"]>> {
     const decision = noticeDecision(found, { quiet: quiet(), urgentDuringQuiet: prefs.urgentDuringQuiet }, now, deps.timeZone());
-    if (decision === "send") return deliver();
+    if (decision === "send") return deliver(found.macOnly);
     if (decision === "hold") { schedule = holdNotice(schedule, now, found.urgent); return "held"; }
     return "none";
   }
@@ -293,7 +302,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
    * it), so nothing goes silent. Paused meanwhile: dropped, as a held notice is. Seen in Ozzie meanwhile:
    * that counts as being told.
    */
-  async function afterHandoff(at: string, handed: Promise<boolean>, found: { worse: boolean; urgent: boolean }) {
+  async function afterHandoff(at: string, handed: Promise<boolean>, found: { worse: boolean; urgent: boolean; macOnly: boolean }) {
     const decided = await handed.catch(() => false);
     const outcome: NonNullable<HistoryEntry["notice"]> = decided ? "responsibility" : schedule.paused ? "none"
       : seenAt && seenAt >= at ? "in-app" : await decide(found, deps.now());
@@ -331,15 +340,16 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
    * relevance before it goes out). Rechecked against the newest saved check of the same Sunday, with no new
    * Planning Center read: a change reversed meanwhile (a decline restored, the extra request gone) no longer
    * counts, and neither does one the person's Church rules now keep out of notices. With no saved check of
-   * that Sunday to recheck against, its changes stand as they were found.
+   * that Sunday to recheck against, its changes stand as they were found. Returns the changes that still bring it
+   * (none: no notice needed), so a notice only about background checks still stays on this Mac.
    */
-  const stillRelevant = (entry: HistoryEntry): boolean => {
+  const stillNotifying = (entry: HistoryEntry): SundayChange[] => {
     const ctx = hooks?.context();
     const own = ctx && entry.plan_id ? keyOf(ctx.settings.organization, entry.plan_id) : undefined;
     const key = own && sundays[own] ? own : Object.keys(sundays).find(k => sundays[k]!.latest.plan_id === entry.plan_id);
     const memory = key ? sundays[key] : undefined;
     const holding = (entry.changes ?? []).filter(c => !memory || changeStillHolds(c, memory, foundBy[key!] ?? null));
-    return routeChanges(holding, feedbackOf(ctx?.rules ?? {})).notify.length > 0;
+    return routeChanges(holding, feedbackOf(ctx?.rules ?? {})).notify;
   };
 
   async function tick() {
@@ -354,8 +364,9 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const running = step.start ? run(step.start) : inflight;
     if (released.deliver) {
       // One notice for whatever is still so; a held entry that no longer is says no notice was needed.
-      const relevant = new Set(history.filter(e => e.notice === "held" && stillRelevant(e)));
-      const outcome = relevant.size ? await deliver() : null;
+      const still = new Map(history.filter(e => e.notice === "held").map(e => [e, stillNotifying(e)] as const).filter(([, c]) => c.length > 0));
+      const relevant = new Set(still.keys());
+      const outcome = relevant.size ? await deliver(macOnlyFor([...still.values()].flat())) : null;
       history = history.map(e => e.notice !== "held" ? e : { ...e, notice: !relevant.has(e) ? "none" : outcome === "sent" ? "sent-later" : "unavailable" });
     }
     emit();

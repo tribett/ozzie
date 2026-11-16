@@ -17,7 +17,6 @@ import {
 import { plainText } from "../../../core/src/calendar/ics.js";
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 
 /** Every native command this file may call. Calendar text goes nowhere else. */
 export const CALENDAR_COMMANDS = [
@@ -25,6 +24,33 @@ export const CALENDAR_COMMANDS = [
   "calendar_links", "calendar_link_add", "calendar_link_remove", "calendar_link_read", "calendar_links_forget_all",
 ] as const;
 type Command = typeof CALENDAR_COMMANDS[number];
+/**
+ * Whether a command is one of CALENDAR_COMMANDS, by literal comparison only: nothing an importer could patch (no Set, no
+ * prototype; review U, finding 1).
+ */
+export function allowed(command: string): command is Command {
+  switch (command) {
+    case "calendar_apple_status":
+    case "calendar_apple_ask":
+    case "calendar_apple_calendars":
+    case "calendar_apple_events":
+    case "calendar_apple_chosen":
+    case "calendar_apple_choose":
+    case "calendar_links":
+    case "calendar_link_add":
+    case "calendar_link_remove":
+    case "calendar_link_read":
+    case "calendar_links_forget_all":
+      return true;
+    default:
+      return false;
+  }
+}
+/**
+ * The one way to native code, private to this module: a command not in CALENDAR_COMMANDS is refused here, before anything is
+ * sent, however its name was made (review S2, finding 1). Every call below also names its command as a literal from that list.
+ */
+const nativeInvoke: Invoke = (command, args) => allowed(command) ? tauriInvoke(command, args) : Promise.reject("unavailable");
 
 export type AppleAccess = "full" | "not-determined" | "denied" | "restricted" | "write-only" | "not-available";
 export interface AppleCalendarChoice { id: string; title: string; account: string | null }
@@ -58,9 +84,9 @@ export const LINK_PROBLEMS: Readonly<Record<LinkError, string>> = Object.freeze(
   denied: "This Mac's Keychain didn't let Ozzie use it.",
   unavailable: "Ozzie couldn't save or read this calendar on this Mac. Try again.",
 });
-/** A problem in plain words, looked up without prototypes: an unexpected code is never a built-in property. */
+/** A problem in plain words, looked up among the table's own entries only: an unexpected code is never a built-in property. */
 const lookup = (table: Readonly<Record<string, string>>, code: unknown): string | null =>
-  typeof code === "string" && Object.hasOwn(table, code) ? table[code]! : null;
+  typeof code === "string" ? Object.entries(table).find(([known]) => known === code)?.[1] ?? null : null;
 export const linkProblem = (error: unknown) => lookup(LINK_PROBLEMS, error) ?? LINK_PROBLEMS.unavailable;
 const APPLE_PROBLEMS: Readonly<Record<string, string>> = Object.freeze({
   "not-available": "Apple Calendar can't be read by this copy of Ozzie.",

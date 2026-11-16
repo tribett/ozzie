@@ -32,12 +32,15 @@ mod always_on;
 mod calendars;
 // Visitor cards: Ozzie's own images-only photo panel (no path ever comes from the page).
 mod card_picker;
+mod church_sources;
 // "Open in Mail" / "Open in Messages" on drafts: a new, unsent message the person sends.
 mod draft_apps;
 mod local_tools;
 // The small program another AI app starts to read Ozzie's shared check (helpers/share.swift).
 mod share_bundle;
 mod share_helper;
+// "A notice on your phone": the Mac's fixed notices, also to the leader's phone through ntfy.sh.
+mod phone_notice;
 // Siri and Shortcuts: the switch, the copy their helper answers from (helpers/shortcuts.swift), and
 // the pages an ozzie:// link opens.
 mod shortcuts;
@@ -1089,16 +1092,25 @@ fn dev_defaults() -> DevDefaults {
 const SUNDAY_NOTICE_TITLE: &str = "Ozzie";
 const SUNDAY_NOTICE_BODY: &str = "Sunday coverage needs attention. Open Ozzie to see details.";
 /// The webview asks for the Sunday notice and passes no text. The capability grants none of the
-/// notification plugin's own commands, so the webview cannot show any other notification text.
+/// notification plugin's own commands, so the webview cannot show any other notification text. While
+/// "A notice on your phone" is on, its fixed line also goes to the leader's phone, after this one,
+/// unless the page says it stays on this Mac (`local_only`: a notice only about a background check).
 #[tauri::command]
-fn notify_sunday_attention(app: tauri::AppHandle) -> Result<(), &'static str> {
+fn notify_sunday_attention(
+    app: tauri::AppHandle,
+    local_only: Option<bool>,
+) -> Result<(), &'static str> {
+    use ozzie_native_auth::phone_notice::Line;
     use tauri_plugin_notification::NotificationExt;
-    app.notification()
+    let shown = app
+        .notification()
         .builder()
         .title(SUNDAY_NOTICE_TITLE)
         .body(SUNDAY_NOTICE_BODY)
         .show()
-        .map_err(|_| "notification-unavailable")
+        .map_err(|_| "notification-unavailable");
+    phone_notice::also_to_phone(&app, Line::SundayAttention, local_only);
+    shown
 }
 fn main() {
     let smoke = std::env::args().any(|arg| arg == "--lifecycle-smoke");
@@ -1136,6 +1148,7 @@ fn main() {
                 let _ = ozzie_native_auth::shortcuts_check::startup(&dir);
             }
             updater::setup(app);
+            phone_notice::setup(app);
             always_on::setup(app)?;
             Ok(())
         })
@@ -1209,11 +1222,28 @@ fn main() {
             calendars::calendar_link_remove,
             calendars::calendar_link_read,
             calendars::calendar_links_forget_all,
+            church_sources::church_sources,
+            church_sources::church_source_choose_file,
+            church_sources::church_source_read,
+            church_sources::church_source_set,
+            church_sources::church_source_remove,
+            church_sources::church_sources_forget_all,
+            church_sources::church_link_add,
+            church_sources::church_link_read,
+            church_sources::church_link_remove,
+            church_sources::church_links_forget_all,
+            church_sources::church_notes_choose_file,
+            church_sources::church_notes_set,
             always_on::background_info,
             always_on::background_next_due,
             always_on::autostart_get,
             always_on::autostart_set,
             always_on::notify_ozzie,
+            phone_notice::phone_notice_status,
+            phone_notice::phone_notice_on,
+            phone_notice::phone_notice_new_channel,
+            phone_notice::phone_notice_off,
+            phone_notice::phone_notice_test,
             always_on::responsibility_list,
             always_on::responsibility_create,
             always_on::responsibility_edit,

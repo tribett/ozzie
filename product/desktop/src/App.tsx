@@ -51,11 +51,14 @@ import { updates, useUpdates } from "./updates.js";
 import { UpdateLine, UpdatesSection } from "./updates-view.js";
 import { calendarsConnected, createCalendars, useCalendarState } from "./calendars.js";
 import { CalendarSettings } from "./calendar-settings.js";
+import { createChurchSources, useChurchSources } from "./church-sources.js";
+import { ChurchListsPage } from "./church-lists-page.js";
+import { ChurchOwnWords } from "./church-own-words.js";
 
-type Page = "today" | "sunday" | "cards" | "rules" | "automatic" | "activity" | "connection";
+type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "today", label: "Today", icon: "clock" }, { id: "sunday", label: "Sunday", icon: "sun" }, { id: "cards", label: "Visitor cards", icon: "user" },
-  { id: "rules", label: "Church rules", icon: "rules" },
+  { id: "rules", label: "Church rules", icon: "rules" }, { id: "lists", label: "Lists & notes", icon: "table" },
   { id: "automatic", label: "What runs automatically", icon: "repeat" },
   { id: "activity", label: "What happened", icon: "history" }, { id: "connection", label: "Settings", icon: "link" },
 ];
@@ -259,6 +262,12 @@ export function App() {
   useEffect(() => { if ((page === "automatic" || page === "today") && visible) runner.markSeen(); }, [page, watch.unseen, visible]);
   // Today in front: read the calendars again once the last read is over 15 minutes old (checked as the clock ticks).
   useEffect(() => { if (page === "today" && visible) void calendars.readIfOld(); }, [page, visible, calendars, now]);
+  // The church's own lists (church-sources.ts): read on this Mac, kept in memory, shown only on Lists & notes and beside
+  // a matched Sunday card. Read when one of those pages is opened or the window comes forward, again then once the last
+  // read is over an hour old; never as the clock ticks, since a private link's read is a request to the internet.
+  const [churchSources] = useState(() => createChurchSources());
+  const sourcesState = useChurchSources(churchSources);
+  useEffect(() => { if ((page === "sunday" || page === "lists") && visible) void churchSources.readIfOld(); }, [page, visible, churchSources]);
   const runnerState = useRef({ readiness, status, rules, decisions: [] as readonly SundayDecision[], modelReady,
     prefs: automatic.prefs, zone: macZone(), procedures, loop, workspace: "this-mac", capture, fictional, configured: false, sunday: null as string | null });
   const runnerHooks: RunnerHooks = useMemo(() => ({
@@ -518,11 +527,13 @@ export function App() {
           onLaterExample={fictional && capture?.completed_at === nov22Capture().completed_at
             ? () => { void act(() => Promise.resolve(withFictionalOperations(nov22LaterCapture())), true); } : undefined}
           onHow={procedures ? showProcedure : undefined} feedback={feedback} onSettings={() => setPage("connection")}
-          church={<CheckInsSunday capture={capture} rules={rules} names={capture?.names ?? {}} feedback={feedback} now={now} />} />}
+          church={<CheckInsSunday capture={capture} rules={rules} names={capture?.names ?? {}} feedback={feedback} now={now} />}
+          beside={card => <ChurchOwnWords state={sourcesState} card={card} onOpen={target => { churchSources.focus(target); setPage("lists"); }} />} />}
         {page === "cards" && <CardsPage people={capture?.names ?? {}} workspace={org || "this-mac"} />}
         {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions} keptElsewhere={Object.entries(rulesByChurch.kept).map(([organization, k]) => ({ organization, ...(k.name ? { name: k.name } : {}) }))}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}
           procedures={orderedProcedures} focus={focusProcedure} church={<ChurchReadsRules rules={rules} onChange={setRules} capture={capture} status={status} />} />}
+        {page === "lists" && <ChurchListsPage sources={churchSources} positions={positions} />}
         {page === "automatic" && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId}
           readiness={readiness} busy={busy} now={now} churchTimeZone={churchZone}
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={p => proactive.setPrefs(p)}

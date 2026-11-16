@@ -1,9 +1,12 @@
-html, body, #root { height: 100%; margin: 0; }
+/* Only the page pane (.main) and the sidebar scroll. The window, the app and its columns clip: `overflow: hidden` still
+   lets a script or a focus scroll a box, which pushed the whole app up when Open on Sunday moved to a section of notes. */
+html, body, #root { height: 100%; margin: 0; overflow: clip; }
 body { background: #FAF6EE; }
 @media (prefers-color-scheme: dark) { body { background: #1A1611; } }
-.oz.app { height: 100vh; }
-.oz .shell { height: 100%; }
-.oz .main { overflow-y: auto; padding-bottom: 64px; }
+.oz.app { height: 100vh; overflow: clip; }
+.oz .shell { height: 100%; overflow: clip; }
+/* The pane places what it positions (a visually hidden label far down a page scrolls and clips with it, not the app). */
+.oz .main { overflow-y: auto; padding-bottom: 64px; position: relative; }
 .oz .col { width: 100%; margin: 0 auto; }
 .oz .logo { width: 132px; }
 .oz .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; }

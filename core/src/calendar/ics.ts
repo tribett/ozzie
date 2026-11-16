@@ -140,11 +140,12 @@ function property(line: string): Prop | null {
   }
   if (colon <= 0) return null;
   const [name = "", ...rest] = split(line.slice(0, colon), ";");
-  const params: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const p of rest) {
+  // Without a prototype, and made from pairs rather than by keys set as they are read (review U: no key made at run time).
+  const pairs = rest.flatMap(p => {
     const eq = p.indexOf("=");
-    if (eq > 0) params[p.slice(0, eq).trim().toUpperCase()] = p.slice(eq + 1).trim().replace(/^"(.*)"$/su, "$1");
-  }
+    return eq > 0 ? [[p.slice(0, eq).trim().toUpperCase(), p.slice(eq + 1).trim().replace(/^"(.*)"$/su, "$1")] as const] : [];
+  });
+  const params = Object.setPrototypeOf(Object.fromEntries(pairs), null) as Record<string, string>;
   return { name: name.trim().toUpperCase(), params, value: line.slice(colon + 1) };
 }
 const unescapeText = (v: string) => v.replace(/\\([\\;,nN])/gu, (_, c: string) => c === "n" || c === "N" ? "\n" : c);

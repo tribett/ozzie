@@ -82,6 +82,11 @@ invented people). No church data is shown.
   read Ozzie's last saved check through a small read-only server, with
   placeholders instead of names and no background-check facts. See
   [core/docs/mcp.md](core/docs/mcp.md).
+- **Sends a notice to your phone too, if you turn it on.** Off by default.
+  Each time Ozzie sends a notice, the same fixed line can also reach your own
+  phone through ntfy.sh, a free service Ozzie doesn't run. See
+  [A notice on your phone](#a-notice-on-your-phone) for exactly what leaves
+  the Mac and who can see it.
 - **Works without a connection.** "See the fictional example" shows the app
   with an invented church.
 
@@ -153,11 +158,147 @@ summarise what a job it keeps an eye on found.
   Planning Center can't be reached) keeps the names it showed, in a file only
   your user account can read.
 
+## A notice on your phone
+
+Off unless you turn it on in Settings. You install the free ntfy app on your
+phone and subscribe to the channel Ozzie shows (no account). From then on,
+each time Ozzie sends a notice, native code
+(`core/native-auth/src/phone_notice.rs`) also sends exactly this, and nothing
+else, even if your Mac's own notifications are turned off for Ozzie:
+
+- **Where:** one HTTPS POST to `https://ntfy.sh/<channel>`, through rustls,
+  with no proxy, no redirect followed, one attempt and a 10-second limit. The
+  answer's body is never read.
+- **What:** the title `Ozzie` and one of six fixed sentences as the body: the
+  Mac notice's own words for that kind of notice (for example "Sunday coverage
+  needs attention. Open Ozzie to see details.") or the test line. No sentence
+  holds a name, a number, a link or anything Ozzie read or you typed. The page
+  can't supply text, a channel or an address; it can only name a kind of
+  notice, and say that one stays on this Mac (which can only keep a line off
+  the phone, never add one). Besides the title, Ozzie sets only
+  `content-type: text/plain`; the HTTP library adds only the host, accept and
+  content-length headers.
+- **When:** at the same moments as the notices on your Mac, so quiet hours,
+  Pause everything and your Church rules on notices apply unchanged: uncertain
+  findings (Worth a look) don't send a notice unless you chose "Always tell me
+  right away" for that kind. A notice that is only about a background check
+  stays on your Mac: nothing goes to your phone for it. Plus "Send a test
+  notice" when you press it. At most 12 an hour while Ozzie is running, by your
+  Mac's clock. The Mac's own notice is sent whatever happens to the phone's.
+  Settings shows when the last phone notice went and whether it was sent.
+- **The channel:** `ozzie-` and 160 random bits from the operating system,
+  kept in your Mac's Keychain, never in a file, the record of what happened,
+  the recordings Ozzie saves of its checks, or a log. It is shown in Settings
+  and put on the clipboard when you copy it. Anyone who learned it could read
+  those sentences and could also send your phone a notice that looks like
+  Ozzie's; Ozzie's own notices are only these fixed lines and never hold a
+  link. So "Make a new channel" replaces it at any time (do that if it was
+  ever on a shared screen or screenshot). Turning the notice off stops sending
+  and forgets the channel; a notice not yet sent checks again just before it
+  goes and then sends nothing to the old channel, though one already on its
+  way to ntfy.sh at that moment may still arrive.
+
+ntfy.sh, and the phone makers' services it uses to reach your phone (Google's,
+and Apple's for an iPhone), can see which line was sent and when; ntfy.sh also
+sees your Mac's internet address and keeps each line for a while (about half a
+day by its usual setting).
+
+## Lists and notes you add
+
+Off until you add one, on the Lists & notes page. A church often keeps its own
+lists outside Planning Center, such as who holds which keys. Ozzie can show
+one beside the Sunday cards it belongs with (`core/src/sources/`,
+`product/desktop/src-tauri/src/church_sources.rs`). Lists and notes you add
+stay on your Mac: they aren't sent to AI help, shared with other AI apps or
+Siri, or put in any notice.
+
+- **What is read:** a spreadsheet saved as CSV or tab-separated text, up to
+  2 MB, that you choose in Ozzie's own open panel. Ozzie reads it again from
+  where it is when you open Sunday or Lists & notes (the first time after Ozzie
+  starts, then at most once an hour) and when you press "Read again", never
+  with the window closed or hidden, and never changes it. It doesn't read a
+  file in your Library folder, except in iCloud Drive, in an app's Documents
+  folder in iCloud (where Numbers and TextEdit save) and in the cloud drives
+  macOS keeps there (apps' private iCloud folders, such as Mail's, stay
+  refused), nor a hidden file or folder, Ozzie's own folders, or an alias of a
+  file.
+- **Or a private link:** the https link a site gives for a sheet published on
+  the web as comma-separated values (in Google Sheets, File › Share › Publish
+  to web). Anyone with that link can read the sheet, so it is kept only in your
+  Mac's Keychain (`church.ozzie.source-links.v1`), never in a file or a log;
+  the page holds it only while you paste it, and afterwards shows only its
+  host. It reads the link when you add it, when you open Sunday or Lists &
+  notes (the first time after Ozzie starts, then at most once an hour while
+  Ozzie stays open), and when you ask; it never reads it with the window
+  closed or hidden. Each read is one HTTPS GET for the sheet
+  (`core/native-auth/src/sheet_link.rs`): https on port 443 to a name that
+  resolves only to public addresses, connected only to those, at most three
+  redirects each checked the same way, no proxy, no cookies or Referer, 20
+  seconds in all, at most 2 MB, and refused if any Content-Type the site sends
+  says it is a web page (often a sign-in page), or if its text, after any white
+  space and invisible characters, starts like a web page's tag (`<` then a
+  letter, `!`, `?` or `/`: so a first cell such as `<b>Name</b>` is refused
+  too, and one such as `<5` or `<=10` is not), or if it is a workbook, JSON
+  or not text. It sends nothing about your church. The site in the link, and
+  any site that link sends Ozzie on to, sees when it is read, your Mac's
+  internet address, and that the request comes from Ozzie. At most 8 links.
+- **Notes:** a file saved as plain text or Markdown, up to 1 MB, that you
+  choose in Ozzie's own open panel, read from where it is like a list's file
+  (the same places refused). The panel offers plain text, Markdown and PDF
+  files: a PDF is refused with a sentence saying how to save it as plain text,
+  and a Word or Pages file can't be chosen there (Lists & notes says how to
+  save one as plain text, and one renamed to .txt is refused with a sentence
+  saying so). Ozzie splits notes into sections at each `#` heading, or at
+  blank lines in a file with no headings. It shows them on Lists & notes with a
+  find box. Notes are shown as written, except that hidden format characters
+  are removed, tabs and other control characters become spaces, and a line
+  over 2,000 characters or a file over 20,000 lines is cut, which the notes
+  then say. To be exact, the Unicode line separators start a new line, as a line break
+  does, and spaces at the end of a line are dropped (`core/src/sources/text.ts`,
+  `noteLine`). No Markdown is drawn: a link or an image is its text. Every
+  line is shown, a heading longer than a title included (the title is cut; the
+  heading is shown whole above the section). You can point to a section from
+  the Sunday cards for one team (by its Planning Center id) or about one kind
+  of finding, with a way to open it here from those cards. Beside a Sunday
+  card it shows only the title of a section you pointed there (numbered when
+  titles repeat), as your church's own notes, not checked by Ozzie. Ozzie never follows notes
+  and never compares their words with Planning Center or with anyone's name;
+  the find box searches them on this Mac.
+- **Matches are yours:** you pick the column that names a team or role and
+  match its values to Planning Center teams and positions. Ozzie may suggest a
+  team or position with the same name; a suggestion counts only after you
+  choose "Use this match". Ozzie never compares the names in a list with
+  people in Planning Center, and nothing in a list changes a finding.
+- **Shown as your church's own words:** on Lists & notes in the file's own
+  order, and beside a matched Sunday card under "From your church's list '…'
+  (not checked by Ozzie)", only the columns you tick. No row has a button:
+  nothing is copied, exported or drafted from it.
+- **Nowhere else:** not in the briefing read aloud or a draft either. Ozzie's
+  own tests check on every change that the lists-and-notes code calls only its
+  own commands, that nothing which sends anything imports it, and that it names
+  none of the browser's ways off the page that the test lists
+  (`core/test/sources/stays-on-this-mac.test.ts`). That is a check on Ozzie's
+  own code, not a sandbox. What was read is kept in memory only, while Ozzie
+  is open.
+- **What Ozzie keeps:** `church-sources.json` in Ozzie's data folder, which
+  only your user account can read: each list's and notes' name, the file's
+  name and place (or a link's host), your column choices and matches, the
+  sections you pointed to, and when each was last read; beside it,
+  `source-links.json` holds each link's id and host. A link's address is only
+  in the Keychain. "Remove this list" or "Remove these notes" forgets one (a
+  link's address too), and "Forget all lists and notes" forgets them all and
+  deletes every link's address from the Keychain. If the Keychain doesn't
+  answer then, the addresses are removed the next time Lists & notes or Sunday
+  is opened and it does, and they never count toward the 8 links. The files
+  and sheets themselves don't change.
+
 ## Download
 
 A signed copy of Ozzie for Mac (Developer ID: FlockConnect LLC, notarized by
 Apple; Apple Silicon, macOS 14 or later) is at https://ozzie.church/download.
-It is an early build with no automatic updates.
+It is an early build. It checks for a new version about once a day and
+installs one only when you choose to (Settings › Updates; the check can be
+turned off there).
 
 ## Build and run
 

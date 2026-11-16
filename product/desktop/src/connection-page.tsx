@@ -1,4 +1,5 @@
 import { OtherAiAppsSetup } from "./other-ai-apps-setup.js";
+import { PhoneNoticeSection } from "./phone-notice-section.js";
 import { SiriShortcutsSection } from "./siri-shortcuts-section.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
 import { useState, type ReactNode } from "react";
@@ -69,8 +70,8 @@ export function YourNameField({ store = yourName }: { store?: { get(): string; s
   </div>;
 }
 
-/** Settings: Planning Center, calendars, AI help, your name on notes, automatic checks, the closed window, updates, other AI apps, Siri and Shortcuts, saved recordings and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars }: {
+/** Settings: Planning Center, calendars, AI help, your name on notes, automatic checks, the closed window, a notice on your phone, updates, other AI apps, Siri and Shortcuts, saved recordings and guided setup, in that order. */
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** The automatic-check schedule, summarized here and changed under What runs automatically. */
@@ -91,6 +92,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   updates?: ReactNode;
   /** The leader's own calendars (calendar-settings.tsx `CalendarSettings`), shown after Planning Center. */
   calendars?: ReactNode;
+  /** Tests only: what stands in for "A notice on your phone" (phone-notice-section.tsx), which otherwise asks native itself. */
+  phone?: ReactNode;
 }) {
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
@@ -154,6 +157,8 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
         <AutostartToggle autostart={autostart} />
       </div>
     </section>}
+
+    {phone === undefined ? <PhoneNoticeSection /> : phone}
 
     {updates}
 

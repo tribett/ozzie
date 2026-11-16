@@ -1,0 +1,4 @@
+Name,Team,Link
+Dana Fictional,Ushers,"=HYPERLINK(""https://example.invalid/x"",""Open"")"
+Lee Example,+1,-1
+Remy Sample,@x,=1+2

@@ -4,9 +4,10 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => "sent") }));
+import { invoke as tauri } from "@tauri-apps/api/core";
 import { APPLE_SOURCE, type CalendarRead } from "../../../core/src/calendar/events.js";
-import { CALENDAR_COMMANDS, calendarsConnected, createCalendars, LINK_PROBLEMS, linkProblem, type Invoke } from "../src/calendars.js";
+import { allowed, CALENDAR_COMMANDS, calendarsConnected, createCalendars, LINK_PROBLEMS, linkProblem, type Invoke } from "../src/calendars.js";
 import { buildHarnessData } from "../src/harness-bridge.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { CalendarGroup, dayLabel, timeOnDay } from "../src/calendar-today.js";
@@ -448,5 +449,21 @@ describe("review C2: links that can't be read", () => {
     expect(await calendars.removeLink("unusable-0")).toBeNull();
     expect(f.calls.find(c => c[0] === "calendar_link_remove")![1]).toEqual({ id: "unusable-0" });
     expect(calendars.state().links).toEqual([]);
+  });
+});
+
+describe("the calendar bridge to native code", () => {
+  it("refuses any command not in its list before anything is sent, however the name was made (review S2, finding 1)", async () => {
+    const sent = vi.mocked(tauri);
+    sent.mockClear();
+    for (const command of ["notify_ozzie", ["notify", "ozzie"].join("_"), "calendar_x", "", "church_sources", "toString", "__proto__"]) expect(allowed(command), command).toBe(false);
+    for (const command of CALENDAR_COMMANDS) expect(allowed(command), command).toBe(true);
+    // Review U, finding 1: literal comparisons, so widening a built-in's prototype widens nothing.
+    const has = Set.prototype.has;
+    try {
+      Set.prototype.has = () => true;
+      expect(allowed(["notify", "ozzie"].join("_"))).toBe(false);
+    } finally { Set.prototype.has = has; }
+    expect(sent).not.toHaveBeenCalled();
   });
 });

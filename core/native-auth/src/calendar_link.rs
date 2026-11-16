@@ -47,7 +47,8 @@ pub const TOTAL_LIMIT: Duration = Duration::from_secs(20);
 const WAIT_LIMIT: Duration = Duration::from_secs(10);
 const MAX_LIST_BYTES: u64 = 64 * 1024;
 
-/// Why a link couldn't be added or read. Closed codes: no address, host or calendar text is ever in one.
+/// Why a link (a calendar's, or a published sheet's) couldn't be added or read. Closed codes: no address, host,
+/// calendar text or sheet is ever in one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LinkError {
@@ -64,7 +65,7 @@ pub enum LinkError {
     TooMany,
     /// No link with that id.
     Unknown,
-    /// The address isn't in the Keychain any more.
+    /// The address isn't in the Keychain any more, or what is there now is for another host than the one listed.
     Missing,
     /// The list of links on this Mac can't be read (damaged, or saved by a newer Ozzie). Nothing is removed.
     ListUnreadable,
@@ -76,6 +77,14 @@ pub enum LinkError {
     MovedElsewhere,
     TooLarge,
     NotACalendar,
+    /// A published sheet's link only (sheet_link.rs): a web page (often a sign-in page) instead of the sheet.
+    WebPage,
+    /// A published sheet's link only: a workbook (a ZIP or an older Office file), not text.
+    Workbook,
+    /// A published sheet's link only: a NUL byte without a UTF-16 byte-order mark, so not text.
+    NotText,
+    /// A published sheet's link only: something other than a sheet (a JSON object or array).
+    NotASheet,
     Locked,
     Denied,
     Unavailable,
@@ -232,7 +241,7 @@ pub fn public_addresses(found: &[IpAddr]) -> Result<Vec<SocketAddr>, LinkError> 
 
 // ---- Fetching ---------------------------------------------------------------------------------------------
 
-type LookupFn = fn(&str) -> io::Result<Vec<IpAddr>>;
+pub(crate) type LookupFn = fn(&str) -> io::Result<Vec<IpAddr>>;
 fn system_lookup(host: &str) -> io::Result<Vec<IpAddr>> {
     Ok((host, 443).to_socket_addrs()?.map(|a| a.ip()).collect())
 }
@@ -288,6 +297,18 @@ impl reqwest::dns::Resolve for PublicOnly {
 pub trait CalendarFetch: Send + Sync {
     fn get(&self, url: &Url) -> Result<String, LinkError>;
 }
+/// Reads what a saved link points at, checked for what it must be: a calendar's text (`CalendarFetch`), or a
+/// published sheet's bytes (sheet_link.rs).
+pub trait LinkFetch<B>: Send + Sync {
+    fn fetch(&self, url: &Url) -> Result<B, LinkError>;
+}
+/// A calendar fetch as a link store reads it.
+struct Calendars(Arc<dyn CalendarFetch>);
+impl LinkFetch<String> for Calendars {
+    fn fetch(&self, url: &Url) -> Result<String, LinkError> {
+        self.0.get(url)
+    }
+}
 
 /// The guarded client described at the top of this file.
 pub struct GuardedHttp(reqwest::blocking::Client);
@@ -295,7 +316,7 @@ impl GuardedHttp {
     pub fn new() -> Result<Self, LinkError> {
         Self::with_lookup(system_lookup)
     }
-    fn with_lookup(lookup: LookupFn) -> Result<Self, LinkError> {
+    pub(crate) fn with_lookup(lookup: LookupFn) -> Result<Self, LinkError> {
         let redirects = reqwest::redirect::Policy::custom(|attempt| {
             if redirect_allowed(attempt.previous().len(), attempt.url()) {
                 attempt.follow()
@@ -356,9 +377,14 @@ pub fn within<T: Send + 'static>(
 }
 /// A body read in pieces until `deadline`, at most `MAX_CALENDAR_BYTES`. A server that sends a byte now and then
 /// can't keep it going: the deadline is checked before every piece.
-pub fn read_body(
+pub fn read_body(reader: impl Read, deadline: std::time::Instant) -> Result<Vec<u8>, LinkError> {
+    read_body_up_to(reader, deadline, MAX_CALENDAR_BYTES)
+}
+/// `read_body` with its own limit: more than `max` bytes is refused as it arrives.
+pub fn read_body_up_to(
     mut reader: impl Read,
     deadline: std::time::Instant,
+    max: usize,
 ) -> Result<Vec<u8>, LinkError> {
     let mut body = Vec::new();
     let mut piece = vec![0u8; 64 * 1024];
@@ -377,7 +403,7 @@ pub fn read_body(
             return Ok(body);
         }
         body.extend_from_slice(&piece[..n]);
-        if body.len() > MAX_CALENDAR_BYTES {
+        if body.len() > max {
             return Err(LinkError::TooLarge);
         }
     }
@@ -387,36 +413,73 @@ pub fn read_body(
 pub fn redirect_allowed(previous: usize, url: &Url) -> bool {
     previous <= MAX_REDIRECTS && check_target(url).is_ok()
 }
+/// What the calendar fetch asks for.
+const CALENDAR_ACCEPT: &str = "text/calendar, text/plain;q=0.5, */*;q=0.1";
+/// A 200 answer's Content-Type, as the site gave it (when it is text), and its body.
+type Typed = (Option<String>, Vec<u8>);
 fn fetch(
     client: &reqwest::blocking::Client,
     url: Url,
+    accept: &'static str,
+    max: usize,
     deadline: std::time::Instant,
-) -> Result<String, LinkError> {
+) -> Result<Typed, LinkError> {
     let response = client
         .get(url)
-        .header(
-            reqwest::header::ACCEPT,
-            "text/calendar, text/plain;q=0.5, */*;q=0.1",
-        )
+        .header(reqwest::header::ACCEPT, accept)
         .send()
         .map_err(|e| classify(&e))?;
     if response.status().as_u16() != 200 {
         return Err(LinkError::Refused);
     }
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_CALENDAR_BYTES as u64)
-    {
+    if response.content_length().is_some_and(|n| n > max as u64) {
         return Err(LinkError::TooLarge);
     }
-    calendar_text(read_body(response, deadline)?)
+    let content_type = content_types(response.headers());
+    Ok((content_type, read_body_up_to(response, deadline, max)?))
+}
+/// Every Content-Type the site sent, in order, joined with ", " (review U, note 1): a site that sends two, or one that
+/// isn't ASCII, is read as far as it goes (each byte that isn't ASCII as U+FFFD; a media type is ASCII). None when it
+/// sent none.
+pub fn content_types(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let all: Vec<String> = headers
+        .get_all(reqwest::header::CONTENT_TYPE)
+        .iter()
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+        .collect();
+    (!all.is_empty()).then(|| all.join(", "))
+}
+impl GuardedHttp {
+    /// One guarded GET of `url` (every guard at the top of this file), asking for `accept`: the body of a 200 answer,
+    /// at most `max` bytes (`MAX_CALENDAR_BYTES` at most), or why not. What the body must be is the caller's to check.
+    pub fn get_body(
+        &self,
+        url: &Url,
+        accept: &'static str,
+        max: usize,
+    ) -> Result<Vec<u8>, LinkError> {
+        self.get_typed(url, accept, max).map(|(_, body)| body)
+    }
+    /// `get_body` with every Content-Type the site gave (`content_types`): a published sheet's read uses them to refuse
+    /// a web page (sheet_link.rs). The same GET, guards and limits.
+    pub fn get_typed(
+        &self,
+        url: &Url,
+        accept: &'static str,
+        max: usize,
+    ) -> Result<(Option<String>, Vec<u8>), LinkError> {
+        check_target(url)?;
+        let (client, url) = (self.0.clone(), url.clone());
+        let max = max.min(MAX_CALENDAR_BYTES);
+        let deadline = std::time::Instant::now() + TOTAL_LIMIT;
+        within(TOTAL_LIMIT, move || {
+            fetch(&client, url, accept, max, deadline)
+        })
+    }
 }
 impl CalendarFetch for GuardedHttp {
     fn get(&self, url: &Url) -> Result<String, LinkError> {
-        check_target(url)?;
-        let (client, url) = (self.0.clone(), url.clone());
-        let deadline = std::time::Instant::now() + TOTAL_LIMIT;
-        within(TOTAL_LIMIT, move || fetch(&client, url, deadline))
+        calendar_text(self.get_body(url, CALENDAR_ACCEPT, MAX_CALENDAR_BYTES)?)
     }
 }
 
@@ -527,26 +590,64 @@ pub fn clean_label(label: &str) -> Result<String, LinkError> {
     Ok(label.to_owned())
 }
 
-/// The saved links: addresses in the Keychain, the list beside them in the app's data folder.
-pub struct CalendarLinks {
+/// Saved private links: addresses in the Keychain, the list beside them in the app's data folder. Calendar links
+/// (`CalendarLinks`) and published sheets' links (sheet_link.rs) are each one of these, with their own Keychain
+/// service, list and fetch, and the same guards.
+pub struct SavedLinks<B> {
     store: Arc<dyn CredentialStore>,
     list: PathBuf,
-    fetch: Arc<dyn CalendarFetch>,
+    fetch: Arc<dyn LinkFetch<B>>,
+    /// The first part of every Keychain account an address is kept under (`["<workspace>", "<id>"]`).
+    workspace: &'static str,
+    /// Whether an address must be https as written (a published sheet's), rather than a calendar's `webcal://` read as
+    /// https.
+    https_only: bool,
+    /// The longest host an address may have (a published sheet's is shown whole on the page, never cut).
+    max_host: usize,
     /// Adding, removing and listing one at a time, so the list and the Keychain agree.
     lock: Mutex<()>,
 }
-impl CalendarLinks {
+/// The private calendar links.
+pub type CalendarLinks = SavedLinks<String>;
+impl SavedLinks<String> {
+    /// The calendar links: each address under `["calendar-link", "<id>"]` in the store's Keychain service, read as
+    /// calendar text.
     pub fn new(
         store: Arc<dyn CredentialStore>,
         list: PathBuf,
         fetch: Arc<dyn CalendarFetch>,
     ) -> Self {
+        Self::with_fetch(store, list, Arc::new(Calendars(fetch)), KEYCHAIN_WORKSPACE)
+    }
+}
+impl<B> SavedLinks<B> {
+    /// Links read by `fetch`, their addresses kept under `workspace` in `store`'s Keychain service and listed in `list`.
+    pub fn with_fetch(
+        store: Arc<dyn CredentialStore>,
+        list: PathBuf,
+        fetch: Arc<dyn LinkFetch<B>>,
+        workspace: &'static str,
+    ) -> Self {
         Self {
             store,
             list,
             fetch,
+            workspace,
+            https_only: false,
+            max_host: usize::MAX,
             lock: Mutex::new(()),
         }
+    }
+    /// The same links, each address added only when its host has at most `max` characters.
+    pub fn max_host(mut self, max: usize) -> Self {
+        self.max_host = max;
+        self
+    }
+    /// The same links, each address added only when it is https as written: nothing is read from a `webcal://` (or any
+    /// other) address rewritten to https.
+    pub fn https_only(mut self) -> Self {
+        self.https_only = true;
+        self
     }
     fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
         self.lock.lock().unwrap_or_else(|e| e.into_inner())
@@ -653,16 +754,15 @@ impl CalendarLinks {
         let saved = self.store.accounts().ok();
         if let (Some(saved), true) = (&saved, others.is_empty()) {
             for (workspace, id) in saved {
-                if workspace == KEYCHAIN_WORKSPACE && !links.iter().any(|e| &e.id == id) {
-                    let _ = self.store.delete(KEYCHAIN_WORKSPACE, id);
+                if workspace == self.workspace && !links.iter().any(|e| &e.id == id) {
+                    let _ = self.store.delete(self.workspace, id);
                 }
             }
         }
         let usable = links.iter().map(|e| LinkView {
-            missing: saved.as_ref().is_some_and(|s| {
-                !s.iter()
-                    .any(|(w, id)| w == KEYCHAIN_WORKSPACE && *id == e.id)
-            }),
+            missing: saved
+                .as_ref()
+                .is_some_and(|s| !s.iter().any(|(w, id)| w == self.workspace && *id == e.id)),
             ..LinkView::from(e)
         });
         // Entries this version can't use are listed too, each with a way to remove it (review C2, N1).
@@ -676,20 +776,32 @@ impl CalendarLinks {
         Ok(usable.chain(unusable).collect())
     }
 
-    /// Adds a link: checks the address, reads it once (it must give back a calendar), then keeps the address in the
-    /// Keychain and the label in the list. Returns the link and the calendar text it read.
-    pub fn add(&self, label: &str, address: &str) -> Result<(LinkView, String), LinkError> {
+    /// Adds a link: checks the address, reads it once (it must give back what `fetch` accepts: a calendar, a sheet),
+    /// then keeps the address in the Keychain and the label in the list. Returns the link and what it read.
+    pub fn add(&self, label: &str, address: &str) -> Result<(LinkView, B), LinkError> {
         let label = clean_label(label)?;
         let url = normalize_address(address)?;
+        // A web address, but read as https only because it was rewritten from webcal.
+        if self.https_only
+            && !address
+                .trim()
+                .get(..8)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        {
+            return Err(LinkError::NotHttps);
+        }
         let host = match url.host() {
             Some(Host::Domain(name)) => name.trim_end_matches('.').to_ascii_lowercase(),
             _ => return Err(LinkError::NotOnTheInternet),
         };
+        if host.chars().count() > self.max_host {
+            return Err(LinkError::NotAnAddress);
+        }
         if self.guard_count()? >= MAX_LINKS {
             return Err(LinkError::TooMany);
         }
         // Read before keeping anything: a wrong address is refused without being saved.
-        let text = self.fetch.get(&url)?;
+        let text = self.fetch.fetch(&url)?;
         let _held = self.guard();
         let Loaded {
             entries: mut links,
@@ -702,12 +814,12 @@ impl CalendarLinks {
         getrandom::fill(&mut random).map_err(|_| LinkError::Unavailable)?;
         let id: String = random.iter().map(|b| format!("{b:02x}")).collect();
         self.store
-            .put(KEYCHAIN_WORKSPACE, &id, url.as_str().as_bytes())?;
+            .put(self.workspace, &id, url.as_str().as_bytes())?;
         let entry = Entry { id, label, host };
         links.push(entry.clone());
         if let Err(error) = self.save(&links, &others) {
             // Never keep an address the list doesn't name.
-            let _ = self.store.delete(KEYCHAIN_WORKSPACE, &entry.id);
+            let _ = self.store.delete(self.workspace, &entry.id);
             return Err(error);
         }
         Ok((LinkView::from(&entry), text))
@@ -733,7 +845,7 @@ impl CalendarLinks {
         if !links.iter().any(|e| e.id == id) {
             return Err(LinkError::Unknown);
         }
-        self.store.delete(KEYCHAIN_WORKSPACE, id)?;
+        self.store.delete(self.workspace, id)?;
         let kept: Vec<Entry> = links.into_iter().filter(|e| e.id != id).collect();
         self.save(&kept, &others)
     }
@@ -754,7 +866,7 @@ impl CalendarLinks {
             && valid_id(id)
             && !links.iter().any(|e| e.id == id)
         {
-            self.store.delete(KEYCHAIN_WORKSPACE, id)?;
+            self.store.delete(self.workspace, id)?;
         }
         self.save(&links, &others)
     }
@@ -764,8 +876,8 @@ impl CalendarLinks {
     pub fn forget_all(&self) -> Result<(), LinkError> {
         let _held = self.guard();
         for (workspace, id) in self.store.accounts()? {
-            if workspace == KEYCHAIN_WORKSPACE {
-                self.store.delete(KEYCHAIN_WORKSPACE, &id)?;
+            if workspace == self.workspace {
+                self.store.delete(self.workspace, &id)?;
             }
         }
         let _ = std::fs::remove_file(self.list.with_extension("partial"));
@@ -776,22 +888,59 @@ impl CalendarLinks {
         }
     }
 
-    /// Reads a saved link's calendar text: the address from the Keychain, checked again, then one guarded GET.
-    pub fn read(&self, id: &str) -> Result<String, LinkError> {
+    /// The id of the saved link whose address is `address` as Ozzie reads it (made plain the same way, so white space
+    /// around it, a fragment or the case of the host don't count), or none. Only the id comes back, never an address;
+    /// nothing is read from the internet to compare.
+    pub fn saved_id(&self, address: &str) -> Result<Option<String>, LinkError> {
+        let Ok(url) = normalize_address(address) else {
+            return Ok(None);
+        };
+        let _held = self.guard();
+        for entry in self.load()?.entries {
+            let Some(secret) =
+                crate::credentials::read_private(&*self.store, self.workspace, &entry.id)?
+            else {
+                continue;
+            };
+            let saved = std::str::from_utf8(&secret)
+                .ok()
+                .and_then(|text| normalize_address(text).ok());
+            if saved.is_some_and(|saved| saved == url) {
+                return Ok(Some(entry.id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Reads a saved link: the address from the Keychain, checked again, then one guarded GET. An address there for
+    /// another host than the one listed (put in the Keychain outside Ozzie) is not this link's: it is never read under
+    /// this link's label and host (`Missing`).
+    pub fn read(&self, id: &str) -> Result<B, LinkError> {
         if !valid_id(id) {
             return Err(LinkError::Unknown);
         }
         let url = {
             let _held = self.guard();
-            if !self.load()?.entries.iter().any(|e| e.id == id) {
-                return Err(LinkError::Unknown);
-            }
-            let secret = crate::credentials::read_private(&*self.store, KEYCHAIN_WORKSPACE, id)?
+            let host = self
+                .load()?
+                .entries
+                .into_iter()
+                .find(|e| e.id == id)
+                .ok_or(LinkError::Unknown)?
+                .host;
+            let secret = crate::credentials::read_private(&*self.store, self.workspace, id)?
                 .ok_or(LinkError::Missing)?;
             let text = std::str::from_utf8(&secret).map_err(|_| LinkError::Missing)?;
-            normalize_address(text)?
+            let url = normalize_address(text)?;
+            let named = url
+                .host_str()
+                .map(|h| h.trim_end_matches('.').to_ascii_lowercase());
+            if named.as_deref() != Some(host.as_str()) {
+                return Err(LinkError::Missing);
+            }
+            url
         };
-        self.fetch.get(&url)
+        self.fetch.fetch(&url)
     }
 }
 

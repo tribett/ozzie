@@ -13,9 +13,13 @@ pub mod lifetime;
 pub mod model;
 pub mod name_guard;
 pub mod oauth;
+// "A notice on your phone": the fixed line, the channel and the one request to ntfy.sh.
+pub mod phone_notice;
 pub mod provider;
 pub mod responsibilities;
 pub mod shared_check;
+// "Add a list from a private link": a published sheet read through the calendar links' guarded client and store.
+pub mod sheet_link;
 pub mod shortcuts_check;
 
 pub mod source;

@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { NoticeKind } from "./responsibility-runner.js";
+import type { NoticeOptions } from "./phone-notice.js";
 
 export interface BackgroundInfo { fastSchedule: boolean; probe: boolean; tickMs: number }
 export interface Autostart { get(): Promise<boolean>; set(enabled: boolean): Promise<boolean> }
@@ -30,8 +31,11 @@ export const background = {
     .catch((): BackgroundInfo => ({ fastSchedule: false, probe: false, tickMs: 30_000 })),
   /** Wake the native timer when the next run is due. */
   nextDue: (at: string | null) => { void invoke("background_next_due", { atMs: at ? Date.parse(at) : null }).catch(() => undefined); },
-  /** One of four fixed notices; the text is fixed in native code and carries no names or details. */
-  notify: (kind: NoticeKind) => invoke<void>("notify_ozzie", { kind }),
+  /**
+   * One of four fixed notices; the text is fixed in native code and carries no names or details. "This Mac only"
+   * (phone-notice.ts) keeps its phone line back; it never adds one.
+   */
+  notify: (kind: NoticeKind, options?: NoticeOptions) => invoke<void>("notify_ozzie", options?.localOnly ? { kind, localOnly: true } : { kind }),
   /** Listens for the native events; returns a function that stops listening. */
   on(handlers: BackgroundHandlers): () => void {
     const stops: Promise<() => void>[] = [];

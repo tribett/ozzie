@@ -15,11 +15,13 @@
 //!    identifier, off unless the person turns it on); opened that way, the window stays hidden;
 //!  - the responsibilities store and its commands (core/native-auth responsibilities.rs is the
 //!    enforcement point), including the AI step a responsibility run may spend from its grant;
-//!  - discreet notifications whose text is fixed here: never a name or a detail.
+//!  - discreet notifications whose text is fixed here: never a name or a detail (and, while "A notice
+//!    on your phone" is on, the same kind's fixed line to the leader's phone: phone_notice.rs).
 use crate::{Ledger, SessionNames};
 use ozzie_native_auth::agent::{self, AgentError, AgentStepReply};
 use ozzie_native_auth::ledger::{StepView, TaskKind, Watchdog};
 use ozzie_native_auth::model::{self as model_route, KeychainKeys};
+use ozzie_native_auth::phone_notice::Line;
 use ozzie_native_auth::responsibilities::{
     Grant, Listing, ResponsibilityError, ResponsibilityRow, ResponsibilityStore,
 };
@@ -493,17 +495,28 @@ pub fn notice_body(kind: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-/// The page names which fixed notice to show and passes no text.
+/// The page names which fixed notice to show and passes no text. While "A notice on your phone" is on,
+/// the same kind's fixed line also goes to the leader's phone (phone_notice.rs), after this one, unless
+/// the page says it stays on this Mac (`local_only`: a notice only about a background check).
 #[tauri::command]
-pub fn notify_ozzie(app: tauri::AppHandle, kind: String) -> Result<(), &'static str> {
+pub fn notify_ozzie(
+    app: tauri::AppHandle,
+    kind: String,
+    local_only: Option<bool>,
+) -> Result<(), &'static str> {
     use tauri_plugin_notification::NotificationExt;
     let body = notice_body(&kind).ok_or("invalid")?;
-    app.notification()
+    let shown = app
+        .notification()
         .builder()
         .title(NOTICE_TITLE)
         .body(body)
         .show()
-        .map_err(|_| "notification-unavailable")
+        .map_err(|_| "notification-unavailable");
+    if let Some(line) = Line::for_notice(&kind) {
+        crate::phone_notice::also_to_phone(&app, line, local_only);
+    }
+    shown
 }
 
 async fn blocking<T: Send + 'static>(

@@ -154,6 +154,28 @@ describe("click targets: at least 44 by 44 CSS pixels (ui-build-handoff)", () =>
   });
 });
 
+describe("the window: only the page pane scrolls (the coordinator's 0.1.8 click-through)", () => {
+  const css = ["hearth.css", "styles.css"].map(f => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//gu, "");
+  /** The last value `selector` is given for `prop`, in the order the two files apply. */
+  const last = (selector: string, prop: string) => [...css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]
+    .filter(m => m[1]!.split(",").map(x => x.trim()).includes(selector))
+    .flatMap(m => [...m[2]!.matchAll(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "gu"))].map(x => x[1]!.trim())).at(-1) ?? null;
+
+  it("the app and its two columns clip what overflows rather than hide it, so nothing can scroll them", () => {
+    // "Open" on Sunday's notes box scrolled the whole app up by a few hundred pixels in the real app: `overflow: hidden`
+    // still lets a script (scrollIntoView, focus) scroll a box, and the app had more to show than its height because
+    // a visually hidden label far down Lists & notes was placed against the app, not the pane. `clip` can't be scrolled.
+    expect(last(".oz.app", "overflow")).toBe("clip");
+    expect(last(".oz .shell", "overflow")).toBe("clip");
+    for (const root of ["html", "body", "#root"]) expect(last(root, "overflow"), root).toBe("clip");
+  });
+
+  it("the page pane places what it positions, so a hidden label scrolls and clips with the page", () => {
+    expect(last(".oz .main", "position")).toBe("relative");
+    expect(last(".oz .main", "overflow-y")).toBe("auto");
+  });
+});
+
 describe("What runs automatically: time zone", () => {
   it("names the church's zone when a check read it, and says when this Mac's clock differs", () => {
     expect(zoneText("America/Chicago", "America/New_York")).toMatch(/^.*\(America\/Chicago\), the church's time zone in Planning Center\. Times on this page and quiet hours follow this Mac's clock: .*\(America\/New_York\)\.$/);

@@ -30,10 +30,11 @@ import { isOperationsRead, type SundayCapture, type SundayRules } from "../../..
 import { changeStillHolds, compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import {
-  alwaysFor, briefTarget, feedbackOf, foundOf, keptForBriefing, routeChanges, routeFindings, stableFindingKey, type FoundKey,
+  alwaysFor, briefTarget, changeFindingKind, feedbackOf, foundOf, keptForBriefing, routeChanges, routeFindings, stableFindingKey, type FoundKey,
 } from "../../../core/src/finding-feedback.js";
 import { checkFailure, retryDenied, StepFailure, stepFailure, type Invoke } from "./harness-bridge.js";
 import type { KeyValueStore } from "./proactive.js";
+import { heldMacOnly, THIS_MAC_ONLY, thisMacOnly, type NoticeOptions } from "./phone-notice.js";
 
 // ---- The native store --------------------------------------------------------------------------------
 
@@ -184,7 +185,8 @@ export interface RunnerDeps {
   native: ResponsibilityNative;
   store: KeyValueStore;
   now: () => string;
-  notify: (kind: NoticeKind) => Promise<void>;
+  /** One fixed notice; `THIS_MAC_ONLY` when only background checks brought it (its phone line stays back). */
+  notify: (kind: NoticeKind, options?: NoticeOptions) => Promise<void>;
   /** Wakes the native timer when the next run is due. */
   nextDue?: (at: string | null) => void;
   /** Developer builds only (OZZIE_DEV_FAST_SCHEDULE=1): due times minutes apart. */
@@ -285,6 +287,10 @@ const fresh = (): Saved => ({
 });
 const read = <T,>(store: KeyValueStore, key: string): T | null => { try { const raw = store.get(key); return raw ? JSON.parse(raw) as T : null; } catch { return null; } };
 const NOTICE_RANK: Record<NoticeKind, number> = { "couldnt-check": 0, checked: 1, "needs-decision": 2, "briefing-ready": 3 };
+/** A change's finding kind, for "this Mac only" (null: not about a finding). Kinds only. */
+const changeKind = (c: SundayChange) => c.finding?.kind ?? changeFindingKind(c.kind);
+/** Sends one notice; `macOnly`: only background checks brought it, so "A notice on your phone" leaves it on this Mac. */
+const sendNotice = (deps: Pick<RunnerDeps, "notify">, kind: NoticeKind, macOnly: boolean) => macOnly ? deps.notify(kind, THIS_MAC_ONLY) : deps.notify(kind);
 const CANCELLED = Symbol("cancelled");
 const rateLimited = (value: unknown) => (JSON.stringify(value) ?? "").includes("rate-limited");
 
@@ -293,8 +299,10 @@ export type { FoundKey };
 /**
  * A notice waiting for quiet hours to end, and what brought it: the new findings (ids only; the item keeps its
  * changes), so it can be rechecked before it goes out. `found` is absent on one held before rechecks were kept.
+ * `mac_only`: only background checks brought it when it was held, kept for when it can no longer be rechecked
+ * (phone-notice.ts `heldMacOnly`); absent on one held before this was kept.
  */
-interface Held { kind: NoticeKind; at: string; item: string; found?: FoundKey[] }
+interface Held { kind: NoticeKind; at: string; item: string; found?: FoundKey[]; mac_only?: boolean }
 /** `found`/`keys`: what a template reports and announces; `all`: every finding the check shows, for the briefing's kept list. */
 export interface Found { decisions: number; looks: number; findings: NonNullable<NoticedItem["findings"]>; found: FoundKey[]; keys: string[]; drafts: number; all: FoundKey[] }
 /**
@@ -463,8 +471,9 @@ export function createRunner(deps: RunnerDeps): Runner {
   /**
    * `urgent`: inside the church's window, or a kind the person asked to hear about right away. Quiet hours
    * still hold it unless the person chose to let urgent notices through; Ozzie never widens that itself.
+   * `macOnly`: only background checks brought it, so its phone line stays back (rechecked if it is held).
    */
-  async function notice(kind: NoticeKind, item: NoticedItem, trigger: RunTrigger, id: string, urgent = false, found?: FoundKey[]) {
+  async function notice(kind: NoticeKind, item: NoticedItem, trigger: RunTrigger, id: string, urgent = false, found?: FoundKey[], macOnly = false) {
     // A person who just asked is already looking.
     if (trigger === "start" || trigger === "manual") { patch(item.id, { notice: "in-app" }); return; }
     if (!await stillActive(id)) { patch(item.id, { notice: "none" }); return; }
@@ -472,11 +481,11 @@ export function createRunner(deps: RunnerDeps): Runner {
     const decision = urgent && ctx.urgentDuringQuiet === true ? { send: true as const } : quietDeferral(deps.now(), ctx.quiet, ctx.macZone);
     if (!decision.send) {
       // Each one is kept (one notice per kind still goes out), so a cause reversed later never hides an earlier one.
-      held = [...held, { kind, at: decision.at, item: item.id, ...(found ? { found } : {}) }].slice(-HELD_KEPT);
+      held = [...held, { kind, at: decision.at, item: item.id, ...(found ? { found } : {}), mac_only: macOnly }].slice(-HELD_KEPT);
       patch(item.id, { notice: "held" });
       return;
     }
-    try { await deps.notify(kind); patch(item.id, { notice: "sent" }); } catch { patch(item.id, { notice: "unavailable" }); }
+    try { await sendNotice(deps, kind, macOnly); patch(item.id, { notice: "sent" }); } catch { patch(item.id, { notice: "unavailable" }); }
     if (kind === "briefing-ready") openToday = true;
   }
   /**
@@ -486,12 +495,17 @@ export function createRunner(deps: RunnerDeps): Runner {
    * app made one. A change reversed meanwhile, or a finding no longer there, no longer counts; neither does
    * one the person's Church rules now keep out of notices. "Couldn't check" no longer counts once a later
    * check of the same job finished. A briefing or an every-check notice is the person's own choice: it goes.
+   * Returns null when nothing brings it any more; otherwise `kinds`: the finding kinds that still bring it (null in
+   * the list for a cause that isn't a finding of a known kind), or `kinds: null` when it can no longer be rechecked
+   * (its run record is gone, or it was held before its findings were kept), so the phone line falls back to what was
+   * so when it was held (phone-notice.ts `heldMacOnly`).
    */
-  function stillRelevant(h: Held): boolean {
+  function stillCause(h: Held): { kinds: (string | null)[] | null } | null {
     const item = noticed.find(i => i.id === h.item);
-    if (!item || !hooks) return true;
-    if (h.kind === "couldnt-check") return !noticed.some(i => i.responsibility_id === item.responsibility_id && i.at > item.at && (i.kind === "found" || i.kind === "clear" || i.kind === "briefing"));
-    if (h.kind !== "needs-decision" || !h.found || !item.check) return true;
+    if (!item || !hooks) return { kinds: null };
+    if (h.kind === "couldnt-check") return noticed.some(i => i.responsibility_id === item.responsibility_id && i.at > item.at && (i.kind === "found" || i.kind === "clear" || i.kind === "briefing")) ? null : { kinds: [null] };
+    if (h.kind !== "needs-decision") return { kinds: [null] };
+    if (!h.found || !item.check) return { kinds: null };
     const ctx = hooks.context();
     const entries = feedbackOf(ctx.rules);
     const plan = item.check.plan_id;
@@ -502,11 +516,13 @@ export function createRunner(deps: RunnerDeps): Runner {
       memory = compareSundayCheck(memory, recordSundayCheck(newer, ctx.rules, newer.completed_at), { now: deps.now(), urgentWithinHours: ctx.urgentWithinHours }).memory;
     }
     const holding = (item.changes ?? []).filter(c => !memory || changeStillHolds(c, memory));
-    if (routeChanges(holding, entries).notify.length) return true;
+    const changed = routeChanges(holding, entries).notify;
+    if (changed.length) return { kinds: changed.map(changeKind) };
     // New findings: still there in a newer check that read what this job reads; otherwise as its own check found them.
     const answers = newer && (!TEMPLATES[item.template].needs.includes("operations") || newer.reads.some(isOperationsRead));
     const still = answers ? findingsFor(item.template, newer, ctx.rules, newer.completed_at).found.filter(f => h.found!.some(x => x.key === f.key)) : h.found;
-    return routeFindings(still, entries).notify.length > 0;
+    const notify = routeFindings(still, entries).notify;
+    return notify.length ? { kinds: still.filter(f => notify.includes(f.key)).map(f => f.kind) } : null;
   }
   /** Held notices go out once quiet hours end, one per kind, the most important first, for what is still so. */
   async function deliverHeld() {
@@ -515,15 +531,18 @@ export function createRunner(deps: RunnerDeps): Runner {
     if (!quietDeferral(deps.now(), ctx.quiet, ctx.macZone).send) return;
     const due = held.filter(h => ms(h.at) <= ms(deps.now()));
     held = held.filter(h => ms(h.at) > ms(deps.now()));
-    const kinds = new Map<NoticeKind, Held[]>();
+    const kinds = new Map<NoticeKind, { list: Held[]; macOnly: boolean }>();
     for (const h of due) {
       // One that no longer holds says no notice was needed.
-      if (stillRelevant(h)) kinds.set(h.kind, [...kinds.get(h.kind) ?? [], h]);
-      else patch(h.item, { notice: "none" });
+      const cause = stillCause(h);
+      if (!cause) { patch(h.item, { notice: "none" }); continue; }
+      // One notice per kind: it stays on this Mac only if every held one it stands for does.
+      const kind = kinds.get(h.kind) ?? { list: [], macOnly: true };
+      kinds.set(h.kind, { list: [...kind.list, h], macOnly: kind.macOnly && heldMacOnly(h.mac_only, cause.kinds) });
     }
-    for (const [kind, list] of [...kinds].sort(([a], [b]) => NOTICE_RANK[b] - NOTICE_RANK[a])) {
+    for (const [kind, { list, macOnly }] of [...kinds].sort(([a], [b]) => NOTICE_RANK[b] - NOTICE_RANK[a])) {
       let outcome: NoticedItem["notice"] = "sent-later";
-      try { await deps.notify(kind); } catch { outcome = "unavailable"; }
+      try { await sendNotice(deps, kind, kind === "needs-decision" && macOnly); } catch { outcome = "unavailable"; }
       for (const h of list) patch(h.item, { notice: outcome });
       if (kind === "briefing-ready") openToday = true;
     }
@@ -718,7 +737,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       const briefingOnly = fresh.briefing.length + routed.briefing.length > 0 && trigger !== "start" && trigger !== "manual";
       // What brought a "needs a decision" notice, so a held one can be rechecked before it goes out.
       const cause = noticeKind === "needs-decision" ? found.found.filter(f => (r.report === "every-check" ? kept : fresh).notify.includes(f.key)) : undefined;
-      if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent, cause);
+      // Only background checks brought it: "A notice on your phone" leaves it on this Mac. A mix still goes.
+      const macOnly = noticeKind === "needs-decision" && thisMacOnly([...routed.notify.map(changeKind), ...(cause ?? []).map(f => f.kind)]);
+      if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent, cause, macOnly);
       else patch(item.id, { notice: briefingOnly ? "briefing" : "none" });
       await deps.native.end(r.id, grant.run_id, "ok", null, count, drafts).catch(() => undefined);
       log(`responsibility: run status=ok code=- noticed=${count} drafts=${drafts}${ready ? ` summary=${ready.status}` : ""}`);
