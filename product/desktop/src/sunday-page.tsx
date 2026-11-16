@@ -581,6 +581,8 @@ export function SundayPage(props: {
   onHow?: ((procedure: string) => void) | undefined;
   /** What the person tells Ozzie on finding cards, kept with the Church rules. */
   feedback?: FeedbackSource | null;
+  /** Last Sunday in Check-Ins against the kids rules (church-reads-view.tsx), when Check-Ins was part of the check. */
+  church?: ReactNode;
 }) {
   const { brief, names, decisions, onDecisions } = props;
   // "Your name for notes" from Settings, put in on this Mac after any rewording; [Your name] when none is set.
@@ -646,6 +648,7 @@ export function SundayPage(props: {
       checkedAt={brief.checked_at ?? brief.completed_at} />}
     {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names} onHow={props.onHow}
       feedback={controls} occurrence={occurrence.id} />}
+    {brief && props.church}
     {brief && <SetAside entries={setAside} feedback={controls} />}
     {brief && <section className="notchecked" aria-label="What I didn't check">
       <h2 className="h3">What I didn't check</h2>

@@ -4,8 +4,30 @@ export type OrganizationDiagnostic = { version: 1 } & (
   { stage: "userinfo"; reason: UserInfoReason } |
   { stage: "organization-binding"; reason: "organization-mismatch" }
 );
-/** What the saved connection was granted: Services alone (the default), or also Calendar, People and Groups. */
-export type ConnectionScopes = "services" | "services-and-operations";
+/**
+ * What the saved connection was granted (native `Scopes::label`): Services alone (the default) or also Calendar, People and
+ * Groups, then whether Check-Ins and Registrations were each granted too. Read it through `granted`.
+ */
+export type ConnectionScopes = `${"services" | "services-and-operations"}${"" | "+check-ins"}${"" | "+registrations"}`;
+/** The products a checked connection was granted; null until the connection has been checked this session (or an unknown spelling). */
+export function granted(status: Pick<ConnectionStatus, "scopes"> | null | undefined): { operations: boolean; checkIns: boolean; registrations: boolean } | null {
+  const scopes: unknown = status?.scopes;
+  if (typeof scopes !== "string") return null;
+  const [base, ...more] = scopes.split("+");
+  const canonical = `${base}${more.includes("check-ins") ? "+check-ins" : ""}${more.includes("registrations") ? "+registrations" : ""}`;
+  if ((base !== "services" && base !== "services-and-operations") || canonical !== scopes) return null;
+  return { operations: base === "services-and-operations", checkIns: more.includes("check-ins"), registrations: more.includes("registrations") };
+}
+/** Calendar, People and Groups were all granted. */
+export const operationsGranted = (status: Pick<ConnectionStatus, "scopes"> | null | undefined) => granted(status)?.operations === true;
+/** Check-Ins and Registrations, each asked for only when the person chooses it. */
+export interface MoreProducts { checkIns?: boolean; registrations?: boolean }
+/** The Check-Ins and Registrations choices a connection already has, so changing another choice keeps them. */
+export const moreOf = (status: Pick<ConnectionStatus, "scopes"> | null | undefined): MoreProducts => {
+  const g = granted(status);
+  return { checkIns: g?.checkIns === true, registrations: g?.registrations === true };
+};
+const moreArgs = (more: MoreProducts) => ({ ...(more.checkIns ? { checkIns: true } : {}), ...(more.registrations ? { registrations: true } : {}) });
 export type ConnectionStatus = {
   state: "disconnected" | "waiting" | "checking" | "connected" | "stored-unchecked" | "cancelled" | "expired" | "failed";
   organization: string; checked_at_ms: number | null; source: string; problem: unknown;
@@ -90,15 +112,16 @@ export const signNote = (text: string, name: string) => text.split(PLACEHOLDER).
 
 export const connection = {
   status: () => invoke<ConnectionStatus | null>("connection_status"),
-  /** `operations` asks Planning Center for Calendar, People and Groups too. Ozzie still only reads. */
-  connect: (client_id: string, organization: string, registered: boolean, operations = false) => invoke<ConnectionStatus>("connect_planning_center",
-    operations ? { clientId: client_id, organization, registered, operations: true } : { clientId: client_id, organization, registered })
+  /** `operations` asks Planning Center for Calendar, People and Groups too; `more` for Check-Ins and Registrations. Ozzie still only reads. */
+  connect: (client_id: string, organization: string, registered: boolean, operations = false, more: MoreProducts = {}) => invoke<ConnectionStatus>("connect_planning_center",
+    { clientId: client_id, organization, registered, ...(operations ? { operations: true } : {}), ...moreArgs(more) })
     .then(status => { operationsAsked.set(operations); return status; }),
   /**
    * One click: Ozzie's own registration ("Ozzie for Mac"); Planning Center names the organization after
    * sign-in. Only in builds that have that registration built in (`appAvailable`).
    */
-  connectApp: (operations = false) => invoke<ConnectionStatus>("connect_planning_center_app", operations ? { operations: true } : {})
+  connectApp: (operations = false, more: MoreProducts = {}) => invoke<ConnectionStatus>("connect_planning_center_app",
+    { ...(operations ? { operations: true } : {}), ...moreArgs(more) })
     .then(status => { operationsAsked.set(operations); return status; }),
   /** Whether this build can connect in one click. */
   appAvailable: () => invoke<boolean>("planning_center_app").catch(() => false),
@@ -368,6 +391,17 @@ export function switchProblem(error: unknown, question: SwitchQuestion): string 
   return connectionProblem(error);
 }
 
+/** What can still be true of a sign-in Ozzie removed without signing out of it at Planning Center. */
+const STAYS_ACTIVE = "it may stay active at Planning Center until it expires or an administrator disconnects it there (Account Settings, Integrations";
+/**
+ * After Disconnect removed a saved sign-in it couldn't read that named another church (native: disconnected with
+ * `organization-unverified`), it wasn't signed out at Planning Center: say so. Empty for any other status.
+ */
+export function disconnectNote(status: Pick<ConnectionStatus, "state" | "problem"> | null): string {
+  if (status?.state !== "disconnected" || status.problem !== "organization-unverified") return "";
+  return "Ozzie removed the saved sign-in from this Mac but didn't sign out of it at Planning Center, because it named another church. " +
+    `${STAYS_ACTIVE.charAt(0).toUpperCase()}${STAYS_ACTIVE.slice(1)}).`;
+}
 /** One sign-in the person chose to leave that's still saved: why, and what to do. */
 export function leftBehindCopy(entry: LeftBehind): string {
   const which = churchLabel(entry.organization, entry.name);
@@ -376,7 +410,7 @@ export function leftBehindCopy(entry: LeftBehind): string {
     case "refused": {
       const listed = entry.ozzie_registration === true ? ", where it's listed as Ozzie for Mac"
         : entry.ozzie_registration === false ? ", where it's listed under the registration typed in Ozzie's Advanced settings" : "";
-      return `Planning Center wouldn't sign Ozzie out of ${which}, so that sign-in is still saved on this Mac. Trying again may not help. Ozzie can remove it from this Mac, but it may stay active at Planning Center until it expires or an administrator disconnects it there (Account Settings, Integrations${listed}).`;
+      return `Planning Center wouldn't sign Ozzie out of ${which}, so that sign-in is still saved on this Mac. Trying again may not help. Ozzie can remove it from this Mac, but ${STAYS_ACTIVE}${listed}).`;
     }
     case "revoke-failed": return `Ozzie couldn't sign out of ${which} yet because Planning Center couldn't be reached. ${stays} Try again when this Mac is online.`;
     case "locked": return `Ozzie couldn't sign out of ${which} yet because the Mac's credential storage is locked. ${stays} Unlock it, then try again.`;

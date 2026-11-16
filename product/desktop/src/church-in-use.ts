@@ -20,8 +20,11 @@ export function onScreenCapture(capture: SundayCapture | null, fictional: boolea
 export const ofChurchInUse = (capture: SundayCapture, organization: string, inUse: string | undefined) =>
   onScreenCapture(capture, false, organization, inUse) !== null;
 
-/** The Church rules that name one church's teams, rooms and findings. The rest (Sundays in a row) apply to any church. */
-const CHURCH_KEYS = ["sundayLeads", "rooms", "kidsTeams", "kidsBackgroundChecks", "feedback"] as const;
+/**
+ * The Church rules that name one church's teams, rooms, forms, Check-Ins rooms and findings. The rest (Sundays in a
+ * row) apply to any church.
+ */
+const CHURCH_KEYS = ["sundayLeads", "rooms", "kidsTeams", "kidsBackgroundChecks", "feedback", "forms", "checkIns"] as const;
 export type ChurchRules = Partial<Pick<SundayRules, (typeof CHURCH_KEYS)[number]>>;
 /** Which church the Church rules in use were set for, and the church-specific ones kept for other churches. */
 export interface RulesByChurch { church: string; kept: Record<string, { rules: ChurchRules; name?: string }> }
@@ -35,7 +38,8 @@ export function churchRules(rules: SundayRules): ChurchRules {
 /** Whether any rule is set for this church's teams, rooms or findings, including turning the background-check rule off. */
 export function hasChurchRules(rules: SundayRules): boolean {
   return rules.sundayLeads.length > 0 || (rules.rooms?.length ?? 0) > 0 || (rules.kidsTeams?.length ?? 0) > 0 || (rules.feedback?.length ?? 0) > 0
-    || rules.kidsBackgroundChecks === false;
+    || rules.kidsBackgroundChecks === false || rules.forms?.on === true || (rules.forms?.watched?.length ?? 0) > 0
+    || rules.checkIns?.event_id !== undefined || (rules.checkIns?.rooms?.length ?? 0) > 0;
 }
 const numeric = (value: string | undefined): value is string => value !== undefined && /^[1-9]\d{0,31}$/.test(value);
 /**

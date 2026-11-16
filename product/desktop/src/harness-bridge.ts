@@ -26,7 +26,7 @@ import { sundayOperations, type SundayOperations } from "../../../core/src/opera
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
-import type { ConnectionStatus } from "./connection.js";
+import { operationsGranted, type ConnectionStatus } from "./connection.js";
 import {
   askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, ledgerDetail, localSteps, modelSteps, outcomeSteps, type CheckTrigger,
   type TaskRow,
@@ -163,6 +163,11 @@ export interface AppSnapshot {
   /** The app's own brief and operations for this capture, when it has built them already. */
   brief?: SundayBrief | null;
   operations?: SundayOperations | null;
+  /**
+   * Whether the fictional email-and-calendar import goes with the fictional example (the default). Off once the
+   * leader's own calendar is on Today, which no longer shows it, so Ask neither answers from it nor points to it.
+   */
+  fictionalImport?: boolean;
 }
 export const modeOf = (capture: SundayCapture | null, fictional: boolean): HarnessData["mode"] =>
   fictional ? "fictional" : capture?.kind === "recording" ? "recording" : "live";
@@ -172,7 +177,7 @@ export const modeOf = (capture: SundayCapture | null, fictional: boolean): Harne
  */
 export function grantedFor(capture: SundayCapture | null, fictional: boolean, status: ConnectionStatus | null): HarnessData["granted"] {
   if (fictional) return ["services", "operations"];
-  if (status?.scopes) return status.scopes === "services-and-operations" ? ["services", "operations"] : ["services"];
+  if (status?.scopes) return operationsGranted(status) ? ["services", "operations"] : ["services"];
   return capture?.reads.some(r => OPERATIONS_READ.test(r.collection) && r.outcome !== "not-requested") ? ["services", "operations"] : ["services"];
 }
 
@@ -185,7 +190,7 @@ export function buildHarnessData(s: AppSnapshot, refresh?: HarnessData["refresh"
     brief: s.brief !== undefined ? s.brief : capture ? sundayBrief(capture, rules, now, fictional) : null,
     operations: s.operations !== undefined ? s.operations : capture ? sundayOps(capture, rules, now, fictional) : null,
     decisions: s.decisions, rules,
-    attention: fictional && capture ? attentionImport() : null,
+    attention: fictional && capture && s.fictionalImport !== false ? attentionImport() : null,
     granted: grantedFor(capture, fictional, s.status),
     mode: modeOf(capture, fictional),
     connected,

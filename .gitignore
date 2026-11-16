@@ -2,6 +2,7 @@
 node_modules/
 dist/
 /core/mcp/dist-share/
+/core/mcp/dist-shortcuts/
 target/
 .env
 .env.*

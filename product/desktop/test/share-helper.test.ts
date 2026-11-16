@@ -226,7 +226,7 @@ describe.skipIf(why !== null)("ozzie-share answers as the Node server does, byte
     const ours = Buffer.concat(out), theirs = await node(input, path);
     expect(theirs.length).toBeGreaterThan(1 << 17);
     expect(ours.toString("utf8")).toBe(theirs.toString("utf8"));
-  });
+  }, 30_000); // about 4 s alone; over the 5 s default when the whole suite and Rust builds run at once
 
   it("takes no arguments", () => {
     const run = spawnSync(HELPER, ["--anything"], { input: lines(request(1, "ping")), env: {} });

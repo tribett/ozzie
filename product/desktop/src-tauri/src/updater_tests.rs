@@ -292,11 +292,15 @@ fn the_page_gets_no_updater_permission() {
 }
 
 #[test]
-fn this_build_is_0_1_1_everywhere_it_is_declared() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.1.1");
-    assert_eq!(conf()["version"], json!(env!("CARGO_PKG_VERSION")));
+fn this_build_has_one_version_everywhere_it_is_declared() {
+    // Cargo.toml, tauri.conf.json and Cargo.lock must agree, whatever the release is (this named 0.1.1 and went
+    // red, unnoticed, when 0.1.2 was declared).
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(conf()["version"], json!(version));
     let lock = include_str!("../Cargo.lock");
-    assert!(lock.contains("name = \"ozzie-desktop\"\nversion = \"0.1.1\""));
+    assert!(lock.contains(&format!(
+        "name = \"ozzie-desktop\"\nversion = \"{version}\""
+    )));
 }
 
 #[test]

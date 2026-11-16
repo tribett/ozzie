@@ -369,7 +369,7 @@ describe("read-only", () => {
   it("holds no write, network or process call anywhere in its source", () => {
     const dir = new URL("../../mcp/", import.meta.url);
     const sources = readdirSync(dir).filter(f => f.endsWith(".ts") && !/^vite(?:\.\w+)?\.config\.ts$/u.test(f));
-    expect(sources.sort()).toEqual(["embedded.ts", "file.ts", "main.ts", "render.ts", "server.ts", "snapshot.ts"]);
+    expect(sources.sort()).toEqual(["embedded.ts", "file.ts", "main.ts", "render.ts", "server.ts", "shortcuts-embedded.ts", "shortcuts.ts", "snapshot.ts"]);
     for (const f of sources) {
       const src = readFileSync(new URL(f, dir), "utf8");
       expect(src, f).not.toMatch(/\b(?:writeFile|writeSync|appendFile|createWriteStream|mkdir|rmSync|unlink|rename|copyFile|truncate|chmod|O_WRONLY|O_RDWR|O_CREAT)\b/u);

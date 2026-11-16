@@ -15,6 +15,10 @@ const what: Record<string, string> = {
   calendar_conflicts: "Read one event's room conflicts",
   organization: "Read the church's time zone",
   people_background_checks: "Read whether one person has a current background check",
+  people_forms: "Read the list of People forms", people_form_submissions: "Read one form's new submissions (when and who, never the answers)",
+  checkins_events: "Read the Check-Ins events", checkins_locations: "Read one Check-Ins event's rooms",
+  checkins_event_periods: "Read one Check-Ins event's recent times", checkins_location_counts: "Read how many checked in to each room at one time",
+  registrations_signups: "Read the upcoming signups", registrations_attendees: "Count one signup's registrations",
 };
 /**
  * `notGranted`: Ozzie asked Planning Center for Calendar, People and Groups, and it granted Services

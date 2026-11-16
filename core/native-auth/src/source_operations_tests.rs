@@ -916,6 +916,15 @@ fn target_for(collection: Collection) -> Target {
         Collection::PeopleBackgroundChecks => Target::people_person("50"),
         // Setup's Sunday picker: no target, and less of a plan (see `valid`).
         Collection::ServiceTypes | Collection::UpcomingPlans => Target::default(),
+        // Church reads (source_church_tests.rs).
+        Collection::PeopleForms | Collection::CheckInsEvents | Collection::RegistrationsSignups => {
+            Target::default()
+        }
+        Collection::PeopleFormSubmissions => Target::form("610").within(&window()),
+        Collection::CheckInsLocations => Target::checkins_event("620"),
+        Collection::CheckInsEventPeriods => Target::checkins_event("620").within(&window()),
+        Collection::CheckInsLocationCounts => Target::checkins_event_time("630"),
+        Collection::RegistrationsAttendees => Target::signup("640"),
     }
 }
 /// A valid request for every collection: the picker's reads come before a plan is chosen, so
@@ -937,7 +946,7 @@ fn valid(collection: Collection) -> SourceRequest {
     )
     .unwrap()
 }
-const ALL: [Collection; 22] = [
+const ALL: [Collection; 30] = [
     Collection::Plan,
     Collection::Organization,
     Collection::PlanTimes,
@@ -960,6 +969,14 @@ const ALL: [Collection; 22] = [
     Collection::PeopleBackgroundChecks,
     Collection::ServiceTypes,
     Collection::UpcomingPlans,
+    Collection::PeopleForms,
+    Collection::PeopleFormSubmissions,
+    Collection::CheckInsEvents,
+    Collection::CheckInsLocations,
+    Collection::CheckInsEventPeriods,
+    Collection::CheckInsLocationCounts,
+    Collection::RegistrationsSignups,
+    Collection::RegistrationsAttendees,
 ];
 
 #[test]
@@ -1650,3 +1667,6 @@ fn a_check_entered_by_hand_counts_as_cleared() {
     );
     assert!(page["data"][0]["attributes"].get("note").is_none());
 }
+
+#[path = "source_church_tests.rs"]
+mod church;

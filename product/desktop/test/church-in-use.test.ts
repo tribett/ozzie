@@ -62,6 +62,15 @@ describe("Church rules set for one church's teams stay with that church", () => 
     expect(back.rules).toEqual(rules1001);
     expect(back.store).toEqual({ church: "1001", kept: {} });
   });
+  it("include the forms watched and the Check-Ins rooms matched: another church never reads them", () => {
+    const withChurchReads: SundayRules = { ...rules1001, forms: { on: true, watched: ["610"] }, checkIns: { event_id: "620", rooms: [{ location_id: "650", team_id: "77" }] } };
+    const moved = moveRules(withChurchReads, bound, "2002")!;
+    expect(moved.rules).toEqual({ sundayLeads: [], checkInAfterSundaysInARow: 4 });
+    expect(moveRules(moved.rules, moved.store, "1001")!.rules).toEqual(withChurchReads);
+    // Forms turned on alone is a rule for that church, named in the switch question.
+    const formsOnly: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 0, forms: { on: true, watched: [] } };
+    expect(rulesAtStake({ from: "1001", to: "2002" }, formsOnly, bound).from).toBe(true);
+  });
   it("aren't used in the moment before they are moved, and the first church seen adopts them", () => {
     expect(backgroundCheckTeamIds(rulesInUse(rules1001, bound, "2002"))).toEqual([]);
     expect(rulesInUse(rules1001, bound, "1001")).toBe(rules1001);

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { connection, type ConnectionStatus } from "./connection.js";
+import { connection, granted, moreOf, operationsGranted, type ConnectionStatus, type MoreProducts } from "./connection.js";
 import { model } from "./model.js";
 import { sundaySource, type Settings } from "./sunday-source.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
@@ -15,6 +15,8 @@ import { agentStep, buildHarnessData, createAppHarness, procedures, type LedgerR
 import type { ModelStep } from "../../../core/src/harness/contract.js";
 import { parseRequest } from "../../../core/src/harness/responsibilities.js";
 import type { Runner } from "./responsibility-runner.js";
+import { checkInsFacts, formsFacts, registrationsFacts } from "../../../core/src/church-reads/index.js";
+import { withFormsOn, withWatchedForm } from "../../../core/src/church-reads/rules.js";
 
 /**
  * Debug builds only (OZZIE_DEV_AUTOPILOT=1): runs the live flow through the real code paths and
@@ -88,7 +90,41 @@ export function devKidsRules(rules: SundayRules, spec: string | undefined): Sund
   return kidsTeams.length ? { ...rules, kidsTeams } : rules;
 }
 
-export async function runAutopilot(settings: Settings, rules: SundayRules, operations: boolean, show: (c: SundayCapture) => void, harness?: AutopilotHarness, oneClick = false) {
+/**
+ * Debug builds only (OZZIE_DEV_FORMS, validated natively): "1" turns People forms on with none chosen (the list only), or a
+ * list of form ids to watch. Nothing is saved; release builds never send a value.
+ */
+export function devChurchRules(rules: SundayRules, forms: string | undefined): SundayRules {
+  if (!forms) return rules;
+  const on = withFormsOn(rules, true);
+  return forms === "1" ? on : forms.split(",").reduce((r, id) => withWatchedForm(r, id, true), on);
+}
+const tally = (reads: SundayCapture["reads"]) => `${reads.filter(r => r.outcome === "ok" || r.outcome === "truncated").length}/${reads.length}`;
+const rows = (reads: SundayCapture["reads"]) => reads.reduce((n, r) => n + (Array.isArray(r.body?.data) ? r.body.data.length : 0), 0);
+/** Name-free lines for the church reads: read tallies ("ok or partly read" of all), counts and fixed states only. */
+export function churchLines(capture: SundayCapture, rules: SundayRules): string[] {
+  const of = (prefix: string) => capture.reads.filter(r => r.collection.startsWith(prefix));
+  const now = capture.completed_at;
+  const forms = formsFacts(capture, rules, { zone: "UTC" }), checkIns = checkInsFacts(capture, rules, { now }), signups = registrationsFacts(capture, rules, { now, zone: "UTC" });
+  const formReads = of("people_form"), checkInReads = of("checkins_"), signupReads = of("registrations_");
+  return [
+    forms ? `forms: reads=${tally(formReads)} listed=${forms.listed.length} watched=${capture.forms?.length ?? 0} facts=${forms.forms.length} ` +
+      `submissions=${forms.forms.reduce((n, f) => n + f.count, 0)} submitters=${forms.forms.reduce((n, f) => n + f.submitters.length, 0)} ` +
+      `unnamed=${forms.forms.reduce((n, f) => n + f.unnamed, 0)} not_checked=${forms.not_checked.length}`
+      : `forms: off reads=${formReads.length}`,
+    checkIns ? `checkins: reads=${tally(checkInReads)} events=${checkIns.events.length} rooms=${checkIns.rooms.length} last_sunday=${checkIns.sunday ? "found" : "none"} ` +
+      `so_far=${checkIns.so_far ? checkIns.so_far.times.length : "none"} times=${checkIns.times.length} room_counts=${checkIns.times.reduce((n, t) => n + t.rooms.length, 0)} ` +
+      `count_rows=${rows(of("checkins_location_counts"))} matched=${checkIns.matched.map(m => m.state).join(",") || "none"} held=${checkIns.held} ` +
+      `below=${checkIns.below.map(f => `${f.tone}:${f.matched}`).join(",") || "none"} not_checked=${checkIns.not_checked.length}`
+      : `checkins: not-read reads=${checkInReads.length}`,
+    signups ? `registrations: reads=${tally(signupReads)} upcoming=${signups.signups.length} open=${signups.signups.filter(s => s.state === "open").length} ` +
+      `counted=${signups.signups.filter(s => s.registered !== null).length} limits=${signups.signups.filter(s => typeof s.limit === "number").length} not_checked=${signups.not_checked.length}`
+      : `registrations: not-read reads=${signupReads.length}`,
+  ];
+}
+
+export async function runAutopilot(settings: Settings, rules: SundayRules, operations: boolean, show: (c: SundayCapture) => void, harness?: AutopilotHarness, oneClick = false,
+  more: MoreProducts = {}) {
   try {
     await log("start");
     let status: ConnectionStatus | null = await connection.status();
@@ -115,9 +151,13 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
         status = await connection.status();
       }
     }
-    if (operations && status?.state === "connected" && status.scopes !== "services-and-operations") {
-      await log("connecting with rooms, follow-ups and group events: browser sign-in opened");
-      await connection.connect(settings.clientId, settings.organization, true, true);
+    // Ask again only for what's wanted and not yet granted, keeping everything already granted.
+    const has = granted(status), keep = moreOf(status);
+    const wantMore = (more.checkIns && !has?.checkIns) || (more.registrations && !has?.registrations);
+    if (status?.state === "connected" && ((operations && !operationsGranted(status)) || wantMore)) {
+      await log(`connecting with more: operations=${operations || operationsGranted(status)} check_ins=${Boolean(more.checkIns || keep.checkIns)} registrations=${Boolean(more.registrations || keep.registrations)} browser sign-in opened`);
+      await connection.connect(settings.clientId, settings.organization, true, operations || operationsGranted(status),
+        { checkIns: Boolean(more.checkIns || keep.checkIns), registrations: Boolean(more.registrations || keep.registrations) });
       status = await connection.status();
       for (let i = 0; i < 150 && status?.state !== "connected" && status?.state !== "failed" && status?.state !== "expired" && !status?.last_attempt; i++) {
         await wait(2000);
@@ -145,6 +185,8 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
     await log(`operations: ${ops ? `findings=${ops.result?.findings.map(f => f.kind + ":" + f.certainty).join(",") || "none"} group_meetings=${ops.group_meetings.length} not_checked=${ops.not_checked.length}` : "none"}`);
     const outcomes = capture.reads.reduce<Record<string, number>>((a, r) => ({ ...a, [r.outcome]: (a[r.outcome] ?? 0) + 1 }), {});
     await log(`check: reads=${capture.reads.length} outcomes=${JSON.stringify(outcomes)} names=${Object.keys(capture.names).length}`);
+    // People forms, Check-Ins and Registrations: tallies and counts only, never a name, label or answer.
+    for (const line of churchLines(capture, rules)) await log(line);
     const brief = buildSundayBrief(capture, rules, new Date().toISOString());
     await log(`brief: status=${brief.status} findings=${brief.findings.map(f => f.kind + (f.people ? `[s${f.people.suggestions.length}/c${f.people.conflicts.length}/u${f.people.unverified.length}/x${f.people.left_out.length}]` : "")).join(",")}`);
     // Kids rules: counts and fixed states only, never a name, id or a background check's details.
@@ -160,7 +202,8 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
       const recording = await sundaySource.loadRecording(settings.organization, saved[0].path_id);
       const again = buildSundayBrief(recording, rules, new Date().toISOString());
       const same = JSON.stringify(again.findings) === JSON.stringify(brief.findings);
-      await log(`recording: saved=${saved.length} kind=${recording.kind} reads=${recording.reads.length} same_findings=${same}`);
+      const sameChurch = JSON.stringify(churchLines(recording, rules)) === JSON.stringify(churchLines(capture, rules));
+      await log(`recording: saved=${saved.length} kind=${recording.kind} reads=${recording.reads.length} same_findings=${same} same_church=${sameChurch}`);
     } else await log("recording: none saved");
 
     // Ask Ozzie through the real route: log only whether each question passed every check, never text.

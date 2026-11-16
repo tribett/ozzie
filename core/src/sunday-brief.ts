@@ -4,7 +4,7 @@ import { evaluateCoverage, type CandidateAssessment, type CoverageResult, type P
 import { churchTimeZone, planDate, planStart } from "./church-time.js";
 import { applyFeedback, briefTarget, feedbackOf, type CorrectionEntry, type StopEntry } from "./finding-feedback.js";
 import { kidsFindings } from "./kids-rules.js";
-import { captureToCoverage, isKidsRead, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
+import { captureToCoverage, isChurchRead, isKidsRead, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
 import type { DecidedBrief } from "./sunday-decisions.js";
 import type { SundayOperations } from "./operations-capture.js";
 import type { OperationsResult } from "./operations-findings/index.js";
@@ -144,7 +144,8 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   // Calendar, People and Groups reads are reported by the operations check (operations-capture),
   // so a turned-off or refused room read never makes the Services picture look incomplete. So is the
   // church's time zone: only rooms and group meetings depend on it, never Services coverage.
-  const services = capture.reads.filter(r => !isOperationsRead(r) && !isKidsRead(r) && r.collection !== ORGANIZATION_COLLECTION);
+  // People forms, Check-Ins and Registrations are reported by core/src/church-reads, never as Services reads.
+  const services = capture.reads.filter(r => !isOperationsRead(r) && !isKidsRead(r) && !isChurchRead(r) && r.collection !== ORGANIZATION_COLLECTION);
   const time_zone = churchTimeZone(capture);
   const checkTimes = services.map(r => r.checked_at).sort();
   const checked_at = checkTimes[0] ?? null;

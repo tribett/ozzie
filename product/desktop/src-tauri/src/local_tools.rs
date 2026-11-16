@@ -15,7 +15,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-const SANDBOX: &str = "/usr/bin/sandbox-exec";
+pub(crate) const SANDBOX: &str = "/usr/bin/sandbox-exec";
 
 /// Tesseract parses untrusted images, so it gets nothing beyond running itself and reading its
 /// own install. Everything else is denied: no network, no file writes, no other programs, no
@@ -253,7 +253,7 @@ fn sandboxed(policy: &str, locale: &str, argv: &[&str]) -> Command {
 /// One of Ozzie's own helpers under `policy`, whose parameters (`-D NAME=path`) are paths known
 /// only at run time. HOME is passed so the recognizers find this person's cache folders without
 /// a directory-service lookup; nothing else of Ozzie's environment is.
-fn sandboxed_helper(
+pub(crate) fn sandboxed_helper(
     policy: &str,
     locale: &str,
     params: &[(&str, &Path)],
@@ -289,10 +289,10 @@ fn helper_beside(program: &Path, name: &str) -> Option<PathBuf> {
     let path = program.parent()?.join(name).canonicalize().ok()?;
     path.is_file().then_some(path)
 }
-fn helper(name: &str) -> Option<PathBuf> {
+pub(crate) fn helper(name: &str) -> Option<PathBuf> {
     helper_beside(&std::env::current_exe().ok()?.canonicalize().ok()?, name)
 }
-fn home() -> Option<PathBuf> {
+pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
@@ -557,7 +557,7 @@ impl Speech {
 
 /// Runs a fixed command with `input` on stdin and returns stdout, bounded in size and time.
 /// The child is killed on timeout, excess output or cancellation. Nothing is written anywhere.
-fn run_bounded(
+pub(crate) fn run_bounded(
     mut command: Command,
     input: Vec<u8>,
     timeout: Duration,

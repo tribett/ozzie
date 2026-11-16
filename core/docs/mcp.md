@@ -189,6 +189,29 @@ printf '%s\n' \
 From a checkout, pipe the same lines to `node core/mcp/dist/ozzie-mcp.mjs`, or to
 `product/desktop/src-tauri/binaries/ozzie-share-<target>` after `pnpm build:share` and a `cargo build`.
 
+## Siri and Shortcuts
+
+"Let Siri and Shortcuts ask Ozzie" in Ozzie's Settings (off by default; ADR 0006) keeps a second, smaller
+copy beside this one: `shortcuts-check.json`, with its own `.shortcuts-check.on` marker, holding only the
+`sunday.overview` result and no task rows. Native writes it with the same checks as the shared copy
+(`core/native-auth/src/shortcuts_check.rs` on top of `shared_check.rs`), and the two switches never
+touch each other's copy. The helper `ozzie-shortcuts` (`product/desktop/src-tauri/helpers/shortcuts.swift`,
+no entitlements) runs `shortcuts.ts` in JavaScriptCore: given one question, `sunday`, it reads the copy
+only while its marker is a regular file, checks it with `parseSharedCheck`, and prints an answer made of
+counts, dates and fixed words, never a label:
+
+```sh
+'/Applications/Ozzie.app/Contents/MacOS/ozzie-shortcuts' sunday
+# Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. Checked in Planning Center today at 10:00 AM.
+```
+
+A shortcut runs that command with Run Shell Script and Siri runs the shortcut by its name. Run Shell
+Script needs Shortcuts > Settings > Advanced > Allow Running Scripts, a setting for all of Shortcuts on
+the Mac: any shortcut can then run commands as the leader, and Ozzie's Settings says so. When it can't
+answer at all, the helper writes one plain sentence for Shortcuts to show and exits 70. `ozzie://today` and `ozzie://sunday` open those pages
+in Ozzie while the switch is on; nothing else from a link is used. It reads no environment but `HOME`,
+and has no override for the copy's path.
+
 ## Tests
 
 - `core/test/mcp/server.test.ts`: handshake and JSON-RPC errors, over-long lines, batch size, a failing
@@ -216,6 +239,12 @@ From a checkout, pipe the same lines to `node core/mcp/dist/ozzie-mcp.mjs`, or t
   the copy id's shape, nothing written while off, turning it off and clearing remove the copy and any
   half-written one, start-up clean-up, a copy that can't be removed reported; `SHARED_TOOLS` and the
   copy id pinned to the TypeScript.
+- `core/test/mcp/shortcuts.test.ts`, `core/native-auth/src/shortcuts_check_tests.rs`,
+  `product/desktop/test/siri-shortcuts.test.ts` and `product/desktop/test/shortcuts-helper.test.ts`: the
+  answers to Siri and Shortcuts in every state a check can be in (exact text), only Ozzie's own words,
+  numbers and dates in any of them over every fixture, the copy holding only the overview, the two
+  switches independent, the built helper agreeing with `shortcuts.ts` and reading nothing that isn't a
+  plain file, and the `ozzie://` pages limited to Today and Sunday.
 - `product/desktop/test/share-check.test.ts`: off unless native says on, a failed removal said plainly
   and left on to try again, only placeholder results handed to native, the copy removed whenever
   nothing current is shared (no check, another church, disconnected, deleted recordings, a refused

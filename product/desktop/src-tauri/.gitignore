@@ -1,3 +1,5 @@
 /gen/schemas/
 # Ozzie's Mac helpers, built from helpers/*.swift by build.rs.
 /binaries/
+# xcodebuild makes this beside the project on every build (review I, L4); its logs go to Xcode's DerivedData.
+/intents/OzzieIntents.xcodeproj/project.xcworkspace/

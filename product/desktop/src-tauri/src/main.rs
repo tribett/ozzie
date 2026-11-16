@@ -28,6 +28,8 @@ use tauri::Manager;
 use ozzie_native_auth::lifetime;
 // H6: keeps running with the window closed (menu bar, timer, App Nap, open at login, responsibilities).
 mod always_on;
+// The leader's own calendars on Today, read-only: Apple Calendar on this Mac and private calendar links.
+mod calendars;
 // Visitor cards: Ozzie's own images-only photo panel (no path ever comes from the page).
 mod card_picker;
 // "Open in Mail" / "Open in Messages" on drafts: a new, unsent message the person sends.
@@ -35,6 +37,9 @@ mod draft_apps;
 mod local_tools;
 // The small program another AI app starts to read Ozzie's shared check (helpers/share.swift).
 mod share_helper;
+// Siri and Shortcuts: the switch, the copy their helper answers from (helpers/shortcuts.swift), and
+// the pages an ozzie:// link opens.
+mod shortcuts;
 // New versions of Ozzie from the public release, installed only on the person's click.
 mod updater;
 /// Where saved connections live in this Mac's Keychain, per organization: `local:<organization>`.
@@ -244,7 +249,8 @@ async fn connection_status(
         .map_err(|_| ConsumerError::NativeUnavailable)?
 }
 /// `operations` (optional, default false) opts in to the Calendar, People and Groups scopes for
-/// the Sunday check's operations reads. Each Planning Center product scope permits read and
+/// the Sunday check's operations reads; `check_ins` and `registrations` (optional, default false)
+/// each opt in to that product's counts. Each Planning Center product scope permits read and
 /// write in that product; Ozzie only issues GET source reads, and asks for Services alone unless
 /// the person chooses more. `ConnectionStatus.scopes` reports what Planning Center actually
 /// granted, read from its token response; a grant wider than asked fails as `scope-mismatch`
@@ -258,13 +264,15 @@ async fn connect_planning_center(
     organization: String,
     registered: bool,
     operations: Option<bool>,
+    check_ins: Option<bool>,
+    registrations: Option<bool>,
 ) -> Result<ConnectionStatus, ConsumerError> {
     let consumer = consumer.inner().clone();
-    let scopes = if operations.unwrap_or(false) {
-        Scopes::ServicesAndOperations
-    } else {
-        Scopes::Services
-    };
+    let scopes = Scopes::asked(
+        operations.unwrap_or(false),
+        check_ins.unwrap_or(false),
+        registrations.unwrap_or(false),
+    );
     tauri::async_runtime::spawn_blocking(move || {
         sign_in(&consumer, scopes, |consumer| {
             Ok(consumer
@@ -282,13 +290,15 @@ async fn connect_planning_center(
 async fn connect_planning_center_app(
     consumer: tauri::State<'_, Consumer>,
     operations: Option<bool>,
+    check_ins: Option<bool>,
+    registrations: Option<bool>,
 ) -> Result<ConnectionStatus, ConsumerError> {
     let consumer = consumer.inner().clone();
-    let scopes = if operations.unwrap_or(false) {
-        Scopes::ServicesAndOperations
-    } else {
-        Scopes::Services
-    };
+    let scopes = Scopes::asked(
+        operations.unwrap_or(false),
+        check_ins.unwrap_or(false),
+        registrations.unwrap_or(false),
+    );
     tauri::async_runtime::spawn_blocking(move || {
         sign_in(&consumer, scopes, |consumer| {
             Ok(consumer.0.prepare_finder()?)
@@ -456,6 +466,8 @@ async fn remove_refused_sign_ins(
     .map_err(|_| ConsumerError::NativeUnavailable)?
 }
 /// Read-only Sunday readiness check for one plan, using the connected session.
+// Tauri passes each IPC argument by name; grouping them would change what the webview sends.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn check_sunday(
     consumer: tauri::State<'_, Consumer>,
@@ -467,6 +479,11 @@ async fn check_sunday(
     // Church rules: kids teams with the background-check rule on. Their scheduled people's cleared
     // People background checks are read; absent or empty, none are. Validated natively.
     kids_team_ids: Option<Vec<String>>,
+    // Church rules: the People forms to watch, once forms are turned on (absent: off, no form is
+    // read; empty: on, the list only). At most ten numeric ids, validated natively.
+    form_ids: Option<Vec<String>>,
+    // Church rules: the one Check-Ins event to read, when chosen. A numeric id, validated natively.
+    checkins_event_id: Option<String>,
 ) -> Result<SundayCapture, ConsumerError> {
     let consumer = consumer.inner().clone();
     let checks = checks.inner().clone();
@@ -478,11 +495,15 @@ async fn check_sunday(
             .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
         let auth = connected_auth(&consumer)?;
         // Disconnecting or quitting cancels the controller, which ends the check.
-        let (capture, read) = sunday_check::check_sunday(
+        let (capture, read) = sunday_check::check_sunday_with(
             &auth,
             &service_type_id,
             &plan_id,
             &kids_team_ids,
+            sunday_check::ChurchReads {
+                forms: form_ids.as_deref(),
+                checkins_event: checkins_event_id.as_deref(),
+            },
             &AtomicBool::new(false),
         )
         .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
@@ -989,6 +1010,13 @@ struct DevDefaults {
     autopilot_one_click: bool,
     /// Debug builds only: `team_id:min` pairs the autopilot marks as kids teams (OZZIE_DEV_KIDS_TEAMS, e.g. "7593352:2").
     kids_teams: String,
+    /// Debug builds only: the autopilot also opts in to Check-Ins (OZZIE_DEV_CHECK_INS=1; asks for consent).
+    autopilot_check_ins: bool,
+    /// Debug builds only: the autopilot also opts in to Registrations (OZZIE_DEV_REGISTRATIONS=1; asks for consent).
+    autopilot_registrations: bool,
+    /// Debug builds only: People forms for the autopilot's check (OZZIE_DEV_FORMS): "1" turns forms on with
+    /// none chosen (the list only), or up to ten comma-separated form ids to watch.
+    forms: String,
 }
 /// Validated values only; anything missing or malformed is an empty string.
 #[cfg(any(debug_assertions, test))]
@@ -1020,6 +1048,16 @@ fn dev_defaults_from(get: impl Fn(&str) -> Option<String>) -> DevDefaults {
                                 && !min.starts_with('0')
                         })
                     })
+            })
+            .unwrap_or_default(),
+        autopilot_check_ins: get("OZZIE_DEV_CHECK_INS").as_deref() == Some("1"),
+        autopilot_registrations: get("OZZIE_DEV_REGISTRATIONS").as_deref() == Some("1"),
+        forms: get("OZZIE_DEV_FORMS")
+            .filter(|v| {
+                v == "1"
+                    || (v.len() <= 400
+                        && v.split(',').count() <= 10
+                        && v.split(',').all(numeric_id))
             })
             .unwrap_or_default(),
     }
@@ -1073,6 +1111,7 @@ fn main() {
         .manage(Ledger::default())
         .manage(ManagedConnect::default())
         .manage(local_tools::LocalTools::default())
+        .manage(shortcuts::OpenedPage::default())
         .manage(Smoke {
             enabled: smoke,
             ready: AtomicBool::new(false),
@@ -1092,6 +1131,8 @@ fn main() {
             // every start, with any half-written one; a failure here is tried again next start.
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = shared_check::startup(&dir);
+                // The copy for Siri and Shortcuts, by the same rule.
+                let _ = ozzie_native_auth::shortcuts_check::startup(&dir);
             }
             updater::setup(app);
             always_on::setup(app)?;
@@ -1147,6 +1188,25 @@ fn main() {
             local_tools::stop_listening,
             local_tools::cancel_listening,
             share_helper::share_helper_path,
+            shortcuts::shortcuts_status,
+            shortcuts::start_shortcuts,
+            shortcuts::stop_shortcuts,
+            shortcuts::clear_shortcuts_check,
+            shortcuts::save_shortcuts_check,
+            shortcuts::shortcuts_helper_path,
+            shortcuts::siri_actions_bundled,
+            shortcuts::take_opened_page,
+            calendars::calendar_apple_status,
+            calendars::calendar_apple_ask,
+            calendars::calendar_apple_calendars,
+            calendars::calendar_apple_events,
+            calendars::calendar_apple_chosen,
+            calendars::calendar_apple_choose,
+            calendars::calendar_links,
+            calendars::calendar_link_add,
+            calendars::calendar_link_remove,
+            calendars::calendar_link_read,
+            calendars::calendar_links_forget_all,
             always_on::background_info,
             always_on::background_next_due,
             always_on::autostart_get,
@@ -1175,6 +1235,7 @@ fn main() {
     }
     app.run(move |app, event| {
         always_on::on_run_event(app, &event);
+        shortcuts::on_run_event(app, &event);
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
@@ -1342,5 +1403,30 @@ mod tests {
         ] {
             assert_eq!(kids(bad), "", "{bad}");
         }
+        let forms = |v: &'static str| {
+            dev_defaults_from(move |key: &str| (key == "OZZIE_DEV_FORMS").then(|| v.to_string()))
+                .forms
+        };
+        assert_eq!(forms("1"), "1");
+        assert_eq!(forms("610"), "610");
+        assert_eq!(forms("610,611"), "610,611");
+        for bad in [
+            "",
+            "0",
+            "on",
+            "0610",
+            "610,",
+            "610;rm",
+            "1,2,3,4,5,6,7,8,9,10,11",
+        ] {
+            assert_eq!(forms(bad), "", "{bad}");
+        }
+        let flag = |key: &'static str, v: &'static str| {
+            let d = dev_defaults_from(move |k: &str| (k == key).then(|| v.to_string()));
+            (d.autopilot_check_ins, d.autopilot_registrations)
+        };
+        assert_eq!(flag("OZZIE_DEV_CHECK_INS", "1"), (true, false));
+        assert_eq!(flag("OZZIE_DEV_REGISTRATIONS", "1"), (false, true));
+        assert_eq!(flag("OZZIE_DEV_CHECK_INS", "yes"), (false, false));
     }
 }

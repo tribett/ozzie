@@ -12,6 +12,11 @@ pub const VERSION: &str = "2018-11-01";
 pub const CALENDAR_VERSION: &str = "2022-07-07";
 pub const PEOPLE_VERSION: &str = "2025-11-10";
 pub const GROUPS_VERSION: &str = "2023-07-10";
+/// Check-Ins and Registrations: each product's latest published version, checked against Planning
+/// Center's own published API documentation and OpenAPI on 2026-11-15 for every resource, filter
+/// and include read here.
+pub const CHECK_INS_VERSION: &str = "2025-05-28";
+pub const REGISTRATIONS_VERSION: &str = "2025-05-01";
 pub const ORIGIN: &str = "https://api.planningcenteronline.com";
 
 /// One Planning Center product: its path prefix and pinned `X-PCO-API-Version`.
@@ -21,6 +26,8 @@ pub enum Product {
     Calendar,
     People,
     Groups,
+    CheckIns,
+    Registrations,
 }
 impl Product {
     pub fn version(self) -> &'static str {
@@ -29,6 +36,8 @@ impl Product {
             Self::Calendar => CALENDAR_VERSION,
             Self::People => PEOPLE_VERSION,
             Self::Groups => GROUPS_VERSION,
+            Self::CheckIns => CHECK_INS_VERSION,
+            Self::Registrations => REGISTRATIONS_VERSION,
         }
     }
     fn prefix(self) -> &'static str {
@@ -37,6 +46,19 @@ impl Product {
             Self::Calendar => "/calendar/v2",
             Self::People => "/people/v2",
             Self::Groups => "/groups/v2",
+            Self::CheckIns => "/check-ins/v2",
+            Self::Registrations => "/registrations/v2",
+        }
+    }
+    /// Whether a saved connection's granted set lets this product be read at all. Services is
+    /// always granted; Calendar, People and Groups come together (operations); Check-Ins and
+    /// Registrations are each their own opt-in. A product not granted is never requested.
+    pub(crate) fn granted(self, scopes: crate::oauth::Scopes) -> bool {
+        match self {
+            Self::Services => true,
+            Self::Calendar | Self::People | Self::Groups => scopes.operations(),
+            Self::CheckIns => scopes.check_ins(),
+            Self::Registrations => scopes.registrations(),
         }
     }
 }
@@ -146,6 +168,29 @@ pub enum Collection {
     ServiceTypes,
     /// One service type's upcoming plans (`filter=future`), with no plan id.
     UpcomingPlans,
+    // Church reads (People forms, Check-Ins, Registrations): capture only, never on the stdin
+    // protocol. Each is read only when its product was granted (forms: People, and only once the
+    // church turned forms on in Church rules). Counts and labels; never an answer, never a child.
+    /// The church's People forms that aren't archived (`filter=not_archived`): names as labels.
+    PeopleForms,
+    /// One chosen form's submissions created in the recent window, with who submitted (a Person
+    /// link and its name, local only). Never the submitted answers.
+    PeopleFormSubmissions,
+    /// The church's Check-Ins events that aren't archived (`filter=not_archived`).
+    CheckInsEvents,
+    /// One Check-Ins event's places to check in (rooms and folders): names as labels.
+    CheckInsLocations,
+    /// One Check-Ins event's periods overlapping the recent window, with their event times
+    /// (`include=event_times`, start times only).
+    CheckInsEventPeriods,
+    /// One event time's per-room counts (`LocationEventTime`): regular, guest and volunteer
+    /// check-ins as Planning Center counts them. No check-in, person or child is ever read.
+    CheckInsLocationCounts,
+    /// The church's Registrations signups that aren't archived (`filter=unarchived`).
+    RegistrationsSignups,
+    /// One open signup's active attendees (`filter=active`): whether each is active, canceled or
+    /// waitlisted, and nothing else, so they can be counted. No name, person or registration.
+    RegistrationsAttendees,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -164,6 +209,14 @@ enum Scope {
     PeoplePerson,
     /// A service type's plans, before one is chosen (`/service_types/{id}/plans`).
     ServiceTypePlans,
+    /// A People Form (`/people/v2/forms/{id}`).
+    Form,
+    /// A Check-Ins Event (`/check-ins/v2/events/{id}`); kept apart from Calendar's `Event`.
+    CheckInsEvent,
+    /// A Check-Ins EventTime (`/check-ins/v2/event_times/{id}`).
+    CheckInsEventTime,
+    /// A Registrations Signup (`/registrations/v2/signups/{id}`).
+    Signup,
 }
 impl Collection {
     /// Contract name recorded in a Sunday capture.
@@ -190,6 +243,14 @@ impl Collection {
             Self::PeopleBackgroundChecks => "people_background_checks",
             Self::ServiceTypes => "service_types",
             Self::UpcomingPlans => "upcoming_plans",
+            Self::PeopleForms => "people_forms",
+            Self::PeopleFormSubmissions => "people_form_submissions",
+            Self::CheckInsEvents => "checkins_events",
+            Self::CheckInsLocations => "checkins_locations",
+            Self::CheckInsEventPeriods => "checkins_event_periods",
+            Self::CheckInsLocationCounts => "checkins_location_counts",
+            Self::RegistrationsSignups => "registrations_signups",
+            Self::RegistrationsAttendees => "registrations_attendees",
         }
     }
     pub fn product(self) -> Product {
@@ -201,8 +262,15 @@ impl Collection {
             | Self::PeopleWorkflowSteps
             | Self::PeopleWorkflowReadyCards
             | Self::PeopleWorkflowSnoozedCards
-            | Self::PeopleBackgroundChecks => Product::People,
+            | Self::PeopleBackgroundChecks
+            | Self::PeopleForms
+            | Self::PeopleFormSubmissions => Product::People,
             Self::GroupsPersonMemberships | Self::GroupsGroupEvents => Product::Groups,
+            Self::CheckInsEvents
+            | Self::CheckInsLocations
+            | Self::CheckInsEventPeriods
+            | Self::CheckInsLocationCounts => Product::CheckIns,
+            Self::RegistrationsSignups | Self::RegistrationsAttendees => Product::Registrations,
             _ => Product::Services,
         }
     }
@@ -235,6 +303,13 @@ impl Collection {
             // `/services/v2/service_types`: the Services Organization is its parent.
             Self::ServiceTypes => Scope::Organization,
             Self::UpcomingPlans => Scope::ServiceTypePlans,
+            Self::PeopleForms | Self::CheckInsEvents | Self::RegistrationsSignups => {
+                Scope::Organization
+            }
+            Self::PeopleFormSubmissions => Scope::Form,
+            Self::CheckInsLocations | Self::CheckInsEventPeriods => Scope::CheckInsEvent,
+            Self::CheckInsLocationCounts => Scope::CheckInsEventTime,
+            Self::RegistrationsAttendees => Scope::Signup,
         }
     }
     /// Which Sunday ids a request names: (service type, plan). Every Sunday read names both;
@@ -268,6 +343,14 @@ impl Collection {
         matches!(
             self,
             Self::CalendarResourceBookings | Self::GroupsGroupEvents
+        ) || self.recent()
+    }
+    /// Windowed reads bounded instead to the days before the check (`sunday_check::recent_window`):
+    /// Check-Ins periods overlapping it, and form submissions created inside it.
+    pub(crate) fn recent(self) -> bool {
+        matches!(
+            self,
+            Self::CheckInsEventPeriods | Self::PeopleFormSubmissions
         )
     }
     fn paginated(self) -> bool {
@@ -294,6 +377,14 @@ impl Collection {
             Self::PeopleBackgroundChecks => "background_checks",
             Self::ServiceTypes => "service_types",
             Self::UpcomingPlans => "plans",
+            Self::PeopleForms => "forms",
+            Self::PeopleFormSubmissions => "form_submissions",
+            Self::CheckInsEvents => "events",
+            Self::CheckInsLocations => "locations",
+            Self::CheckInsEventPeriods => "event_periods",
+            Self::CheckInsLocationCounts => "location_event_times",
+            Self::RegistrationsSignups => "signups",
+            Self::RegistrationsAttendees => "attendees",
         }
     }
     fn resource(self) -> &'static str {
@@ -318,18 +409,31 @@ impl Collection {
             Self::PeopleBackgroundChecks => "BackgroundCheck",
             Self::ServiceTypes => "ServiceType",
             Self::UpcomingPlans => "Plan",
+            Self::PeopleForms => "Form",
+            Self::PeopleFormSubmissions => "FormSubmission",
+            Self::CheckInsEvents => "Event",
+            Self::CheckInsLocations => "Location",
+            Self::CheckInsEventPeriods => "EventPeriod",
+            Self::CheckInsLocationCounts => "LocationEventTime",
+            Self::RegistrationsSignups => "Signup",
+            Self::RegistrationsAttendees => "Attendee",
         }
     }
 }
-/// Reads whose rows carry a free-text display `name` (a room, follow-up workflow or step, or
-/// a service type). Such names can name a person ("Follow-up for ..."), so they never stay in
-/// a body: the projection moves each into the page's local `labels` as `<prefix>:<row id>`.
-/// A capture never reads service types, so a recording can't hold a `service_type:` label.
-pub(crate) const LABELLED: [(&str, Collection); 4] = [
+/// Reads whose rows carry a free-text display `name` (a room, follow-up workflow or step, a
+/// service type, a form, a Check-Ins event or room, or a signup). Such names can name a person
+/// ("Follow-up for ...", "Smith family baptism"), so they never stay in a body: the projection
+/// moves each into the page's local `labels` as `<prefix>:<row id>`. A capture never reads
+/// service types, so a recording can't hold a `service_type:` label.
+pub(crate) const LABELLED: [(&str, Collection); 8] = [
     ("room", Collection::CalendarRooms),
     ("workflow", Collection::PeopleWorkflows),
     ("step", Collection::PeopleWorkflowSteps),
     ("service_type", Collection::ServiceTypes),
+    ("form", Collection::PeopleForms),
+    ("checkins_event", Collection::CheckInsEvents),
+    ("checkins_location", Collection::CheckInsLocations),
+    ("signup", Collection::RegistrationsSignups),
 ];
 /// Longest label kept, in characters.
 pub(crate) const LABEL_CHARS: usize = 120;
@@ -381,6 +485,10 @@ pub(crate) struct Target {
     pub(crate) group_id: Option<String>,
     pub(crate) groups_person_id: Option<String>,
     pub(crate) people_person_id: Option<String>,
+    pub(crate) form_id: Option<String>,
+    pub(crate) checkins_event_id: Option<String>,
+    pub(crate) checkins_event_time_id: Option<String>,
+    pub(crate) signup_id: Option<String>,
     pub(crate) window: Option<Window>,
 }
 impl Target {
@@ -426,6 +534,30 @@ impl Target {
             ..Self::default()
         }
     }
+    pub(crate) fn form(id: &str) -> Self {
+        Self {
+            form_id: Some(id.into()),
+            ..Self::default()
+        }
+    }
+    pub(crate) fn checkins_event(id: &str) -> Self {
+        Self {
+            checkins_event_id: Some(id.into()),
+            ..Self::default()
+        }
+    }
+    pub(crate) fn checkins_event_time(id: &str) -> Self {
+        Self {
+            checkins_event_time_id: Some(id.into()),
+            ..Self::default()
+        }
+    }
+    pub(crate) fn signup(id: &str) -> Self {
+        Self {
+            signup_id: Some(id.into()),
+            ..Self::default()
+        }
+    }
     pub(crate) fn within(mut self, window: &Window) -> Self {
         self.window = Some(window.clone());
         self
@@ -467,6 +599,14 @@ pub struct SourceRequest {
     pub(crate) groups_person_id: Option<String>,
     #[serde(skip)]
     pub(crate) people_person_id: Option<String>,
+    #[serde(skip)]
+    pub(crate) form_id: Option<String>,
+    #[serde(skip)]
+    pub(crate) checkins_event_id: Option<String>,
+    #[serde(skip)]
+    pub(crate) checkins_event_time_id: Option<String>,
+    #[serde(skip)]
+    pub(crate) signup_id: Option<String>,
     #[serde(skip)]
     pub(crate) window: Option<Window>,
     #[serde(skip)]
@@ -529,6 +669,10 @@ impl SourceRequest {
             group_id: target.group_id.clone(),
             groups_person_id: target.groups_person_id.clone(),
             people_person_id: target.people_person_id.clone(),
+            form_id: target.form_id.clone(),
+            checkins_event_id: target.checkins_event_id.clone(),
+            checkins_event_time_id: target.checkins_event_time_id.clone(),
+            signup_id: target.signup_id.clone(),
             window: target.window.clone(),
             profile: Profile::Capture,
         };
@@ -552,6 +696,10 @@ impl SourceRequest {
             (Scope::Group, &self.group_id),
             (Scope::GroupsPerson, &self.groups_person_id),
             (Scope::PeoplePerson, &self.people_person_id),
+            (Scope::Form, &self.form_id),
+            (Scope::CheckInsEvent, &self.checkins_event_id),
+            (Scope::CheckInsEventTime, &self.checkins_event_time_id),
+            (Scope::Signup, &self.signup_id),
         ];
         let scope = self.collection.scope();
         let scoped = ids.iter().all(|(owner, id)| {
@@ -621,6 +769,32 @@ impl SourceRequest {
             // Cleared checks only: an unfinished or not-cleared check never reaches this Mac.
             Collection::PeopleBackgroundChecks => fixed(&[("filter", "complete_clear")]),
             Collection::UpcomingPlans => fixed(&[("filter", "future"), ("order", "sort_date")]),
+            Collection::PeopleForms | Collection::CheckInsEvents => {
+                fixed(&[("filter", "not_archived")])
+            }
+            // Whom it's for: only the Person's name and whether they're a child ever travel.
+            // Answers are never included.
+            Collection::PeopleFormSubmissions => fixed(&[
+                ("include", "person"),
+                ("fields[Person]", "name,child"),
+                ("where[created_at][gte]", starts_at),
+                ("where[created_at][lt]", ends_at),
+                ("order", "created_at"),
+            ]),
+            Collection::CheckInsEventPeriods => {
+                let mut query = fixed(&[("include", "event_times")]);
+                query.extend(fixed(&window));
+                query
+            }
+            Collection::RegistrationsSignups => fixed(&[("filter", "unarchived")]),
+            // Only what counting needs ever travels: never an attendee's name.
+            Collection::RegistrationsAttendees => fixed(&[
+                ("filter", "active"),
+                ("fields[Attendee]", "active,canceled,waitlisted"),
+            ]),
+            // A count names its room only when the room is included (Planning Center's published
+            // LocationEventTime renders no relationships); the included rooms are dropped unread.
+            Collection::CheckInsLocationCounts => fixed(&[("include", "location")]),
             _ => Vec::new(),
         }
     }
@@ -643,6 +817,16 @@ impl SourceRequest {
                 self.people_person_id.as_deref().unwrap_or_default(),
             ),
             Scope::ServiceTypePlans => ("ServiceType", &self.service_type_id),
+            Scope::Form => ("Form", self.form_id.as_deref().unwrap_or_default()),
+            Scope::CheckInsEvent => (
+                "Event",
+                self.checkins_event_id.as_deref().unwrap_or_default(),
+            ),
+            Scope::CheckInsEventTime => (
+                "EventTime",
+                self.checkins_event_time_id.as_deref().unwrap_or_default(),
+            ),
+            Scope::Signup => ("Signup", self.signup_id.as_deref().unwrap_or_default()),
         }
     }
     fn path(&self) -> String {
@@ -674,6 +858,10 @@ impl SourceRequest {
             Scope::ServiceTypePlans => {
                 format!("{prefix}/service_types/{}/{segment}", self.service_type_id)
             }
+            Scope::Form => under("forms", &self.form_id),
+            Scope::CheckInsEvent => under("events", &self.checkins_event_id),
+            Scope::CheckInsEventTime => under("event_times", &self.checkins_event_time_id),
+            Scope::Signup => under("signups", &self.signup_id),
         }
     }
     pub fn url(&self) -> String {
@@ -834,6 +1022,13 @@ const OPERATIONS_TYPES: &[&str] = &[
     "Membership",
     "Event",
     "BackgroundCheck",
+    "Form",
+    "FormSubmission",
+    "Location",
+    "EventPeriod",
+    "LocationEventTime",
+    "Signup",
+    "Attendee",
 ];
 // Calendar 2026-06-22 (applies to every version): bookings may link redacted stubs in place of
 // an event the user cannot see.
@@ -843,6 +1038,11 @@ const RESOURCE: &[&str] = &["Resource"];
 const WORKFLOW: &[&str] = &["Workflow"];
 const GROUP: &[&str] = &["Group"];
 const PERSON: &[&str] = &["Person"];
+const FORM: &[&str] = &["Form"];
+const LOCATION: &[&str] = &["Location"];
+/// An included Check-Ins EventTime's documented links: its event and the period it belongs to.
+const EVENT_TIME_LINKS: &[(&str, &[&str])] =
+    &[("event", &["Event"]), ("event_period", &["EventPeriod"])];
 /// Included EventResourceRequest: approval status and what it links, nothing else.
 const RESOURCE_REQUEST: Schema = &[("approval_status", true, Fact::Code)];
 const RESOURCE_REQUEST_LINKS: &[(&str, &[&str])] = &[("event", EVENT), ("resource", RESOURCE)];
@@ -1094,6 +1294,8 @@ enum Fact {
     MaybeInstant,
     /// Null or a calendar date, `YYYY-MM-DD` (a background check's `expires_on`).
     MaybeDate,
+    /// Null or a count (a signup's `maximum_capacity`: null when it has no overall limit).
+    MaybeCount,
     NotificationInstant,
     Flag,
     TimeType,
@@ -1118,6 +1320,7 @@ impl Fact {
             Self::Instant => instant(v),
             Self::MaybeInstant => v.is_null() || instant(v),
             Self::MaybeDate => v.is_null() || v.as_str().is_some_and(date),
+            Self::MaybeCount => v.is_null() || nonnegative(v),
             Self::NotificationInstant => v.is_null() || notification_instant(v),
             Self::Flag => v.is_boolean(),
             Self::TimeType => v
@@ -1206,6 +1409,11 @@ impl SourceRequest {
             (Collection::PeopleWorkflowSteps, _) => WORKFLOW,
             (Collection::GroupsPersonMemberships, "person") => PERSON,
             (Collection::PeopleBackgroundChecks, _) => PERSON,
+            (Collection::PeopleFormSubmissions, "form") => FORM,
+            (Collection::PeopleFormSubmissions, _) => PERSON,
+            (Collection::CheckInsEventPeriods, _) => &["Event"],
+            (Collection::CheckInsLocationCounts, "event_time") => &["EventTime"],
+            (Collection::CheckInsLocationCounts, _) => LOCATION,
             (Collection::GroupsPersonMemberships | Collection::GroupsGroupEvents, _) => GROUP,
             _ => self.types(),
         }
@@ -1305,6 +1513,53 @@ impl SourceRequest {
                 ("title", false, Fact::Text),
                 ("series_title", false, Fact::Text),
             ],
+            // A form's `name` becomes a local label; `archived` proves the filter held. The
+            // description, public link, counts and every setting are dropped.
+            Collection::PeopleForms => &[
+                ("name", false, Fact::Label),
+                ("active", false, Fact::Flag),
+                ("archived", false, Fact::Flag),
+            ],
+            // When it was submitted, nothing else: verification state, answers and selected
+            // options are never kept (and never asked for).
+            Collection::PeopleFormSubmissions => &[("created_at", true, Fact::Instant)],
+            // An event's `name` becomes a local label; `archived_at` proves the filter held.
+            Collection::CheckInsEvents => &[
+                ("name", false, Fact::Label),
+                ("archived_at", false, Fact::MaybeInstant),
+            ],
+            // A location's `name` becomes a local label; `kind` tells a room from a folder. Ages,
+            // grades, gender, questions and ratios are dropped.
+            Collection::CheckInsLocations => {
+                &[("name", false, Fact::Label), ("kind", false, Fact::Code)]
+            }
+            // The period's own interval only: its note and totals are dropped.
+            Collection::CheckInsEventPeriods => &[
+                ("starts_at", true, Fact::Instant),
+                ("ends_at", true, Fact::Instant),
+            ],
+            // The three counts Check-Ins keeps for one room at one event time.
+            Collection::CheckInsLocationCounts => &[
+                ("regular_count", true, Fact::Count),
+                ("guest_count", true, Fact::Count),
+                ("volunteer_count", true, Fact::Count),
+            ],
+            // A signup's `name` becomes a local label. When registration opens and closes, whether
+            // it is closed, and its overall limit; the description, links and logo are dropped.
+            Collection::RegistrationsSignups => &[
+                ("name", false, Fact::Label),
+                ("archived", false, Fact::Flag),
+                ("closed", false, Fact::Flag),
+                ("open_at", false, Fact::MaybeInstant),
+                ("close_at", false, Fact::MaybeInstant),
+                ("maximum_capacity", false, Fact::MaybeCount),
+            ],
+            // Only what proves the attendee counts as registered; never a name or a time.
+            Collection::RegistrationsAttendees => &[
+                ("active", true, Fact::Flag),
+                ("canceled", false, Fact::Flag),
+                ("waitlisted", false, Fact::Flag),
+            ],
         }
     }
     fn relationships(&self) -> &'static [&'static str] {
@@ -1358,6 +1613,20 @@ impl SourceRequest {
             Collection::ServiceTypes => &[],
             // Kept only to confirm each plan is the requested service type's.
             Collection::UpcomingPlans => &["service_type"],
+            Collection::PeopleForms | Collection::CheckInsEvents => &[],
+            Collection::RegistrationsSignups => &[],
+            // The form (to confirm it) and who submitted; the answers' links are dropped.
+            Collection::PeopleFormSubmissions => &["form", "person"],
+            // Planning Center renders only a room's `parent` (its folder), which isn't needed: the
+            // room's event is the one the request named, confirmed by `meta.parent` when present.
+            Collection::CheckInsLocations => &[],
+            // A period renders its `event`; its times are placed by their own `event_period`.
+            Collection::CheckInsEventPeriods => &["event"],
+            // The count's room is the included link. Its event time is the one the request named;
+            // a rendered `event_time` link is kept so it can be checked against it.
+            Collection::CheckInsLocationCounts => &["location", "event_time"],
+            // An attendee's person, registration, emergency contact and option are all dropped.
+            Collection::RegistrationsAttendees => &[],
         }
     }
     /// Included resource types this read asked for. Protocol reads never keep `included`.
@@ -1370,6 +1639,8 @@ impl SourceRequest {
             Collection::TeamPositionAssignments => &["Person", "TeamPosition"],
             Collection::PersonSchedules | Collection::PersonSchedulesUnfiltered => &["PlanTime"],
             Collection::CalendarResourceBookings => &["EventResourceRequest"],
+            Collection::CheckInsEventPeriods => &["EventTime"],
+            Collection::PeopleFormSubmissions => &["Person"],
             _ => &[],
         }
     }
@@ -1440,6 +1711,18 @@ fn confirm(request: &SourceRequest, row: &Value) -> Result<(), SourceError> {
             _ => false,
         }
     };
+    let flag = |key: &str| row["attributes"][key].as_bool();
+    // Inside the recent window `[starts_at, ends_at)`, by the row's own creation time.
+    let created_inside = || {
+        let at = |text: Option<&str>| text.and_then(instant_ms);
+        match (request.window.as_ref(), at(attribute("created_at"))) {
+            (Some(window), Some(created)) => {
+                at(Some(&window.starts_at)).is_some_and(|from| created >= from)
+                    && at(Some(&window.ends_at)).is_some_and(|until| created < until)
+            }
+            _ => false,
+        }
+    };
     let kept = match request.collection {
         // This organization's own settings, never another's.
         Collection::Organization => row["id"].as_str() == Some(request.organization.as_str()),
@@ -1467,6 +1750,30 @@ fn confirm(request: &SourceRequest, row: &Value) -> Result<(), SourceError> {
         }
         // A plan of another service type isn't one the person can choose here.
         Collection::UpcomingPlans => parent("service_type", &Some(request.service_type_id.clone())),
+        // An archived form, event or signup is never read as current: a filter Planning Center
+        // ignored would otherwise hand this Mac one.
+        Collection::PeopleForms | Collection::RegistrationsSignups => {
+            flag("archived") != Some(true)
+        }
+        Collection::CheckInsEvents => row["attributes"]["archived_at"].is_null(),
+        // Exactly the chosen form, and only submissions created inside the window.
+        Collection::PeopleFormSubmissions => parent("form", &request.form_id) && created_inside(),
+        Collection::CheckInsEventPeriods => parent("event", &request.checkins_event_id) && inside(),
+        // A count that doesn't name its room can't be placed: the page is refused, never guessed.
+        // One whose own `event_time` link names another time than the request is refused too.
+        Collection::CheckInsLocationCounts => {
+            let time = &row["relationships"]["event_time"]["data"];
+            row["relationships"]["location"]["data"].is_object()
+                && (time.is_null()
+                    || time["id"].as_str() == request.checkins_event_time_id.as_deref())
+        }
+        // Only an active attendee is counted as registered: a filter Planning Center ignored
+        // would otherwise count a canceled or waitlisted one.
+        Collection::RegistrationsAttendees => {
+            flag("active") == Some(true)
+                && flag("canceled") != Some(true)
+                && flag("waitlisted") != Some(true)
+        }
         _ => true,
     };
     if kept {
@@ -1548,7 +1855,11 @@ fn project_links<'a>(
 }
 /// Included rows keep identity plus one closed fact set; links are dropped, and relationships
 /// too except a request's event and resource (how a booking's approval is joined).
-fn project_included(row: &Value, kind: &str) -> Result<Value, SourceError> {
+fn project_included(
+    request: &SourceRequest,
+    row: &Value,
+    kind: &str,
+) -> Result<Value, SourceError> {
     let mut result = identity(row, &[kind])?;
     let attrs = row
         .get("attributes")
@@ -1563,7 +1874,39 @@ fn project_included(row: &Value, kind: &str) -> Result<Value, SourceError> {
         }
         return Ok(result);
     }
+    if kind == "EventTime" {
+        // When the time starts, and the event and period it belongs to; its name and totals are
+        // dropped. A time of another event than the one requested refuses the page.
+        result["attributes"] = select(&[("starts_at", true, Fact::Instant)], Some(attrs))?;
+        if let Some(rels) = row.get("relationships") {
+            let rels = rels.as_object().ok_or(SourceError::InvalidResponse)?;
+            let links = project_links(rels, EVENT_TIME_LINKS.iter().copied())?;
+            if let Some(event) = links.get("event")
+                && event["data"]["id"].as_str() != request.checkins_event_id.as_deref()
+            {
+                return Err(SourceError::InvalidResponse);
+            }
+            result["relationships"] = Value::Object(links);
+        }
+        return Ok(result);
+    }
     result["attributes"] = match kind {
+        // A form submission's person can be a child (a form that allows submitting for household
+        // members): a name is kept only for someone Planning Center says, exactly, isn't a child.
+        // A child's name, or the name of someone it doesn't say, is never kept.
+        // `child: false` is kept as the proof the check stores beside every linked person.
+        "Person" if request.collection == Collection::PeopleFormSubmissions => {
+            match (
+                attrs.get("child"),
+                attrs.get("name").and_then(Value::as_str),
+            ) {
+                (Some(Value::Bool(false)), Some(name)) if name.len() <= 256 => {
+                    json!({"child":false,"name":name})
+                }
+                (Some(Value::Bool(false)), None) => json!({"child":false}),
+                _ => json!({}),
+            }
+        }
         // Services names a person `full_name`. Only the display name survives, as `name`.
         "Person" => {
             let name = attrs
@@ -1640,7 +1983,7 @@ pub fn project_page(
             let Some(kind) = wanted.iter().find(|&&k| k == kind) else {
                 continue;
             };
-            let projected = project_included(row, kind)?;
+            let projected = project_included(request, row, kind)?;
             if !seen.insert((projected["type"].to_string(), projected["id"].to_string())) {
                 return Err(SourceError::InvalidResponse);
             }

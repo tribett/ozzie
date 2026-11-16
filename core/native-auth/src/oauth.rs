@@ -178,61 +178,176 @@ pub trait Provider: Send + Sync {
 /// A Planning Center product set: what a sign-in asks consent for, and what a token response
 /// granted. Each product scope permits both reading and writing in that product; Ozzie never
 /// writes, and enforces GET-only source reads in its own HTTP layer (`source::NativeSourceHttp`),
-/// not through the scope. Least privilege is the default: `Services`. `ServicesAndOperations` is
-/// an explicit opt-in for the Sunday check's Calendar, People and Groups reads, and widening a
-/// saved connection needs new consent.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Scopes {
-    #[default]
-    Services,
-    ServicesAndOperations,
+/// not through the scope. Least privilege is the default: `Services`. Every other product is an
+/// explicit opt-in, and widening a saved connection needs new consent:
+/// - operations: Calendar, People and Groups together (rooms, follow-ups, group events, the
+///   background-check read and the People forms the church chooses);
+/// - Check-Ins (`check_ins`): how many checked in per room, as counts only;
+/// - Registrations (`registrations`): upcoming signups and how many registered, as counts only.
+///
+/// Closed: the only spellings are the eight canonical ones `label` writes. The two original
+/// sets keep their original names and bytes (`Services`, `ServicesAndOperations`), so saved
+/// connections and older status readers are unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Scopes {
+    operations: bool,
+    check_ins: bool,
+    registrations: bool,
 }
+// The two original sets keep their original (variant) names, so every caller and every saved
+// record from before Check-Ins and Registrations reads exactly as it did.
+#[allow(non_upper_case_globals)]
 impl Scopes {
-    /// The exact OAuth `scope` parameter for this set.
-    pub fn oauth(self) -> &'static str {
-        match self {
-            Self::Services => "services openid",
-            Self::ServicesAndOperations => "services calendar people groups openid",
+    /// Services alone: the default, least-privilege set.
+    pub const Services: Scopes = Scopes {
+        operations: false,
+        check_ins: false,
+        registrations: false,
+    };
+    /// Services with Calendar, People and Groups.
+    pub const ServicesAndOperations: Scopes = Scopes {
+        operations: true,
+        check_ins: false,
+        registrations: false,
+    };
+    /// The widest set Ozzie ever asks for. A refresh checks its grant against this, then keeps
+    /// or narrows the saved set; it never widens it.
+    pub const Widest: Scopes = Scopes {
+        operations: true,
+        check_ins: true,
+        registrations: true,
+    };
+    /// What a sign-in asks for, from the person's three choices: operations (Calendar, People and
+    /// Groups), Check-Ins and Registrations. Services is always included; nothing else can be.
+    pub fn asked(operations: bool, check_ins: bool, registrations: bool) -> Scopes {
+        Scopes {
+            operations,
+            check_ins,
+            registrations,
         }
+    }
+    /// This set, with Check-Ins asked for (or not).
+    pub fn with_check_ins(self, on: bool) -> Scopes {
+        Scopes {
+            check_ins: on,
+            ..self
+        }
+    }
+    /// This set, with Registrations asked for (or not).
+    pub fn with_registrations(self, on: bool) -> Scopes {
+        Scopes {
+            registrations: on,
+            ..self
+        }
+    }
+    /// The exact OAuth `scope` parameter for this set: Planning Center's own scope names.
+    pub fn oauth(self) -> String {
+        let mut scope = String::from("services");
+        if self.operations {
+            scope.push_str(" calendar people groups");
+        }
+        if self.check_ins {
+            scope.push_str(" check_ins");
+        }
+        if self.registrations {
+            scope.push_str(" registrations");
+        }
+        scope.push_str(" openid");
+        scope
     }
     /// True when Calendar, People and Groups were all granted for the operations reads.
     pub fn operations(self) -> bool {
-        self == Self::ServicesAndOperations
+        self.operations
+    }
+    /// True when Check-Ins was granted.
+    pub fn check_ins(self) -> bool {
+        self.check_ins
+    }
+    /// True when Registrations was granted.
+    pub fn registrations(self) -> bool {
+        self.registrations
     }
     /// The set a token response granted when `asked` was requested. `scope` is the response's
     /// space-separated `scope`; `None` means exactly `asked` (RFC 6749 §5.1). A grant naming
     /// anything `asked` did not, or leaving out Services, is refused: Ozzie never holds a
     /// credential wider than the consent it asked for. Operations count only when Calendar,
-    /// People and Groups were all granted; anything less is `Services`.
+    /// People and Groups were all granted; Check-Ins and Registrations each count on their own.
     pub fn granted(asked: Scopes, scope: Option<&str>) -> Result<Scopes, AuthError> {
         let Some(scope) = scope else {
             return Ok(asked);
         };
-        let allowed: Vec<&str> = asked.oauth().split(' ').collect();
+        let allowed = asked.oauth();
+        let allowed: Vec<&str> = allowed.split(' ').collect();
         let granted: Vec<&str> = scope.split_ascii_whitespace().collect();
         if granted.iter().any(|token| !allowed.contains(token)) || !granted.contains(&"services") {
             return Err(AuthError::ScopeMismatch);
         }
-        let operations = ["calendar", "people", "groups"]
-            .iter()
-            .all(|product| granted.contains(product));
-        Ok(if operations {
-            Self::ServicesAndOperations
-        } else {
-            Self::Services
+        Ok(Scopes {
+            operations: ["calendar", "people", "groups"]
+                .iter()
+                .all(|product| granted.contains(product)),
+            check_ins: granted.contains(&"check_ins"),
+            registrations: granted.contains(&"registrations"),
         })
     }
     /// The smaller of two sets: a refresh can keep or narrow a saved set, never widen it.
     pub fn narrower(self, other: Scopes) -> Scopes {
-        if self.operations() && other.operations() {
-            Self::ServicesAndOperations
-        } else {
-            Self::Services
+        Scopes {
+            operations: self.operations && other.operations,
+            check_ins: self.check_ins && other.check_ins,
+            registrations: self.registrations && other.registrations,
         }
     }
     fn is_default(&self) -> bool {
         *self == Self::Services
+    }
+    /// The one spelling of this set, in saved records and in the status the webview reads:
+    /// `services` or `services-and-operations`, then `+check-ins`, then `+registrations`.
+    pub fn label(self) -> String {
+        let mut label = String::from(if self.operations {
+            "services-and-operations"
+        } else {
+            "services"
+        });
+        if self.check_ins {
+            label.push_str("+check-ins");
+        }
+        if self.registrations {
+            label.push_str("+registrations");
+        }
+        label
+    }
+    /// Only a canonical `label`; any other spelling (unknown, reordered, repeated) is `None`.
+    pub fn from_label(text: &str) -> Option<Scopes> {
+        let mut parts = text.split('+');
+        let operations = match parts.next()? {
+            "services" => false,
+            "services-and-operations" => true,
+            _ => return None,
+        };
+        let mut scopes = Scopes {
+            operations,
+            ..Scopes::Services
+        };
+        for part in parts {
+            match part {
+                "check-ins" => scopes.check_ins = true,
+                "registrations" => scopes.registrations = true,
+                _ => return None,
+            }
+        }
+        (scopes.label() == text).then_some(scopes)
+    }
+}
+impl serde::Serialize for Scopes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.label())
+    }
+}
+impl<'de> serde::Deserialize<'de> for Scopes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Scopes::from_label(&text).ok_or_else(|| serde::de::Error::custom("unknown scope set"))
     }
 }
 #[derive(Clone)]
@@ -313,6 +428,42 @@ impl Revocable {
     fn read(bytes: &[u8]) -> Option<Self> {
         let record: Self = serde_json::from_slice(bytes).ok()?;
         (!record.client_id.is_empty() && record.tokens.validate().is_ok()).then_some(record)
+    }
+}
+/// What Disconnect can still tell about a saved sign-in this version can't otherwise read (a later
+/// version's spelling, damaged tokens): its registration, the church it names when it says, and a
+/// token Planning Center can revoke. Never kept, shown or logged.
+#[derive(serde::Deserialize)]
+struct Leftover {
+    client_id: String,
+    #[serde(default)]
+    organization: Option<String>,
+    tokens: LeftoverTokens,
+}
+#[derive(serde::Deserialize, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
+struct LeftoverTokens {
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+}
+impl Leftover {
+    fn read(bytes: &[u8]) -> Option<Self> {
+        let record: Self = serde_json::from_slice(bytes).ok()?;
+        (!record.client_id.is_empty()).then_some(record)
+    }
+    /// The token to revoke: the refresh token when one is readable, else the access token.
+    fn revocable(&self) -> Option<(&str, &'static str)> {
+        let usable =
+            |s: &&String| !s.is_empty() && s.len() <= 8192 && !s.chars().any(char::is_control);
+        if let Some(refresh) = self.tokens.refresh_token.as_ref().filter(usable) {
+            return Some((refresh, "refresh_token"));
+        }
+        self.tokens
+            .access_token
+            .as_ref()
+            .filter(usable)
+            .map(|access| (access.as_str(), "access_token"))
     }
 }
 /// A one-way fingerprint (SHA-256) of a saved record's bytes: which credential a sign-in left
@@ -783,7 +934,7 @@ impl AuthController {
             ("redirect_uri", REDIRECT_URI),
             ("response_type", "code"),
             // Product scopes permit read and write in Planning Center; Ozzie only reads (GET).
-            ("scope", scopes.oauth()),
+            ("scope", scopes.oauth().as_str()),
             ("state", &state),
             ("code_challenge", &challenge),
             ("code_challenge_method", "S256"),
@@ -1279,9 +1430,7 @@ impl AuthController {
         }
         request.validate()?;
         // Defense in depth: products this connection was never granted are never requested.
-        if request.collection.product() != crate::source::Product::Services
-            && !verified.scopes.operations()
-        {
+        if !request.collection.product().granted(verified.scopes) {
             return Err(crate::source::SourceError::InvalidRequest);
         }
         self.source_bound(request, verified.generation, cancelled)?;
@@ -1509,7 +1658,7 @@ impl AuthController {
             // A refresh keeps the saved granted set or narrows it to what this response grants;
             // it never widens it (only a new sign-in can). A grant naming anything Ozzie never
             // asks for, or without Services, is refused like a sign-in's.
-            let scopes = match Scopes::granted(Scopes::ServicesAndOperations, scope.as_deref()) {
+            let scopes = match Scopes::granted(Scopes::Widest, scope.as_deref()) {
                 Ok(fresh) => stored.scopes.narrower(fresh),
                 Err(error) => {
                     self.discard(&tokens);
@@ -1583,6 +1732,8 @@ impl AuthController {
             }
         };
         let generation = self.generation.load(Ordering::SeqCst);
+        // Set when an unreadable saved sign-in named another church: it's removed, not revoked.
+        let mut unrevoked = false;
         let result = (|| {
             if read_private(
                 self.store.as_ref(),
@@ -1592,12 +1743,45 @@ impl AuthController {
             .map_err(AuthError::Store)?
             .is_some()
             {
-                let stored = self.stored()?;
-                let (token, hint) = match stored.tokens.refresh_token.as_deref() {
-                    Some(r) => (r, "refresh_token"),
-                    None => (stored.tokens.access_token.as_str(), "access_token"),
+                let tokens = match self.stored() {
+                    Ok(stored) => Some(stored.tokens),
+                    // A saved sign-in this version can't read (a later version's spelling of what
+                    // was granted, or damaged tokens) never blocks Disconnect. The credential it
+                    // still names is signed out as this registration's, by its refresh token when
+                    // one is readable, but only if it names this church: one naming another church
+                    // is removed without a revoke, and the result says so. Bytes that aren't a
+                    // sign-in at all hold nothing to revoke. Either way it is then deleted.
+                    Err(AuthError::InvalidToken) => {
+                        let bytes = read_private(
+                            self.store.as_ref(),
+                            &self.binding.workspace,
+                            &self.binding.organization,
+                        )
+                        .map_err(AuthError::Store)?;
+                        if let Some(old) =
+                            bytes.as_deref().map(Vec::as_slice).and_then(Leftover::read)
+                        {
+                            if old.client_id != self.binding.client_id {
+                                return Err(AuthError::OrganizationUnverified);
+                            }
+                            if old
+                                .organization
+                                .as_deref()
+                                .is_some_and(|church| church != self.binding.organization)
+                            {
+                                unrevoked = true;
+                            } else if let Some((token, hint)) = old.revocable() {
+                                self.provider.revoke(&self.binding.client_id, token, hint)?;
+                            }
+                        }
+                        None
+                    }
+                    Err(error) => return Err(error),
                 };
-                self.provider.revoke(&self.binding.client_id, token, hint)?;
+                if let Some(tokens) = tokens {
+                    let (token, hint) = revocation(&tokens);
+                    self.provider.revoke(&self.binding.client_id, token, hint)?;
+                }
             }
             self.store
                 .delete(&self.binding.workspace, &self.binding.organization)
@@ -1606,7 +1790,7 @@ impl AuthController {
             state.nothing_stored = true;
             state.status.state = ConnectionState::Disconnected;
             state.status.checked_at_ms = None;
-            state.status.problem = None;
+            state.status.problem = unrevoked.then_some(AuthError::OrganizationUnverified);
             state.status.organization_diagnostic = None;
             Ok(state.status.clone())
         })();

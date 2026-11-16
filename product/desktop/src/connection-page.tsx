@@ -1,6 +1,9 @@
 import { OtherAiAppsSetup } from "./other-ai-apps-setup.js";
+import { SiriShortcutsSection } from "./siri-shortcuts-section.js";
+import type { ShortcutsSettings } from "./siri-shortcuts.js";
 import { useState, type ReactNode } from "react";
-import { yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
+import { moreOf, operationsGranted, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
+import { MoreFromPlanningCenter } from "./planning-center-more.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
 import { AiSettings } from "./ai-settings.js";
@@ -13,8 +16,8 @@ import { AutostartToggle } from "./responsibility-views.js";
 
 /** The access the saved connection was granted, known only once it's been checked this session. */
 export function grantedCopy(status: ConnectionStatus | null): string {
-  if (status?.scopes === "services-and-operations") return "Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.";
-  if (status?.scopes === "services") return "Granted: Services only. Rooms, follow-ups and group events aren't checked.";
+  if (operationsGranted(status)) return "Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.";
+  if (status?.scopes) return "Granted: Services only. Rooms, follow-ups and group events aren't checked.";
   return "What's granted shows here once the connection has been checked.";
 }
 
@@ -30,8 +33,8 @@ export const SHARE_HOW = [
  * How many recordings are saved, and deleting them. Deleting asks once first (Sunday can't be shown from them
  * afterwards); the question opens under the button, which says so to VoiceOver. `confirming`: start open (tests).
  */
-export function SavedRecordings({ count, onDelete, sharing, confirming = false }: {
-  count: number; onDelete?: (() => void) | undefined; sharing: boolean; confirming?: boolean;
+export function SavedRecordings({ count, onDelete, sharing, siri = false, confirming = false }: {
+  count: number; onDelete?: (() => void) | undefined; sharing: boolean; siri?: boolean; confirming?: boolean;
 }) {
   const [confirm, setConfirm] = useState(confirming);
   const it = count === 1 ? "it" : "them";
@@ -43,7 +46,7 @@ export function SavedRecordings({ count, onDelete, sharing, confirming = false }
     </div>
     {count > 0 && onDelete && confirm && <div id="delete-recordings" className="decide" role="group" aria-labelledby="delete-recordings-q">
       <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved recording" : `all ${count} saved recordings`} from this Mac? Sunday can't be shown
-        from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""} Planning Center doesn't change.</p>
+        from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""}{siri ? " The copy Siri and Shortcuts answer from is removed too." : ""} Planning Center doesn't change.</p>
       <div className="find-next">
         <button type="button" className="btn btn-primary btn-sm" onClick={() => { setConfirm(false); onDelete(); }}>Yes, delete {it}</button>
         <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(false)}>Keep {it}</button>
@@ -66,8 +69,8 @@ export function YourNameField({ store = yourName }: { store?: { get(): string; s
   </div>;
 }
 
-/** Settings: Planning Center, AI help, your name on notes, automatic checks, the closed window, updates, other AI apps, saved recordings and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, oneClick, nameStore, updates }: {
+/** Settings: Planning Center, calendars, AI help, your name on notes, automatic checks, the closed window, updates, other AI apps, Siri and Shortcuts, saved recordings and guided setup, in that order. */
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** The automatic-check schedule, summarized here and changed under What runs automatically. */
@@ -78,17 +81,22 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   developer?: { loop: "pi" | "ts"; onLoop: (loop: "pi" | "ts") => void } | undefined;
   /** "Use Ozzie's last check in other AI apps" (share-check.ts), off by default; `problem` when turning it on or off failed. */
   sharing?: { on: boolean; onChange: (on: boolean) => void; problem?: string | null } | undefined;
+  /** "Let Siri and Shortcuts ask Ozzie" (siri-shortcuts.ts), off by default. */
+  siri?: ShortcutsSettings | undefined;
   /** Tests only: whether Ozzie's own registration is built in, instead of asking the app. */
   oneClick?: boolean;
   /** Tests only: where "Your name for notes" is kept, instead of this Mac's storage. */
   nameStore?: { get(): string; set(name: string): void };
   /** New versions of Ozzie (updates-view.tsx `UpdatesSection`), shown after the closed-window section. */
   updates?: ReactNode;
+  /** The leader's own calendars (calendar-settings.tsx `CalendarSettings`), shown after Planning Center. */
+  calendars?: ReactNode;
 }) {
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
   // The opt-in signs in again with the same registration (Ozzie's own, or yours under Advanced) as the sign-in form.
-  const reconnect = (operations: boolean) => { void run(() => control.signIn(operations), "operations"); };
+  // Check-Ins and Registrations stay as they are when this choice changes.
+  const reconnect = (operations: boolean) => { void run(() => control.signIn(operations, moreOf(status)), "operations"); };
   return <div className="col settings">
     <h1 className="h1">Settings</h1>
     <p className="lede">How Ozzie reads your church's Planning Center, and what it keeps on this Mac.</p>
@@ -110,13 +118,16 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
         <p className="find-body">Ozzie can also check room bookings in Planning Center Calendar, follow-ups without an owner in People, and group events at the same time as serving in Groups. Turning this on signs in again and asks Planning Center for Calendar, People and Groups access. Planning Center grants each of those as read-and-write; Ozzie only reads, and has no way to change anything there.</p>
         <p className="checkline granted">{grantedCopy(status)}</p>
         <div className="row form-actions">
-          {status?.scopes !== "services-and-operations"
+          {!operationsGranted(status)
             ? <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(true)}>Also check rooms, follow-ups and group events</button>
             : <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(false)}>Sign in again with Services only</button>}
         </div>
         {control.problem?.from === "operations" && <p role="alert" className="problem">{control.problem.text}</p>}
       </section>
+      <MoreFromPlanningCenter status={status} control={control} />
     </section>
+
+    {calendars}
 
     <section className="settings-sec" aria-labelledby="ai-title">
       <h2 id="ai-title" className="h3">AI help</h2>
@@ -164,11 +175,13 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
       </div>
     </section>}
 
+    {siri && <SiriShortcutsSection {...siri} />}
+
     <section className="settings-sec" aria-labelledby="saved-title">
       <h2 id="saved-title" className="h3">Saved recordings</h2>
       <div className="find">
         <p className="find-body">Each check saves a recording so Sunday can still be shown if Planning Center can't be reached. Recordings include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each Sunday.</p>
-        <SavedRecordings count={recordingCount} onDelete={onDeleteRecordings} sharing={Boolean(sharing?.on)} />
+        <SavedRecordings count={recordingCount} onDelete={onDeleteRecordings} sharing={Boolean(sharing?.on)} siri={Boolean(siri?.on)} />
       </div>
     </section>
 

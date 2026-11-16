@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Ozzie",
-  "version": "0.1.1",
+  "version": "0.1.5",
   "identifier": "church.ozzie.desktop",
   "build": {
-    "beforeBuildCommand": "pnpm build:share && pnpm build:desktop-ui",
+    "beforeBuildCommand": "pnpm build:share && pnpm build:shortcuts && pnpm build:desktop-ui",
     "frontendDist": "../dist"
   },
   "app": {
@@ -43,13 +43,18 @@
       "app"
     ],
     "externalBin": [
+      "binaries/ozzie-calendar",
       "binaries/ozzie-card-reader",
       "binaries/ozzie-listen",
-      "binaries/ozzie-share"
+      "binaries/ozzie-share",
+      "binaries/ozzie-shortcuts"
     ],
     "macOS": {
       "minimumSystemVersion": "14.0",
-      "entitlements": "Entitlements.plist"
+      "entitlements": "Entitlements.plist",
+      "files": {
+        "Extensions/OzzieIntents.appex": "binaries/OzzieIntents.appex"
+      }
     },
     "icon": [
       "icons/icon.png"

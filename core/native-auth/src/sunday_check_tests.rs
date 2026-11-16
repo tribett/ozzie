@@ -2932,3 +2932,6 @@ fn recordings_keep_background_reads_only_for_people_on_the_kids_teams_the_check_
             .contains("kids_teams")
     );
 }
+
+#[path = "sunday_church_tests.rs"]
+mod church;

@@ -20,6 +20,8 @@ import {
 import { correctionFor, type FeedbackEntry, type FeedbackTarget } from "../../../core/src/finding-feedback.js";
 import { FindingFeedback, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
 import { BriefingPreview, briefingPreviewTimes, SundayReadyBrief } from "./sunday-ready.js";
+import type { CalendarRead } from "../../../core/src/calendar/events.js";
+import { CalendarGroup } from "./calendar-today.js";
 
 /** What Ozzie keeps an eye on, for Today: it comes to the person here first. */
 export interface TodayWatch {
@@ -102,7 +104,7 @@ const NO_DECISIONS: readonly SundayDecision[] = [];
 const NO_ENTRIES: readonly FeedbackEntry[] = [];
 
 export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions = NO_DECISIONS, operations = null, watch = null, now: nowProp, zone: zoneProp, store = browserStore,
-  feedback = null, example = true }: {
+  feedback = null, example = true, church = null, calendar = null }: {
   brief: SundayBrief | null; onSunday: () => void; names?: Record<string, string> | undefined; sundayDecisions?: readonly SundayDecision[];
   /** Rooms, follow-ups and group meetings for the same check, so the briefing says what the Sunday page says. */
   operations?: SundayOperations | null;
@@ -119,6 +121,13 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
    * Shown only until a real Planning Center connection exists, so it never sits among a church's own items.
    */
   example?: boolean;
+  /** People forms, Check-Ins and Registrations from the same check (church-reads-view.tsx), after the three groups. */
+  church?: ReactNode;
+  /**
+   * The leader's own calendars (calendars.ts), once one is connected: "On your calendar" replaces the fictional
+   * example. Shown on this Mac only; null when none is connected.
+   */
+  calendar?: { reads: readonly CalendarRead[]; reading: boolean; onSettings?: () => void } | null;
 }) {
   const now = nowProp ?? watch?.now ?? new Date().toISOString();
   const zone = zoneProp ?? macZone();
@@ -286,6 +295,8 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     {group("attention", sundayCalm)}
     {group("review")}
     {group("progress", progressMore)}
+    {church}
+    {calendar && <CalendarGroup reads={calendar.reads} now={now} zone={zone} reading={calendar.reading} onSettings={calendar.onSettings} />}
 
     {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now)} onBack={bringBack} />}
 

@@ -31,6 +31,17 @@ pub const MAX_GROUPS: usize = 20;
 pub const MAX_CONFLICT_EVENTS: usize = 20;
 /// People scheduled on kids teams whose People background checks are read.
 pub const MAX_BACKGROUND_PEOPLE: usize = MAX_PEOPLE;
+/// People forms the church chose to watch (Church rules), whose recent submissions are read.
+pub const MAX_FORMS: usize = 10;
+/// Check-Ins events whose rooms and recent periods are read.
+pub const MAX_CHECKINS_EVENTS: usize = 10;
+/// Check-Ins event times (inside the recent window, latest first) whose room counts are read.
+pub const MAX_CHECKINS_TIMES: usize = 20;
+/// Open Registrations signups whose active attendees are counted.
+pub const MAX_SIGNUPS: usize = 10;
+/// Days before the check that Check-Ins and form submissions are read for: long enough that the
+/// most recent Sunday is always inside, whichever day the check runs.
+pub const RECENT_DAYS: u64 = 8;
 const PER_PAGE: u16 = 100;
 /// Whole-check budget. Reads not started in time are recorded as `timeout`, never dropped.
 pub const BUDGET_MS: u64 = 180_000;
@@ -96,6 +107,15 @@ pub struct SundayCapture {
     /// Absent when empty (and in older recordings).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kids_teams: Vec<String>,
+    /// The People forms this check was given to watch (Church rules), once the church turned forms
+    /// on: the form list is read only then, and submissions only for these. Absent when forms are
+    /// off (and in older recordings); empty when on with none chosen yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forms: Option<Vec<String>>,
+    /// The Check-Ins event the church chose in Church rules, when it chose one: only that event's
+    /// rooms and times are read. Absent: every listed event, up to MAX_CHECKINS_EVENTS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkins_event: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,6 +140,18 @@ pub struct SundayRead {
     /// The Person whose People background checks were read (same id space as `person_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub people_person_id: Option<String>,
+    /// The People form whose submissions were read (`people_form_submissions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_id: Option<String>,
+    /// The Check-Ins event whose rooms or periods were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkins_event_id: Option<String>,
+    /// The Check-Ins event time whose room counts were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkins_event_time_id: Option<String>,
+    /// The Registrations signup whose active attendees were counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signup_id: Option<String>,
     /// The time window a windowed read asked for (the plan's Sunday, every UTC offset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<Window>,
@@ -244,15 +276,52 @@ pub fn check_sunday(
     kids_teams: &[String],
     cancelled: &AtomicBool,
 ) -> Result<(SundayCapture, ReadNames), SourceError> {
-    if !numeric_id(service_type_id) || !numeric_id(plan_id) || !kids_teams_valid(kids_teams) {
-        return Err(SourceError::InvalidRequest);
-    }
-    let http = NativeSourceHttp::new()?;
-    run(
+    check_sunday_with(
         auth,
         service_type_id,
         plan_id,
         kids_teams,
+        ChurchReads::default(),
+        cancelled,
+    )
+}
+/// What the church chose for the church reads (Church rules). `forms`: `None` while forms are off
+/// (no form is read), `Some` once on (the form list is read, and submissions only for these ids).
+/// `checkins_event`: the one Check-Ins event to read, when chosen; otherwise every listed event,
+/// bounded. Check-Ins and Registrations are read only when their own product was granted.
+#[derive(Clone, Copy, Default)]
+pub struct ChurchReads<'a> {
+    pub forms: Option<&'a [String]>,
+    pub checkins_event: Option<&'a str>,
+}
+impl ChurchReads<'_> {
+    fn valid(&self) -> bool {
+        self.forms.is_none_or(forms_valid) && self.checkins_event.is_none_or(numeric_id)
+    }
+}
+/// `check_sunday`, plus the church reads the church chose (`ChurchReads`).
+pub fn check_sunday_with(
+    auth: &AuthController,
+    service_type_id: &str,
+    plan_id: &str,
+    kids_teams: &[String],
+    church: ChurchReads<'_>,
+    cancelled: &AtomicBool,
+) -> Result<(SundayCapture, ReadNames), SourceError> {
+    if !numeric_id(service_type_id)
+        || !numeric_id(plan_id)
+        || !kids_teams_valid(kids_teams)
+        || !church.valid()
+    {
+        return Err(SourceError::InvalidRequest);
+    }
+    let http = NativeSourceHttp::new()?;
+    run_with_church(
+        auth,
+        service_type_id,
+        plan_id,
+        kids_teams,
+        church,
         cancelled,
         &http,
         &SystemClock(Instant::now()),
@@ -260,10 +329,15 @@ pub fn check_sunday(
 }
 /// At most MAX_TEAMS distinct numeric team ids.
 fn kids_teams_valid(kids_teams: &[String]) -> bool {
-    let distinct: BTreeSet<&str> = kids_teams.iter().map(String::as_str).collect();
-    kids_teams.len() <= MAX_TEAMS
-        && distinct.len() == kids_teams.len()
-        && kids_teams.iter().all(|id| numeric_id(id))
+    distinct_ids(kids_teams, MAX_TEAMS)
+}
+/// At most MAX_FORMS distinct numeric form ids.
+fn forms_valid(forms: &[String]) -> bool {
+    distinct_ids(forms, MAX_FORMS)
+}
+fn distinct_ids(ids: &[String], max: usize) -> bool {
+    let distinct: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+    ids.len() <= max && distinct.len() == ids.len() && ids.iter().all(|id| numeric_id(id))
 }
 
 /// Ordered, de-duplicated ids with a hard cap.
@@ -370,6 +444,10 @@ impl Check<'_> {
             group_id: target.group_id.clone(),
             groups_person_id: target.groups_person_id.clone(),
             people_person_id: target.people_person_id.clone(),
+            form_id: target.form_id.clone(),
+            checkins_event_id: target.checkins_event_id.clone(),
+            checkins_event_time_id: target.checkins_event_time_id.clone(),
+            signup_id: target.signup_id.clone(),
             window: target.window.clone(),
             offset,
             checked_at: String::new(),
@@ -386,7 +464,7 @@ impl Check<'_> {
             .get(&None)
             .or_else(|| self.tripped.get(&endpoint))
             .copied();
-        if collection.product() != Product::Services && !self.verified.scopes().operations() {
+        if !collection.product().granted(self.verified.scopes()) {
             record.outcome = NOT_REQUESTED.into();
         } else if let Some(reason) = tripped {
             record.outcome = reason.into();
@@ -428,7 +506,7 @@ impl Check<'_> {
                             .entry(key.clone())
                             .or_insert_with(|| label.clone());
                     }
-                    record.body = Some(self.keep(page.body()));
+                    record.body = Some(self.keep(collection, page.body()));
                     record.outcome = OK.into();
                     headers = Some(page.headers().clone());
                 }
@@ -494,8 +572,12 @@ impl Check<'_> {
         Ok(())
     }
     /// Stored body: links consumed, included Person rows moved into `names`.
-    fn keep(&mut self, body: &Value) -> Value {
+    /// A form submission whose person kept no name on this page (a child, or someone Planning
+    /// Center didn't say isn't a child) keeps no person link either: it is counted, never named,
+    /// and its person id isn't stored.
+    fn keep(&mut self, collection: Collection, body: &Value) -> Value {
         let mut body = body.clone();
+        let mut named_here = BTreeSet::new();
         if let Some(map) = body.as_object_mut() {
             map.remove("links");
             if let Some(Value::Array(rows)) = map.remove("included") {
@@ -507,6 +589,14 @@ impl Check<'_> {
                         {
                             self.read_names.insert(name.into());
                             self.names.entry(id.into()).or_insert_with(|| name.into());
+                            named_here.insert(id.to_owned());
+                            // A form submission's named person keeps, in the body, only Planning
+                            // Center's proof that they aren't a child: recordings are checked by it.
+                            if collection == Collection::PeopleFormSubmissions
+                                && row["attributes"]["child"] == Value::Bool(false)
+                            {
+                                kept.push(serde_json::json!({"id":id,"type":"Person","attributes":{"child":false}}));
+                            }
                         }
                     } else {
                         kept.push(row);
@@ -514,6 +604,18 @@ impl Check<'_> {
                 }
                 if !kept.is_empty() {
                     map.insert("included".into(), Value::Array(kept));
+                }
+            }
+        }
+        if collection == Collection::PeopleFormSubmissions {
+            for row in body["data"].as_array_mut().into_iter().flatten() {
+                let person = row["relationships"]["person"]["data"]["id"]
+                    .as_str()
+                    .map(str::to_owned);
+                if !person.is_some_and(|id| named_here.contains(&id))
+                    && let Some(links) = row["relationships"].as_object_mut()
+                {
+                    links.remove("person");
                 }
             }
         }
@@ -746,6 +848,159 @@ fn background_checks(
     Ok(())
 }
 
+/// The days before a check that Check-Ins and form submissions are read for, from the check's own
+/// start: `[start - RECENT_DAYS days, start)`, as whole-second UTC instants with the start rounded
+/// up. A recording's reads must carry exactly the window its `started_at` gives.
+pub(crate) fn recent_window(started_ms: u64) -> Option<Window> {
+    let until = started_ms.div_ceil(1000) * 1000;
+    let from = until.checked_sub(RECENT_DAYS * 24 * HOUR_MS)?;
+    let second = |ms: u64| format!("{}Z", &rfc3339(ms)[..19]);
+    Some(Window {
+        starts_at: second(from),
+        ends_at: second(until),
+    })
+}
+/// Event times one `checkins_event_periods` read placed inside `window`: included EventTime rows
+/// (with `include=event_times`) whose own `event_period` is a period on this page and whose event,
+/// when stated, is the read's, as (start ms, id). Planning Center's published EventPeriod renders
+/// no link to its times, so the time's own link is what places it. A time that can't be placed,
+/// or that starts outside the window, is left out.
+fn recent_event_times<'a>(read: &'a SundayRead, window: &Window) -> Vec<(i64, &'a str)> {
+    let Some(body) = &read.body else {
+        return Vec::new();
+    };
+    let (Some(from), Some(until)) = (
+        crate::source::instant_ms(&window.starts_at),
+        crate::source::instant_ms(&window.ends_at),
+    ) else {
+        return Vec::new();
+    };
+    let periods: BTreeSet<&str> = row_ids(read).into_iter().collect();
+    let mut times: Vec<(i64, &str)> = body["included"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["type"] == "EventTime")
+        .filter(|row| {
+            row["relationships"]["event_period"]["data"]["id"]
+                .as_str()
+                .is_some_and(|period| periods.contains(period))
+        })
+        .filter(|row| {
+            let event = &row["relationships"]["event"]["data"];
+            event.is_null() || event["id"].as_str() == read.checkins_event_id.as_deref()
+        })
+        .filter_map(|row| {
+            let at = row["attributes"]["starts_at"]
+                .as_str()
+                .and_then(crate::source::instant_ms)?;
+            Some((at, row["id"].as_str()?))
+        })
+        .filter(|&(at, _)| from <= at && at < until)
+        .collect();
+    times.sort_unstable();
+    times.dedup();
+    times
+}
+/// Signups a `registrations_signups` read lists as open (`closed: false`), in row order: only these
+/// have attendees worth counting. One whose `closed` is missing is not read.
+fn open_signups(read: &SundayRead) -> Vec<&str> {
+    read.body
+        .as_ref()
+        .and_then(|body| body["data"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|row| row["attributes"]["closed"] == Value::Bool(false))
+        .filter_map(|row| row["id"].as_str())
+        .collect()
+}
+/// People forms, once the church turned them on: the list of forms that aren't archived, then
+/// for each chosen form that list holds, in the order chosen, its submissions created inside the
+/// recent window, with who submitted. A form not in the list is not read (the webview says so).
+fn people_forms(
+    check: &mut Check<'_>,
+    forms: &[String],
+    window: &Window,
+) -> Result<(), SourceError> {
+    let mut listed = BTreeSet::new();
+    for index in check.pages(Collection::PeopleForms, &Target::default(), false)? {
+        listed.extend(row_ids(&check.reads[index]).into_iter().map(str::to_owned));
+    }
+    for form in forms.iter().filter(|form| listed.contains(*form)) {
+        let target = Target::form(form).within(window);
+        check.pages(Collection::PeopleFormSubmissions, &target, false)?;
+    }
+    Ok(())
+}
+/// Check-Ins, only when granted: the events that aren't archived (bounded), each event's rooms
+/// and its periods overlapping the recent window, then for the latest event times that started
+/// inside it (bounded across every event) the per-room counts. Counts only: no check-in, person or
+/// child is read.
+fn check_ins(
+    check: &mut Check<'_>,
+    window: &Window,
+    chosen: Option<&str>,
+) -> Result<(), SourceError> {
+    let mut events = Bounded::new(MAX_CHECKINS_EVENTS);
+    for index in check.pages(Collection::CheckInsEvents, &Target::default(), false)? {
+        match chosen {
+            // The church chose one event: only it is read, and only if Check-Ins lists it.
+            Some(chosen) => {
+                if row_ids(&check.reads[index]).contains(&chosen) {
+                    events.add(chosen);
+                }
+            }
+            None => check.gather_rows(index, &mut events),
+        }
+    }
+    let mut candidates: Vec<(i64, String, usize)> = Vec::new();
+    for event in &events.ids {
+        let target = Target::checkins_event(event);
+        check.pages(Collection::CheckInsLocations, &target, false)?;
+        let periods = target.within(window);
+        for index in check.pages(Collection::CheckInsEventPeriods, &periods, false)? {
+            for (at, time) in recent_event_times(&check.reads[index], window) {
+                candidates.push((at, time.to_owned(), index));
+            }
+        }
+    }
+    // Latest first, so a bound leaves out the oldest times, never last Sunday's.
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let mut times = Bounded::new(MAX_CHECKINS_TIMES);
+    for (_, time, index) in candidates {
+        if !times.add(&time) && check.reads[index].outcome == OK {
+            check.reads[index].outcome = TRUNCATED.into();
+        }
+    }
+    for time in &times.ids {
+        let target = Target::checkins_event_time(time);
+        check.pages(Collection::CheckInsLocationCounts, &target, false)?;
+    }
+    Ok(())
+}
+/// Registrations, only when granted: the signups that aren't archived, then each open one's
+/// active attendees (bounded), so they can be counted. No attendee's name or person is read.
+fn registrations(check: &mut Check<'_>) -> Result<(), SourceError> {
+    let mut signups = Bounded::new(MAX_SIGNUPS);
+    for index in check.pages(Collection::RegistrationsSignups, &Target::default(), false)? {
+        let open = open_signups(&check.reads[index])
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        check.bound(index, open, &mut signups);
+    }
+    for signup in &signups.ids {
+        check.pages(
+            Collection::RegistrationsAttendees,
+            &Target::signup(signup),
+            false,
+        )?;
+    }
+    Ok(())
+}
+
+/// The check without People forms, as every test before forms existed runs it.
+#[cfg(test)]
 pub(crate) fn run(
     auth: &AuthController,
     service_type_id: &str,
@@ -755,10 +1010,38 @@ pub(crate) fn run(
     http: &dyn SourceHttp,
     clock: &dyn Clock,
 ) -> Result<(SundayCapture, ReadNames), SourceError> {
-    if !numeric_id(service_type_id) || !numeric_id(plan_id) || !kids_teams_valid(kids_teams) {
+    run_with_church(
+        auth,
+        service_type_id,
+        plan_id,
+        kids_teams,
+        ChurchReads::default(),
+        cancelled,
+        http,
+        clock,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_with_church(
+    auth: &AuthController,
+    service_type_id: &str,
+    plan_id: &str,
+    kids_teams: &[String],
+    church: ChurchReads<'_>,
+    cancelled: &AtomicBool,
+    http: &dyn SourceHttp,
+    clock: &dyn Clock,
+) -> Result<(SundayCapture, ReadNames), SourceError> {
+    if !numeric_id(service_type_id)
+        || !numeric_id(plan_id)
+        || !kids_teams_valid(kids_teams)
+        || !church.valid()
+    {
         return Err(SourceError::InvalidRequest);
     }
-    let started_at = rfc3339(clock.now_ms());
+    let started_ms = clock.now_ms();
+    let started_at = rfc3339(started_ms);
+    let recent = recent_window(started_ms).ok_or(SourceError::InvalidRequest)?;
     // One organization check for the whole check; every page stays pinned to it.
     let verified = auth.verify_source(cancelled)?;
     let mut check = Check {
@@ -813,10 +1096,33 @@ pub(crate) fn run(
     }
     operations(&mut check, &people, &on_plan)?;
     background_checks(&mut check, &members, kids_teams)?;
-    // Names only for people this capture is about: everyone on the plan, and the bounded set
-    // of people whose own schedules and blockouts were planned. Nobody else's name is kept.
+    // Church reads last: forms once the church turned them on; Check-Ins and Registrations only
+    // when the saved connection was granted that product (otherwise nothing is recorded for it).
+    if let Some(forms) = church.forms {
+        people_forms(&mut check, forms, &recent)?;
+    }
+    if check.verified.scopes().check_ins() {
+        check_ins(&mut check, &recent, church.checkins_event)?;
+    }
+    if check.verified.scopes().registrations() {
+        registrations(&mut check)?;
+    }
+    // Names only for people this capture is about: everyone on the plan, the bounded set of
+    // people whose own schedules and blockouts were planned, and who submitted a chosen form in
+    // the recent window. Nobody else's name is kept.
     let mut named: BTreeSet<String> = people.ids.into_iter().collect();
     named.extend(on_plan);
+    for read in check
+        .reads
+        .iter()
+        .filter(|r| r.collection == Collection::PeopleFormSubmissions.label())
+    {
+        named.extend(
+            related_ids(read, "person", "Person")
+                .into_iter()
+                .map(str::to_owned),
+        );
+    }
     // The guard still learns the pruned ones: a name read is a name that must not reach a model.
     check.names.retain(|id, _| named.contains(id));
     let capture = SundayCapture {
@@ -832,6 +1138,8 @@ pub(crate) fn run(
         // Every label names a row of a stored body: only answered pages supply them.
         labels: check.labels,
         kids_teams: kids_teams.to_vec(),
+        forms: church.forms.map(<[String]>::to_vec),
+        checkins_event: church.checkins_event.map(str::to_owned),
     };
     Ok((capture, ReadNames(check.read_names.into_iter().collect())))
 }
@@ -883,9 +1191,13 @@ fn recording_name(name: &str) -> Option<RecordingName<'_>> {
 }
 /// Reads must agree with each other the way the check makes them. Child reads take their id
 /// from their parent read: steps and cards from a `people_workflows` row, group events from a
-/// `groups_person_memberships` group, memberships from a `team_members` person. `not-requested`
-/// is the saved connection's consent, so it marks every operations read of a capture or none,
-/// and never a Services read. Each label names a row of the read its prefix belongs to.
+/// `groups_person_memberships` group, memberships from a `team_members` person, form submissions
+/// from a listed form the check was given, Check-Ins rooms and periods from a listed event, room
+/// counts from an event time a period read placed inside the recent window, attendees from an
+/// open signup. `not-requested` is the saved connection's consent, so it marks every Calendar,
+/// People and Groups read of a capture or none, and never a Services, Check-Ins or Registrations
+/// read (those are only made when granted). Each label names a row of the read its prefix
+/// belongs to.
 fn consistent(capture: &SundayCapture) -> bool {
     let of = |collection: Collection| {
         capture
@@ -906,6 +1218,26 @@ fn consistent(capture: &SundayCapture) -> bool {
     let booked: BTreeSet<&str> = of(Collection::CalendarResourceBookings)
         .flat_map(|r| related_ids(r, "event", "Event"))
         .collect();
+    let given: BTreeSet<&str> = capture.forms.iter().flatten().map(String::as_str).collect();
+    let forms: BTreeSet<&str> = of(Collection::PeopleForms)
+        .flat_map(row_ids)
+        .filter(|id| given.contains(id))
+        .collect();
+    let checkins_events: BTreeSet<&str> =
+        of(Collection::CheckInsEvents).flat_map(row_ids).collect();
+    let recent = parse_rfc3339(&capture.started_at).and_then(recent_window);
+    let event_times: BTreeSet<&str> = recent
+        .as_ref()
+        .map(|window| {
+            of(Collection::CheckInsEventPeriods)
+                .flat_map(|r| recent_event_times(r, window))
+                .map(|(_, id)| id)
+                .collect()
+        })
+        .unwrap_or_default();
+    let signups: BTreeSet<&str> = of(Collection::RegistrationsSignups)
+        .flat_map(open_signups)
+        .collect();
     let from = |id: &Option<String>, set: &BTreeSet<&str>| {
         id.as_deref().is_some_and(|id| set.contains(id))
     };
@@ -921,12 +1253,32 @@ fn consistent(capture: &SundayCapture) -> bool {
             "groups_person_memberships" => from(&read.groups_person_id, &on_plan),
             // Only someone confirmed or pending on a kids team this check was given.
             "people_background_checks" => from(&read.people_person_id, &kids_people),
+            // The form list only once the church turned forms on; submissions only for a form
+            // the check was given that the list held.
+            "people_forms" => capture.forms.is_some(),
+            "people_form_submissions" => from(&read.form_id, &forms),
+            "checkins_locations" | "checkins_event_periods" => {
+                from(&read.checkins_event_id, &checkins_events)
+                    && capture
+                        .checkins_event
+                        .as_ref()
+                        .is_none_or(|chosen| read.checkins_event_id.as_ref() == Some(chosen))
+            }
+            "checkins_location_counts" => from(&read.checkins_event_time_id, &event_times),
+            "registrations_attendees" => from(&read.signup_id, &signups),
             _ => true,
         });
     let operations: Vec<&SundayRead> = capture
         .reads
         .iter()
-        .filter(|r| collection_of(r).is_some_and(|c| c.product() != Product::Services))
+        .filter(|r| {
+            collection_of(r).is_some_and(|c| {
+                matches!(
+                    c.product(),
+                    Product::Calendar | Product::People | Product::Groups
+                )
+            })
+        })
         .collect();
     let not_requested = operations
         .iter()
@@ -971,6 +1323,14 @@ fn collection_of(read: &SundayRead) -> Option<Collection> {
         ("groups_person_memberships", false) => Collection::GroupsPersonMemberships,
         ("groups_group_events", false) => Collection::GroupsGroupEvents,
         ("people_background_checks", false) => Collection::PeopleBackgroundChecks,
+        ("people_forms", false) => Collection::PeopleForms,
+        ("people_form_submissions", false) => Collection::PeopleFormSubmissions,
+        ("checkins_events", false) => Collection::CheckInsEvents,
+        ("checkins_locations", false) => Collection::CheckInsLocations,
+        ("checkins_event_periods", false) => Collection::CheckInsEventPeriods,
+        ("checkins_location_counts", false) => Collection::CheckInsLocationCounts,
+        ("registrations_signups", false) => Collection::RegistrationsSignups,
+        ("registrations_attendees", false) => Collection::RegistrationsAttendees,
         _ => return None,
     })
 }
@@ -998,23 +1358,36 @@ fn valid_capture(capture: &SundayCapture) -> bool {
             .reads
             .iter()
             .all(|read| valid_read(capture, &binding, read))
-        // Windowed reads follow the plan read's own date, never another Sunday.
+        // Windowed reads follow the plan read's own date, never another Sunday; Check-Ins periods
+        // and form submissions follow the check's own start, never another week.
         && {
             let window = plan_window(&capture.reads);
-            capture
-                .reads
-                .iter()
-                .all(|read| read.window.is_none() || read.window == window)
+            let recent = parse_rfc3339(&capture.started_at).and_then(recent_window);
+            capture.reads.iter().all(|read| {
+                if collection_of(read).is_some_and(Collection::recent) {
+                    read.window.is_some() && read.window == recent
+                } else {
+                    read.window.is_none() || read.window == window
+                }
+            })
         }
         && kids_teams_valid(&capture.kids_teams)
+        && capture.forms.as_deref().is_none_or(forms_valid)
+        && capture.checkins_event.as_deref().is_none_or(numeric_id)
         && consistent(capture)
 }
 fn valid_read(capture: &SundayCapture, binding: &Binding, read: &SundayRead) -> bool {
     let Some(collection) = collection_of(read) else {
         return false;
     };
-    // Only an operations read can lack consent; Services is always requested.
-    if read.outcome == NOT_REQUESTED && collection.product() == Product::Services {
+    // Only a Calendar, People or Groups read can lack consent: Services is always requested, and
+    // Check-Ins and Registrations are only read once granted.
+    if read.outcome == NOT_REQUESTED
+        && !matches!(
+            collection.product(),
+            Product::Calendar | Product::People | Product::Groups
+        )
+    {
         return false;
     }
     let target = Target {
@@ -1025,6 +1398,10 @@ fn valid_read(capture: &SundayCapture, binding: &Binding, read: &SundayRead) -> 
         group_id: read.group_id.clone(),
         groups_person_id: read.groups_person_id.clone(),
         people_person_id: read.people_person_id.clone(),
+        form_id: read.form_id.clone(),
+        checkins_event_id: read.checkins_event_id.clone(),
+        checkins_event_time_id: read.checkins_event_time_id.clone(),
+        signup_id: read.signup_id.clone(),
         window: read.window.clone(),
     };
     let Ok(request) = SourceRequest::capture_at(
@@ -1048,15 +1425,37 @@ fn valid_read(capture: &SundayCapture, binding: &Binding, read: &SundayRead) -> 
     let Some(body) = &read.body else {
         return true;
     };
-    // Stored bodies never keep links (consumed) or Person rows (moved to `names`).
+    // Stored bodies never keep links (consumed) or Person rows (moved to `names`), except a form
+    // submission's proof that its linked person isn't a child, which carries nothing else.
+    let proof = |row: &Value| {
+        collection == Collection::PeopleFormSubmissions
+            && row["attributes"] == serde_json::json!({"child":false})
+    };
     if !body.as_object().is_some_and(|map| {
         map.keys()
             .all(|k| ["data", "included", "meta"].contains(&k.as_str()))
-    }) || body["included"]
-        .as_array()
-        .is_some_and(|rows| rows.iter().any(|row| row["type"] == "Person"))
-    {
+    }) || body["included"].as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|row| row["type"] == "Person" && !proof(row))
+    }) {
         return false;
+    }
+    // Every person a submission links has that proof in the same body: a recording made before the
+    // proof existed, or one a child's link was put back into, can't load.
+    if collection == Collection::PeopleFormSubmissions {
+        let proven: BTreeSet<&str> = body["included"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|row| row["type"] == "Person")
+            .filter_map(|row| row["id"].as_str())
+            .collect();
+        if related_ids(read, "person", "Person")
+            .iter()
+            .any(|id| !proven.contains(id))
+        {
+            return false;
+        }
     }
     serde_json::to_vec(body)
         .ok()

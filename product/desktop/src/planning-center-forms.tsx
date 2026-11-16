@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 import {
   attemptCopy, churchLabel, churchShort, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
   missingCopy, parseDeclined, parseInUse, parseLastAttempt, parseSwitchQuestion, parseUnretired, signInInstead, switchCopy, switchProblem,
-  switchSettings, type ConnectionStatus, type RulesAtStake,
+  switchSettings, disconnectNote, type ConnectionStatus, type MoreProducts, type RulesAtStake,
   type SwitchDecision, type SwitchQuestion, type Unretired,
 } from "./connection.js";
 import { loadRules, type Settings } from "./sunday-source.js";
@@ -35,7 +35,7 @@ export function planFromAddress(text: string): { serviceTypeId?: string; planId?
 export function useConnectionControl(settings: Settings, onStatus: (s: ConnectionStatus) => void, status: ConnectionStatus | null, oneClick?: boolean) {
   const [registered, setRegistered] = useState(Boolean(settings.clientId));
   const [working, setWorking] = useState(false);
-  const [problem, setProblem] = useState<{ text: string; from: "sign-in" | "operations" } | null>(null);
+  const [problem, setProblem] = useState<{ text: string; from: "sign-in" | "operations" | "more" } | null>(null);
   const [builtIn, setBuiltIn] = useState(oneClick ?? false);
   useEffect(() => {
     if (oneClick !== undefined) return;
@@ -52,11 +52,11 @@ export function useConnectionControl(settings: Settings, onStatus: (s: Connectio
   /** Whether a sign-in can start now, with whichever registration is in use. */
   const canSignIn = (ownIds ? ready : builtIn) && !asking;
   const canCheck = numeric(settings.organization) && (ownIds ? registered : builtIn);
-  const signIn = (operations = false) => ownIds
-    ? connection.connect(settings.clientId, settings.organization, registered, operations)
-    : connection.connectApp(operations);
+  const signIn = (operations = false, more: MoreProducts = {}) => ownIds
+    ? connection.connect(settings.clientId, settings.organization, registered, operations, more)
+    : connection.connectApp(operations, more);
   const checkSaved = () => connection.refresh(ownIds ? settings.clientId : "", settings.organization, ownIds ? registered : true);
-  const run = async (operation: () => Promise<ConnectionStatus | void>, from: "sign-in" | "operations" = "sign-in") => {
+  const run = async (operation: () => Promise<ConnectionStatus | void>, from: "sign-in" | "operations" | "more" = "sign-in") => {
     setWorking(true); setProblem(null);
     try { const result = await operation(); if (result) onStatus(result); }
     catch (error) { setProblem({ text: connectionProblem(error), from }); }
@@ -193,6 +193,7 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       ? <p className="panel-ok" role="status"><Icon name="check" small /><span>Connected. Planning Center confirmed {churchLabel(status.organization, status.organization_name)}{status.checked_at_ms != null ? ` at ${at(status.checked_at_ms)}` : ""}.</span></p>
       : <p aria-live="polite">{state}</p>}
     {shownProblem && <p role="alert" className="problem">{shownProblem}</p>}
+    {disconnectNote(status) && <p className="small">{disconnectNote(status)}</p>}
     {saved && !asking && <div><button className="btn btn-quiet btn-sm btn-flush" disabled={working} onClick={() => { void run(() => connection.disconnect()); }}>Disconnect and revoke access</button></div>}
     {builtIn && <details className="listen-more" open={ownIds || undefined}>
       <summary><Icon name="chev" small />Advanced: use your own Planning Center registration</summary>

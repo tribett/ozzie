@@ -17,8 +17,15 @@ export interface LocalInterval { starts_at: string; ends_at: string }
  */
 export function isTimeZone(v: unknown): v is string {
   if (typeof v !== "string" || v.length > 64 || (v !== "UTC" && !/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+$/.test(v))) return false;
-  try { new Intl.DateTimeFormat("en-US", { timeZone: v }); return true; } catch { return false; }
+  const known = zoneNames.get(v);
+  if (known !== undefined) return known;
+  let ok: boolean;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: v }); ok = true; } catch { ok = false; }
+  // Building a formatter is slow, and a calendar file can name the same zone many times: answers are kept, a bounded number.
+  if (zoneNames.size < 512) zoneNames.set(v, ok);
+  return ok;
 }
+const zoneNames = new Map<string, boolean>();
 
 export type ChurchZone = { zone: string; problem: null } | { zone: null; problem: "missing" | "failed" | "unrecognized" };
 interface Row { type?: unknown; id?: unknown; attributes?: Record<string, unknown> }
@@ -38,14 +45,24 @@ export const churchTimeZone = (capture: Pick<SundayCapture, "organization" | "re
 
 const DAY_MS = 86_400_000;
 const iso = (n: number) => new Date(n).toISOString();
+// One formatter per zone: building one is far slower than using it, and calendars convert many times per read.
+const formats = new Map<string, Intl.DateTimeFormat>();
+function formatIn(zone: string): Intl.DateTimeFormat {
+  let format = formats.get(zone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    if (formats.size < 64) formats.set(zone, format);
+  }
+  return format;
+}
 function parts(at: number, zone: string) {
-  const p = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date(at));
+  const p = formatIn(zone).formatToParts(new Date(at));
   const n = (type: string) => Number(p.find(x => x.type === type)?.value);
   return { year: n("year"), month: n("month"), day: n("day"), hour: n("hour"), minute: n("minute"), second: n("second") };
 }
 /** The zone's UTC offset at `at`, in milliseconds (whole seconds). */
-function offsetAt(at: number, zone: string): number {
+export function offsetAt(at: number, zone: string): number {
   const p = parts(at, zone);
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(at / 1000) * 1000;
 }

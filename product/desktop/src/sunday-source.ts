@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { backgroundCheckTeamIds } from "../../../core/src/kids-rules.js";
+import { checkInsEvent, formIdsForCheck } from "../../../core/src/church-reads/rules.js";
 
 export interface RecordingSummary { path_id: string; plan_id: string; completed_at: string }
 /** Setup's Sunday picker (native sunday_picker.rs). Names and titles are display text for this Mac only. */
@@ -13,11 +14,15 @@ export interface Choices<T> { items: T[]; more: boolean }
 export const sundaySource = {
   /**
    * Every check (Check now, the schedule, always-on) passes this Mac's Church rules: the kids teams whose
-   * scheduled people's background checks are read, only while that rule is on. None set, none read.
+   * scheduled people's background checks are read, only while that rule is on. None set, none read. The People forms
+   * to watch go too, once forms are turned on (none: the list only); while forms are off, no form is read. So does the
+   * Check-Ins event chosen on Church rules, which is then the only one read.
    */
   check: (serviceTypeId: string, planId: string, rules: SundayRules = loadRules()) => {
     const kidsTeamIds = backgroundCheckTeamIds(rules);
-    return invoke<SundayCapture>("check_sunday", { serviceTypeId, planId, ...(kidsTeamIds.length ? { kidsTeamIds } : {}) });
+    const formIds = formIdsForCheck(rules), checkinsEventId = checkInsEvent(rules);
+    return invoke<SundayCapture>("check_sunday", { serviceTypeId, planId, ...(kidsTeamIds.length ? { kidsTeamIds } : {}), ...(formIds ? { formIds } : {}),
+      ...(checkinsEventId ? { checkinsEventId } : {}) });
   },
   /** Choosing the Sunday in setup: the church's service types, then one type's upcoming plans. Nothing is saved natively. */
   serviceTypes: () => invoke<Choices<ServiceTypeChoice>>("list_service_types"),
@@ -27,7 +32,8 @@ export const sundaySource = {
   loadRecording: (organization: string, pathId: string) => invoke<SundayCapture>("load_sunday_recording", { organization, pathId }),
   deleteRecordings: (organization: string) => invoke<void>("delete_sunday_recordings", { organization }),
   /** Debug builds only: non-secret IDs from the developer's local settings; release builds return empty strings. */
-  devDefaults: () => invoke<{ clientId: string; organization: string; serviceTypeId: string; planId: string; autopilot: boolean; autopilotOperations?: boolean; autopilotOneClick?: boolean; kidsTeams?: string }>("dev_defaults"),
+  devDefaults: () => invoke<{ clientId: string; organization: string; serviceTypeId: string; planId: string; autopilot: boolean; autopilotOperations?: boolean; autopilotOneClick?: boolean; kidsTeams?: string;
+    autopilotCheckIns?: boolean; autopilotRegistrations?: boolean; forms?: string }>("dev_defaults"),
 };
 
 export interface Settings { clientId: string; organization: string; serviceTypeId: string; planId: string }

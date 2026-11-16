@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { SundayRules } from "../../../core/src/sunday-capture.js";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { roomRules } from "../../../core/src/operations-capture.js";
@@ -40,7 +40,7 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
 }
 
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
-export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [] }: {
+export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
   /** Team leaders Planning Center lists, by team (null when that read didn't complete). Names resolve on this Mac. */
   leaders?: Record<string, string[] | null>; names?: Record<string, string>;
@@ -52,6 +52,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   focus?: string | null;
   /** Churches whose rules for their own teams and rooms are kept aside while Ozzie uses another church. */
   keptElsewhere?: { organization: string; name?: string }[];
+  /** People forms to watch and Check-Ins rooms matched to kids teams (church-reads-view.tsx). */
+  church?: ReactNode;
 }) {
   // What the person told Ozzie on finding cards, kept with these rules; deleting one says so, with Undo.
   const { controls, notice } = useFeedback({ entries: feedbackOf(rules), onEntries: next => onChange({ ...rules, feedback: next }) }, names);
@@ -104,6 +106,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
       </div>)}
     </section>
     <KidsTeamsRules rules={rules} onChange={onChange} teams={teams} />
+    {church}
     <section className="find rule-rooms">
       <h2 className="h3">Rooms</h2>
       <p className="find-body">Say which rooms can't hold two things at once, and how much setup time to allow before each booking. Rooms come from Planning Center Calendar; nothing there changes.</p>

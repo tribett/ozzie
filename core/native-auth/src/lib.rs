@@ -1,6 +1,7 @@
 //! Read-only native authentication; Sunday production issuance remains unavailable.
 pub mod agent;
 pub mod background;
+pub mod calendar_link;
 pub mod callback;
 pub mod connections;
 pub mod credentials;
@@ -15,6 +16,7 @@ pub mod oauth;
 pub mod provider;
 pub mod responsibilities;
 pub mod shared_check;
+pub mod shortcuts_check;
 
 pub mod source;
 

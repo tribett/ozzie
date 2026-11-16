@@ -15,6 +15,8 @@ export interface SundayRead {
   people_person_id?: string;
   /** calendar_conflicts reads are per Calendar event. */
   event_id?: string;
+  /** Church reads (core/src/church-reads): the form, Check-Ins event or event time, or signup a read is about. */
+  form_id?: string; checkins_event_id?: string; checkins_event_time_id?: string; signup_id?: string;
   /** The time window a windowed read asked for (canonical UTC). */
   window?: { starts_at: string; ends_at: string };
   /** `ok`, `truncated`, `not-requested` (turned off in Settings) or a source error reason. */
@@ -31,6 +33,10 @@ export interface SundayCapture {
   labels?: Record<string, string>;
   /** The kids teams whose scheduled people's background checks this check read (native `kids_teams`). Absent: none. */
   kids_teams?: string[];
+  /** The People forms this check was given to watch, once forms were turned on (native `forms`). Absent: forms off. */
+  forms?: string[];
+  /** The one Check-Ins event this check read, when one was chosen then (native `checkins_event`). Absent: every listed event. */
+  checkins_event?: string;
 }
 /** The church's own rule for one Planning Center Calendar room. */
 export interface RoomRuleSetting { room_id: string; exclusive: boolean; setup_minutes: number }
@@ -50,6 +56,13 @@ export interface SundayRules {
   kidsBackgroundChecks?: boolean;
   /** What the person said on finding cards (finding-feedback.ts). Read through feedbackOf, which checks every entry. */
   feedback?: FeedbackEntry[];
+  /** People forms to watch for new submissions (core/src/church-reads/rules.ts). Absent or off: no form is read. */
+  forms?: { on?: boolean; watched?: string[] };
+  /**
+   * Check-Ins (core/src/church-reads/rules.ts): the event to read last Sunday from (absent: every event), and the
+   * Check-Ins rooms the leader matched to a kids team, so that team's rule can be compared with the room's count.
+   */
+  checkIns?: { event_id?: string; rooms?: { location_id: string; team_id: string }[] };
 }
 /** Calendar, People and Groups reads (contract "v2 operations reads"). They never feed Services coverage. */
 export const OPERATIONS_COLLECTIONS: ReadonlySet<string> = new Set([
@@ -61,6 +74,12 @@ export const isOperationsRead = (read: Pick<SundayRead, "collection">) => OPERAT
 /** The People background-check read (kids-rules.ts). Reported by the kids rules; never Services coverage or the operations check. */
 export const KIDS_COLLECTIONS: ReadonlySet<string> = new Set(["people_background_checks"]);
 export const isKidsRead = (read: Pick<SundayRead, "collection">) => KIDS_COLLECTIONS.has(read.collection);
+/** People forms, Check-Ins and Registrations reads (core/src/church-reads). Never Services coverage or the operations check. */
+export const CHURCH_COLLECTIONS: ReadonlySet<string> = new Set([
+  "people_forms", "people_form_submissions", "checkins_events", "checkins_locations", "checkins_event_periods",
+  "checkins_location_counts", "registrations_signups", "registrations_attendees",
+]);
+export const isChurchRead = (read: Pick<SundayRead, "collection">) => CHURCH_COLLECTIONS.has(read.collection);
 /** The Services Organization read: only the church's time zone (core/src/church-time.ts). Not part of coverage. */
 export const ORGANIZATION_COLLECTION = "organization";
 export interface PositionLabel { position_id: string; team_id: string; name: string; interval: ServingInterval | null }
@@ -113,7 +132,7 @@ export function captureToCoverage(capture: SundayCapture, rules: SundayRules, no
   // Scopes: one per collection/team/person, from every page read for it.
   const grouped = new Map<string, SundayRead[]>();
   for (const read of capture.reads) {
-    if (read.collection === "plan" || read.collection === ORGANIZATION_COLLECTION || isOperationsRead(read) || isKidsRead(read)) continue;
+    if (read.collection === "plan" || read.collection === ORGANIZATION_COLLECTION || isOperationsRead(read) || isKidsRead(read) || isChurchRead(read)) continue;
     const id = scopeId(read);
     grouped.set(id, [...(grouped.get(id) ?? []), read]);
   }

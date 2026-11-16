@@ -15,6 +15,9 @@
 //! Whether sharing is on is kept here too, as a marker file beside the copy (ON_FILE), so it holds
 //! without the webview: nothing is written while it's absent, turning sharing off removes it before
 //! the copy, and every start of the app removes a copy (and any half-written one) left while off.
+//!
+//! The same checks and the same file handling keep a second copy, in its own Place with its own
+//! marker: the copy Siri and Shortcuts answer from (shortcuts_check.rs, ADR 0006).
 use crate::agent::tool_message_ok;
 use crate::background;
 use crate::ledger::{EventType, FailureCode, RunState, TaskKind, TaskRow};
@@ -45,13 +48,25 @@ pub const SHARED_TOOLS: [&str; 9] = [
     "groups.clashes",
     "rules.current",
 ];
+/// Where one copy lives in the app data folder: its file, and the marker present while the leader
+/// has it on. Each copy is turned on and off, written, cleared and cleaned up on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub file: &'static str,
+    pub on_file: &'static str,
+}
+/// The copy for other AI apps (core/mcp).
+pub const OTHER_AI_APPS: Place = Place {
+    file: SHARED_FILE,
+    on_file: ON_FILE,
+};
 /// Most recent ledger tasks shared (core/mcp/snapshot.ts MAX_SHARED_TASKS).
 pub const MAX_TASKS: usize = 20;
 /// Largest file written (core/mcp/snapshot.ts MAX_SHARED_BYTES).
 pub const MAX_BYTES: usize = 256 * 1024;
 
-/// One share, stop, clear or start-up clean-up at a time, so a share can't land after sharing was
-/// turned off, whatever order the commands arrive in.
+/// One share, stop, clear or start-up clean-up at a time (of either copy), so a share can't land
+/// after sharing was turned off, whatever order the commands arrive in.
 static LOCK: Mutex<()> = Mutex::new(());
 fn locked() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -232,23 +247,12 @@ pub fn shared_bytes(
 
 /// Whether the leader has sharing on: the marker is a regular file (never a link).
 pub fn is_on(dir: &Path) -> bool {
-    std::fs::symlink_metadata(dir.join(ON_FILE)).is_ok_and(|m| m.file_type().is_file())
+    is_on_at(OTHER_AI_APPS, dir)
 }
-
 /// Turning sharing on: writes the marker (0600). Nothing is shared until the next check is.
 pub fn start(dir: &Path) -> Result<(), ShareError> {
-    let _guard = locked();
-    create_private_dir(dir).map_err(|_| ShareError::Unavailable)?;
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options
-        .open(dir.join(ON_FILE))
-        .and_then(|file| file.sync_all())
-        .map_err(|_| ShareError::Unavailable)
+    start_at(OTHER_AI_APPS, dir)
 }
-
 /// Checks and writes the shared file in `dir`, replacing the last one whole. Refused while off.
 pub fn share(
     dir: &Path,
@@ -258,46 +262,91 @@ pub fn share(
     copy_id: &str,
     now_ms: u64,
 ) -> Result<(), ShareError> {
+    share_at(OTHER_AI_APPS, dir, envelopes, tasks, names, copy_id, now_ms)
+}
+/// Turning sharing off (`stop_at`).
+pub fn stop(dir: &Path) -> Result<(), ShareError> {
+    stop_at(OTHER_AI_APPS, dir)
+}
+/// Nothing current to share (`clear_at`).
+pub fn clear(dir: &Path) -> Result<(), ShareError> {
+    clear_at(OTHER_AI_APPS, dir)
+}
+/// At every start of the app (`startup_at`).
+pub fn startup(dir: &Path) -> Result<(), ShareError> {
+    startup_at(OTHER_AI_APPS, dir)
+}
+
+/// Whether the copy at `place` is on: its marker is a regular file (never a link).
+pub fn is_on_at(place: Place, dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir.join(place.on_file)).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// Turning a copy on: writes its marker (0600). Nothing is written until the next check is.
+pub fn start_at(place: Place, dir: &Path) -> Result<(), ShareError> {
     let _guard = locked();
-    if !is_on(dir) {
+    create_private_dir(dir).map_err(|_| ShareError::Unavailable)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(dir.join(place.on_file))
+        .and_then(|file| file.sync_all())
+        .map_err(|_| ShareError::Unavailable)
+}
+
+/// Checks and writes the copy at `place` in `dir` (`shared_bytes`), replacing the last one whole.
+/// Refused while that copy is off.
+pub fn share_at(
+    place: Place,
+    dir: &Path,
+    envelopes: &[String],
+    tasks: &[TaskRow],
+    names: &NameGuard,
+    copy_id: &str,
+    now_ms: u64,
+) -> Result<(), ShareError> {
+    let _guard = locked();
+    if !is_on_at(place, dir) {
         return Err(ShareError::Off);
     }
     let bytes = shared_bytes(envelopes, tasks, names, copy_id, now_ms)?;
-    write_private(dir, &bytes).map_err(|_| ShareError::Unavailable)
+    write_private(place, dir, &bytes).map_err(|_| ShareError::Unavailable)
 }
 
-/// Turning sharing off: removes the marker first (so nothing more is written, and the next start
+/// Turning a copy off: removes its marker first (so nothing more is written, and the next start
 /// clears what's left even if this fails part-way), then the copy and any half-written one, each
 /// tried whatever happened to the one before. Already gone is fine; anything else that can't be
 /// removed is `Unavailable`.
-pub fn stop(dir: &Path) -> Result<(), ShareError> {
+pub fn stop_at(place: Place, dir: &Path) -> Result<(), ShareError> {
     let _guard = locked();
-    let marker = remove(&dir.join(ON_FILE));
-    let copies = remove_copies(dir);
+    let marker = remove(&dir.join(place.on_file));
+    let copies = remove_copies(place, dir);
     marker.and(copies)
 }
 
 /// Nothing current to share (no check, another church's, a disconnected Planning Center, deleted
-/// recordings, a refused share): removes the copy and any half-written one. Sharing stays on.
-pub fn clear(dir: &Path) -> Result<(), ShareError> {
+/// recordings, a refused share): removes the copy and any half-written one. It stays on.
+pub fn clear_at(place: Place, dir: &Path) -> Result<(), ShareError> {
     let _guard = locked();
-    remove_copies(dir)
+    remove_copies(place, dir)
 }
 
-/// At every start of the app: a half-written copy is always removed, and while sharing is off the
-/// copy too, so a copy that outlived turning sharing off (a failed removal, a crash) never stays.
-pub fn startup(dir: &Path) -> Result<(), ShareError> {
+/// At every start of the app: a half-written copy is always removed, and while the copy is off the
+/// copy too, so a copy that outlived turning it off (a failed removal, a crash) never stays.
+pub fn startup_at(place: Place, dir: &Path) -> Result<(), ShareError> {
     let _guard = locked();
-    remove(&partial_path(dir))?;
-    if is_on(dir) {
+    remove(&partial_path(place, dir))?;
+    if is_on_at(place, dir) {
         Ok(())
     } else {
-        remove(&dir.join(SHARED_FILE))
+        remove(&dir.join(place.file))
     }
 }
 
-fn partial_path(dir: &Path) -> PathBuf {
-    dir.join(format!(".{SHARED_FILE}.partial"))
+fn partial_path(place: Place, dir: &Path) -> PathBuf {
+    dir.join(format!(".{}.partial", place.file))
 }
 fn remove(path: &Path) -> Result<(), ShareError> {
     match std::fs::remove_file(path) {
@@ -306,9 +355,9 @@ fn remove(path: &Path) -> Result<(), ShareError> {
         Err(_) => Err(ShareError::Unavailable),
     }
 }
-fn remove_copies(dir: &Path) -> Result<(), ShareError> {
-    let file = remove(&dir.join(SHARED_FILE));
-    let partial = remove(&partial_path(dir));
+fn remove_copies(place: Place, dir: &Path) -> Result<(), ShareError> {
+    let file = remove(&dir.join(place.file));
+    let partial = remove(&partial_path(place, dir));
     file.and(partial)
 }
 
@@ -320,11 +369,11 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
     builder.create(dir)
 }
 
-fn write_private(dir: &Path, bytes: &[u8]) -> io::Result<()> {
+fn write_private(place: Place, dir: &Path, bytes: &[u8]) -> io::Result<()> {
     create_private_dir(dir)?;
     // Written aside then renamed, so a reader never sees half a file. A partial file left by a
     // crash is removed first.
-    let partial = partial_path(dir);
+    let partial = partial_path(place, dir);
     let _ = std::fs::remove_file(&partial);
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -334,7 +383,7 @@ fn write_private(dir: &Path, bytes: &[u8]) -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()
     });
-    if let Err(error) = written.and_then(|()| std::fs::rename(&partial, dir.join(SHARED_FILE))) {
+    if let Err(error) = written.and_then(|()| std::fs::rename(&partial, dir.join(place.file))) {
         let _ = std::fs::remove_file(&partial);
         return Err(error);
     }

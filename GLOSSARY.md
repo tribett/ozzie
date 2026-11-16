@@ -79,3 +79,11 @@ _Avoid_: Cloud Ozzie, Ozzie AI key
 **Shared check**:
 The placeholder-only copy of Ozzie's last saved check that another AI app on the same Mac can read when the leader turns on "Use Ozzie's last check in other AI apps". It holds no names and no background-check facts. In UI copy, use "Ozzie's last check in other AI apps".
 _Avoid_: MCP, connector, export (on user surfaces)
+
+**Copy for Siri and Shortcuts**:
+The smaller shared check that Ozzie's Siri actions and its bundled helper answer Siri and Shortcuts from while "Let Siri and Shortcuts ask Ozzie" is on: the Sunday overview only, checked like the shared check. Answers from it are counts, dates and Ozzie's own words, never a label or name. In UI copy, use "the copy Siri and Shortcuts answer from".
+_Avoid_: Siri integration, export
+
+**Siri actions**:
+Ozzie's own actions in Siri, Spotlight and the Shortcuts app with no setup: "Is Sunday covered", "Open Ozzie's Sunday page" and "Open Ozzie's Today page" (App Intents in a sandboxed extension bundled with Ozzie, ADR 0007). They answer with the helper's own code from the copy for Siri and Shortcuts, and only while the switch is on. In UI copy, use "Ozzie's actions".
+_Avoid_: intents, App Intents, extension (on user surfaces)

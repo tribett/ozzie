@@ -66,7 +66,8 @@ const NEVER_HIDDEN: ReadonlySet<string> = new Set(["worth-a-look"]);
 /**
  * Open roles are settled one Sunday at a time ("Not needed this Sunday"), never silenced for good. Kids safety
  * rules (kids-rules.ts) are never silenced from a card either, for a team or for one person: a later lapse (a
- * check that expires, a room left with one person) must still show. The church changes the rule itself on
+ * check that expires, a room left with one person) must still show. A Check-Ins room set beside a kids rule
+ * (church-reads/checkins.ts) is only Worth a look, so a team's can be stopped like any other. The church changes the rule itself on
  * Church rules, where it stays visible; "This isn't right" still sets aside one Sunday's occurrence.
  */
 const NEVER_STOPPED: ReadonlySet<string> = new Set(["worth-a-look", "needs-people", "too-few-confirmed", "background-check"]);
@@ -372,6 +373,9 @@ export const KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({
   attention: "email and calendar that disagree",
   "too-few-confirmed": "kids teams with fewer confirmed people than your rule asks",
   "background-check": "missing or expiring background checks",
+  "checkins-below-rule": "Check-Ins rooms with fewer volunteers checked in than your kids rule's number",
+  "form-submissions": "new form submissions",
+  "registration-signup": "signup counts",
 });
 export const kindWords = (kind: string) => Object.hasOwn(KIND_WORDS, kind) ? KIND_WORDS[kind]! : "findings like this";
 type NameOf = (personId: string) => string | undefined;
