@@ -84,7 +84,9 @@ impl Http for NativeHttp {
 }
 pub struct PcoProvider<H: Http>(pub H);
 impl<H: Http> PcoProvider<H> {
-    fn token(&self, params: &[(&str, &str)]) -> Result<Grant, AuthError> {
+    /// `refused`: what a reply refusing the request (400, 401 or 403) is. Anything else that isn't
+    /// a 200 (out of reach, 429, 5xx) is a provider failure.
+    fn token(&self, params: &[(&str, &str)], refused: AuthError) -> Result<Grant, AuthError> {
         let form = Zeroizing::new(
             url::form_urlencoded::Serializer::new(String::new())
                 .extend_pairs(params.iter().copied())
@@ -92,7 +94,11 @@ impl<H: Http> PcoProvider<H> {
         );
         let response = self.0.send(Endpoint::Token, Some(&form), None)?;
         if response.status != 200 {
-            return Err(AuthError::ProviderFailure);
+            return Err(if matches!(response.status, 400 | 401 | 403) {
+                refused
+            } else {
+                AuthError::ProviderFailure
+            });
         }
         let tokens: Tokens =
             serde_json::from_slice(&response.body).map_err(|_| AuthError::InvalidToken)?;
@@ -115,13 +121,16 @@ impl<H: Http> Provider for PcoProvider<H> {
             .map(|grant| grant.tokens)
     }
     fn exchange_grant(&self, client: &str, code: &str, verifier: &str) -> Result<Grant, AuthError> {
-        self.token(&[
-            ("client_id", client),
-            ("code", code),
-            ("code_verifier", verifier),
-            ("redirect_uri", REDIRECT_URI),
-            ("grant_type", "authorization_code"),
-        ])
+        self.token(
+            &[
+                ("client_id", client),
+                ("code", code),
+                ("code_verifier", verifier),
+                ("redirect_uri", REDIRECT_URI),
+                ("grant_type", "authorization_code"),
+            ],
+            AuthError::ProviderFailure,
+        )
     }
     fn organization(&self, access: &str) -> Result<String, AuthError> {
         self.organization_detailed(access)
@@ -204,12 +213,18 @@ impl<H: Http> Provider for PcoProvider<H> {
         self.refresh_grant(client, refresh)
             .map(|grant| grant.tokens)
     }
+    /// A renewal Planning Center refuses (the refresh token was revoked or ran out: `invalid_grant`)
+    /// is `InvalidToken`, as when there is nothing saved to renew: only a new sign-in helps. Out of
+    /// reach is a provider failure, worth another try.
     fn refresh_grant(&self, client: &str, refresh: &str) -> Result<Grant, AuthError> {
-        self.token(&[
-            ("client_id", client),
-            ("refresh_token", refresh),
-            ("grant_type", "refresh_token"),
-        ])
+        self.token(
+            &[
+                ("client_id", client),
+                ("refresh_token", refresh),
+                ("grant_type", "refresh_token"),
+            ],
+            AuthError::InvalidToken,
+        )
     }
     fn revoke(&self, client: &str, token: &str, hint: &str) -> Result<(), AuthError> {
         let form = Zeroizing::new(

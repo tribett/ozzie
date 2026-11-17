@@ -20,7 +20,9 @@ import { THIS_MAC_ONLY, thisMacOnly, type NoticeOptions } from "./phone-notice.j
  * Shared by "Check Planning Center now" and the schedule so both behave the same.
  */
 export async function verifiedSundayCheck(ctx: { settings: Settings; status: ConnectionStatus | null; rules?: SundayRules }, onStatus: (s: ConnectionStatus) => void): Promise<SundayCapture> {
-  // Tokens last about two hours, and a saved connection must be re-verified after restart.
+  // A saved connection must be re-verified after a restart, or after its sign-in couldn't be renewed. While it is
+  // connected, native code renews the sign-in (its access lasts about two hours) before a read that finds it running
+  // out (main.rs renewed_auth), so this isn't needed for that.
   if (ctx.status?.state !== "connected") {
     const verified = await connection.refresh(ctx.settings.clientId, ctx.settings.organization, true);
     onStatus(verified);

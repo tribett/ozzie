@@ -50,9 +50,37 @@ export const saveSettings = (s: Settings) => save(SETTINGS, s);
 export const loadRules = () => load<SundayRules>(RULES, defaultRules);
 export const saveRules = (r: SundayRules) => save(RULES, r);
 
+/** What comes after a sign-in that wasn't renewed, for each cause (`notRenewed`). */
+interface NotRenewedNext { again: string; reached: string; locked: string; denied: string; unavailable: string; later: string }
+/**
+ * A read found Ozzie's sign-in to Planning Center needed renewing (its access lasts about two hours: running out by
+ * Ozzie's clock, or already refused by Planning Center) and couldn't renew it first, so nothing was read (native main.rs
+ * `renewed_auth`, core `renewal_error`), with `what` happened instead and `next`, for each cause:
+ *  - `invalid-credentials`: only a new sign-in mends it (refused, nothing to renew with, another church, a write the
+ *    Keychain refused after Planning Center renewed).
+ *  - `provider-failure`: Planning Center didn't renew it just now (no answer, a 429 or a 5xx); the next check tries again.
+ *  - The Keychain, before Planning Center was asked: `locked` comes right by itself and the next check tries again;
+ *    `denied` and `store-unavailable` leave the connection failed for the leader to act on (review N, 4).
+ *  - Anything else (a sign-in or Disconnect under way, a cancel): not just now.
+ */
+function notRenewed(known: string, what: string, next: NotRenewedNext): string {
+  const lead = "Ozzie's sign-in to Planning Center needed renewing";
+  if (known.includes("invalid-credentials") || known.includes("missing-credentials")) return `${lead} and couldn't be renewed, ${what}. ${next.again}`;
+  if (known.includes('"provider-failure"')) return `${lead}, and Planning Center didn't renew it just now, ${what}. ${next.reached}`;
+  if (known.includes('"locked"')) return `${lead}, and this Mac's credential storage was locked, ${what}. ${next.locked}`;
+  if (known.includes('"denied"')) return `${lead}, and this Mac didn't let Ozzie use it, ${what}. ${next.denied}`;
+  if (known.includes('"store-unavailable"')) return `${lead}, and this Mac's credential storage couldn't be read, ${what}. ${next.unavailable}`;
+  return `${lead} and couldn't be renewed just now, ${what}. ${next.later}`;
+}
+
 /** Why the Sunday picker couldn't list anything. Fixed local copy only; native error text is never rendered. */
 export function choicesProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
+  if (known.includes("sign-in-not-renewed")) {
+    const later = "Try again in a moment, or enter the plan by hand.";
+    return notRenewed(known, "so your Sundays weren't listed", { again: "Sign in again in Settings, or enter the plan by hand.",
+      reached: later, locked: later, denied: "Allow access when macOS asks, then try again, or enter the plan by hand.", unavailable: later, later });
+  }
   if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Then your upcoming Sundays are listed here.";
   if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Try again in a minute, or enter the plan by hand.";
   if (known.includes("busy")) return "Ozzie is reading Planning Center for something else right now. Try again in a moment.";
@@ -80,12 +108,20 @@ export const PICKER_REFUSED = "Planning Center didn't let Ozzie list your church
 /** Whether a failed check was a refused read (REFUSED), so the Sunday page can offer its next steps. */
 export const refusedRead = (error: unknown): boolean => {
   const known = JSON.stringify(error) ?? "";
-  return known.includes("denied") && !known.includes("not-connected") && !known.includes("missing-credentials") && !known.includes("invalid-credentials");
+  return known.includes("denied") && !known.includes("not-connected") && !known.includes("missing-credentials") && !known.includes("invalid-credentials")
+    && !known.includes("sign-in-not-renewed");
 };
 
 /** Fixed local copy only. Native error text is never rendered. */
 export function sundayProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
+  if (known.includes("sign-in-not-renewed")) {
+    return notRenewed(known, "so nothing was read", { again: "Sign in again in Settings.", reached: "Ozzie tries again at the next check.",
+      locked: "Ozzie tries again at the next check.", denied: "Allow access when macOS asks, then check again.",
+      unavailable: "Check again in a moment; if it keeps happening, sign in again in Settings.", later: "Try again in a moment, or sign in again in Settings." });
+  }
+  // Checking the saved sign-in before the check found none Ozzie can use (refused, or nothing to renew with).
+  if (known.includes('"invalid-token"')) return "Ozzie has no sign-in to Planning Center it can use, so nothing was read. Sign in again in Settings.";
   if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Ozzie only reads; it changes nothing there.";
   if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Wait a minute, then check again, or show the last saved check.";
   if (known.includes("denied")) return `${REFUSED.summary} Either the login you signed in with can't see this service type's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access; then sign in again under Settings, or choose another Sunday.`;

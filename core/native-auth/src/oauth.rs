@@ -9,6 +9,9 @@ use zeroize::Zeroizing;
 
 pub const REDIRECT_URI: &str = "http://127.0.0.1:42819/oauth/callback";
 pub const ATTEMPT_LIFETIME_MS: u64 = 300_000;
+/// How long before a saved sign-in's access token runs out (Planning Center's last two hours) a read
+/// renews it first (`AuthController::renew_if_due`): longer than a whole Sunday check and its waits.
+pub const RENEW_BEFORE_MS: u64 = 10 * 60_000;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthError {
@@ -385,6 +388,11 @@ pub struct ConnectionStatus {
     /// Center named this organization at sign-in, so the app can remember it. Omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub found: bool,
+    /// On a connection handed over from a one-click sign-in: when that sign-in was checked. A
+    /// renewal changes `checked_at_ms`, never this, so the page applies the organization Planning
+    /// Center named once per sign-in (review M, L7). Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found_at_ms: Option<u64>,
     /// The church's name as Planning Center's userinfo stated it at this connection's last
     /// sign-in or check (`church_name`), when it did. Shown to the person only.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -564,6 +572,13 @@ struct State {
     /// Positive knowledge that nothing is saved: seen absent at construction or deleted here,
     /// with nothing written since. A sign-in then has no displaced credential to look up.
     nothing_stored: bool,
+    /// When the saved access token runs out, by this controller's clock: its `expires_in` from when
+    /// this controller saved it (a sign-in or a renewal), or 0 once Planning Center refused it at an
+    /// identity check. Unknown for a saved sign-in this controller hasn't checked. Not a secret.
+    runs_out: Option<u64>,
+    /// Credentials this controller has written to the Keychain (a sign-in's or a refresh's), so a
+    /// refresh can tell whether its own was written (`refresh_as`).
+    writes: u64,
 }
 pub(crate) enum SundayReceiverDecision {
     Retry,
@@ -605,6 +620,8 @@ pub struct AuthController {
         Arc<crate::sunday::SundayAuthority>,
         crate::sunday::ControllerInstance,
     )>,
+    /// One renewal at a time (`renew_if_due`): a read that finds one under way waits for it.
+    renewing: Mutex<()>,
 }
 struct Operation<'a>(&'a AtomicBool);
 impl Drop for Operation<'_> {
@@ -644,6 +661,7 @@ impl AuthController {
             organization_diagnostic: None,
             scopes: None,
             found: false,
+            found_at_ms: None,
             organization_name: saved.as_deref().and_then(|bytes| stored_name(bytes)),
         };
         drop(saved);
@@ -658,11 +676,14 @@ impl AuthController {
                 status,
                 unchecked_save: None,
                 nothing_stored: !present,
+                runs_out: None,
+                writes: 0,
             }),
             generation: AtomicU64::new(0),
             busy: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             sunday: None,
+            renewing: Mutex::new(()),
         })
     }
     pub fn new_with_sunday_authority(
@@ -725,15 +746,19 @@ impl AuthController {
                     organization_diagnostic: None,
                     scopes: None,
                     found: false,
+                    found_at_ms: None,
                     organization_name: None,
                 },
                 unchecked_save: None,
                 nothing_stored: true,
+                runs_out: None,
+                writes: 0,
             }),
             generation: AtomicU64::new(0),
             busy: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             sunday: None,
+            renewing: Mutex::new(()),
         })
     }
     /// Hands a finished one-click sign-in over to an ordinary controller bound to the
@@ -749,7 +774,10 @@ impl AuthController {
             return Err(AuthError::Cancelled);
         }
         let _operation = self.operation()?;
-        let status = self.lock()?.status.clone();
+        let (status, runs_out) = {
+            let state = self.lock()?;
+            (state.status.clone(), state.runs_out)
+        };
         let scopes = status.scopes.ok_or(AuthError::InvalidToken)?;
         if status.state != ConnectionState::Connected || !numeric_id(&status.organization) {
             return Err(AuthError::InvalidToken);
@@ -775,6 +803,8 @@ impl AuthController {
             state.status.checked_at_ms = status.checked_at_ms;
             state.status.scopes = Some(scopes);
             state.status.found = true;
+            state.status.found_at_ms = status.checked_at_ms;
+            state.runs_out = runs_out;
         }
         drop(_operation);
         self.cancel();
@@ -888,6 +918,7 @@ impl AuthController {
                 organization_diagnostic: None,
                 scopes: None,
                 found: false,
+                found_at_ms: None,
                 organization_name: None,
             }),
             Err(std::sync::TryLockError::Poisoned(_)) => Err(AuthError::ProviderFailure),
@@ -1008,7 +1039,8 @@ impl AuthController {
         result
     }
     /// `rotating`: a refresh, after which Planning Center no longer accepts the credential it was
-    /// refreshed from; otherwise a sign-in.
+    /// refreshed from; otherwise a sign-in. `renewal`: a refresh renewing a connection this
+    /// controller already confirmed (`renew_if_due`).
     #[allow(clippy::too_many_arguments)]
     fn save(
         &self,
@@ -1019,8 +1051,12 @@ impl AuthController {
         diagnostic: &mut Option<OrganizationDiagnostic>,
         writer: Option<&RetiredTag>,
         rotating: bool,
+        renewal: bool,
     ) -> Result<ConnectionStatus, AuthError> {
         tokens.validate()?;
+        // Planning Center issued these tokens before now, so their life counted from here ends no
+        // earlier than theirs does by more than this save takes; `RENEW_BEFORE_MS` covers that.
+        let runs_out = (self.now)().saturating_add(tokens.expires_in.saturating_mul(1000));
         self.check_writer(generation, expires, writer)?;
         // The same userinfo read as always; its church name is kept for the person to see.
         let organization = self
@@ -1040,6 +1076,9 @@ impl AuthController {
         // Preserve original outer errors; only a still-live operation may retain details.
         // A one-click finder (never on the Sunday writer path) takes the organization named.
         let (workspace, bound_organization) = match (organization, self.finding) {
+            (Err(failure), _) if renewal && writer.is_none() && unanswered(&failure.diagnostic) => {
+                return self.keep_renewed(tokens, scopes, generation, runs_out);
+            }
             (Err(failure), _) => {
                 if self.check_writer(generation, expires, writer).is_ok() {
                     *diagnostic = Some(failure.diagnostic);
@@ -1108,6 +1147,7 @@ impl AuthController {
         }
         put.map_err(AuthError::Store)?;
         state.nothing_stored = false;
+        state.writes += 1;
         if writer.is_some() {
             state.unchecked_save = Some(generation);
             state.status.state = ConnectionState::StoredUnchecked;
@@ -1189,6 +1229,7 @@ impl AuthController {
             state.status.problem = None;
             state.status.organization_diagnostic = None;
             state.status.scopes = Some(scopes);
+            state.runs_out = Some(runs_out);
             let status = state.status.clone();
             drop(publication);
             drop(displaced);
@@ -1200,6 +1241,7 @@ impl AuthController {
         state.status.organization_diagnostic = None;
         state.status.scopes = Some(scopes);
         state.status.organization_name = name;
+        state.runs_out = Some(runs_out);
         if self.finding.is_some() {
             state.status.organization = bound_organization;
         }
@@ -1210,6 +1252,47 @@ impl AuthController {
             self.discard_as(&old.client_id, &old.tokens);
         }
         Ok(status)
+    }
+    /// A renewal Planning Center granted whose identity check then went unanswered (out of reach,
+    /// a 5xx or a 429). Planning Center no longer accepts the refresh token it renewed from, so
+    /// dropping these would leave nothing that works until a new sign-in. They are saved for the
+    /// church this controller is bound to, exactly as a checked renewal saves them with the
+    /// church's name it already had, and the connection stays as it was: its last check time is
+    /// still the last time Planning Center confirmed the church. Nothing is read with them before a
+    /// read's own identity check confirms that church (`identify`). Another church, or a reply
+    /// refusing or garbling the identity, still saves nothing (`save`). A cancel before the write
+    /// saves nothing; one after it keeps what it wrote, as `save` does for a refresh.
+    fn keep_renewed(
+        &self,
+        tokens: Tokens,
+        scopes: Scopes,
+        generation: u64,
+        runs_out: u64,
+    ) -> Result<ConnectionStatus, AuthError> {
+        self.check(generation, None)?;
+        let mut state = self.lock()?;
+        let record = StoredConnection {
+            client_id: self.binding.client_id.clone(),
+            organization: self.binding.organization.clone(),
+            tokens,
+            scopes,
+            organization_name: state.status.organization_name.clone(),
+        };
+        let bytes =
+            Zeroizing::new(serde_json::to_vec(&record).map_err(|_| AuthError::InvalidToken)?);
+        self.check(generation, None)?;
+        self.store
+            .put(&self.binding.workspace, &self.binding.organization, &bytes)
+            .map_err(AuthError::Store)?;
+        state.nothing_stored = false;
+        state.writes += 1;
+        state.runs_out = Some(runs_out);
+        self.check(generation, None)?;
+        state.status.state = ConnectionState::Connected;
+        state.status.scopes = Some(scopes);
+        state.status.problem = None;
+        state.status.organization_diagnostic = None;
+        Ok(state.status.clone())
     }
     // Called only while the existing OAuth operation exclusion and State are held.
     // The get/delete trait cannot exclude an external process after the comparison.
@@ -1258,10 +1341,13 @@ impl AuthController {
         self.discard_as(&self.binding.client_id, tokens);
     }
     fn discard_as(&self, client: &str, tokens: &Tokens) {
+        let (token, hint) = revocation(tokens);
+        self.revoke_quietly(client, token, hint);
+    }
+    fn revoke_quietly(&self, client: &str, token: &str, hint: &str) {
         if self.sunday.is_some() {
             return;
         }
-        let (token, hint) = revocation(tokens);
         let _ = self.provider.revoke(client, token, hint);
     }
     /// Identity only (workspace, organization, client id); never credentials.
@@ -1387,7 +1473,7 @@ impl AuthController {
         let generation = self.generation.load(Ordering::SeqCst);
         self.source_bound(request, generation, cancelled)?;
         self.source_session(generation, cancelled, |access, _, check| {
-            let organization = self.provider.organization(access);
+            let organization = self.identify(access);
             check()?;
             if organization.map_err(source_error)? != self.binding.organization {
                 return Err(SourceError::OrganizationUnverified);
@@ -1408,7 +1494,7 @@ impl AuthController {
         }
         let generation = self.generation.load(Ordering::SeqCst);
         self.source_session(generation, cancelled, |access, scopes, check| {
-            let organization = self.provider.organization(access);
+            let organization = self.identify(access);
             check()?;
             if organization.map_err(source_error)? != self.binding.organization {
                 return Err(SourceError::OrganizationUnverified);
@@ -1437,6 +1523,30 @@ impl AuthController {
         self.source_session(verified.generation, cancelled, |access, _, _| {
             http.read(request, access)
         })
+    }
+    /// A read's identity check: the organization the saved access token belongs to, from one
+    /// userinfo read as before. When Planning Center refuses the token itself (401 or 403), it ran
+    /// out sooner than this controller's clock says (the clock `system_clock` keeps doesn't count
+    /// time this Mac spent asleep) or was withdrawn: the next read renews it first
+    /// (`renewal_due`). The read itself fails as it always did.
+    fn identify(&self, access: &str) -> Result<String, AuthError> {
+        self.provider
+            .organization_detailed(access)
+            .map_err(|failure| {
+                if failure.diagnostic
+                    == OrganizationDiagnostic::userinfo(UserInfoReason::AccessDenied)
+                    && let Ok(mut state) = self.state.lock()
+                    && state.runs_out.is_some()
+                {
+                    state.runs_out = Some(0);
+                }
+                // Planning Center unanswered says nothing about the church: out of reach (review M, L5).
+                if unanswered(&failure.diagnostic) {
+                    AuthError::ProviderFailure
+                } else {
+                    failure.error
+                }
+            })
     }
     /// True once the proof's generation has ended (cancel, disconnect or a new attempt).
     pub(crate) fn source_ended(&self, verified: &VerifiedSource) -> bool {
@@ -1622,6 +1732,16 @@ impl AuthController {
         Ok(page?)
     }
     pub fn refresh(&self) -> Result<ConnectionStatus, AuthError> {
+        self.refresh_as(false, &mut Reached::default())
+    }
+    /// `refresh`; `renewal` when it renews a connection this controller already confirmed
+    /// (`renew_if_due`), whose renewed tokens are kept if only the identity check goes unanswered
+    /// (`keep_renewed`). `reached`: how far it got.
+    fn refresh_as(
+        &self,
+        renewal: bool,
+        reached: &mut Reached,
+    ) -> Result<ConnectionStatus, AuthError> {
         let writer = self.prepare_mutation(RetireReason::AuthorityChanged)?;
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(AuthError::Cancelled);
@@ -1629,8 +1749,12 @@ impl AuthController {
         let _operation = self.operation()?;
         let generation = self.generation.load(Ordering::SeqCst);
         let mut diagnostic = None;
+        // Planning Center's answer, in case it is never written: what to sign out of then.
+        let mut fresh: Option<(Zeroizing<String>, &'static str)> = None;
+        let mut writes = None;
         let result = (|| {
             let mut state = self.lock()?;
+            writes = Some(state.writes);
             self.check_writer(generation, None, writer.as_ref())?;
             state.unchecked_save = None;
             state.status.state = ConnectionState::Checking;
@@ -1648,9 +1772,11 @@ impl AuthController {
                 .refresh_token
                 .as_deref()
                 .ok_or(AuthError::InvalidToken)?;
+            reached.asked = true;
             let grant = self
                 .provider
                 .refresh_grant(&self.binding.client_id, previous);
+            reached.unreachable = matches!(grant, Err(AuthError::ProviderFailure));
             if writer.is_some() {
                 self.check_writer(generation, None, writer.as_ref())?;
             }
@@ -1665,6 +1791,16 @@ impl AuthController {
                     return Err(error);
                 }
             };
+            // Its own refresh token, only when Planning Center gave a new one. Without one the saved
+            // refresh token goes on working, and revoking even the new access token may revoke the
+            // grant it came from (RFC 7009 §2.1), the saved sign-in with it: nothing is signed out
+            // then, nor when Planning Center handed back the saved credential (review N, 2).
+            if !same_credential(&stored.tokens, &tokens) {
+                fresh = tokens
+                    .refresh_token
+                    .as_deref()
+                    .map(|new| (Zeroizing::new(new.to_owned()), "refresh_token"));
+            }
             if tokens.refresh_token.is_none() {
                 tokens.refresh_token = Some(previous.into());
             }
@@ -1679,9 +1815,102 @@ impl AuthController {
                 &mut diagnostic,
                 writer.as_ref(),
                 true,
+                renewal,
             )
         })();
+        // Stopped after Planning Center answered and before its write (Quit, Cancel, Disconnect, a
+        // church switch): the renewed credential is held nowhere, so it is signed out at Planning
+        // Center, best effort (review M, L3), on a thread of its own: the request (up to 15 s) never
+        // holds this refresh's operation, the renewal's turn or the read's locks, so a sign-in right
+        // after Cancel isn't answered busy meanwhile (review N, 3). At Quit, Ozzie may exit first.
+        if matches!(result, Err(AuthError::Cancelled))
+            && writes.is_some_and(|before| self.lock().is_ok_and(|s| s.writes == before))
+            && let Some((token, hint)) = fresh.take()
+        {
+            self.revoke_aside(token, hint);
+        }
         self.record(generation, result, diagnostic, None)
+    }
+    /// `revoke_quietly` on a thread of its own, holding nothing of this controller's: the token
+    /// moves there and is wiped when the request ends.
+    fn revoke_aside(&self, token: Zeroizing<String>, hint: &'static str) {
+        if self.sunday.is_some() {
+            return;
+        }
+        let (provider, client) = (self.provider.clone(), self.binding.client_id.clone());
+        let _ = std::thread::Builder::new()
+            .name("ozzie-revoke".into())
+            .spawn(move || {
+                let _ = provider.revoke(&client, &token, hint);
+            });
+    }
+    /// Whether a read should renew this connection's sign-in first: it is connected, and its access
+    /// token runs out within `RENEW_BEFORE_MS` by this controller's clock, or Planning Center already
+    /// refused it (`identify`). Never waits for a Keychain write in progress (`status_or_busy`).
+    pub fn renewal_due(&self) -> bool {
+        // The clock is read before State is held, as everywhere a clock may reenter.
+        let now = (self.now)();
+        match self.state.try_lock() {
+            Ok(state) => self.due(&state, now),
+            Err(_) => false,
+        }
+    }
+    fn due(&self, state: &State, now: u64) -> bool {
+        !self.is_cancelled()
+            && state.status.state == ConnectionState::Connected
+            && state
+                .runs_out
+                .is_some_and(|at| now.saturating_add(RENEW_BEFORE_MS) >= at)
+    }
+    /// Renews this connection's sign-in when it is due (`renewal_due`), once, through `refresh`, the
+    /// renewal "Check saved connection" makes, with all of its guards: the church must still match,
+    /// the Keychain record is replaced exactly as there, and a cancel, Disconnect or new sign-in on
+    /// this controller meanwhile saves nothing. True when it renewed; false when nothing was due,
+    /// including when another read renewed it while this one waited its turn.
+    ///
+    /// A failed renewal fails the read, as `renewal_error` reports it: `invalid-credentials` when
+    /// only a new sign-in helps (the connection is then `failed`, as after "Check saved
+    /// connection"), `provider-failure` when Planning Center didn't renew it just now, and a
+    /// Keychain error before Planning Center was asked as itself. After `provider-failure` or a
+    /// locked Keychain the connection stays as it was, nothing showing the sign-in itself is bad, so
+    /// the next read tries again; a Keychain that refuses or isn't there leaves it `failed`. A renewal Planning Center granted whose identity check alone went unanswered keeps
+    /// the renewed tokens and counts as renewed (`keep_renewed`); the read's own identity check
+    /// then confirms the church before anything is read.
+    pub fn renew_if_due(&self) -> Result<bool, crate::source::SourceError> {
+        let _turn = self.renewing.lock().unwrap_or_else(|e| e.into_inner());
+        let now = (self.now)();
+        let broken = |error| renewal_error(error, &Reached::default());
+        let before = {
+            let state = self.lock().map_err(broken)?;
+            if !self.due(&state, now) {
+                return Ok(false);
+            }
+            state.status.clone()
+        };
+        let generation = self.generation.load(Ordering::SeqCst);
+        let mut reached = Reached::default();
+        match self.refresh_as(true, &mut reached) {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                // Nothing shows the sign-in itself is bad when Planning Center didn't renew it just
+                // now, or when the Keychain was locked before Planning Center was asked (review M,
+                // L4): the connection is as it was, and the next read tries again. A Keychain that
+                // refuses or isn't there leaves it failed, which says why (review N, 4).
+                let untouched = (reached.unreachable && error == AuthError::ProviderFailure)
+                    || (!reached.asked && error == AuthError::Store(StoreError::Locked));
+                if untouched {
+                    let mut state = self.lock().map_err(broken)?;
+                    if !self.is_cancelled()
+                        && generation == self.generation.load(Ordering::SeqCst)
+                        && state.status.state == ConnectionState::Failed
+                        && state.status.problem.as_ref() == Some(&error)
+                    {
+                        state.status = before;
+                    }
+                }
+                Err(renewal_error(error, &reached))
+            }
+        }
     }
     /// Cancels, waits up to DISCONNECT_WAIT for an in-flight read, then revokes and deletes.
     /// `Busy` means nothing was revoked or deleted yet.
@@ -1895,6 +2124,7 @@ impl AuthController {
                 &mut diagnostic,
                 writer.as_ref(),
                 false,
+                false,
             )
         })();
         self.record(generation, result, diagnostic, Some(attempt.expires))
@@ -2016,6 +2246,7 @@ impl AuthController {
                 &mut diagnostic,
                 None,
                 false,
+                false,
             )
         })();
         self.record(
@@ -2050,6 +2281,42 @@ fn source_error(error: AuthError) -> crate::source::SourceError {
         _ => SourceError::ProviderFailure,
     }
 }
+/// How far a refresh got (`refresh_as`).
+#[derive(Default)]
+struct Reached {
+    /// Planning Center was asked to renew.
+    asked: bool,
+    /// The request to renew went unanswered: out of reach, a 429 or a 5xx.
+    unreachable: bool,
+}
+/// A failed renewal as the read it ends reports it, true to what helps: `provider-failure` only
+/// when Planning Center didn't renew it just now (no answer, a 429 or a 5xx; another try may work);
+/// a Keychain error before Planning Center was asked, a cancel or another sign-in under way as they
+/// are; anything else `invalid-credentials`, which only a new sign-in mends: Planning Center refused
+/// it, nothing to renew with, a renewal whose identity check named another church or refused the
+/// new token, or whose write the Keychain refused (the old refresh token is spent either way, review
+/// N, 8), a grant naming a scope set Ozzie never asks for, a controller left broken by a fault.
+fn renewal_error(error: AuthError, reached: &Reached) -> crate::source::SourceError {
+    match error {
+        AuthError::ProviderFailure if reached.unreachable => {
+            crate::source::SourceError::ProviderFailure
+        }
+        AuthError::Store(_) if !reached.asked => source_error(error),
+        AuthError::Cancelled | AuthError::Busy => source_error(error),
+        _ => crate::source::SourceError::InvalidCredentials,
+    }
+}
+/// An identity check Planning Center didn't answer usefully: out of reach, a 429, or any status but
+/// 200, 401 and 403 (a 5xx, say), as `PcoProvider::organization_named` reports them. It says nothing
+/// about which church a credential belongs to.
+fn unanswered(diagnostic: &OrganizationDiagnostic) -> bool {
+    [
+        UserInfoReason::TransportFailure,
+        UserInfoReason::ProviderFailure,
+    ]
+    .into_iter()
+    .any(|reason| *diagnostic == OrganizationDiagnostic::userinfo(reason))
+}
 /// How long disconnect waits for an in-flight read to finish before revoking.
 pub const DISCONNECT_WAIT: std::time::Duration = std::time::Duration::from_secs(6);
 pub fn numeric_id(id: &str) -> bool {
@@ -2079,3 +2346,7 @@ mod sunday_read_tests;
 #[cfg(test)]
 #[path = "sunday_gate_tests.rs"]
 mod sunday_gate_tests;
+
+#[cfg(test)]
+#[path = "renewal_tests.rs"]
+mod renewal_tests;

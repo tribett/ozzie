@@ -1,7 +1,7 @@
 import { shouldRefreshStale } from "./stale-refresh.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  connection, followInUse, foundOrganization, fresher, operationsAsked, operationsGranted, parseInUse, parseSwitchQuestion, pendingSettings, seenInUse, yourName,
+  connection, followInUse, foundOrganization, fresher, needsSignIn, operationsAsked, operationsGranted, parseInUse, parseSwitchQuestion, pendingSettings, seenInUse, yourName,
   type ConnectionStatus,
 } from "./connection.js";
 import { adoptRules, loadRulesByChurch, moveRules, ofChurchInUse, onScreenCapture, rulesInUse, saveRulesByChurch } from "./church-in-use.js";
@@ -675,7 +675,8 @@ export function App() {
         {/* Outside the pages above, so guided setup or another page never unmounts it: the cards end only as KeptCards
             says (cards-page.tsx), and names beside them come only from a check of the church in use. */}
         {(page === "cards" || cardsOpened) && <div hidden={showSetup || page !== "cards"} className="cards-kept">
-          <KeptCards check={capture && { organization: capture.organization, names: capture.names }} example={fictional} inUse={inUseOrg ?? null} discarded={cardsDiscarded} onScreen={visible} onOpenCards={setOpenCards} /></div>}
+          <KeptCards check={capture && { organization: capture.organization, names: capture.names }} example={fictional} inUse={inUseOrg ?? null} discarded={cardsDiscarded} onScreen={visible} onOpenCards={setOpenCards}
+            disconnected={status?.state === "disconnected"} signInAgain={needsSignIn(status)} /></div>}
       </main>
       {quitAsk && <QuitQuestion ask={quitAsk} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
       <AskPanel key={askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}

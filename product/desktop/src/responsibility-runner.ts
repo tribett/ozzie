@@ -442,8 +442,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     deps.store.set(KEYS.writeups, JSON.stringify({ version: 1, items: writeups }));
   };
   /**
-   * How many times every write-up was forgotten (deleted saved checks, a disconnect, a switch of church): a write-up
-   * still being prepared then is dropped when it comes back (review G, N2). Stopping a job aborts its run, so its write-up
+   * How many times every write-up was forgotten (deleted saved checks, a disconnect, a switch of church): the write-up of
+   * a run under way then, still reading or still being prepared, is dropped when it comes back (review G, N2; K, L3). Stopping a job aborts its run, so its write-up
    * never comes back. One for another church is kept but never shown (build).
    */
   let forgotten = 0;
@@ -707,6 +707,8 @@ export function createRunner(deps: RunnerDeps): Runner {
   async function run(r: Responsibility, trigger: RunTrigger, slot: string | null, missed: string[], fallback = false): Promise<RunResult> {
     if (!hooks) return { status: "skipped" };
     const started = deps.now();
+    // Taken before anything is read: a forget while this run still reads Planning Center drops its write-up too (review K, L3).
+    const since = forgotten;
     const s = stateOf(r.id);
     let grant: Grant;
     try { grant = await deps.native.begin(r.id, trigger); }
@@ -819,7 +821,6 @@ export function createRunner(deps: RunnerDeps): Runner {
       // and the card shows the check alone (L15).
       let ready: Prepared | null = null;
       let why: NoWriteup | null = !ctx.modelReady ? "off" : grant.ai_steps <= 0 ? "spent" : null;
-      const since = forgotten;
       if (!why) {
         try { ready = await guard(hooks.prepare(r, grant, capture, abort.signal, trigger)); }
         catch (error) { if (error !== CANCELLED && !abort.signal.aborted) ready = null; else why = "stopped"; }

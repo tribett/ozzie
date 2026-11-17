@@ -386,3 +386,35 @@ fn an_unreadable_saved_slot_fails_closed_without_overwriting_it() {
     );
     assert!(store.0.0.lock().unwrap().is_empty());
 }
+
+#[test]
+fn a_renewal_keeps_when_the_one_click_sign_in_was_made() {
+    // Review M, L7: the page applies the organization Planning Center named once per sign-in. A
+    // renewal changes the connection's check time, never when the one-click sign-in was made.
+    let store = Arc::new(MemoryStore::default());
+    let church = Church::new("1001");
+    let clock = Arc::new(std::sync::atomic::AtomicU64::new(1_000));
+    let now = clock.clone();
+    let auth = AuthController::find_organization(
+        "fictional-app-client".into(),
+        "local:",
+        store,
+        church,
+        Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst)),
+    )
+    .unwrap();
+    sign_in(&auth, Scopes::Services).unwrap();
+    let bound = auth.adopt_found().unwrap();
+    let handed = bound.status().unwrap();
+    assert_eq!(handed.found_at_ms, Some(1_000));
+    assert!(
+        serde_json::to_string(&handed)
+            .unwrap()
+            .contains("\"found_at_ms\":1000")
+    );
+    clock.store(7_201_000, std::sync::atomic::Ordering::SeqCst);
+    let renewed = bound.refresh().unwrap();
+    assert_eq!(renewed.checked_at_ms, Some(7_201_000));
+    assert_eq!(renewed.found_at_ms, Some(1_000));
+    assert!(renewed.found);
+}

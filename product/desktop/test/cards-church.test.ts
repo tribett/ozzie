@@ -9,7 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 import { CardReviewController } from "../../src/card-review/controller.js";
-import { cardsAt, KEPT_ENDS, KeptCards, MATCHES_NEED_CHECK, MATCHES_NEED_CHURCH, MATCHES_NOT_IN_EXAMPLE, readingFor, type ShownCheck } from "../src/cards-page.js";
+import { cardsAt, KEPT_ENDS, KeptCards, MATCHES_NEED_CHECK, MATCHES_NEED_CHURCH, MATCHES_NEED_SIGN_IN, MATCHES_NOT_IN_EXAMPLE, readingFor, type ShownCheck } from "../src/cards-page.js";
+import { needsSignIn } from "../src/connection.js";
 import { DISCONNECT_CARDS_ASK, DISCONNECT_DISCARD, DISCONNECT_FAILED, DISCONNECT_KEEP, DisconnectButton } from "../src/planning-center-forms.js";
 
 const dom = installFakeDom();
@@ -32,7 +33,7 @@ async function mount(inUse: string | null) {
   const root = createRoot(dom.root as unknown as Element);
   const open: number[] = [];
   const show = async (church: string | null, discarded = 0) => {
-    await act(async () => { root.render(React.createElement(KeptCards, { check: null, example: false, inUse: church, discarded, onOpenCards: n => open.push(n), review })); });
+    await act(async () => { root.render(React.createElement(KeptCards, { check: null, example: false, inUse: church, disconnected: false, discarded, onOpenCards: n => open.push(n), review })); });
   };
   await show(inUse);
   return { review, show, open, unmount: () => act(async () => { root.unmount(); }) };
@@ -96,6 +97,8 @@ describe("visitor cards and the church Ozzie uses", () => {
   it("is keyed in App by the church in use and Disconnect, never by the Organization ID in Settings", () => {
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
     expect(app).toContain("<KeptCards check={capture && { organization: capture.organization, names: capture.names }} example={fictional} inUse={inUseOrg ?? null} discarded={cardsDiscarded}");
+    // "Connect Planning Center" only when the native status says it is disconnected (review K, L5).
+    expect(app).toMatch(/<KeptCards [^>]*disconnected=\{status\?\.state === "disconnected"\}/u);
     expect(app).not.toMatch(/<CardsPage /u);
     expect(app).not.toContain("workspace={org");
     // Typing an ID under Advanced changes settings, which KeptCards never reads.
@@ -116,15 +119,16 @@ describe("names offered beside visitor cards as possible matches (review G)", ()
   const A: ShownCheck = { organization: "1001", names: { "511": NAME } };
   const B: ShownCheck = { organization: "2002", names: { "611": "Sam Whitcombe" } };
   const RILEY = `Possible match: ${NAME}`;
-  async function mountWith(inUse: string | null, check: ShownCheck | null, example = false) {
+  /** `disconnected`: the native status says Planning Center is disconnected (not a sign-in being checked). */
+  async function mountWith(inUse: string | null, check: ShownCheck | null, example = false, disconnected = false, signInAgain = false) {
     const { act } = await import("react");
     const { createRoot } = await import("react-dom/client");
     const review = await readCards();
     const root = createRoot(dom.root as unknown as Element);
-    const show = async (church: string | null, shown: ShownCheck | null, ex = false) => {
-      await act(async () => { root.render(React.createElement(KeptCards, { check: shown, example: ex, inUse: church, review })); });
+    const show = async (church: string | null, shown: ShownCheck | null, ex = false, off = false) => {
+      await act(async () => { root.render(React.createElement(KeptCards, { check: shown, example: ex, inUse: church, disconnected: off, signInAgain, review })); });
     };
-    await show(inUse, check, example);
+    await show(inUse, check, example, disconnected);
     return { show, unmount: () => act(async () => { root.unmount(); }) };
   }
 
@@ -136,12 +140,46 @@ describe("names offered beside visitor cards as possible matches (review G)", ()
   });
 
   it("after a disconnect, offers none, even with a saved copy of that church's check on screen", async () => {
-    const m = await mountWith(null, A);
+    const m = await mountWith(null, A, false, true);
     expect(dom.seen()).toContain(NAME);
     expect(dom.seen()).not.toContain(RILEY);
     expect(dom.seen()).toContain(MATCHES_NEED_CHURCH);
     expect(MATCHES_NEED_CHURCH).toBe("Connect Planning Center to see possible matches with this Sunday's check.");
     await m.unmount();
+  });
+
+  it("while Ozzie checks its sign-in (at launch, on a refresh), offers none and doesn't ask to connect (review K, L5)", async () => {
+    // Native names no church in use while it checks; Planning Center isn't disconnected.
+    const m = await mountWith(null, A);
+    expect(dom.seen()).toContain(NAME);
+    expect(dom.seen()).not.toContain(RILEY);
+    expect(dom.seen()).not.toContain(MATCHES_NEED_CHURCH);
+    expect(dom.seen()).toContain(MATCHES_NEED_CHECK);
+    // Checked: the church is in use again, and its names are offered.
+    await m.show("1001", A);
+    expect(dom.seen()).toContain(RILEY);
+    // Disconnected: then, and only then, it asks to connect.
+    await m.show(null, A, false, true);
+    expect(dom.seen()).not.toContain(RILEY);
+    expect(dom.seen()).toContain(MATCHES_NEED_CHURCH);
+    await m.unmount();
+  });
+
+  it("after a sign-in Planning Center no longer accepts, says to sign in again, not to wait for a check (review M, L5)", async () => {
+    const m = await mountWith(null, A, false, false, true);
+    expect(dom.seen()).not.toContain(RILEY);
+    expect(dom.seen()).toContain(MATCHES_NEED_SIGN_IN);
+    expect(dom.seen()).not.toContain(MATCHES_NEED_CHECK);
+    expect(MATCHES_NEED_SIGN_IN).toBe("Sign in to Planning Center again in Settings to see possible matches.");
+    await m.unmount();
+    // Which failed sign-in needs signing in again: refused or nothing to renew with, or a grant Ozzie can't keep. Planning
+    // Center out of reach or an organization check that didn't finish doesn't.
+    const failed = (problem: string) => ({ state: "failed" as const, problem });
+    expect(needsSignIn(failed("invalid-token"))).toBe(true);
+    expect(needsSignIn(failed("scope-mismatch"))).toBe(true);
+    for (const problem of ["provider-failure", "organization-unverified", "busy", "cancelled"]) expect(needsSignIn(failed(problem)), problem).toBe(false);
+    expect(needsSignIn({ state: "connected", problem: "invalid-token" })).toBe(false);
+    expect(needsSignIn(null)).toBe(false);
   });
 
   it("after a first sign-in to another church, offers that church's names once it is checked, never the first one's", async () => {

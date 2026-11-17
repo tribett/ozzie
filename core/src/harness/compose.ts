@@ -207,8 +207,10 @@ function summary(tool: string, p: Row): string | null {
     case "sunday.who_could_help": {
       const role = str((p["asked_for"] as Row | null)?.["role"]) ?? "This role";
       if (p["open_need"] === "none in the last check") return `${role} has no open need in the last check.`;
-      const n = Array.isArray(p["people"]) ? p["people"].length : 0;
-      return `On the team for ${role}, the check listed ${plural(n, "person", "people")}, in no particular order.`;
+      // Everyone the check listed, those left out of a copy cut to fit included. No order is named: the app's card shows
+      // them alphabetically and Ask in person-id order, each saying so beside the people it shows (review K).
+      const n = (Array.isArray(p["people"]) ? p["people"].length : 0) + (num(p["left_out_for_length"]) ?? 0);
+      return `On the team for ${role}, the check listed ${plural(n, "person", "people")}.`;
     }
     case "sunday.pending_requests": {
       const n = Array.isArray(p["pending"]) ? p["pending"].length : 0, m = Array.isArray(p["leads_not_accepted"]) ? p["leads_not_accepted"].length : 0;

@@ -93,6 +93,18 @@ export const FAILURE_REASONS: Readonly<Record<FailureCode, string>> = Object.fre
   interrupted: "it was stopped before it finished",
 });
 const reason = (code: string | null | undefined) => (code && Object.hasOwn(FAILURE_REASONS, code) ? FAILURE_REASONS[code as FailureCode] : "something went wrong");
+/**
+ * Why a Sunday check stopped, where its code means something narrower than for other tasks (harness-bridge.ts
+ * `checkFailure`): which church a sign-in belongs to, and a sign-in that was busy or a Mac's storage that was locked.
+ */
+export const CHECK_FAILURE_REASONS: Readonly<Partial<Record<FailureCode, string>>> = Object.freeze({
+  // Out of reach, a 429 or a 5xx alike (review N, 8).
+  "provider-failure": "Planning Center didn't answer just now",
+  unverified: "Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read",
+  cancelled: "Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped",
+});
+const reasonFor = (kind: TaskRow["kind"], code: string | null | undefined) =>
+  kind === "check" && code && Object.hasOwn(CHECK_FAILURE_REASONS, code) ? CHECK_FAILURE_REASONS[code as FailureCode]! : reason(code);
 
 /** When Ozzie can't tell, what it can do instead (owner decision "Useful help when work cannot be completed"). */
 export const CAN_DO_INSTEAD = "Ozzie can tell you what still needs a decision this Sunday, who on a team could help with an open role, or prepare a note for you to copy. Ask “What can you do?” to see more.";
@@ -202,7 +214,7 @@ export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow[
       return `${asked}; ${reason(outcome)}`;
     }
     case "verified": return kind === "check" ? "Finished the check" : "Checked the facts it chose against what was read";
-    case "failed": return `Stopped: ${reason(detail)}`;
+    case "failed": return `Stopped: ${reasonFor(kind, detail)}`;
     case "cancelled": return "Stopped by you";
     default: return null;
   }
@@ -335,7 +347,7 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
     title = row.kind === "ask" ? row.state === "verified" ? options.trigger === "on-this-mac" ? "Answered on this Mac" : "Answered a question" : "A question" : procedure!;
     outcome = row.state === "verified" ? `checked · ${things(tools.length)}` : null;
   }
-  if (row.state === "failed") outcome = `Couldn't finish: ${reason(row.failure)}`;
+  if (row.state === "failed") outcome = `Couldn't finish: ${reasonFor(row.kind, row.failure)}`;
   if (row.state === "cancelled") outcome = "You stopped it";
   if (row.state === "admitted" || row.state === "running" || row.state === "proposed") outcome = "Still running";
   return [title, outcome, at].filter(Boolean).join(" · ");
@@ -381,14 +393,15 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
   switch (row.state) {
     case "verified":
       if (row.kind === "check") ended = tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "Finished, though part of the check couldn't be read." : "Finished.";
-      // Its card shows what the AI found next to the full list, never a draft, and says when the AI didn't ask for the
-      // list of people (review H, M3; review G, N3, N4).
+      // Its card shows what the AI found next to the full list, never a draft, and says when the AI didn't ask for this
+      // role's list of people (review H, M3; review G, N3, N4). The record names no role, so a call for another role's list
+      // counts as a call here, and this ending then says nothing about whose list it was (review K, L1).
       else if (start === "who-could-help") {
         const looked = tools.some(e => /^sunday\.who_could_help (?:complete|partial|stale)$/u.test(e.detail));
         ended = end === "not-covered" ? "The AI couldn't tell more than the list showed, and Ozzie said so."
           : end === "draft" ? "Finished. The AI asked for a note, which isn't prepared from this card."
             : looked ? "Finished. Ozzie showed what the AI found beside the list from its own check."
-              : "Finished. The AI didn't ask for the list of people; Ozzie showed what it said about the role.";
+              : "Finished. The AI didn't ask for this role's list of people; Ozzie showed what it said about the role.";
       }
       else if (end === "nothing-needs-a-decision") ended = "Nothing needed a decision.";
       else if (end === "not-covered") ended = "What Ozzie read didn't answer it, and the answer said so.";
@@ -397,7 +410,7 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
       break;
     case "failed":
       ended = row.failure === "fidelity" ? "The AI's answer didn't check out against what Ozzie read, so nothing was shown."
-        : row.failure === "limit" ? "Stopped at its limit." : `Couldn't finish: ${reason(row.failure)}.`;
+        : row.failure === "limit" ? "Stopped at its limit." : `Couldn't finish: ${reasonFor(row.kind, row.failure)}.`;
       break;
     // Pausing or stopping a job, or stopping a question: a person did it either way (review H, L12).
     case "cancelled": ended = "Stopped by you."; break;

@@ -40,6 +40,13 @@ describe("the two reads behind the picker", () => {
     expect(choicesProblem({ "sunday-choices": "organization-unverified" })).toContain("couldn't be verified");
     const odd = choicesProblem({ "sunday-choices": "provider-failure", detail: "Avery Brightwater <script>" });
     expect(odd).toBe("Planning Center couldn't be read just now. Try again, or enter the plan by hand.");
+    // The sign-in was running out and wasn't renewed (native main.rs renewed_auth), true to the cause.
+    expect(choicesProblem({ "sign-in-not-renewed": "invalid-credentials" })).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed, so your Sundays weren't listed. Sign in again in Settings, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "provider-failure" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and Planning Center didn't renew it just now, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "locked" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage was locked, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "denied" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac didn't let Ozzie use it, so your Sundays weren't listed. Allow access when macOS asks, then try again, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "store-unavailable" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage couldn't be read, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "busy" })).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed just now, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
   });
 });
 

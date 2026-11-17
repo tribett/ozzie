@@ -88,6 +88,13 @@ describe("one-click Planning Center connect", () => {
     expect(foundOrganization({ ...empty, organization: "999" }, status, first!.key)).toBeNull();
     // A new sign-in (new check time) applies again.
     expect(foundOrganization(empty, { ...status, checked_at_ms: 2_000 }, first!.key)?.settings.organization).toBe("513367");
+    // Review M, L7: a renewal changes the check time every two hours, never when the one-click sign-in was made, so
+    // it never re-applies the organization over IDs typed under Advanced since.
+    const found = { ...status, found_at_ms: 1_000 };
+    const once = foundOrganization(empty, found, null)!;
+    expect(foundOrganization({ ...empty, organization: "999" }, { ...found, checked_at_ms: 7_201_000 }, once.key)).toBeNull();
+    // Another one-click sign-in is another time: applied again.
+    expect(foundOrganization({ ...empty, organization: "999" }, { ...found, found_at_ms: 9_000_000, checked_at_ms: 9_000_000 }, once.key)?.settings.organization).toBe("513367");
   });
   it("keeps the chosen Sunday for the same organization and clears it for a different one", () => {
     const status = connectedStatus({ found: true });

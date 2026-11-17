@@ -257,8 +257,8 @@ states.
   role, room, follow-up and group names as Planning Center has them, which can
   include a person's name if your church typed one there. It is forgotten when
   the job stops or ends, when Ozzie switches church, when you delete saved
-  checks and whenever Planning Center is disconnected, including one the AI
-  was still writing, and none is shown until Ozzie knows which church it is
+  checks and whenever Planning Center is disconnected, including one from a
+  run still under way, and none is shown until Ozzie knows which church it is
   using. It leads that job's card on Today; What runs automatically shows it
   under the run. When AI help is set up and a run has none, the card says why,
   except when you paused the job while it was being written; with no AI route
@@ -271,7 +271,9 @@ states.
   tools read to that one role at that one service time before the loop
   starts. When the AI chose facts about the role, the card shows Ozzie's lines
   for them and everyone the check listed, taken from Ozzie's own list with the
-  same labels, alphabetically, never from the AI's copy, which can be
+  same labels, grouped by label as on that list and alphabetical within each
+  group, with those left out folded behind "Show N left out and why" as on that
+  list, never from the AI's copy, which can be
   shortened to fit what the AI may read (the card says when it was). It never
   marks which ones the AI named. Otherwise one line says it had nothing to
   add, couldn't tell more, or asked for a note, which isn't prepared there.

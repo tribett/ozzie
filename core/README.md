@@ -135,7 +135,8 @@ does, and what fixed logic does".
 The TypeScript harness runs under Node with any `ModelStep` (`contract.ts`):
 the tests use scripted models over fixed, invented data, for example
 `core/test/harness/compose.test.ts`. In the app the only model step is the
-native `agent_step` command. There is no command-line entry yet.
+native `agent_step` command. There is no command-line entry for the harness
+yet; the fixed checks have one, below.
 
 From the repository root, on Node 22.23.4 (`.node-version`):
 
@@ -150,6 +151,44 @@ pnpm test:native             # the Rust crate core/native-auth
 `core/test/harness/eval.test.ts` sweeps every fixture for injected
 instructions, leaked names and canaries; `core/test/harness/fixed.test.ts` holds
 the specs, the grammar and the pins to the files.
+
+## Try the Sunday check from the command line
+
+`core/examples/sunday-check.ts` runs Ozzie's Sunday check over a saved copy of
+a check of a fictional church (the example the app shows), with example Church
+rules. It needs no app, no Planning Center account and no AI: it calls the same
+fixed functions the app does and prints the findings, each with why, its source
+and when it was read. Nothing is fetched, sent or saved. After
+`pnpm install --frozen-lockfile`, on Node 22.23.4:
+
+```sh
+node core/examples/run.mjs          # plain text
+node core/examples/run.mjs --json   # the same findings as JSON
+```
+
+The start of its output:
+
+```
+Ozzie Sunday check: the fictional example
+A saved copy of a check of a fictional church. Nothing was read from Planning Center, nothing went to an AI model, nothing was saved.
+
+Plan: Ozzie Demo — Main Sunday (fictional), November 22, 2026
+Checked: Friday, November 20 at 10:00 AM EST
+
+Needs a decision (5)
+
+1. Greeter still needs one more person at the 9:30 AM service. One person on the team could help with no overlap found, and one with a possible conflict. One person's availability couldn't be checked.
+   Why I flagged this:
+   - Planning Center reports 1 remaining request for Greeter.
+   - That number already accounts for people who accepted or are pending; Ozzie doesn't subtract them again.
+   - People are listed from this position's team in Planning Center, checked against their blockouts and other schedules. They are not ranked.
+   Source: Planning Center Services, checked Friday, November 20 at 10:00 AM EST
+```
+
+Change `EXAMPLE_RULES` in the file to see a rule add or remove a finding;
+`core/test/examples/sunday-check.test.ts` pins the output. `run.mjs` loads the
+TypeScript with the repository's own Vite, in memory, because the core imports
+some fixed texts with `?raw`.
 
 ## Extending it
 

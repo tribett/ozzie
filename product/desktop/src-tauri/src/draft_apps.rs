@@ -98,8 +98,10 @@ fn encode(text: &str, newline: &str, out: &mut String) {
                 out.push(char::from(byte));
             } else {
                 out.push('%');
-                out.push(char::from(HEX[usize::from(byte >> 4)]));
-                out.push(char::from(HEX[usize::from(byte & 0x0F)]));
+                // By `get`, not an index: the structure test refuses any index but a literal.
+                let digit = |nibble: u8| HEX.get(usize::from(nibble)).copied().unwrap_or(b'0');
+                out.push(char::from(digit(byte >> 4)));
+                out.push(char::from(digit(byte & 0x0F)));
             }
         }
     }
@@ -307,8 +309,10 @@ pub(crate) async fn open_draft_to(
     let turns = checks.inner().clone();
     let checked = checked.inner().clone();
     let address = tauri::async_runtime::spawn_blocking(move || {
+        // The connection as it is, never renewed here (review M, L1): a renewal could take about 30 s
+        // before the 8-second limit starts. Checks keep the sign-in renewed.
         let read = contact::read_recipient(&checked, &turns, &person, app.contact(), || {
-            crate::connected_auth(&consumer).ok()
+            crate::session_auth(&consumer).ok()
         });
         prepare(app, &unaddressed, read)
     })
@@ -885,6 +889,38 @@ mod tests {
         unsafes: usize,
         /// Each function's parameters, as the last segment of each parameter's type.
         inputs: Vec<(String, Vec<String>)>,
+        /// Every index by anything but an integer or string literal or `..` (`s[a..]`, `s[r]` with
+        /// a range held in `r`, `s[RangeFrom { .. }]`): a string's slice panic quotes the string.
+        indexed: usize,
+        /// Macros whose arguments couldn't be read as code (`macro_args`): nothing in them was seen.
+        opaque: Vec<String>,
+    }
+    /// A macro's arguments as code: expressions separated by commas, or `matches!`'s expression,
+    /// pattern and guard (review M, L6).
+    enum MacroArgs {
+        Exprs(syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>),
+        Matches(Box<(syn::Expr, syn::Pat, Option<syn::Expr>)>),
+    }
+    fn macro_args(m: &syn::Macro) -> Option<MacroArgs> {
+        use syn::parse::Parser as _;
+        let exprs = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(args) = exprs.parse2(m.tokens.clone()) {
+            return Some(MacroArgs::Exprs(args));
+        }
+        let matches = |input: syn::parse::ParseStream| {
+            let expr: syn::Expr = input.parse()?;
+            input.parse::<syn::Token![,]>()?;
+            let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
+            let guard = if input.peek(syn::Token![if]) {
+                input.parse::<syn::Token![if]>()?;
+                Some(input.parse::<syn::Expr>()?)
+            } else {
+                None
+            };
+            input.parse::<Option<syn::Token![,]>>()?;
+            Ok(MacroArgs::Matches(Box::new((expr, pat, guard))))
+        };
+        matches.parse2(m.tokens.clone()).ok()
     }
     impl Named {
         fn flatten(&mut self, tree: &syn::UseTree, prefix: &str) {
@@ -1008,6 +1044,24 @@ mod tests {
                 m.tokens.to_string().split_whitespace().collect(),
             ));
             syn::visit::visit_macro(self, m);
+            // Review M, L6: the arguments are read as code, so a slice, a call or a path inside a
+            // macro is seen as anywhere else.
+            match macro_args(m) {
+                Some(MacroArgs::Exprs(args)) => args.iter().for_each(|a| self.visit_expr(a)),
+                Some(MacroArgs::Matches(matched)) => {
+                    let (expr, pat, guard) = *matched;
+                    self.visit_expr(&expr);
+                    self.visit_pat(&pat);
+                    guard.iter().for_each(|g| self.visit_expr(g));
+                }
+                None => self.opaque.push(joined(&m.path)),
+            }
+        }
+        fn visit_expr_index(&mut self, e: &'a syn::ExprIndex) {
+            if !literal_index(&e.index) {
+                self.indexed += 1;
+            }
+            syn::visit::visit_expr_index(self, e);
         }
         fn visit_expr_method_call(&mut self, call: &'a syn::ExprMethodCall) {
             let args = call
@@ -1022,6 +1076,59 @@ mod tests {
                 .push((self.within.last().cloned(), call.method.to_string(), args));
             syn::visit::visit_expr_method_call(self, call);
         }
+    }
+    /// Whether an index can't slice a string: an integer or string literal, or `..`, through any
+    /// brackets (review N, 5). A range held in a variable or built as a struct is none.
+    fn literal_index(index: &syn::Expr) -> bool {
+        match index {
+            syn::Expr::Paren(p) => literal_index(&p.expr),
+            syn::Expr::Group(g) => literal_index(&g.expr),
+            syn::Expr::Lit(l) => matches!(l.lit, syn::Lit::Int(_) | syn::Lit::Str(_)),
+            syn::Expr::Range(r) => r.start.is_none() && r.end.is_none(),
+            _ => false,
+        }
+    }
+    /// Whether a macro's tokens ask for debug formatting: `{:?}`, `{:#?}`, `{x:?}`, `{:>8?}`
+    /// (review N, 5).
+    fn debug_formatted(tokens: &str) -> bool {
+        // `{{` and `}}` are a brace written out, not a format.
+        let tokens = tokens.replace("{{", "").replace("}}", "");
+        tokens.split('{').skip(1).any(|part| {
+            part.split('}')
+                .next()
+                .is_some_and(|inner| inner.ends_with('?'))
+        })
+    }
+    /// Review K, L6: a path that can panic with a value in its message: a panicking call spelled as
+    /// a path of any length (`Option::expect(x, …)`, `Index::index(s, 1..)`,
+    /// `<str>::split_at(s, 1)`, whose path is the one segment `split_at`), or anything of
+    /// `std::panic` (`panic_any`, `resume_unwind`), `begin_panic` or `Index`.
+    fn panics_through(path: &str) -> bool {
+        let segments: Vec<&str> = path.split("::").collect();
+        let last = segments.last().copied().unwrap_or_default();
+        ([
+            "expect",
+            "unwrap",
+            "expect_err",
+            "unwrap_err",
+            "unwrap_unchecked",
+            "index",
+            "index_mut",
+            "split_at",
+            "split_at_mut",
+        ]
+        .contains(&last))
+            || segments.iter().any(|s| {
+                [
+                    "panic",
+                    "panic_any",
+                    "begin_panic",
+                    "panicking",
+                    "Index",
+                    "IndexMut",
+                ]
+                .contains(s)
+            })
     }
     fn named(source: &str) -> Named {
         use syn::visit::Visit as _;
@@ -1217,7 +1324,8 @@ mod tests {
             }
             if let Some(rest) = path.strip_prefix("crate::") {
                 assert!(
-                    ["Consumer", "SundayChecks", "connected_auth"].contains(&rest),
+                    // The connection as it is, never the lookup that may renew (review M, L1).
+                    ["Consumer", "SundayChecks", "session_auth"].contains(&rest),
                     "draft_apps.rs reaches {path}"
                 );
             }
@@ -1265,6 +1373,8 @@ mod tests {
             .collect();
         assert_eq!(read_calls.len(), 1, "called once, inside open_draft_to");
         for (name, tokens) in &here.macros {
+            // By its last segment, so `std::println!` is `println!` (review N, 5).
+            let last = name.rsplit("::").next().unwrap_or_default();
             assert!(
                 ![
                     "write",
@@ -1276,11 +1386,11 @@ mod tests {
                     "dbg",
                     "format_args"
                 ]
-                .contains(&name.as_str()),
+                .contains(&last),
                 "draft_apps.rs uses {name}!"
             );
             assert!(
-                !tokens.contains(":?"),
+                !debug_formatted(tokens),
                 "draft_apps.rs formats a value: {name}!({tokens})"
             );
             for banned in ["emit", "notification", "log::"] {
@@ -1314,12 +1424,54 @@ mod tests {
                     "unwrap",
                     "expect_err",
                     "unwrap_err",
-                    "unwrap_unchecked"
+                    "unwrap_unchecked",
+                    "index",
+                    "index_mut",
+                    "split_at",
+                    "split_at_mut"
                 ]
                 .contains(&method.as_str()),
                 "draft_apps.rs calls {method} in {within:?}"
             );
         }
+        // Review K, L6: nor spelled as a path, nor by slicing a string with a range, macro
+        // arguments included (review M, L6), every one of which is read.
+        for (within, path) in here.paths() {
+            assert!(
+                !panics_through(&path),
+                "draft_apps.rs can panic through {path} in {within:?}"
+            );
+        }
+        assert_eq!(
+            here.indexed, 0,
+            "draft_apps.rs indexes by more than a literal"
+        );
+        assert_eq!(here.opaque, Vec::<String>::new(), "macro arguments unread");
+        let probe = named(
+            "fn f(s: &str) { let _ = format!(\"{}\", &s[1..]); let _ = matches!(s.len(), 1); let _ = str::split_at(s, 1); }",
+        );
+        assert_eq!(probe.indexed, 1);
+        // Review N, 5: a range held in a variable or built as a struct, a one-segment path, a
+        // qualified print macro, pretty debug formatting.
+        let held = named(
+            "fn f(s: &str) { let r = 1..2; let _ = &s[r]; let _ = &s[core::ops::RangeFrom { start: 1 }]; let _ = s[0] + s[..].len(); }",
+        );
+        assert_eq!(held.indexed, 2);
+        assert!(
+            named("fn f(s: &str) { let _ = <str>::split_at(s, 1); }")
+                .paths()
+                .iter()
+                .any(|(_, p)| panics_through(p))
+        );
+        assert!(debug_formatted(r#"\"{:#?}\",value"#) && debug_formatted(r#"\"{x:?}\""#));
+        assert!(!debug_formatted(r#"\"{}{{?}}\",value"#));
+        assert!(probe.calls.iter().any(|(_, m, _)| m == "len"));
+        assert!(probe.paths().iter().any(|(_, p)| panics_through(p)));
+        assert!(
+            named("fn f(b: u8) -> bool { matches!(b, b'a'..=b'z' | b'_') }")
+                .opaque
+                .is_empty()
+        );
         // Review G, L-a: of the Objective-C runtime, only the three classes this file needs, and only
         // what it calls on them: no other class (process-wide state such as `NSProcessInfo`, the
         // pasteboard, user defaults), no message sent by hand.
@@ -1375,9 +1527,11 @@ mod tests {
                 "chars",
                 "clone",
                 "contact",
+                "copied",
                 "count",
                 "encode_utf8",
                 "file_stem",
+                "get",
                 "inner",
                 "is_ascii_alphanumeric",
                 "is_control",

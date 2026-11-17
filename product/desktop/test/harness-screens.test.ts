@@ -16,6 +16,7 @@ import { aiText, taskAccount, taskLine, TOOL_PHRASES, type TaskEventRow } from "
 import { HowOzzieChecks, RulesPage } from "../src/rules-page.js";
 import { FIXED_HOW, GroupMeetings, OperationsSection, readsFor, SundayPage, Why } from "../src/sunday-page.js";
 import { HIDDEN_WORDS, row, text } from "./harness-fakes.js";
+import type { FailureCode } from "../../../core/src/harness/contract.js";
 
 const skills = await bundledSkills();
 const ordered = PROCEDURE_ORDER.map(id => skills.get(id)!);
@@ -46,6 +47,21 @@ describe("What happened: the task ledger in plain words", () => {
     expect(taskLine(failed, { now })).toBe(`A question · Couldn't finish: the answer couldn't be backed up by what Ozzie read · ${clock}`);
     expect(taskLine(interrupted, { now, procedures: skills })).toBe(`Sunday ready · Couldn't finish: it was stopped before it finished · ${clock}`);
     expect(taskLine(row({ kind: "ask", state: "cancelled" }), { now })).toBe(`A question · You stopped it · ${clock}`);
+    // A Sunday check that couldn't finish says why, true to the cause (harness-bridge.ts checkFailure).
+    const check = (failure: FailureCode) => row({ kind: "check", state: "failed", failure, events: [ev(0, "admitted"), ev(1, "running"), ev(2, "failed", failure)] });
+    const why = (failure: FailureCode) => taskLine(check(failure), { now, trigger: "automatic" });
+    expect(why("denied")).toBe(`Automatic Sunday check · Couldn't finish: Planning Center access wasn't available · ${clock}`);
+    // Out of reach, a 429 or a 5xx alike (review N, 8).
+    expect(why("provider-failure")).toBe(`Automatic Sunday check · Couldn't finish: Planning Center didn't answer just now · ${clock}`);
+    expect(why("unverified")).toBe(`Automatic Sunday check · Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read · ${clock}`);
+    expect(why("cancelled")).toBe(`Automatic Sunday check · Couldn't finish: Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped · ${clock}`);
+    expect(taskAccount(check("unverified"), { now, start: "automatic" }).ended)
+      .toBe("Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read.");
+    expect(taskAccount(check("cancelled"), { now, start: "manual" }).ended)
+      .toBe("Couldn't finish: Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped.");
+    // Any other task keeps its own words for the same codes.
+    expect(taskLine(row({ kind: "ask", state: "failed", failure: "cancelled" }), { now })).toBe(`A question · Couldn't finish: you stopped it · ${clock}`);
+    expect(taskLine(row({ kind: "ask", state: "failed", failure: "unverified" }), { now })).toBe(`A question · Couldn't finish: something couldn't be confirmed · ${clock}`);
     expect(taskLine(row({ kind: "skill", skill_id: "room-check", state: "running" }), { now, procedures: skills })).toBe(`Room check · Still running · ${clock}`);
     // Another day shows the day too.
     expect(taskLine(answered, { now: new Date("2026-11-23T12:00:00Z") })).toMatch(/· [A-Z][a-z]{2}, Nov 20, /u);
@@ -88,7 +104,7 @@ describe("What happened: the task ledger in plain words", () => {
       ev(2, "tool", "sunday.who_could_help partial"), ev(3, "model", "2"), ev(4, "model", "2 stop"), ev(5, "verified")] });
     expect(taskAccount(look, { now, start: "who-could-help", end: "facts" }).ended).toBe("Finished. Ozzie showed what the AI found beside the list from its own check.");
     expect(taskAccount(job, { now, start: "who-could-help", end: "facts" }).ended)
-      .toBe("Finished. The AI didn't ask for the list of people; Ozzie showed what it said about the role.");
+      .toBe("Finished. The AI didn't ask for this role's list of people; Ozzie showed what it said about the role.");
     expect(taskAccount(look, { now, start: "who-could-help", end: "draft" }).ended).toBe("Finished. The AI asked for a note, which isn't prepared from this card.");
     expect(taskAccount(look, { now, start: "who-could-help", end: "not-covered" }).ended).toBe("The AI couldn't tell more than the list showed, and Ozzie said so.");
     expect(taskAccount(job, { now, procedures: skills }).started).toBe(`Sunday ready ran at ${clock}.`);

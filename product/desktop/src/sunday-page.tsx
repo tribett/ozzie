@@ -247,28 +247,38 @@ function PersonRow({ listed: { person, label, canDraft, left }, names, action = 
   </div>;
 }
 
-function PeopleList({ finding, names, onDraft, asked = null, openPc = null }: {
-  finding: Finding; names: Names; onDraft: (person: string) => void; asked?: AskedSlot | null | undefined; openPc?: OpenPlanningCenter | null | undefined;
-}) {
+/**
+ * An open role's people as both lists show them (review K, L2): everyone not left out, then "Show N left out and why",
+ * which opens those left out, so the fixed list and the AI's card under it can't show them differently. `none` is said
+ * when everyone was left out.
+ */
+function FoldedPeople({ all, row, none = null }: { all: readonly Listed[]; row: (x: Listed) => ReactNode; none?: ReactNode }) {
   const [showLeft, setShowLeft] = useState(false);
-  const all = listedPeople(finding, names);
-  const row = (x: Listed) => <PersonRow key={x.person.person_id} listed={x} names={names}
-    action={x.canDraft && <button type="button" className="btn btn-secondary btn-sm push" onClick={() => onDraft(x.person.person_id)}>Prepare a note</button>}>
-    {openPc && <div className="person-pc"><OpenInPlanningCenter open={openPc} page="person" id={x.person.person_id} label={OPEN_PERSON}
-      name={nameOf(names, x.person.person_id)} /></div>}
-    {asked?.lines.filter(l => l.key === finding.key && l.person_id === x.person.person_id).map(l => <AskedNote key={l.key + l.person_id} line={l} />)}
-  </PersonRow>;
   const shown = all.filter(x => !x.left), left = all.filter(x => x.left);
-  return <div className="stack people">
-    <p className="small">People on this team in Planning Center. Listed alphabetically, not ranked. Whether someone is willing is theirs to say.</p>
+  return <>
     {shown.map(row)}
-    {!shown.length && <p className="find-body">{noOneText(finding)}</p>}
+    {!shown.length && none}
     {left.length > 0 && <>
       <button type="button" className="btn btn-quiet btn-sm" aria-expanded={showLeft} onClick={() => setShowLeft(!showLeft)}>
         {showLeft ? "Hide" : "Show"} {left.length} left out and why
       </button>
       {showLeft && left.map(row)}
     </>}
+  </>;
+}
+
+function PeopleList({ finding, names, onDraft, asked = null, openPc = null }: {
+  finding: Finding; names: Names; onDraft: (person: string) => void; asked?: AskedSlot | null | undefined; openPc?: OpenPlanningCenter | null | undefined;
+}) {
+  const row = (x: Listed) => <PersonRow key={x.person.person_id} listed={x} names={names}
+    action={x.canDraft && <button type="button" className="btn btn-secondary btn-sm push" onClick={() => onDraft(x.person.person_id)}>Prepare a note</button>}>
+    {openPc && <div className="person-pc"><OpenInPlanningCenter open={openPc} page="person" id={x.person.person_id} label={OPEN_PERSON}
+      name={nameOf(names, x.person.person_id)} /></div>}
+    {asked?.lines.filter(l => l.key === finding.key && l.person_id === x.person.person_id).map(l => <AskedNote key={l.key + l.person_id} line={l} />)}
+  </PersonRow>;
+  return <div className="stack people">
+    <p className="small">People on this team in Planning Center. Grouped by what Ozzie found, alphabetical within each group, not ranked. Whether someone is willing is theirs to say.</p>
+    <FoldedPeople all={listedPeople(finding, names)} row={row} none={<p className="find-body">{noOneText(finding)}</p>} />
   </div>;
 }
 
@@ -277,14 +287,17 @@ export type WhoCouldHelp = (finding: Finding, signal: AbortSignal) => Promise<As
 export const LOOK_BUTTON = "Ask Ozzie to look at who could help";
 export const LOOK_KEEPS = "The list above is still the full list from Ozzie's own check.";
 export const LOOK_TITLE = "What the AI found when asked to look at the list above";
-/** "See how this works", how it ended: true to what the AI did, whether or not it asked for the list (review G, N3, N4). */
+/**
+ * "See how this works", how it ended: true to what the AI did, whether or not it asked for this role's list (review G, N3,
+ * N4), even when it asked only for another role's, which its steps show (review K, L1).
+ */
 export function lookEnded(look: Look): string {
   switch (look.kind) {
     case "lines": return look.looked
       ? "Ozzie wrote a line for each fact the AI chose about the role. The people are Ozzie's own list for this role, the same as above."
-      : "Ozzie wrote a line for each fact the AI chose about the role. The AI didn't ask for the list of people; the people are Ozzie's own list for this role, the same as above.";
+      : "Ozzie wrote a line for each fact the AI chose about the role. The AI didn't ask for this role's list of people; the people are Ozzie's own list for this role, the same as above.";
     case "nothing": return look.looked ? "The AI looked at the list of people and chose nothing beyond it, so Ozzie said so."
-      : "The AI didn't ask for the list of people and chose nothing about the role, so Ozzie said so.";
+      : "The AI didn't ask for this role's list of people and chose nothing about the role, so Ozzie said so.";
     case "not-covered": return "The AI answered that it couldn't tell more, so Ozzie said so.";
     case "draft": return "The AI asked for a note, which isn't prepared from this card, so Ozzie said so.";
   }
@@ -293,8 +306,9 @@ export function lookEnded(look: Look): string {
 /**
  * What the AI found when asked to look at who could help with one role at one time, as a card next to the fixed list
  * (audit item 9; review H, M3; review G, M-1): Ozzie's own lines for the facts the AI chose about the role, then
- * everyone the finding lists, from the same source and in the same rows as the fixed list (never the AI's copy, which
- * may be cut to fit), with no one marked; or one line for what the AI did instead. Where it came from and when, and See
+ * everyone the finding lists, from the same source, in the same rows and with the same fold for those left out as the
+ * fixed list (never the AI's copy, which may be cut to fit; review K, L2), with no one marked; or one line for what the
+ * AI did instead. Where it came from and when, and See
  * how this works with the procedure word for word and the steps. Never a ranking, never a pick, never a note.
  */
 export function WhoCouldHelpCard({ turn, finding, names }: { turn: AskTurn; finding: Finding; names: Names }) {
@@ -317,7 +331,7 @@ export function WhoCouldHelpCard({ turn, finding, names }: { turn: AskTurn; find
     {look.kind === "lines" ? <>
       <div className="ask-lines">{a.body.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>
       {people.length > 0 && <div className="stack people">
-        {people.map(x => <PersonRow key={x.person.person_id} listed={x} names={names} />)}
+        <FoldedPeople all={people} row={x => <PersonRow key={x.person.person_id} listed={x} names={names} />} />
         <p className="small">{LOOK_NOTE}</p>
       </div>}
     </> : <p className="find-body">{line}</p>}

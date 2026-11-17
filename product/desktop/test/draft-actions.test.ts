@@ -276,7 +276,8 @@ describe("a note for one person opens addressed when Planning Center has one det
     expect(said(h("messages", "unaddressed", "busy-with-another-note"))).toBe("Ozzie was still filling in To for another note, so To was left empty. The note opened in Messages.");
     // Native counts reads that went out, of either kind, not notes filled (contact.rs READS_PER_MINUTE).
     // The count is of reads (contact.rs READS_PER_MINUTE = 10), filled in or not.
-    expect(said(h("mail", "unaddressed", "too-many-just-now"))).toBe("Ozzie has already read from Planning Center 10 times in the last minute, so To was left empty. The note opened in Mail.");
+    // Native counts tries, some of which never reached Planning Center (review K, L8).
+    expect(said(h("mail", "unaddressed", "too-many-just-now"))).toBe("Ozzie has already tried to read an email address or mobile number from Planning Center 10 times in the last minute, so To was left empty. The note opened in Mail.");
     // A note whose app's name couldn't be read says what kind of app it was.
     expect(said({ app: "mail", result: "addressed", reason: null, text: NOTE })).toBe("Opened in your email app, addressed to Riley Thornbury. Check it and send it yourself.");
     expect(said({ app: "mail", result: "unaddressed", reason: "child", text: NOTE })).toBe("Planning Center lists Riley Thornbury as a child, so To is left empty. The note opened in your email app.");

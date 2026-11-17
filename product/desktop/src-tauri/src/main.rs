@@ -15,6 +15,7 @@ use ozzie_native_auth::{
     in_use::UseFile,
     oauth::{AuthController, AuthError, ConnectionState, ConnectionStatus, Provider, Scopes},
     provider::{NativeHttp, PcoProvider},
+    source::SourceError,
     sunday_check::{self, ReadNames, Reader, RecordingEntry, RecordingError, SundayCapture, Turn},
     sunday_picker::{self, Choices, PlanChoice, ServiceTypeChoice},
 };
@@ -96,6 +97,12 @@ enum ConsumerError {
     NotConnected,
     /// The Sunday check did not finish; carries the sanitized source reason only.
     SundayCheck(&'static str),
+    /// A read found the sign-in needed renewing and couldn't renew it, so nothing was read
+    /// (`renewed_auth`); the sanitized source reason only, as core `renewal_error` gives it:
+    /// `invalid-credentials` when only a new sign-in mends it, `provider-failure` when Planning Center
+    /// didn't renew it just now (no answer, a 429 or a 5xx), a Keychain reason (`locked`, `denied`,
+    /// `store-unavailable`), `busy` (a sign-in or Disconnect under way past the wait) or `cancelled`.
+    SignInNotRenewed(&'static str),
     /// Setup's list of service types or upcoming plans wasn't read; the sanitized reason only.
     SundayChoices(&'static str),
     Recording(RecordingError),
@@ -177,9 +184,15 @@ impl SessionNames {
 type SundayChecks = sunday_check::Turns;
 /// How long a check waits for the turn. A note's read holds it about 23 s at the very worst (its 8 s
 /// deadline, then an identity check already under way, which the sign-in client limits to 15 s; a
-/// page read is limited to 5 s), so a check outlasts it. A picker read (up to 10 s waiting for the
-/// connection, then the identity check and one page) can take about this long at the very worst.
+/// page read is limited to 5 s; it never renews the sign-in), so a check outlasts it. A picker read
+/// (up to 10 s waiting for the connection, then the identity check and one page) can take about this
+/// long at the very worst; one that first renews the sign-in (`renewed_auth`: up to `RENEWAL_WAITS`
+/// for a sign-in or Disconnect under way, then a token request and an identity check, each limited
+/// to 15 s) can take longer, and a check waiting for it then answers `busy`.
 const CHECK_WAITS_FOR_PICKER: Duration = Duration::from_secs(30);
+/// How long a renewal waits for a sign-in, a check of the saved sign-in, a church-switch answer or
+/// Disconnect under way to finish before the read answers `busy` (`renewed_auth`).
+const RENEWAL_WAITS: Duration = Duration::from_secs(10);
 struct Running(Arc<AtomicBool>);
 impl Drop for Running {
     fn drop(&mut self) {
@@ -465,19 +478,20 @@ async fn check_sunday(
         let _turn = checks
             .take(Reader::Check, CHECK_WAITS_FOR_PICKER)
             .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
-        let auth = connected_auth(&consumer)?;
         // Disconnecting or quitting cancels the controller, which ends the check.
-        let (capture, read) = sunday_check::check_sunday_with(
-            &auth,
-            &service_type_id,
-            &plan_id,
-            &kids_team_ids,
-            sunday_check::ChurchReads {
-                forms: form_ids.as_deref(),
-                checkins_event: checkins_event_id.as_deref(),
-            },
-            &AtomicBool::new(false),
-        )
+        let (capture, read) = read_renewing(&consumer, |auth| {
+            sunday_check::check_sunday_with(
+                auth,
+                &service_type_id,
+                &plan_id,
+                &kids_team_ids,
+                sunday_check::ChurchReads {
+                    forms: form_ids.as_deref(),
+                    checkins_event: checkins_event_id.as_deref(),
+                },
+                &AtomicBool::new(false),
+            )
+        })?
         .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
         names.remember(&capture);
         // Who "Open in Mail" or "Open in Messages" may put in To (draft_apps::open_draft_to).
@@ -494,8 +508,13 @@ async fn check_sunday(
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
 }
-/// This session's verified Planning Center connection, or NotConnected.
-fn connected_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerError> {
+/// This session's verified Planning Center connection, or NotConnected, as it is: never renewed here.
+/// The Sunday check and setup's picker read through `read_renewing`, which renews a sign-in that needs
+/// it first (`renewed_auth`). This is the To line's lookup
+/// (draft_apps::open_draft_to): a renewal (up to about 30 s) would run before its 8-second limit
+/// starts; a sign-in Planning Center no longer accepts makes it answer as it always has, and the note
+/// opens with no one in To.
+fn session_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerError> {
     let (auth, finding) = consumer.0.settle()?.ok_or(ConsumerError::NotConnected)?;
     if finding {
         return Err(ConsumerError::NotConnected);
@@ -505,6 +524,69 @@ fn connected_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerEr
         return Err(ConsumerError::NotConnected);
     }
     Ok(auth)
+}
+/// The session's connection (`session_auth`) with its sign-in renewed first when it needs renewing,
+/// and whether it renewed it just now. Planning Center's access tokens last
+/// two hours, and only "Check saved connection" (on launch, or in Settings) renewed one, so from two
+/// hours after Ozzie started every read failed (0.1.9, 0.2.0). Now a read whose sign-in needs
+/// renewing renews it first, once, through that same renewal (core `AuthController::renew_if_due`),
+/// holding the transition lock so no sign-in, check of the saved sign-in, church-switch answer or
+/// Disconnect runs meanwhile; one of those already running is waited for up to `RENEWAL_WAITS`, then
+/// this read is `busy`. A renewal that fails ends the read before anything is read.
+fn renewed_auth(consumer: &Consumer) -> Result<(Arc<AuthController>, bool), ConsumerError> {
+    renewed_auth_within(consumer, RENEWAL_WAITS)
+}
+fn renewed_auth_within(
+    consumer: &Consumer,
+    wait: Duration,
+) -> Result<(Arc<AuthController>, bool), ConsumerError> {
+    let auth = session_auth(consumer)?;
+    if !auth.renewal_due() {
+        return Ok((auth, false));
+    }
+    let church = auth.bound_to().1.to_owned();
+    let not_renewed = |error: SourceError| ConsumerError::SignInNotRenewed(error.reason());
+    let (_transition, generation) = consumer
+        .1
+        .enter_within(wait)
+        .ok_or_else(|| not_renewed(SourceError::Busy))?;
+    // Looked up again inside the lock: whatever held it (a check of the saved sign-in, a church-switch
+    // answer, a new sign-in, Disconnect) may have replaced the session's controller meanwhile.
+    let auth = session_auth(consumer)?;
+    // The read was made for that church's Sunday (its plan ids are that church's): if the church in
+    // use is another by now, it reads nothing (review N, 6).
+    if auth.bound_to().1 != church {
+        return Err(not_renewed(SourceError::Cancelled));
+    }
+    let renewed = auth.renew_if_due().map_err(not_renewed)?;
+    // Cancelled or quitting meanwhile (`Consumer::stop`): nothing is read.
+    if !consumer.1.current(generation) {
+        return Err(not_renewed(SourceError::Cancelled));
+    }
+    Ok((auth, renewed))
+}
+/// One read on the session's connection (`renewed_auth`). When its identity check found that Planning
+/// Center no longer accepts the sign-in's access token though Ozzie's clock gave it time left (that
+/// clock doesn't count time this Mac spent asleep), and this read hadn't just renewed it, the sign-in is
+/// renewed and the read made once more, once. Only the identity check, which reads nothing, came before.
+fn read_renewing<T>(
+    consumer: &Consumer,
+    read: impl Fn(&AuthController) -> Result<T, SourceError>,
+) -> Result<Result<T, SourceError>, ConsumerError> {
+    let (auth, renewed) = renewed_auth(consumer)?;
+    match read(&auth) {
+        Err(SourceError::OrganizationUnverified) if !renewed && auth.renewal_due() => {
+            let (again, _) = renewed_auth(consumer)?;
+            // Once more for the same church only (review N, 6).
+            if again.bound_to().1 != auth.bound_to().1 {
+                return Err(ConsumerError::SignInNotRenewed(
+                    SourceError::Cancelled.reason(),
+                ));
+            }
+            Ok(read(&again))
+        }
+        result => Ok(result),
+    }
 }
 /// A picker read's turn on the connection, shared with the Sunday check (see `SundayChecks`).
 fn picker_turn(checks: &SundayChecks) -> Result<Turn, ConsumerError> {
@@ -523,9 +605,10 @@ async fn list_service_types(
     let checks = checks.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _turn = picker_turn(&checks)?;
-        let auth = connected_auth(&consumer)?;
-        sunday_picker::service_types(&auth, &AtomicBool::new(false))
-            .map_err(|error| ConsumerError::SundayChoices(error.reason()))
+        read_renewing(&consumer, |auth| {
+            sunday_picker::service_types(auth, &AtomicBool::new(false))
+        })?
+        .map_err(|error| ConsumerError::SundayChoices(error.reason()))
     })
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
@@ -541,9 +624,10 @@ async fn list_upcoming_plans(
     let checks = checks.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _turn = picker_turn(&checks)?;
-        let auth = connected_auth(&consumer)?;
-        sunday_picker::upcoming_plans(&auth, &service_type_id, &AtomicBool::new(false))
-            .map_err(|error| ConsumerError::SundayChoices(error.reason()))
+        read_renewing(&consumer, |auth| {
+            sunday_picker::upcoming_plans(auth, &service_type_id, &AtomicBool::new(false))
+        })?
+        .map_err(|error| ConsumerError::SundayChoices(error.reason()))
     })
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
@@ -1296,6 +1380,425 @@ mod tests {
         assert!(checks.take(Reader::Check, long).is_ok());
         assert_eq!(sunday_picker::WAIT_FOR_CONTROLLER, Duration::from_secs(10));
         assert!(CHECK_WAITS_FOR_PICKER > sunday_picker::WAIT_FOR_CONTROLLER * 2);
+    }
+
+    /// Renewing the sign-in before a read, through the app's own lookup and transition lock.
+    /// Fictional tokens and organizations; the Keychain, Planning Center and the clock are fakes.
+    mod renewal {
+        use super::*;
+        use ozzie_native_auth::credentials::{CredentialStore, StoreError};
+        use ozzie_native_auth::oauth::{
+            OrganizationDiagnostic, OrganizationFailure, Tokens, UserInfoReason,
+        };
+        use std::sync::atomic::{AtomicU64, AtomicUsize};
+
+        const HOUR: u64 = 3_600_000;
+
+        /// Saved sign-ins by church.
+        struct Store(Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+        impl CredentialStore for Store {
+            fn put(&self, _: &str, organization: &str, value: &[u8]) -> Result<(), StoreError> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .insert(organization.into(), value.to_vec());
+                Ok(())
+            }
+            fn get(&self, _: &str, organization: &str) -> Result<Option<Vec<u8>>, StoreError> {
+                Ok(self.0.lock().unwrap().get(organization).cloned())
+            }
+            fn delete(&self, _: &str, organization: &str) -> Result<(), StoreError> {
+                self.0.lock().unwrap().remove(organization);
+                Ok(())
+            }
+        }
+        /// Planning Center: access tokens that run out two hours after they were issued (userinfo
+        /// then refuses them, 401), and renewals refused or out of reach when told to be.
+        struct Pco {
+            clock: Arc<AtomicU64>,
+            issued: Mutex<Vec<(String, u64)>>,
+            refuse: AtomicBool,
+            unreachable: AtomicBool,
+            renewals: AtomicUsize,
+            identity: AtomicUsize,
+            /// While set, a renewal is followed by this quit (`Consumer::stop`'s first step).
+            quits: Mutex<Option<Arc<lifetime::Lifetime>>>,
+            /// The church the signed-in person's userinfo names.
+            church: Mutex<&'static str>,
+        }
+        impl Pco {
+            fn accepts(&self, access: &str) -> bool {
+                let now = self.clock.load(Ordering::SeqCst);
+                self.issued
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(token, at)| token == access && now < at + 2 * HOUR)
+            }
+            fn renewals(&self) -> usize {
+                self.renewals.load(Ordering::SeqCst)
+            }
+        }
+        impl Provider for Pco {
+            fn exchange(&self, _: &str, _: &str, _: &str) -> Result<Tokens, AuthError> {
+                panic!("no sign-in here")
+            }
+            fn organization(&self, access: &str) -> Result<String, AuthError> {
+                self.organization_detailed(access).map_err(|f| f.error)
+            }
+            fn organization_detailed(&self, access: &str) -> Result<String, OrganizationFailure> {
+                self.identity.fetch_add(1, Ordering::SeqCst);
+                if self.accepts(access) {
+                    return Ok((*self.church.lock().unwrap()).into());
+                }
+                Err(OrganizationFailure {
+                    error: AuthError::OrganizationUnverified,
+                    diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::AccessDenied),
+                })
+            }
+            fn refresh(&self, _: &str, _: &str) -> Result<Tokens, AuthError> {
+                let n = self.renewals.fetch_add(1, Ordering::SeqCst) + 1;
+                if let Some(quit) = self.quits.lock().unwrap().as_ref() {
+                    quit.cancel();
+                }
+                if self.refuse.load(Ordering::SeqCst) {
+                    return Err(AuthError::InvalidToken);
+                }
+                if self.unreachable.load(Ordering::SeqCst) {
+                    return Err(AuthError::ProviderFailure);
+                }
+                let access = format!("fictional-access-{n}");
+                let now = self.clock.load(Ordering::SeqCst);
+                self.issued.lock().unwrap().push((access.clone(), now));
+                Ok(Tokens {
+                    access_token: access,
+                    refresh_token: Some(format!("fictional-refresh-{n}")),
+                    token_type: "bearer".into(),
+                    expires_in: 7200,
+                })
+            }
+            fn revoke(&self, _: &str, _: &str, _: &str) -> Result<(), AuthError> {
+                Ok(())
+            }
+        }
+        /// Ozzie started at 0 with a sign-in saved on this Mac and checked it, as on launch.
+        fn launched() -> (Consumer, Arc<Pco>, Arc<AtomicU64>) {
+            let clock = Arc::new(AtomicU64::new(0));
+            let pco = Arc::new(Pco {
+                clock: clock.clone(),
+                issued: Mutex::default(),
+                refuse: AtomicBool::new(false),
+                unreachable: AtomicBool::new(false),
+                renewals: AtomicUsize::new(0),
+                identity: AtomicUsize::new(0),
+                quits: Mutex::new(None),
+                church: Mutex::new("1001"),
+            });
+            let saved = |church: &str| {
+                format!(
+                    r#"{{"client_id":"fictional-client","organization":"{church}","tokens":{{"access_token":"fictional-access-0","refresh_token":"fictional-refresh-0","token_type":"bearer","expires_in":7200}}}}"#
+                )
+                .into_bytes()
+            };
+            // A sign-in for another church is saved too, for a church switch.
+            let store = std::collections::BTreeMap::from([
+                ("1001".to_string(), saved("1001")),
+                ("2002".to_string(), saved("2002")),
+            ]);
+            let (provider, now) = (pco.clone(), clock.clone());
+            let consumer = Consumer(
+                Arc::new(Connections::new(
+                    WORKSPACE_PREFIX,
+                    None,
+                    Arc::new(Store(Mutex::new(store))),
+                    Box::new(move || Ok(provider.clone() as Arc<dyn Provider>)),
+                    Box::new(move || {
+                        let now = now.clone();
+                        Ok(Arc::new(move || now.load(Ordering::SeqCst))
+                            as Arc<dyn Fn() -> u64 + Send + Sync>)
+                    }),
+                )),
+                Arc::default(),
+            );
+            let auth = consumer
+                .0
+                .prepare_check("fictional-client".into(), "1001".into(), true)
+                .unwrap();
+            assert_eq!(auth.refresh().unwrap().state, ConnectionState::Connected);
+            assert_eq!(pco.renewals(), 1);
+            (consumer, pco, clock)
+        }
+        fn json(error: ConsumerError) -> String {
+            serde_json::to_string(&error).unwrap()
+        }
+        /// The connection a check or a picker read gets (`read_renewing`'s lookup).
+        fn connected_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerError> {
+            renewed_auth(consumer).map(|(auth, _)| auth)
+        }
+
+        #[test]
+        fn a_read_two_hours_after_the_launch_renews_the_sign_in_once() {
+            let (consumer, pco, clock) = launched();
+            clock.store(2 * HOUR + 30 * 60_000, Ordering::SeqCst);
+            let auth = connected_auth(&consumer).unwrap();
+            assert_eq!(pco.renewals(), 2);
+            assert!(!auth.renewal_due());
+            // The renewal was on the session's own controller: nothing for the page to re-check.
+            assert!(Arc::ptr_eq(&auth, &consumer.0.current().unwrap()));
+            assert_eq!(auth.status().unwrap().state, ConnectionState::Connected);
+            connected_auth(&consumer).unwrap();
+            assert_eq!(pco.renewals(), 2);
+        }
+
+        #[test]
+        fn a_read_within_the_sign_ins_life_renews_nothing() {
+            let (consumer, pco, clock) = launched();
+            for at in [0, HOUR, 2 * HOUR - 11 * 60_000] {
+                clock.store(at, Ordering::SeqCst);
+                connected_auth(&consumer).unwrap();
+            }
+            assert_eq!(pco.renewals(), 1);
+        }
+
+        #[test]
+        fn a_refused_renewal_ends_the_read_before_anything_is_read() {
+            let (consumer, pco, clock) = launched();
+            pco.refuse.store(true, Ordering::SeqCst);
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            let identity = pco.identity.load(Ordering::SeqCst);
+            let reads = AtomicUsize::new(0);
+            let error = read_renewing(&consumer, |_| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap_err();
+            // The page and the record of what happened read these words (sunday-source.ts).
+            assert_eq!(
+                json(error),
+                r#"{"sign-in-not-renewed":"invalid-credentials"}"#
+            );
+            assert_eq!(reads.load(Ordering::SeqCst), 0);
+            assert_eq!(pco.identity.load(Ordering::SeqCst), identity);
+            assert_eq!(pco.renewals(), 2, "asked once");
+            // The connection now says it failed, as after "Check saved connection".
+            assert_eq!(
+                json(connected_auth(&consumer).err().unwrap()),
+                r#""not-connected""#
+            );
+            assert_eq!(pco.renewals(), 2);
+        }
+
+        #[test]
+        fn planning_center_out_of_reach_says_so_and_the_next_read_renews() {
+            let (consumer, pco, clock) = launched();
+            pco.unreachable.store(true, Ordering::SeqCst);
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            assert_eq!(
+                json(connected_auth(&consumer).err().unwrap()),
+                r#"{"sign-in-not-renewed":"provider-failure"}"#
+            );
+            // Still connected, so automatic checks keep running and the next one tries again.
+            let auth = consumer.0.current().unwrap();
+            assert_eq!(auth.status().unwrap().state, ConnectionState::Connected);
+            pco.unreachable.store(false, Ordering::SeqCst);
+            connected_auth(&consumer).unwrap();
+            assert_eq!(pco.renewals(), 3);
+            assert!(!auth.renewal_due());
+        }
+
+        #[test]
+        fn a_renewal_never_runs_beside_a_sign_in_a_check_of_the_saved_sign_in_or_disconnect() {
+            let (consumer, pco, clock) = launched();
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            // One of those under way: the renewal waits for it, and renews once it has finished.
+            let transition = consumer.1.enter().unwrap();
+            std::thread::scope(|scope| {
+                let reading = scope.spawn(|| connected_auth(&consumer).map(|_| ()));
+                std::thread::sleep(Duration::from_millis(200));
+                assert!(!reading.is_finished());
+                assert_eq!(pco.renewals(), 1);
+                drop(transition);
+                assert!(reading.join().unwrap().is_ok());
+            });
+            assert_eq!(pco.renewals(), 2);
+            // Still under way past the wait: busy, and nothing renewed.
+            clock.store(4 * HOUR + 2 * 60_000, Ordering::SeqCst);
+            let _transition = consumer.1.enter().unwrap();
+            let started = std::time::Instant::now();
+            assert_eq!(
+                json(
+                    renewed_auth_within(&consumer, Duration::from_millis(100))
+                        .err()
+                        .unwrap()
+                ),
+                r#"{"sign-in-not-renewed":"busy"}"#
+            );
+            assert!(started.elapsed() >= Duration::from_millis(100));
+            assert_eq!(pco.renewals(), 2);
+            const { assert!(RENEWAL_WAITS.as_secs() > 5) };
+        }
+
+        #[test]
+        fn a_renewal_after_a_wait_uses_the_connection_that_is_current_then() {
+            // Review M, L9 (mutation M12): "Check saved connection" ran while this read waited for it,
+            // so the controller the read first found was replaced; the read uses the new one, already
+            // renewed, and renews nothing itself.
+            let (consumer, pco, clock) = launched();
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            let first = consumer.0.current().unwrap();
+            let transition = consumer.1.enter().unwrap();
+            std::thread::scope(|scope| {
+                let reading = scope.spawn(|| connected_auth(&consumer).ok());
+                std::thread::sleep(Duration::from_millis(200));
+                assert!(!reading.is_finished());
+                let checked = consumer
+                    .0
+                    .prepare_check("fictional-client".into(), "1001".into(), true)
+                    .unwrap();
+                checked.refresh().unwrap();
+                drop(transition);
+                let used = reading.join().unwrap().expect("the read goes ahead");
+                assert!(Arc::ptr_eq(&used, &checked));
+                assert!(!Arc::ptr_eq(&used, &first));
+            });
+            assert_eq!(
+                pco.renewals(),
+                2,
+                "only the check of the saved sign-in renewed"
+            );
+        }
+
+        /// While a read waits, the church in use becomes 2002, as "Switch Ozzie to this church?"
+        /// answered does: a connection for 2002, checked.
+        fn switch_to_another_church(consumer: &Consumer, pco: &Pco) -> Arc<AuthController> {
+            *pco.church.lock().unwrap() = "2002";
+            let other = consumer
+                .0
+                .prepare_check("fictional-client".into(), "2002".into(), true)
+                .unwrap();
+            assert_eq!(other.refresh().unwrap().organization, "2002");
+            other
+        }
+
+        #[test]
+        fn a_read_that_waited_through_a_church_switch_reads_nothing() {
+            // Review N, 6: the read was made for 1001's Sunday; its plan ids are 1001's. When the
+            // church in use is another by the time it may go ahead, it reads nothing.
+            let (consumer, pco, clock) = launched();
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            let transition = consumer.1.enter().unwrap();
+            std::thread::scope(|scope| {
+                let reading = scope.spawn(|| connected_auth(&consumer).err().map(json));
+                std::thread::sleep(Duration::from_millis(200));
+                assert!(!reading.is_finished());
+                switch_to_another_church(&consumer, &pco);
+                drop(transition);
+                assert_eq!(
+                    reading.join().unwrap().as_deref(),
+                    Some(r#"{"sign-in-not-renewed":"cancelled"}"#)
+                );
+            });
+            // A switch during a read that Planning Center refused: no once-more read, on either
+            // connection (the old one has stopped); the read's own failure stands.
+            let (consumer, pco, clock) = launched();
+            clock.store(30 * 60_000, Ordering::SeqCst);
+            let reads = AtomicUsize::new(0);
+            let result = read_renewing(&consumer, |_| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                switch_to_another_church(&consumer, &pco);
+                clock.store(3 * HOUR, Ordering::SeqCst);
+                Err::<(), _>(SourceError::OrganizationUnverified)
+            });
+            assert_eq!(result.unwrap(), Err(SourceError::OrganizationUnverified));
+            assert_eq!(reads.load(Ordering::SeqCst), 1);
+        }
+
+        #[test]
+        fn a_quit_during_a_renewal_reads_nothing() {
+            // Review M, L9 (mutation M7): Ozzie began to quit while the sign-in renewed.
+            let (consumer, pco, clock) = launched();
+            *pco.quits.lock().unwrap() = Some(consumer.1.clone());
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            let reads = AtomicUsize::new(0);
+            let error = read_renewing(&consumer, |_| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap_err();
+            assert_eq!(json(error), r#"{"sign-in-not-renewed":"cancelled"}"#);
+            assert_eq!(reads.load(Ordering::SeqCst), 0);
+        }
+
+        #[test]
+        fn the_to_line_never_renews_so_its_eight_seconds_hold() {
+            // Review M, L1: "Open in Mail" or "Open in Messages" with a sign-in due for renewal makes
+            // no token request; the To line answers as it does for a sign-in Planning Center refuses,
+            // and the note opens with no one in To. Checks keep the sign-in renewed.
+            let (consumer, pco, clock) = launched();
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            let started = std::time::Instant::now();
+            let auth = session_auth(&consumer).unwrap();
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert!(auth.renewal_due());
+            assert_eq!(pco.renewals(), 1);
+            // The To line looks the connection up this way, and no other (draft_apps.rs).
+            let draft = include_str!("draft_apps.rs");
+            assert!(draft.contains("crate::session_auth(&consumer).ok()"));
+            assert!(!draft.contains("connected_auth"));
+        }
+
+        #[test]
+        fn a_read_planning_center_refused_is_renewed_and_made_once_more_once() {
+            // Ozzie's clock said the sign-in had time left (this Mac slept); Planning Center refused it.
+            // Here the read moves the clock on, as the identity check's refusal marks it in core.
+            let refused = |clock: &AtomicU64| {
+                clock.store(3 * HOUR, Ordering::SeqCst);
+                Err::<(), _>(SourceError::OrganizationUnverified)
+            };
+            let (consumer, pco, clock) = launched();
+            clock.store(30 * 60_000, Ordering::SeqCst);
+            let reads = AtomicUsize::new(0);
+            let result = read_renewing(&consumer, |_| {
+                if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return refused(&clock);
+                }
+                Ok(())
+            });
+            assert_eq!(result.unwrap(), Ok(()));
+            assert_eq!((reads.load(Ordering::SeqCst), pco.renewals()), (2, 2));
+
+            // Refused again after the renewal: not a third time.
+            let (consumer, pco, clock) = launched();
+            let reads = AtomicUsize::new(0);
+            let result = read_renewing(&consumer, |_| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                refused(&clock)
+            });
+            assert_eq!(result.unwrap(), Err(SourceError::OrganizationUnverified));
+            assert_eq!((reads.load(Ordering::SeqCst), pco.renewals()), (2, 2));
+
+            // Renewed just before the read: never renewed twice for one read.
+            let (consumer, pco, clock) = launched();
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            let reads = AtomicUsize::new(0);
+            let result = read_renewing(&consumer, |_| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                refused(&clock)
+            });
+            assert_eq!(result.unwrap(), Err(SourceError::OrganizationUnverified));
+            assert_eq!((reads.load(Ordering::SeqCst), pco.renewals()), (1, 2));
+
+            // Any other failure is the read's own: never repeated.
+            let (consumer, pco, clock) = launched();
+            let reads = AtomicUsize::new(0);
+            let result = read_renewing(&consumer, |_| {
+                reads.fetch_add(1, Ordering::SeqCst);
+                clock.store(3 * HOUR, Ordering::SeqCst);
+                Err::<(), _>(SourceError::ProviderFailure)
+            });
+            assert_eq!(result.unwrap(), Err(SourceError::ProviderFailure));
+            assert_eq!((reads.load(Ordering::SeqCst), pco.renewals()), (1, 1));
+        }
     }
 
     #[test]

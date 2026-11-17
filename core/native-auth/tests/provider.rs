@@ -99,10 +99,42 @@ fn malformed_or_denied_token_responses_never_expose_provider_body() {
         status: 401,
         calls: Mutex::new(vec![]),
     });
-    assert_eq!(
-        provider.refresh("client", "fictional-refresh").err(),
-        Some(AuthError::ProviderFailure)
-    );
+    // A refused renewal (below): the saved sign-in can't be renewed, and the body isn't kept.
+    let error = provider.refresh("client", "fictional-refresh").err();
+    assert_eq!(error, Some(AuthError::InvalidToken));
+    assert!(!format!("{error:?}").contains("fictional-error-secret"));
+}
+#[test]
+fn a_refused_renewal_is_told_apart_from_an_unreachable_planning_center() {
+    // A refresh token Planning Center no longer accepts (revoked, or run out: `invalid_grant`) can't
+    // be renewed by trying again, and signing in again is what helps. Out of reach or overloaded is
+    // worth another try. (RFC 6749 §5.2 refuses with 400 or 401; 403 is a refusal as for revoke.)
+    for (status, error) in [
+        (400, AuthError::InvalidToken),
+        (401, AuthError::InvalidToken),
+        (403, AuthError::InvalidToken),
+        (429, AuthError::ProviderFailure),
+        (500, AuthError::ProviderFailure),
+        (503, AuthError::ProviderFailure),
+    ] {
+        assert_eq!(
+            with_status(status, r#"{"error":"invalid_grant"}"#)
+                .refresh("client", "fictional-refresh")
+                .err(),
+            Some(error),
+            "{status}"
+        );
+    }
+    // A sign-in's code exchange is unchanged: a refusal there is the provider failure it was.
+    for status in [400, 401, 403, 503] {
+        assert_eq!(
+            with_status(status, "{}")
+                .exchange("client", "fictional-code", "fictional-verifier")
+                .err(),
+            Some(AuthError::ProviderFailure),
+            "{status}"
+        );
+    }
 }
 #[test]
 fn revoke_prefers_refresh_token_and_has_no_client_secret() {

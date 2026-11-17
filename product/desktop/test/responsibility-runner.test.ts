@@ -493,6 +493,29 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(Object.values(h.runner.view().writeups).filter(w => w.kind === "written")).toHaveLength(1);
   });
 
+  it("forgets the write-up of a run that was still reading Planning Center when every write-up was forgotten (review K, L3)", async () => {
+    for (const how of ["forget", "switch", "neither"] as const) {
+      const h = setup({ modelReady: true });
+      h.prepare.mockResolvedValue(WRITTEN);
+      const r = await h.start(sunday());
+      h.runner.forgetAllWriteups();
+      const read = heldCheck();
+      h.check.mockImplementationOnce(async () => { await read.gate; return captureAt(h.now()); });
+      h.set(at(FRI, 31));
+      const running = h.runner.runNow(r.id);
+      await vi.waitFor(() => expect(h.check).toHaveBeenCalledTimes(2));
+      // Disconnected (or switched church and back) while the run's check is still reading, before any write-up is asked for.
+      if (how === "forget") h.runner.forgetAllWriteups();
+      if (how === "switch") { h.runner.keepWriteupsFor("fictional-other-church"); h.runner.keepWriteupsFor(nov22Capture().organization); }
+      read.release();
+      await running;
+      // The write-up was still asked for: only keeping it depends on when the run started.
+      expect(h.prepare, how).toHaveBeenCalledTimes(2);
+      expect(Object.values(h.runner.view().writeups).filter(w => w.kind === "written"), how).toHaveLength(how === "neither" ? 1 : 0);
+      expect(h.store.get("ozzie.responsibilities.writeups.v1")!.includes("{{person:501}}"), how).toBe(how === "neither");
+    }
+  });
+
   it("notes the native code a job's AI step was refused with, so a spent allowance is told apart from the run's own limit (review G)", async () => {
     const notes = new StepNotes();
     const step = responsibilityStep("run-1", async () => { throw "daily-limit"; }, notes);

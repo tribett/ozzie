@@ -36,6 +36,8 @@ export type ConnectionStatus = {
   scopes?: ConnectionScopes;
   /** True when one-click sign-in let Planning Center name this organization. */
   found?: boolean;
+  /** On a one-click sign-in's connection: when that sign-in was checked. Renewals don't change it (review M, L7). */
+  found_at_ms?: number;
   /** "Switch Ozzie to this church?": another church's sign-in is saved on this Mac and waits for an answer. */
   switch?: SwitchQuestion;
   /** Sign-ins the person chose to leave that Ozzie couldn't sign out of yet, each with its reason. */
@@ -167,6 +169,14 @@ export function connectionProblem(error: unknown): string {
   return "The connection could not be checked. If you were disconnecting, revocation is unconfirmed; try again.";
 }
 
+/**
+ * Whether the saved sign-in failed in a way only a new sign-in mends: Planning Center refused it or there was nothing to
+ * renew with (`invalid-token`), or it granted a scope set Ozzie never keeps (`scope-mismatch`). Planning Center out of
+ * reach, or an organization check that didn't finish, isn't one: checking again may work.
+ */
+export const needsSignIn = (status: Pick<ConnectionStatus, "state" | "problem"> | null | undefined): boolean =>
+  status?.state === "failed" && (status.problem === "invalid-token" || status.problem === "scope-mismatch");
+
 const genericOrganizationProblem = "The expected organization could not be verified. Nothing new was saved.";
 const userInfoReasons: readonly string[] = ["transport-failure", "access-denied", "provider-failure", "invalid-json", "organization-id-missing", "organization-id-invalid", "unclassified"];
 /** Validate untrusted IPC metadata without invoking getters or rendering provider text. */
@@ -222,7 +232,8 @@ export function foundOrganization<S extends { clientId: string; organization: st
   settings: S, status: ConnectionStatus | null, applied: string | null,
 ): { settings: S; key: string } | null {
   if (status?.state !== "connected" || status.found !== true || !/^[1-9]\d{0,31}$/.test(status.organization)) return null;
-  const key = `${status.organization}@${status.checked_at_ms ?? ""}`;
+  // Once per sign-in: when it was made, which a renewal of it never changes (review M, L7).
+  const key = `${status.organization}@${status.found_at_ms ?? status.checked_at_ms ?? ""}`;
   if (key === applied) return null;
   const same = settings.organization === status.organization;
   return { key, settings: { ...settings, clientId: "", organization: status.organization, ...(same ? {} : { serviceTypeId: "", planId: "" }) } };

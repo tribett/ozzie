@@ -334,17 +334,20 @@ export function cardsAt(at: CardsAt, inUse: string | null, open: boolean): Cards
 export type ShownCheck = { organization: string; names: Readonly<Record<string, string>> };
 export const MATCHES_NEED_CHURCH = "Connect Planning Center to see possible matches with this Sunday's check.";
 export const MATCHES_NEED_CHECK = "Possible matches appear once Ozzie has checked this Sunday for the church it's using.";
+export const MATCHES_NEED_SIGN_IN = "Sign in to Planning Center again in Settings to see possible matches.";
 export const MATCHES_NOT_IN_EXAMPLE = "While the example is on, no names are offered as possible matches: its people are made up.";
 const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
 /**
  * The names a card may be compared with (review G): only those a check of the church Ozzie uses now read. None while no
  * church is in use (a saved copy of the last church's check may be on screen then), none from a check of any other
  * church whatever Settings names, and none while the example is on (the cards are real, its people made up). `why`
- * says why none are offered.
+ * says why none are offered: "Connect Planning Center" only while it is `disconnected`, since native code also names no
+ * church in use while it checks a sign-in, at launch or on a refresh (review K, L5); "Sign in … again" when the sign-in
+ * failed in a way only a new sign-in mends (`signInAgain`, connection.ts `needsSignIn`; review M, L5).
  */
-export function namesBeside(check: ShownCheck | null, inUse: string | null, example: boolean): { names: Readonly<Record<string, string>>; why: string | null } {
+export function namesBeside(check: ShownCheck | null, inUse: string | null, example: boolean, disconnected: boolean, signInAgain = false): { names: Readonly<Record<string, string>>; why: string | null } {
   if (example) return { names: NO_NAMES, why: MATCHES_NOT_IN_EXAMPLE };
-  if (inUse === null) return { names: NO_NAMES, why: MATCHES_NEED_CHURCH };
+  if (inUse === null) return { names: NO_NAMES, why: disconnected ? MATCHES_NEED_CHURCH : signInAgain ? MATCHES_NEED_SIGN_IN : MATCHES_NEED_CHECK };
   if (!check || check.organization !== inUse) return { names: NO_NAMES, why: MATCHES_NEED_CHECK };
   return { names: check.names, why: null };
 }
@@ -353,13 +356,17 @@ export function namesBeside(check: ShownCheck | null, inUse: string | null, exam
  * changed or `discarded` goes up (Disconnect, after its question). Names beside the cards come only from a check of the
  * church the cards belong to while it is in use (`namesBeside`). It reads no setting and no ID typed in Settings.
  */
-export function KeptCards({ check, example, inUse, discarded = 0, onScreen = true, onOpenCards, review }: {
+export function KeptCards({ check, example, inUse, disconnected, signInAgain = false, discarded = 0, onScreen = true, onOpenCards, review }: {
   /** The check on screen, if any. */
   check: ShownCheck | null;
   /** Whether the fictional example is on. */
   example: boolean;
   /** The church Ozzie uses now (native), or null while none is. */
   inUse: string | null;
+  /** Whether the native status says Planning Center is disconnected (not a sign-in being checked). */
+  disconnected: boolean;
+  /** Whether the sign-in failed in a way only a new sign-in mends (connection.ts `needsSignIn`). */
+  signInAgain?: boolean;
   /** How many times the leader chose to disconnect with cards open: each one ends them. */
   discarded?: number;
   onScreen?: boolean;
@@ -372,7 +379,7 @@ export function KeptCards({ check, example, inUse, discarded = 0, onScreen = tru
   const next = cardsAt(at, inUse, open > 0);
   if (next !== at) setAt(next);
   const told = useCallback((n: number) => { setOpen(n); onOpenCards?.(n); }, [onOpenCards]);
-  const beside = namesBeside(check, next.church === inUse ? inUse : null, example);
+  const beside = namesBeside(check, next.church === inUse ? inUse : null, example, disconnected, signInAgain);
   return <CardsPage people={beside.names} noMatches={beside.why} workspace={`cards-${next.epoch}-${discarded}`} onScreen={onScreen} onOpenCards={told} review={review} />;
 }
 export function CardsPage({ people, noMatches = null, workspace, onScreen = true, onOpenCards, review }: {

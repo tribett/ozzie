@@ -4,8 +4,7 @@
 // not the task record (ledger), not the copy for other AI apps (core/mcp), not Siri's copy, never a notice on this Mac or
 // the phone, and no localStorage key but its own. Shown here at run time with fictional data and a scripted model, and
 // in the source: the key and the write-up are named only where they are made and shown.
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
@@ -104,8 +103,14 @@ describe("a job's write-up stays where it is kept", () => {
   });
 
   it("is named only where it is made, kept and shown: never by sharing, Siri, notices, the ledger or the copy for other AI apps", () => {
-    const tracked = execFileSync("git", ["ls-files", "product/desktop/src", "core/src", "core/mcp"], { cwd: new URL("../../../", import.meta.url), encoding: "utf8" })
-      .split("\n").filter(f => /\.(?:ts|tsx|mjs)$/u.test(f));
+    // Every source file on disk under these folders, so a copy without git (a ZIP of the public repository) is checked
+    // too. Build output (dist*, git-ignored) and installed packages are left out; in a clean checkout that is exactly what
+    // git tracks there, and in a working tree it also takes in files not yet added (review N, 9).
+    const tracked = ["product/desktop/src", "core/src", "core/mcp"].flatMap(dir =>
+      readdirSync(new URL(`../../../${dir}`, import.meta.url), { recursive: true, encoding: "utf8" })
+        .map(f => `${dir}/${f.replaceAll("\\", "/")}`))
+      .filter(f => /\.(?:ts|tsx|mjs)$/u.test(f) && !f.split("/").some(part => /^(?:dist(?:-.+)?|node_modules)$/u.test(part)));
+    expect(tracked.length).toBeGreaterThan(100);
     const naming = (re: RegExp) => tracked.filter(f => re.test(readFileSync(new URL(`../../../${f}`, import.meta.url), "utf8"))).sort();
     // The key: only the runner reads or writes it.
     expect(naming(/ozzie\.responsibilities\.writeups/u)).toEqual(["product/desktop/src/responsibility-runner.ts"]);

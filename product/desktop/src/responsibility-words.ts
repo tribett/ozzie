@@ -228,7 +228,9 @@ export function problemText(code: string | null | undefined): string {
     // The store closes a run left open too long: Ozzie may have closed, or the check ran long.
     case "interrupted": return "it was cut off before it finished";
     case "timeout": return "it took too long";
-    case "cancelled": return "it was paused before it finished";
+    // Paused, or its check stopped because Ozzie's sign-in was busy or the Mac's storage was locked (checkFailure).
+    case "cancelled": return "it was paused or stopped before it finished";
+    case "unverified": return "Ozzie couldn't confirm which church its sign-in to Planning Center belongs to";
     case "limit": return "it reached its limit";
     case "unavailable": return "its list of what to keep an eye on couldn't be read on this Mac";
     case "invalid": return "its plan couldn't be used as saved; try Change";

@@ -282,6 +282,24 @@ describe("Sunday checks in the ledger", () => {
     expect(checkFailure("invalid-credentials")).toBe("denied");
     expect(checkFailure({ sunday_check: "timeout" })).toBe("provider-failure");
   });
+
+  it("records why a check failed true to its cause, never 'couldn't be reached' when Planning Center was reached", () => {
+    for (const [error, code] of [
+      // No sign-in Ozzie could use: none connected, one that couldn't be renewed, or the Mac refused it.
+      ["not-connected", "denied"], [{ "sunday-check": "missing-credentials" }, "denied"],
+      [{ "sign-in-not-renewed": "invalid-credentials" }, "denied"], [{ authentication: "invalid-token" }, "denied"],
+      [{ "sunday-check": "denied" }, "denied"], [{ "sign-in-not-renewed": "store-unavailable" }, "denied"],
+      // Ozzie couldn't confirm which church the sign-in belongs to.
+      [{ "sunday-check": "organization-unverified" }, "unverified"], [{ "sign-in-not-renewed": "organization-unverified" }, "unverified"],
+      [{ authentication: "organization-unverified" }, "unverified"],
+      // The sign-in was busy (another read, a sign-in, Disconnect) or this Mac's credential storage was locked.
+      [{ "sunday-check": "busy" }, "cancelled"], [{ "sign-in-not-renewed": "busy" }, "cancelled"], [{ "sunday-check": "cancelled" }, "cancelled"],
+      [{ "sign-in-not-renewed": "cancelled" }, "cancelled"], [{ "sign-in-not-renewed": "locked" }, "cancelled"], [{ "sunday-check": "locked" }, "cancelled"],
+      [{ authentication: { store: "locked" } }, "cancelled"],
+      // Planning Center out of reach, and anything not known.
+      [{ "sign-in-not-renewed": "provider-failure" }, "provider-failure"], [{ "sunday-check": "provider-failure" }, "provider-failure"], [undefined, "provider-failure"],
+    ] as const) expect(checkFailure(error), JSON.stringify(error)).toBe(code);
+  });
 });
 
 // ---- HarnessData ------------------------------------------------------------------------------------------

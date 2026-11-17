@@ -136,8 +136,8 @@ pub enum NoRecipient {
     BusyWithACheck,
     /// Another note was still being addressed: nothing was read.
     BusyWithAnotherNote,
-    /// `READS_PER_MINUTE` reads already went out to Planning Center in the minute before, whether or
-    /// not they filled in To: nothing was read.
+    /// `READS_PER_MINUTE` reads were already tried in the minute before (counted once paced, whether
+    /// or not they reached Planning Center or filled in To): nothing was read.
     TooManyJustNow,
 }
 
@@ -187,8 +187,10 @@ impl Recipient {
                 out.push(char::from(byte));
             } else {
                 out.push('%');
-                out.push(char::from(HEX[usize::from(byte >> 4)]));
-                out.push(char::from(HEX[usize::from(byte & 0x0F)]));
+                // By `get`, not an index: the structure test refuses any index but a literal.
+                let digit = |nibble: u8| HEX.get(usize::from(nibble)).copied().unwrap_or(b'0');
+                out.push(char::from(digit(byte >> 4)));
+                out.push(char::from(digit(byte & 0x0F)));
             }
         }
         out
@@ -284,13 +286,25 @@ fn linked_people(capture: &SundayCapture) -> BTreeSet<&str> {
     linked
 }
 /// The team leaders a capture shows, the way the Sunday page reads them (core/src/sunday-brief.ts
-/// `teamLeaders`): from each answered `team_leaders` read of a team, every `TeamLeader` row's
-/// `people` and `person` links. The check keeps no name for a leader who is only a leader; the page
-/// still offers a note to them, so they are people a check showed.
+/// `teamLeaders`): for a team whose every `team_leaders` read answered with a body, every
+/// `TeamLeader` row's `people` and `person` links. A team with any such read that didn't (one part
+/// of its leaders cut short) shows no leader on the page, so none of its leaders is kept here
+/// (review K, L7). The check keeps no name for a leader who is only a leader; the page still offers
+/// a note to them, so they are people a check showed.
 fn team_leaders(capture: &SundayCapture) -> BTreeSet<&str> {
+    let reads = || {
+        capture
+            .reads
+            .iter()
+            .filter(|read| read.collection == "team_leaders" && read.team_id.is_some())
+    };
+    let cut: BTreeSet<&Option<String>> = reads()
+        .filter(|read| read.outcome != "ok" || read.body.is_none())
+        .map(|read| &read.team_id)
+        .collect();
     let mut leaders = BTreeSet::new();
-    for read in &capture.reads {
-        if read.collection != "team_leaders" || read.team_id.is_none() || read.outcome != "ok" {
+    for read in reads() {
+        if cut.contains(&read.team_id) {
             continue;
         }
         let rows = read.body.as_ref().and_then(|body| body["data"].as_array());
@@ -299,7 +313,7 @@ fn team_leaders(capture: &SundayCapture) -> BTreeSet<&str> {
                 continue;
             }
             for key in ["people", "person"] {
-                leaders.extend(person_ids(&row["relationships"][key]["data"]));
+                leaders.extend(person_ids(&member(&row["relationships"], key)["data"]));
             }
         }
     }
@@ -520,6 +534,13 @@ fn waiting<T>(
     }
 }
 
+/// `value[key]` for a key held in a variable, as a call: the JSON object's member, or Null, exactly
+/// as indexing gives it. The structure test refuses an index by anything but a literal (review N, 5).
+fn member<'v>(value: &'v Value, key: &str) -> &'v Value {
+    static NULL: Value = Value::Null;
+    value.get(key).unwrap_or(&NULL)
+}
+
 /// The recipient a projected contact read gives, by the rules above.
 pub(crate) fn choose(
     body: &Value,
@@ -537,7 +558,7 @@ pub(crate) fn choose(
     }
     let (link, row_type) = kind.rows();
     // The rows used are exactly the ones the record links: none missing, none extra, none twice.
-    let linked: Option<BTreeSet<&str>> = record["relationships"][link]["data"]
+    let linked: Option<BTreeSet<&str>> = member(&record["relationships"], link)["data"]
         .as_array()
         .and_then(|links| links.iter().map(|l| l["id"].as_str()).collect());
     let rows: Vec<&Value> = body["included"]
@@ -550,7 +571,7 @@ pub(crate) fn choose(
     if linked.as_ref() != Some(&included) || included.len() != rows.len() {
         return Err(NoRecipient::CouldNotRead);
     }
-    let attribute = |row: &Value, key: &str| row["attributes"][key].clone();
+    let attribute = |row: &Value, key: &str| member(&row["attributes"], key).clone();
     let usable: Vec<(&str, bool)> = rows
         .iter()
         .filter(|row| match kind {
@@ -564,7 +585,9 @@ pub(crate) fn choose(
                 ContactKind::Email => "address",
                 ContactKind::Mobile => "number",
             };
-            let value = row["attributes"][key].as_str().filter(|v| !v.is_empty())?;
+            let value = member(&row["attributes"], key)
+                .as_str()
+                .filter(|v| !v.is_empty())?;
             Some((value, attribute(row, "primary") == Value::Bool(true)))
         })
         .collect();

@@ -93,8 +93,9 @@ export function addressedText(h: HandOff, to: Pick<Addressee, "name" | "peopleGr
     // A Sunday check or setup's plan picker was reading Planning Center (contact.rs BusyWithACheck).
     case "busy-with-a-check": return `Ozzie was reading Planning Center just then, so To was left empty. The note opened in ${opened}.`;
     case "busy-with-another-note": return `Ozzie was still filling in To for another note, so To was left empty. The note opened in ${opened}.`;
-    // Native allows READS_PER_MINUTE (10) reads in the past minute, whether or not they filled in To (contact.rs).
-    case "too-many-just-now": return `Ozzie has already read from Planning Center 10 times in the last minute, so To was left empty. The note opened in ${opened}.`;
+    // Native allows READS_PER_MINUTE (10) tries in the past minute, whether or not they reached Planning Center or filled
+    // in To (contact.rs `pace`, review K, L8).
+    case "too-many-just-now": return `Ozzie has already tried to read an email address or mobile number from Planning Center 10 times in the last minute, so To was left empty. The note opened in ${opened}.`;
     default: return `Ozzie couldn't read ${to.name}'s ${detail} from Planning Center just now. ${empty}.`;
   }
 }

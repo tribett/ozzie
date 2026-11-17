@@ -284,7 +284,10 @@ describe("What runs automatically: the home for responsibilities", () => {
     expect(statusText({ ...r, runs: [run({ outcome: "failed", code: "cancelled" })] }, false).label).toBe("Keeping an eye on it");
     // Never says Ozzie closed when it may have been a timeout or a pause.
     for (const code of ["interrupted", "timeout", "cancelled"]) expect(problemText(code)).not.toMatch(/closed/u);
-    expect(problemText("cancelled")).toBe("it was paused before it finished");
+    // Paused, or its check stopped because Ozzie's sign-in was busy or the Mac's credential storage was locked
+    // (harness-bridge.ts checkFailure): true of each.
+    expect(problemText("cancelled")).toBe("it was paused or stopped before it finished");
+    expect(problemText("unverified")).toBe("Ozzie couldn't confirm which church its sign-in to Planning Center belongs to");
     // Waiting for Planning Center: says so rather than "Not scheduled".
     const waiting = render(React.createElement(ResponsibilityList, { view: view({ items: [r] }), context: context({ connected: false }), runner: fakeRunner(view()), actions }));
     expect(waiting).toContain("Next check As soon as Planning Center is connected.");

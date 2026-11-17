@@ -1,8 +1,8 @@
 // "Ask Ozzie to look at who could help" on a Sunday card (audit item 9): the who-could-help procedure, run for real through
 // the harness for that one role at one time, beside the fixed list that stays the source of truth. The model still
 // returns only fact ids; the card lists everyone the check listed, alphabetically with the same closed labels as the
-// fixed list, from the finding itself and never from the AI's copy (review G, M-1), never as the AI's pick, and never
-// shows a draft (review H, M3). And
+// fixed list, from the finding itself and never from the AI's copy (review G, M-1), those left out behind the fixed
+// list's own fold (review K, L2), never as the AI's pick, and never shows a draft (review H, M3). And
 // every Sunday card's "See how this works" says the finding came from Ozzie's own check, with no AI, and the reads it
 // used. Fictional data and a scripted model; nothing native runs.
 import React from "react";
@@ -18,9 +18,13 @@ import { nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../../cor
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import { createAppHarness, LedgerRecorder, localTriggers, lookAtWhoCouldHelp, oneRole, WHO_COULD_HELP, type AskTurn, type Look } from "../src/harness-bridge.js";
+import { createAppHarness, LedgerRecorder, localTriggers, lookAtWhoCouldHelp, lookShortened, oneRole, WHO_COULD_HELP, type AskTurn, type Look } from "../src/harness-bridge.js";
 import { listedPeople, lookEnded, READS_FOR, readsFor, SundayPage, WhoCouldHelpCard } from "../src/sunday-page.js";
-import { calls, facts, fakeNative, fictionalData, HIDDEN_WORDS, payloadOf, RULES, scripted, taskIds, text, type Turn } from "./harness-fakes.js";
+import { taskAccount, type TaskEventRow } from "../src/harness-words.js";
+import { calls, facts, fakeNative, fictionalData, HIDDEN_WORDS, payloadOf, row, RULES, scripted, taskIds, text, type Turn } from "./harness-fakes.js";
+import { installFakeDom } from "./fake-dom.js";
+
+const dom = installFakeDom();
 
 const skills = await bundledSkills();
 const greeter = (data: HarnessData) => data.brief!.findings.find(f => f.kind === "needs-people" && f.position?.name === "Greeter")!;
@@ -32,14 +36,13 @@ const lookTurns: Turn[] = [
   r => { const p = payloadOf(r, "sunday.who_could_help")!; return facts([...(p["people"] as Row[]).map(x => x.fact).reverse(), (p["times"] as { fact: string }[])[0]!.fact]); },
 ];
 
-async function look(turns = lookTurns) {
+async function look(turns = lookTurns, session = new HarnessSession()) {
   const data = fictionalData();
   const m = scripted(turns);
   const ledger = fakeNative();
   const kept = new Map<string, string>();
   const recorder = new LedgerRecorder({ invoke: ledger.invoke, hashFor: async id => skills.get(id)?.hash, newId: taskIds(), readyMs: 200,
     triggers: localTriggers({ getItem: k => kept.get(k) ?? null, setItem: (k, v) => { kept.set(k, v); } }) });
-  const session = new HarnessSession();
   const turn = await lookAtWhoCouldHelp(d => createAppHarness({ workspace_id: "fictional", data: d, skills, session, loop: "ts", step: m.model, recorder }), data, greeter(data),
     { skills, recorder });
   await recorder.idle();
@@ -71,14 +74,20 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     if (turn.state !== "answered") throw new Error(turn.state);
     expect(turn.answer.look).toEqual({ kind: "lines", looked: true, shortened: 0 });
     const html = card(turn, data);
-    expect(namesIn(html)).toEqual([
+    // Those left out are folded, as on the fixed list (review K, L2); opened, they follow in the fixed list's order.
+    expect(namesIn(html)).toEqual([["Riley Thornbury", "No overlap found"], ["Casey Pemberly", "Possible conflict"], ["Drew Halvorsen", "Availability needs confirmation"]]);
+    expect(text(html)).toContain("Show 2 left out and why");
+    expect(text(html)).not.toMatch(/Morgan Ellingsworth|Sam Whitcombe/u);
+    const all = await opened(turn, data);
+    expect(namesIn(all)).toEqual([
       ["Riley Thornbury", "No overlap found"], ["Casey Pemberly", "Possible conflict"], ["Drew Halvorsen", "Availability needs confirmation"],
       ["Morgan Ellingsworth", "Left out"], ["Sam Whitcombe", "Left out"],
     ]);
+    expect(text(all)).toContain("Hide 2 left out and why");
     // What the AI adds is Ozzie's line about the role; no person is a sentence, and nothing says who the AI named.
     expect(turn.answer.body).toBe("Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.");
-    expect(text(html)).not.toMatch(/chose|picked|suggest|recommend|first to ask|best/iu);
-    expect(text(html).split("Morgan Ellingsworth").length - 1).toBe(1);
+    expect(text(all)).not.toMatch(/chose|picked|suggest|recommend|first to ask|best/iu);
+    expect(text(all).split("Morgan Ellingsworth").length - 1).toBe(1);
   });
 
   it("takes the people from the finding, as the fixed list does, never from the AI's copy cut to fit: 40 and 85 on a team (review G, M-1)", async () => {
@@ -97,10 +106,13 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
       expect(given, `${n}`).toBeLessThan(n + 5);
       expect(turn.answer.look).toEqual({ kind: "lines", looked: true, shortened: n + 5 - given });
       const html = card(turn, data);
-      // Exactly the fixed list's people and labels, in its order (left out included).
+      // Exactly the fixed list's people and labels, in its order: those left out (last) folded as there, and opened.
       const fixed = listedPeople(finding, data.capture!.names).map(x => [data.capture!.names[x.person.person_id]!, x.label]);
       expect(fixed).toHaveLength(n + 5);
-      expect(namesIn(html), `${n}`).toEqual(fixed);
+      const left = fixed.filter(([, label]) => label === "Left out").length;
+      expect(namesIn(html), `${n}`).toEqual(fixed.slice(0, n + 5 - left));
+      expect(text(html)).toContain(`Show ${left} left out and why`);
+      expect(namesIn(await opened(turn, data)), `${n}`).toEqual(fixed);
       // No read "couldn't be read" here: the card says the AI's list was shortened, and by how many.
       expect(text(html)).not.toMatch(/couldn't be read|Worth a look/u);
       expect(text(html)).toContain(`The AI looked at a shortened list: it wasn't given ${n + 5 - given} of the people Ozzie's check listed.`);
@@ -108,10 +120,30 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     }
   });
 
+  it("a line the AI chose about the list says how many the check listed and names no order beside the alphabetical list (review K)", async () => {
+    for (const n of [0, 40]) {
+      const data = n ? bigTeam(n) : fictionalData();
+      const m = scripted([
+        () => calls(["sunday.open_needs"]),
+        r => calls(["sunday.who_could_help", { role: (payloadOf(r, "sunday.open_needs")!["needs"] as { role: string }[])[0]!.role }]),
+        r => { const p = payloadOf(r, "sunday.who_could_help")!; return facts([String(p["fact"]), (p["times"] as { fact: string }[])[0]!.fact]); },
+      ]);
+      const turn = await lookAtWhoCouldHelp(d => createAppHarness({ workspace_id: "x", data: d, skills, session: new HarnessSession(), loop: "ts", step: m.model }), data, greeter(data), { skills });
+      if (turn.state !== "answered") throw new Error(turn.state);
+      const t = text(card(turn, data));
+      // Everyone the check listed, though the AI's copy of a big team's list was cut to fit.
+      expect(t, `${n}`).toContain(`On the team for Greeter, the check listed ${n + 5} people.`);
+      expect(t).toContain("Everyone the check listed is here, grouped as on the list above and alphabetical within each group;");
+      expect(t).not.toMatch(/particular order/u);
+    }
+  });
+
   it("adds no mark beside a person beyond the fixed list's own: the same rows, without the fixed list's actions (review G)", async () => {
     const { turn, data } = await look();
     if (turn.state !== "answered") throw new Error(turn.state);
-    const ai = rowsIn(card(turn, data));
+    // Opened, so the rows of those left out are checked too.
+    const ai = rowsIn(await opened(turn, data));
+    expect(ai.filter(r => r.includes("is-left"))).toHaveLength(2);
     const fixed = rowsIn(renderToStaticMarkup(React.createElement(SundayPage, {
       brief: data.brief!, names: data.capture!.names, busy: false, problem: "", sender: "", connected: false, hasRecording: false, configured: false, canReword: false,
       decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
@@ -130,6 +162,32 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
       expect([...row.matchAll(/class="([^"]+)"/gu)].map(x => x[1]).filter(c => !/^(?:person(?: is-left)?|ic|person-top|person-name|badge b-[a-z]+|person-role)$/u.test(c!)), row).toEqual([]);
       expect(row).not.toMatch(/<(?:button|a|img|strong|em)\b/u);
     }
+  });
+
+  it("folds those left out behind the fixed list's own Show N left out and why, so the two lists can't differ (review K, L2)", async () => {
+    const { turn, data } = await look();
+    if (turn.state !== "answered") throw new Error(turn.state);
+    const folds = (html: string) => [...html.matchAll(/<button[^>]*>(?:(?!<\/button>).)*left out and why<\/button>/gu)].map(m => m[0]);
+    const ai = card(turn, data);
+    const page = renderToStaticMarkup(React.createElement(SundayPage, {
+      brief: data.brief!, names: data.capture!.names, busy: false, problem: "", sender: "", connected: false, hasRecording: false, configured: false, canReword: false,
+      decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+    }));
+    // The same button, closed, on the AI's card as on the fixed list; and no one left out shows until it is pressed.
+    expect(folds(ai)).toHaveLength(1);
+    expect(folds(page)).toContain(folds(ai)[0]);
+    expect(rowsIn(ai).filter(r => r.includes("is-left"))).toEqual([]);
+    // Pressed again, it folds them away.
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(dom.root as unknown as Element);
+    await act(async () => { root.render(React.createElement(WhoCouldHelpCard, { turn, finding: greeter(data), names: data.capture!.names })); });
+    await act(async () => { dom.press(dom.button("Show 2 left out and why")!); });
+    expect(dom.seen()).toContain("Morgan Ellingsworth");
+    await act(async () => { dom.press(dom.button("Hide 2 left out and why")!); });
+    expect(dom.seen()).not.toContain("Morgan Ellingsworth");
+    expect(dom.button("Show 2 left out and why")).not.toBeNull();
+    await act(async () => { root.unmount(); });
   });
 
   it("uses the newest answer from the tool that listed the role's people when it is asked twice in one run (review G)", async () => {
@@ -170,7 +228,8 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     const t = text(html);
     expect(t).toMatch(/AI help Greeter What the AI found when asked to look at the list above Greeter at 9:30 AM/u);
     expect(t).toMatch(/Riley Thornbury No overlap found .*Casey Pemberly Possible conflict .*Drew Halvorsen Availability needs confirmation/u);
-    expect(t).toContain("Everyone the check listed is shown, alphabetically. Being listed first or last says nothing about anyone, and whether someone is willing is theirs to say.");
+    // Review M, L2: grouped by label first, as the fixed list is, then alphabetical within each group.
+    expect(t).toContain("Everyone the check listed is here, grouped as on the list above and alphabetical within each group; the order within a group says nothing about anyone, and whether someone is willing is theirs to say.");
     expect(t).not.toContain("this is what the AI chose from it");
     expect(t.split("free or willing").length - 1).toBe(0);
     expect(t).toContain("Based on: fictional example data as of");
@@ -195,26 +254,68 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     // Asked for the list, and chose nothing about the role (only people).
     const nothing = await open([...toList, r => facts((payloadOf(r, "sunday.who_could_help")!["people"] as Row[]).map(x => x.fact))]);
     expect(nothing.look).toEqual({ kind: "nothing", looked: true, shortened: 0 });
-    expect(nothing.t).toContain("The AI looked at the same list and had nothing to add.");
+    expect(nothing.t).toContain("The AI looked at the list of people and had nothing to add.");
     expect(nothing.t).not.toMatch(/Riley|Casey|Morgan/u);
+    // Beside a shortened list it never says the AI looked at "the same list" (review K, L4).
+    const cutLook: Look = { kind: "nothing", looked: true, shortened: 7 };
+    if (nothing.turn.state !== "answered") throw new Error(nothing.turn.state);
+    const cutCard = text(card({ state: "answered", answer: { ...nothing.turn.answer, look: cutLook } }, fictionalData()));
+    expect(cutCard).toContain("The AI looked at the list of people and had nothing to add.");
+    expect(cutCard).toContain(lookShortened(7));
+    expect(cutCard).not.toMatch(/same list/u);
     expect(nothing.ended).toBe("The AI looked at the list of people and chose nothing beyond it, so Ozzie said so.");
     // Never asked for the list, with a fact about the role: the people are still the finding's own, and it says so.
     const unlisted = await open([() => calls(["sunday.open_needs"]), r => facts([(payloadOf(r, "sunday.open_needs")!["needs"] as { fact: string }[])[0]!.fact])]);
     expect(unlisted.look).toEqual({ kind: "lines", looked: false, shortened: 0 });
     expect(unlisted.t).toMatch(/Riley Thornbury No overlap found/u);
-    expect(unlisted.ended).toBe("Ozzie wrote a line for each fact the AI chose about the role. The AI didn't ask for the list of people; the people are Ozzie's own list for this role, the same as above.");
+    expect(unlisted.ended).toBe("Ozzie wrote a line for each fact the AI chose about the role. The AI didn't ask for this role's list of people; the people are Ozzie's own list for this role, the same as above.");
     // Never asked for the list, and nothing about the role (the verifier refuses most such answers; said truly if one passes).
     const none: Look = { kind: "nothing", looked: false, shortened: 0 };
     if (lines.turn.state !== "answered") throw new Error(lines.turn.state);
     const noneCard = text(card({ state: "answered", answer: { ...lines.turn.answer, look: none } }, fictionalData()));
-    expect(noneCard).toContain("The AI didn't look at the list of people and had nothing to add.");
+    expect(noneCard).toContain("The AI didn't look at this role's list of people and had nothing to add.");
     expect(noneCard).not.toContain("The AI looked at the same list");
-    expect(lookEnded(none)).toBe("The AI didn't ask for the list of people and chose nothing about the role, so Ozzie said so.");
+    expect(lookEnded(none)).toBe("The AI didn't ask for this role's list of people and chose nothing about the role, so Ozzie said so.");
     // Not covered.
     const notCovered = await open([...toList, r => facts((payloadOf(r, "sunday.who_could_help")!["people"] as Row[]).map(x => x.fact), "not-covered")]);
     expect(notCovered.t).toContain("The AI couldn't tell more than the list above shows.");
     expect(notCovered.t).not.toMatch(/Riley|Casey|free or willing|I can't tell/u);
     expect(notCovered.ended).toBe("The AI answered that it couldn't tell more, so Ozzie said so.");
+  });
+
+  it("asked only for another role's list, says the AI didn't ask for this role's, on the card and in What happened, while its steps show the other (review K, L1)", async () => {
+    // The app's session keeps labels across tasks, so the AI can ask about a role this card isn't about; the tool lists
+    // no one for it.
+    const session = new HarnessSession();
+    const earlier = scripted([() => calls(["sunday.open_needs"]), r => facts([(payloadOf(r, "sunday.open_needs")!["needs"] as { fact: string }[])[0]!.fact])]);
+    await createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session, loop: "ts", step: earlier.model }).runSkill("sunday-ready");
+    const roles = (payloadOf(earlier.requests[1]!, "sunday.open_needs")!["needs"] as { role: string }[]).map(n => n.role);
+    const own = (r: Parameters<Turn>[0]) => (payloadOf(r, "sunday.open_needs")!["needs"] as { role: string }[])[0]!.role;
+    const { turn, data, ledger } = await look([
+      () => calls(["sunday.open_needs"]),
+      r => calls(["sunday.who_could_help", { role: roles.find(x => x !== own(r))! }]),
+      r => facts([(payloadOf(r, "sunday.open_needs")!["needs"] as { fact: string }[])[0]!.fact]),
+    ], session);
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.look).toEqual({ kind: "lines", looked: false, shortened: 0 });
+    const step = "Looked at who is on the team for an open role — all of it";
+    expect(turn.answer.steps).toContain(step);
+    // The card and its account: never "didn't ask for the list of people" beside a step that looked at one.
+    const ended = lookEnded(turn.answer.look!);
+    expect(ended).toBe("Ozzie wrote a line for each fact the AI chose about the role. The AI didn't ask for this role's list of people; the people are Ozzie's own list for this role, the same as above.");
+    const t = text(card(turn, data));
+    expect(t).not.toMatch(/didn't (?:ask for|look at) the list/u);
+    expect(lookEnded({ kind: "nothing", looked: false, shortened: 0 })).not.toMatch(/didn't (?:ask for|look at) the list/u);
+    // What happened, from what was recorded: it shows the same step, and its ending says nothing the card contradicts.
+    const events: TaskEventRow[] = ledger.log.filter(([c]) => c === "ledger_event")
+      .map(([, a], sequence) => ({ task_id: "t", sequence, at: "2026-11-20T21:42:00Z", type: a["kind"] as TaskEventRow["type"], detail: String(a["detail"]) }));
+    const account = taskAccount(row({ kind: "skill", skill_id: WHO_COULD_HELP, state: "verified", events }), { start: "who-could-help", end: "facts" });
+    expect(account.looked).toContain(step);
+    expect(account.ended).toBe("Finished. Ozzie showed what the AI found beside the list from its own check.");
+    // With no call for any list, What happened says what the card says.
+    const noList = taskAccount(row({ kind: "skill", skill_id: WHO_COULD_HELP, state: "verified", events: events.filter(e => !e.detail.startsWith("sunday.who_could_help")) }),
+      { start: "who-could-help", end: "facts" });
+    expect(noList.ended).toBe("Finished. The AI didn't ask for this role's list of people; Ozzie showed what it said about the role.");
   });
 
   it("an answer with a note says the AI asked for one, which isn't prepared here; the note itself is never shown (review G, N4)", async () => {
@@ -255,7 +356,8 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     // Once per open role whose card lists people, after its fixed list.
     const listing = data.brief!.findings.filter(f => f.kind === "needs-people" && f.people && (f.people.suggestions.length + f.people.conflicts.length + f.people.unverified.length + f.people.left_out.length) > 0);
     expect(on.match(/Ask Ozzie to look at who could help/gu)).toHaveLength(listing.length);
-    expect(on.indexOf("Listed alphabetically, not ranked.")).toBeLessThan(on.indexOf("Ask Ozzie to look at who could help"));
+    expect(on).toContain("People on this team in Planning Center. Grouped by what Ozzie found, alphabetical within each group, not ranked. Whether someone is willing is theirs to say.");
+    expect(on.indexOf("Grouped by what Ozzie found, alphabetical within each group, not ranked.")).toBeLessThan(on.indexOf("Ask Ozzie to look at who could help"));
     expect(page()).not.toContain("Ask Ozzie to look at who could help");
   });
 
@@ -283,7 +385,7 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     // Only one time was read, and Riley is "No overlap found" at it, as on the 9:30 card's own list.
     expect((payloadOf(m.requests[1]!, "sunday.open_needs")!["needs"] as unknown[])).toHaveLength(1);
     expect(namesIn(card(turn, data, first)).find(([name]) => name === "Riley Thornbury")?.[1]).toBe("No overlap found");
-    expect(namesIn(card(turn, data, first))).toEqual(listedPeople(first, data.capture!.names).map(x => [data.capture!.names[x.person.person_id]!, x.label]));
+    expect(namesIn(await opened(turn, data, first))).toEqual(listedPeople(first, data.capture!.names).map(x => [data.capture!.names[x.person.person_id]!, x.label]));
     expect(turn.answer.body).toMatch(/^Greeter at 9:30 AM on November 22 /u);
   });
 });
@@ -293,6 +395,30 @@ const withoutBody = (r: SundayRead): SundayRead => { const rest = { ...r }; dele
 /** The AI's card for a turn, with the finding's own people (as SundayPage renders it). */
 const card = (turn: AskTurn, data: HarnessData, finding = greeter(data)) =>
   renderToStaticMarkup(React.createElement(WhoCouldHelpCard, { turn, finding, names: data.capture!.names }));
+type Shape = { nodeType: number; nodeValue: string | null; childNodes: Shape[]; tagName?: string; attributes?: Map<string, string> };
+const escaped = (s: string) => s.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;").replace(/'/gu, "&#x27;");
+/** What the fake document holds, written as renderToStaticMarkup writes it (without its comments between texts). */
+const markupOf = (node: Shape): string => {
+  if (node.nodeType === 3) return escaped(node.nodeValue ?? "");
+  const inner = node.childNodes.map(markupOf).join("");
+  if (node.nodeType !== 1) return inner;
+  const tag = node.tagName!.toLowerCase();
+  return `<${tag}${[...node.attributes!].map(([k, v]) => ` ${k}="${escaped(v)}"`).join("")}>${inner}</${tag}>`;
+};
+/** The AI's card for a turn mounted on the fake document, with "Show N left out and why" pressed: its markup then. */
+async function opened(turn: AskTurn, data: HarnessData, finding = greeter(data)): Promise<string> {
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(dom.root as unknown as Element);
+  await act(async () => { root.render(React.createElement(WhoCouldHelpCard, { turn, finding, names: data.capture!.names })); });
+  const left = listedPeople(finding, data.capture!.names).filter(x => x.left).length;
+  const fold = dom.button(`Show ${left} left out and why`);
+  expect(fold, "the fold").not.toBeNull();
+  await act(async () => { dom.press(fold!); });
+  const html = markupOf(dom.root as unknown as Shape);
+  await act(async () => { root.unmount(); });
+  return html;
+}
 /** Each person row's markup, in order. */
 const rowsIn = (html: string) => [...html.matchAll(/<div class="person(?: is-left)?">.*?<\/p><\/div><\/div>/gu)].map(m => m[0]);
 /** Each person row's name and label, in order. */

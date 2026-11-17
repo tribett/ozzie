@@ -960,6 +960,44 @@ fn a_team_leader_the_check_shows_can_be_addressed() {
         people.remember(&case);
         assert!(!people.holds("1001", "56") && !people.holds("1001", "056"));
     }
+    // Review K, L7: a team whose leaders were read in parts, one of which didn't answer (or answered
+    // with nothing), shows no leader on the page (core `teamLeaders`), so none of its leaders is kept,
+    // even from the parts that did answer. Another team's cut-short read changes nothing here.
+    let part = |team: &str, outcome: &str, leader: Option<&str>| {
+        let mut read = with_leaders(&[], &leader.into_iter().collect::<Vec<_>>())
+            .reads
+            .remove(1);
+        read.team_id = Some(team.into());
+        read.outcome = outcome.into();
+        read
+    };
+    for second in [
+        "truncated",
+        "timeout",
+        "denied",
+        "provider-failure",
+        "no body",
+    ] {
+        let mut cut = with_leaders(&[], &["56"]);
+        let mut rest = part("70", "ok", Some("57"));
+        if second == "no body" {
+            rest.body = None;
+        } else {
+            rest.outcome = second.into();
+        }
+        cut.reads.push(rest);
+        let people = CheckedPeople::default();
+        people.remember(&cut);
+        assert!(
+            !people.holds("1001", "56") && !people.holds("1001", "57"),
+            "{second}"
+        );
+    }
+    let mut elsewhere = with_leaders(&[], &["56"]);
+    elsewhere.reads.push(part("71", "truncated", Some("57")));
+    let people = CheckedPeople::default();
+    people.remember(&elsewhere);
+    assert!(people.holds("1001", "56") && !people.holds("1001", "57"));
     // The bound counts leaders too.
     let many: Vec<String> = (1..=MAX_CHECKED_PEOPLE + 10)
         .map(|n| (1000 + n).to_string())
@@ -1753,6 +1791,38 @@ struct Named {
     raw: Vec<(Option<String>, String)>,
     macros: Vec<(String, String)>,
     calls: Vec<(Option<String>, String, String)>,
+    /// Every index by anything but an integer or string literal or `..` (`s[a..]`, `s[r]` with a
+    /// range held in `r`, `s[RangeFrom { .. }]`): a string's slice panic quotes the string.
+    indexed: usize,
+    /// Macros whose arguments couldn't be read as code (`macro_args`): nothing in them was seen.
+    opaque: Vec<String>,
+}
+/// A macro's arguments as code: expressions separated by commas, or `matches!`'s expression, pattern
+/// and guard (review M, L6).
+enum MacroArgs {
+    Exprs(syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>),
+    Matches(Box<(syn::Expr, syn::Pat, Option<syn::Expr>)>),
+}
+fn macro_args(m: &syn::Macro) -> Option<MacroArgs> {
+    use syn::parse::Parser as _;
+    let exprs = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+    if let Ok(args) = exprs.parse2(m.tokens.clone()) {
+        return Some(MacroArgs::Exprs(args));
+    }
+    let matches = |input: syn::parse::ParseStream| {
+        let expr: syn::Expr = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
+        let guard = if input.peek(syn::Token![if]) {
+            input.parse::<syn::Token![if]>()?;
+            Some(input.parse::<syn::Expr>()?)
+        } else {
+            None
+        };
+        input.parse::<Option<syn::Token![,]>>()?;
+        Ok(MacroArgs::Matches(Box::new((expr, pat, guard))))
+    };
+    matches.parse2(m.tokens.clone()).ok()
 }
 impl Named {
     fn flatten(&mut self, tree: &syn::UseTree, prefix: &str) {
@@ -1834,6 +1904,24 @@ impl<'a> syn::visit::Visit<'a> for Named {
             m.tokens.to_string().split_whitespace().collect(),
         ));
         syn::visit::visit_macro(self, m);
+        // Review M, L6: the arguments are read as code, so a slice, a call or a path inside a macro
+        // is seen as anywhere else.
+        match macro_args(m) {
+            Some(MacroArgs::Exprs(args)) => args.iter().for_each(|a| self.visit_expr(a)),
+            Some(MacroArgs::Matches(matched)) => {
+                let (expr, pat, guard) = *matched;
+                self.visit_expr(&expr);
+                self.visit_pat(&pat);
+                guard.iter().for_each(|g| self.visit_expr(g));
+            }
+            None => self.opaque.push(name.join("::")),
+        }
+    }
+    fn visit_expr_index(&mut self, e: &'a syn::ExprIndex) {
+        if !literal_index(&e.index) {
+            self.indexed += 1;
+        }
+        syn::visit::visit_expr_index(self, e);
     }
     fn visit_expr_method_call(&mut self, call: &'a syn::ExprMethodCall) {
         let receiver = match &*call.receiver {
@@ -1853,6 +1941,58 @@ impl<'a> syn::visit::Visit<'a> for Named {
         ));
         syn::visit::visit_expr_method_call(self, call);
     }
+}
+/// Whether an index can't slice a string: an integer or string literal (a JSON member by name), or
+/// `..`, through any brackets (review N, 5). A range held in a variable or built as a struct is none.
+fn literal_index(index: &syn::Expr) -> bool {
+    match index {
+        syn::Expr::Paren(p) => literal_index(&p.expr),
+        syn::Expr::Group(g) => literal_index(&g.expr),
+        syn::Expr::Lit(l) => matches!(l.lit, syn::Lit::Int(_) | syn::Lit::Str(_)),
+        syn::Expr::Range(r) => r.start.is_none() && r.end.is_none(),
+        _ => false,
+    }
+}
+/// Whether a macro's tokens ask for debug formatting: `{:?}`, `{:#?}`, `{x:?}`, `{:>8?}` (review N, 5).
+fn debug_formatted(tokens: &str) -> bool {
+    // `{{` and `}}` are a brace written out, not a format.
+    let tokens = tokens.replace("{{", "").replace("}}", "");
+    tokens.split('{').skip(1).any(|part| {
+        part.split('}')
+            .next()
+            .is_some_and(|inner| inner.ends_with('?'))
+    })
+}
+/// Review K, L6: a path that can panic with a value in its message: a panicking call spelled as a
+/// path of any length (`Option::expect(x, …)`, `Index::index(s, 1..)`, `<str>::split_at(s, 1)`, whose
+/// path is the one segment `split_at`), or anything of `std::panic` (`panic_any`, `resume_unwind`),
+/// `begin_panic` or `Index`.
+fn panics_through(path: &str) -> bool {
+    let segments: Vec<&str> = path.split("::").collect();
+    let last = segments.last().copied().unwrap_or_default();
+    ([
+        "expect",
+        "unwrap",
+        "expect_err",
+        "unwrap_err",
+        "unwrap_unchecked",
+        "index",
+        "index_mut",
+        "split_at",
+        "split_at_mut",
+    ]
+    .contains(&last))
+        || segments.iter().any(|s| {
+            [
+                "panic",
+                "panic_any",
+                "begin_panic",
+                "panicking",
+                "Index",
+                "IndexMut",
+            ]
+            .contains(s)
+        })
 }
 fn named(source: &str) -> Named {
     use syn::visit::Visit as _;
@@ -2181,6 +2321,92 @@ fn the_public_api_is_exactly_this() {
     );
 }
 
+/// Every method contact.rs calls outside its tests (review M, L6).
+const CONTACT_METHODS: [&str; 83] = [
+    "all",
+    "and_then",
+    "any",
+    "as_array",
+    "as_mut",
+    "as_ref",
+    "as_slice",
+    "as_str",
+    "binding",
+    "body",
+    "bytes",
+    "chars",
+    "clone",
+    "collect",
+    "collection",
+    "contains",
+    "copied",
+    "count",
+    "elapsed",
+    "ends_with",
+    "eq_ignore_ascii_case",
+    "extend",
+    "filter",
+    "filter_map",
+    "flatten",
+    "front",
+    "get",
+    "granted",
+    "holds",
+    "into",
+    "into_inner",
+    "into_iter",
+    "is_ascii",
+    "is_ascii_alphanumeric",
+    "is_ascii_digit",
+    "is_control",
+    "is_empty",
+    "is_none",
+    "is_some",
+    "is_some_and",
+    "iter",
+    "keys",
+    "last",
+    "len",
+    "load",
+    "lock",
+    "map",
+    "map_err",
+    "map_or",
+    "name",
+    "ok",
+    "ok_or",
+    "pace",
+    "pop_front",
+    "push",
+    "push_back",
+    "push_str",
+    "read_verified_using",
+    "recv_timeout",
+    "rows",
+    "saturating_duration_since",
+    "saturating_sub",
+    "scopes",
+    "send",
+    "spawn",
+    "split",
+    "split_once",
+    "starts_with",
+    "status_or_busy",
+    "store",
+    "strip_prefix",
+    "take",
+    "take_now",
+    "then",
+    "then_some",
+    "to_ascii_lowercase",
+    "to_owned",
+    "trim",
+    "unwrap_or",
+    "unwrap_or_else",
+    "url_part",
+    "verify_source",
+    "write_str",
+];
 /// Structure: this module reads only through the turn and the verified, GET-only source path
 /// (`verify_source`, then `read_verified_using` on the contact collections), and has no other way
 /// out: no network client of its own, no file, no process, no environment, no output, no log, no
@@ -2218,6 +2444,8 @@ fn this_module_reaches_only_the_guarded_planning_center_get() {
         }
     }
     for (macro_name, tokens) in &found.macros {
+        // By its last segment, so `std::println!` is `println!` (review N, 5).
+        let name = macro_name.rsplit("::").next().unwrap_or_default();
         assert!(
             ![
                 "write",
@@ -2229,11 +2457,11 @@ fn this_module_reaches_only_the_guarded_planning_center_get() {
                 "dbg",
                 "format_args"
             ]
-            .contains(&macro_name.as_str()),
+            .contains(&name),
             "contact.rs uses {macro_name}!"
         );
         assert!(
-            !tokens.contains(":?"),
+            !debug_formatted(tokens),
             "contact.rs formats a value: {macro_name}!({tokens})"
         );
     }
@@ -2270,12 +2498,61 @@ fn this_module_reaches_only_the_guarded_planning_center_get() {
                 "unwrap",
                 "expect_err",
                 "unwrap_err",
-                "unwrap_unchecked"
+                "unwrap_unchecked",
+                "index",
+                "index_mut",
+                "split_at",
+                "split_at_mut"
             ]
             .contains(&method.as_str()),
             "contact.rs calls {method}"
         );
     }
+    // Review K, L6: nor spelled as a path, nor by slicing a string with a range, macro arguments
+    // included (review M, L6), every one of which is read.
+    for (within, path) in found.paths() {
+        assert!(
+            !panics_through(&path),
+            "contact.rs can panic through {path} in {within:?}"
+        );
+    }
+    assert_eq!(
+        found.indexed, 0,
+        "contact.rs indexes by more than a literal"
+    );
+    assert_eq!(found.opaque, Vec::<String>::new(), "macro arguments unread");
+    // Review M, L6: every method called outside the tests, pinned as draft_apps.rs pins its own: a
+    // new one (a panicking slice, a setter, a formatter) fails here and needs its own review.
+    let mut methods: Vec<&str> = found.calls.iter().map(|(_, _, m)| m.as_str()).collect();
+    methods.sort_unstable();
+    methods.dedup();
+    assert_eq!(methods, CONTACT_METHODS);
+    // The reader sees inside macros, and through a path call.
+    let probe = named(
+        "fn f(s: &str) { let _ = matches!(&s[1..], \"x\"); let _ = format!(\"{}\", s.len()); let _ = str::split_at(s, 1); }",
+    );
+    assert_eq!(probe.indexed, 1);
+    // Review N, 5: a range held in a variable or built as a struct, a one-segment path, a qualified
+    // print macro, pretty debug formatting.
+    let held = named(
+        "fn f(s: &str) { let r = 1..2; let _ = s[r].len(); let _ = s[core::ops::RangeFrom { start: 1 }].len(); let _ = s[\"k\"].len() + s[0].len() + s[..].len(); }",
+    );
+    assert_eq!(held.indexed, 2);
+    assert!(
+        named("fn f(s: &str) { let _ = <str>::split_at(s, 1); }")
+            .paths()
+            .iter()
+            .any(|(_, p)| panics_through(p))
+    );
+    assert!(debug_formatted(r#"\"{:#?}\",value"#) && debug_formatted(r#"\"{x:?}\""#));
+    assert!(!debug_formatted(r#"\"{}{{?}}\",value"#));
+    assert!(probe.calls.iter().any(|(_, _, m)| m == "len"));
+    assert!(probe.paths().iter().any(|(_, p)| panics_through(p)));
+    assert!(
+        named("fn f(c: char) -> bool { matches!(c, 'a'..='z' | '_') }")
+            .opaque
+            .is_empty()
+    );
     for (_, path) in found.paths() {
         assert!(!path.starts_with("objc2"), "contact.rs reaches {path}");
     }

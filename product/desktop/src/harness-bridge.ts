@@ -492,10 +492,21 @@ export class LedgerRecorder {
   async idle(ms = 5_000): Promise<void> { await within(Promise.all([...this.#pending]), ms); }
 }
 
-/** A failed Sunday check as a FailureCode. Fixed codes only; native text is never kept. */
+/**
+ * A failed Sunday check as a FailureCode, true to its cause wherever the code is shown (What happened, a job's card, the
+ * copy for other AI apps). Fixed codes only; native text is never kept.
+ *  - `unverified`: Ozzie couldn't confirm which church the sign-in belongs to (native `organization-unverified`).
+ *  - `cancelled`: it stopped because Ozzie's sign-in was busy (another read, a sign-in, a church switch, Disconnect) or this
+ *    Mac's credential storage was locked.
+ *  - `denied`: no sign-in Ozzie could use: none connected, one that couldn't be renewed (refused, or nothing to renew with),
+ *    or the Mac refused or couldn't give it.
+ *  - `provider-failure`: Planning Center out of reach, and anything else.
+ */
 export function checkFailure(error: unknown): FailureCode {
   const known = JSON.stringify(error) ?? "";
-  if (/not-connected|missing-credentials|invalid-credentials|denied/u.test(known)) return "denied";
+  if (known.includes("organization-unverified")) return "unverified";
+  if (/"(?:busy|cancelled|locked)"/u.test(known)) return "cancelled";
+  if (/not-connected|missing-credentials|invalid-credentials|invalid-token|denied|store-unavailable|"unavailable"/u.test(known)) return "denied";
   return "provider-failure";
 }
 
@@ -630,16 +641,18 @@ export const PEOPLE_LABELS = Object.freeze({
 export type PeopleLabel = (typeof PEOPLE_LABELS)[keyof typeof PEOPLE_LABELS];
 /**
  * What the AI's look at who could help adds to the fixed list (review G, M-1, N3, N4): Ozzie's lines for facts it chose
- * about the role, nothing, that it couldn't tell, or that it asked for a note. `looked`: it asked for the list of people
- * (the tool answered with them). `shortened`: how many people its copy of the list left out to fit what the AI may read.
+ * about the role, nothing, that it couldn't tell, or that it asked for a note. `looked`: it asked for this role's list of
+ * people (the tool answered with them; a call for another role lists no one here, so it isn't this). `shortened`: how many people its copy of the list left out to fit what the AI may read.
  * The people the card shows are never from here: they are the finding's own, as the fixed list shows them.
  */
 export type LookKind = "lines" | "nothing" | "not-covered" | "draft";
 export interface Look { kind: LookKind; looked: boolean; shortened: number }
-/** Said under the people on the AI's card (review H, M3: never a pick, never a ranking). */
-export const LOOK_NOTE = "Everyone the check listed is shown, alphabetically. Being listed first or last says nothing about anyone, and whether someone is willing is theirs to say.";
-export const LOOK_NOTHING = "The AI looked at the same list and had nothing to add.";
-export const LOOK_NOT_LOOKED = "The AI didn't look at the list of people and had nothing to add.";
+/** Said under the people on the AI's card (review H, M3: never a pick, never a ranking). "Here": those left out are folded (review K, L2). */
+export const LOOK_NOTE = "Everyone the check listed is here, grouped as on the list above and alphabetical within each group; the order within a group says nothing about anyone, and whether someone is willing is theirs to say.";
+/** Never "the same list": the AI's copy may be shortened, and the card says so beside this (review K, L4). */
+export const LOOK_NOTHING = "The AI looked at the list of people and had nothing to add.";
+/** `looked` false: the AI may still have asked for another role's list, which lists no one here (review K, L1). */
+export const LOOK_NOT_LOOKED = "The AI didn't look at this role's list of people and had nothing to add.";
 export const LOOK_NOT_COVERED = "The AI couldn't tell more than the list above shows.";
 export const LOOK_DRAFT = "The AI asked for a note, which isn't prepared here. Use Prepare a note on a person's row above.";
 /** The AI's copy of a big team's list is cut to fit what it may read (core tools.ts fit); the card's list never is. */
@@ -677,7 +690,7 @@ export async function lookAtWhoCouldHelp(make: (data: HarnessData) => Harness, d
   if (!parsed) return outcome.code === "no-model" ? { state: "no-model" } : { state: "problem", code: outcome.code, text: LOOK_FAILED };
   const shown = shownAnswer(h, outcome, options.skills.get(WHO_COULD_HELP), options.sender ?? "");
   if (shown.end) options.recorder?.ended(task, shown.end);
-  // The tool's answers: whether the AI asked for the list of people, and the newest one that listed them (review G,
+  // The tool's answers: whether the AI asked for this role's list of people, and the newest one that listed them (review G,
   // M3g) for how much its copy was cut. The people the card shows come from the finding, never from these (M-1).
   type Listed = { fact?: string }[];
   const peopleIn = (e: ToolEnvelope) => (((e.payload as { people?: unknown } | null)?.people ?? []) as Listed);

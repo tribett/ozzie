@@ -10,6 +10,8 @@ import { fictionalOperations, withFictionalOperations } from "../../../core/src/
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { decide, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { refusedRead, sundayProblem } from "../src/sunday-source.js";
+import { checkFailure } from "../src/harness-bridge.js";
+import { FAILURE_REASONS } from "../src/harness-words.js";
 
 const rules: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
 const leadRules: SundayRules = { ...rules, sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery Lead" }] };
@@ -54,6 +56,33 @@ describe("a read Planning Center refused (audit item 5)", () => {
     // Any other problem stays one plain line.
     const other = text(refusedPage(false));
     expect(other).not.toContain("It's one of these");
+  });
+});
+
+describe("a sign-in that was running out and wasn't renewed (native main.rs renewed_auth)", () => {
+  const notRenewed = (reason: string) => ({ "sign-in-not-renewed": reason });
+  it("says why, true to the cause, and what to do next", () => {
+    for (const reason of ["invalid-credentials", "missing-credentials"]) {
+      expect(sundayProblem(notRenewed(reason))).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed, so nothing was read. Sign in again in Settings.");
+    }
+    // No answer, a 429 or a 5xx (review N, 8): the connection stays as it was and the next check tries again.
+    expect(sundayProblem(notRenewed("provider-failure"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and Planning Center didn't renew it just now, so nothing was read. Ozzie tries again at the next check.");
+    // The Keychain, before Planning Center was asked (review N, 4): locked comes right by itself; refused or missing needs the leader.
+    expect(sundayProblem(notRenewed("locked"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage was locked, so nothing was read. Ozzie tries again at the next check.");
+    expect(sundayProblem(notRenewed("denied"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac didn't let Ozzie use it, so nothing was read. Allow access when macOS asks, then check again.");
+    expect(sundayProblem(notRenewed("store-unavailable"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage couldn't be read, so nothing was read. Check again in a moment; if it keeps happening, sign in again in Settings.");
+    for (const reason of ["busy", "cancelled"]) {
+      expect(sundayProblem(notRenewed(reason)), reason).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed just now, so nothing was read. Try again in a moment, or sign in again in Settings.");
+    }
+    // Never the refused-read card, whose causes are a login's access or a sign-in Planning Center refused at a read.
+    for (const reason of ["busy", "cancelled", "locked", "denied", "store-unavailable", "invalid-credentials"]) expect(refusedRead(notRenewed(reason)), reason).toBe(false);
+    // "Check now" when the saved sign-in can't be renewed: no sign-in Ozzie can use.
+    expect(sundayProblem({ authentication: "invalid-token" })).toBe("Ozzie has no sign-in to Planning Center it can use, so nothing was read. Sign in again in Settings.");
+    for (const reason of ["invalid-credentials", "provider-failure", "busy", "denied"]) expect(sundayProblem(notRenewed(reason))).not.toMatch(FORBIDDEN);
+  });
+  it("is never what What happened says for Planning Center out of reach, unless it was", () => {
+    expect(FAILURE_REASONS[checkFailure(notRenewed("invalid-credentials"))]).toBe("Planning Center access wasn't available");
+    expect(FAILURE_REASONS[checkFailure(notRenewed("provider-failure"))]).toBe("Planning Center couldn't be reached");
   });
 });
 

@@ -41,6 +41,25 @@ async function ask(question: string, turns: Turn[], data = harnessData()) {
   return { ...c, restored: c.paragraphs.map(p => h.restore(p, { sender: "Pat" })), draftShown: c.draft ? h.restore(c.draft, { sender: "Pat", firstNames: true }) : null };
 }
 
+describe("who could help, as one line about the list (review K)", () => {
+  it("says how many people the check listed, never in what order, counting those left out to fit", () => {
+    // The app's card shows them alphabetically and Ask in person-id order: the line names neither.
+    const envelope = (people: number, cut = 0): ToolEnvelope => ({
+      tool: "sunday.who_could_help", source: "Planning Center Services", check_time: FRESH, completeness: cut ? "partial" : "complete",
+      payload: {
+        fact: "f1", asked_for: { role: "[Role 1]" },
+        people: Array.from({ length: people }, (_, i) => ({ fact: `f${i + 2}`, role: "[Role 1]", person: `[Person ${i + 1}]`, status: "no overlap found" })),
+        ...(cut ? { left_out_for_length: cut } : {}),
+      },
+    });
+    const said = (e: ToolEnvelope) => composeAnswer(JSON.stringify({ answer: "facts", facts: ["f1"] }), [e]).paragraphs;
+    expect(said(envelope(5))).toEqual(["On the team for [Role 1], the check listed 5 people."]);
+    expect(said(envelope(1))).toEqual(["On the team for [Role 1], the check listed 1 person."]);
+    // A copy cut to fit what the AI may read: the count is the check's, not the copy's.
+    expect(said(envelope(38, 7))).toEqual(["On the team for [Role 1], the check listed 45 people."]);
+  });
+});
+
 describe("the four suggested questions, answered from facts the model chose", () => {
   it("Who could cover Greeter? People in label order whatever order the model chose, and what no overlap doesn't mean", async () => {
     const out = await ask("Who could cover Greeter?", [
