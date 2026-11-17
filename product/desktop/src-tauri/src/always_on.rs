@@ -4,6 +4,10 @@
 //!  - a menu bar icon, a template image macOS tints ("Open Ozzie", "Pause everything" / "Resume
 //!    everything", "Quit Ozzie");
 //!  - closing the window hides it instead of quitting; the Dock icon or the menu brings it back;
+//!  - quitting from Ozzie's menu ("Quit Ozzie" in the menu bar icon's menu or the app menu, whose Command-Q is
+//!    that item: app_menu.rs) while checks are on or visitor cards are open asks first, in the window (audit items
+//!    20 and 23, review P M1; `QuitGuard`); nothing holds any other exit, so logging out, restarting or shutting
+//!    down the Mac, Quit from the Dock and a quit for an update never ask;
 //!  - App Nap is kept from pausing Ozzie (an NSProcessInfo activity that still lets the Mac sleep),
 //!    and the window's web view is configured not to throttle while hidden (tauri.conf.json
 //!    `backgroundThrottling: "disabled"`, which needs macOS 14: the bundle's minimum system version);
@@ -26,6 +30,7 @@ use ozzie_native_auth::responsibilities::{
     Grant, Listing, ResponsibilityError, ResponsibilityRow, ResponsibilityStore,
 };
 use ozzie_native_auth::sunday_check::unix_ms;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
@@ -219,7 +224,7 @@ fn keep_checks_running() {}
 pub const MENU_OPEN: &str = "Open Ozzie";
 pub const MENU_PAUSE: &str = "Pause everything";
 pub const MENU_RESUME: &str = "Resume everything";
-pub const MENU_QUIT: &str = "Quit Ozzie";
+pub const MENU_QUIT: &str = crate::app_menu::QUIT_TEXT;
 /// The one notice the menu bar shows itself: "Pause everything" couldn't be changed (the list of
 /// what Ozzie keeps an eye on couldn't be read or saved). Fixed, discreet, no details.
 pub const PAUSE_FAILED: &str =
@@ -234,7 +239,7 @@ pub fn pause_label(paused: bool) -> &'static str {
 /// The menu item that pauses or resumes everything, so its words follow the store.
 struct PauseItem(Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>);
 
-fn show_main(app: &tauri::AppHandle) {
+fn show_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -242,7 +247,7 @@ fn show_main(app: &tauri::AppHandle) {
         let _ = app.emit("ozzie:shown", ());
     }
 }
-fn set_paused_everywhere(app: &tauri::AppHandle, paused: bool) {
+fn set_paused_everywhere<R: tauri::Runtime>(app: &tauri::AppHandle<R>, paused: bool) {
     if let Some(item) = app
         .state::<PauseItem>()
         .0
@@ -263,7 +268,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .is_ok_and(|s| s.paused_all());
     let open = MenuItem::with_id(app, "open", MENU_OPEN, true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", pause_label(paused), true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", MENU_QUIT, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, crate::app_menu::QUIT_ID, MENU_QUIT, true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[&open, &pause, &PredefinedMenuItem::separator(app)?, &quit],
@@ -278,18 +283,39 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "open" => show_main(app),
-            "pause" => toggle_pause_from_menu(app),
-            "quit" => app.exit(0),
-            _ => {}
-        })
         .build(app)?;
     Ok(())
 }
+/// What a menu item does: the menu bar icon's three, and the app menu's "Quit Ozzie" (Command-Q), which shares the
+/// menu bar's id. Every other app menu item is the system's own (Hide, Copy, Close Window...) and never comes here.
+#[derive(Debug, PartialEq, Eq)]
+enum MenuAction {
+    Open,
+    Pause,
+    Quit,
+}
+fn menu_action(id: &str) -> Option<MenuAction> {
+    match id {
+        "open" => Some(MenuAction::Open),
+        "pause" => Some(MenuAction::Pause),
+        crate::app_menu::QUIT_ID => Some(MenuAction::Quit),
+        _ => None,
+    }
+}
+/// Every menu's clicks, the menu bar icon's and the app menu's: Tauri gives one handler all of them, so there is
+/// exactly one (installed by `manage` through app_menu::install), and a click never runs twice. Tests drive this very
+/// function with Tauri's own MenuEvent on a mock app (review G, L-b).
+fn on_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
+    match menu_action(event.id().as_ref()) {
+        Some(MenuAction::Open) => show_main(app),
+        Some(MenuAction::Pause) => toggle_pause_from_menu(app),
+        Some(MenuAction::Quit) => request_quit(app),
+        None => {}
+    }
+}
 /// "Pause everything" / "Resume everything" from the menu bar. When the store can't be read or
 /// written, nothing changes and a quiet fixed notice says so (never a silent no-op).
-fn toggle_pause_from_menu(app: &tauri::AppHandle) {
+fn toggle_pause_from_menu(app: &tauri::AppHandle<impl tauri::Runtime>) {
     let changed = app
         .state::<Responsibilities>()
         .get()
@@ -332,7 +358,80 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         let _ = window.hide();
     }
 }
-/// The Dock icon (or opening Ozzie again) brings the hidden window back.
+// ---- Asking before quitting (audit items 20 and 23) ----------------------------------------------------
+
+/// What quitting would stop or lose, as the page last said it: how many visitor cards are open (a count only; their
+/// words never leave the page) and whether the regular Sunday check or any job is on. Nothing else is told or kept.
+#[derive(Default)]
+pub struct QuitGuard {
+    cards: AtomicU32,
+    checks: AtomicBool,
+    /// When the window last asked: a second quit while the question is open quits, so Ozzie never traps anyone.
+    asked: Mutex<Option<Instant>>,
+}
+/// How long a question about quitting counts as open for a second quit to go ahead.
+pub const ASKED_FOR: Duration = Duration::from_secs(60);
+/// The most cards a count can say (the review holds at most 8; anything larger is the page's mistake).
+const MAX_CARDS: u32 = 99;
+impl QuitGuard {
+    /// What to ask about, or None to quit at once: nothing would stop or be lost, or a quit was already asked about
+    /// within ASKED_FOR (then the second quit goes ahead).
+    pub fn ask(&self, now: Instant) -> Option<(u32, bool)> {
+        let cards = self.cards.load(Ordering::SeqCst);
+        let checks = self.checks.load(Ordering::SeqCst);
+        if cards == 0 && !checks {
+            return None;
+        }
+        let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
+        if asked.is_some_and(|at| now.duration_since(at) < ASKED_FOR) {
+            return None;
+        }
+        *asked = Some(now);
+        Some((cards, checks))
+    }
+    pub fn set(&self, cards: u32, checks: bool) {
+        self.cards.store(cards.min(MAX_CARDS), Ordering::SeqCst);
+        self.checks.store(checks, Ordering::SeqCst);
+    }
+    fn answered(&self) {
+        *self.asked.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+/// The window's question about quitting: counts only.
+fn quit_asked(cards: u32, checks: bool) -> serde_json::Value {
+    serde_json::json!({ "cards": cards, "checks": checks })
+}
+fn ask_in_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, cards: u32, checks: bool) {
+    show_main(app);
+    let _ = app.emit("ozzie:quit-asked", quit_asked(cards, checks));
+}
+/// "Quit Ozzie" from the menu bar icon or the app menu (Command-Q): asks in the window first when that would stop
+/// checks or lose cards.
+fn request_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    match app.state::<QuitGuard>().ask(Instant::now()) {
+        Some((cards, checks)) => ask_in_window(app, cards, checks),
+        None => app.exit(0),
+    }
+}
+/// The page says what quitting would stop or lose: how many visitor cards are open, and whether checks are on.
+#[tauri::command]
+pub fn quit_guard_set(guard: tauri::State<'_, QuitGuard>, cards: u32, checks: bool) {
+    guard.set(cards, checks);
+}
+/// The leader's "Quit Ozzie" (or "Quit and discard them") in the window's question: quits now.
+#[tauri::command]
+pub fn quit_now(app: tauri::AppHandle) {
+    app.exit(0);
+}
+/// The leader's "Keep Ozzie running": the question is closed, so the next quit asks again.
+#[tauri::command]
+pub fn quit_kept(guard: tauri::State<'_, QuitGuard>) {
+    guard.answered();
+}
+
+/// The Dock icon (or opening Ozzie again) brings the hidden window back. No exit is ever held here: the question is
+/// asked before an exit starts (`request_quit`), so logging out, restarting or shutting down the Mac, Quit from the
+/// Dock, an update and the debug probe all go ahead.
 pub fn on_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
     #[cfg(target_os = "macos")]
     if let tauri::RunEvent::Reopen {
@@ -377,7 +476,8 @@ pub struct Background {
 }
 /// Everything managed here, for main.rs to add in one place.
 pub fn manage(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    builder
+    // The app menu replaces the framework's default, whose Quit would end Ozzie with no question (app_menu.rs).
+    crate::app_menu::install(builder, on_menu_event)
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent)
@@ -388,6 +488,7 @@ pub fn manage(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry>
         .manage(Responsibilities::default())
         .manage(Background::default())
         .manage(PauseItem(Mutex::new(None)))
+        .manage(QuitGuard::default())
 }
 /// At start: open the store, keep App Nap away, add the menu bar icon and start the timer thread.
 pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
@@ -674,6 +775,307 @@ pub async fn responsibility_agent_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quitting_asks_only_when_checks_are_on_or_cards_are_open_and_never_traps_anyone() {
+        let guard = QuitGuard::default();
+        let t0 = Instant::now();
+        // Nothing would stop or be lost: quit at once.
+        assert_eq!(guard.ask(t0), None);
+        guard.set(2, false);
+        assert_eq!(guard.ask(t0), Some((2, false)));
+        // A second quit while the question is open goes ahead.
+        assert_eq!(guard.ask(t0 + Duration::from_secs(5)), None);
+        // After "Keep Ozzie running", the next quit asks again.
+        guard.answered();
+        guard.set(0, true);
+        assert_eq!(guard.ask(t0 + Duration::from_secs(6)), Some((0, true)));
+        // A question left open longer than ASKED_FOR is asked again.
+        assert_eq!(
+            guard.ask(t0 + Duration::from_secs(6) + ASKED_FOR),
+            Some((0, true))
+        );
+        // A count past the review's own limit is held to the most it can say.
+        guard.set(u32::MAX, true);
+        guard.answered();
+        assert_eq!(guard.ask(t0), Some((MAX_CARDS, true)));
+    }
+
+    /// Review F L-7, review G L-b: the installed handler itself, given Tauri's own MenuEvent, on a mock app with the main
+    /// window, the question's guard and a responsibilities store of its own. A handler that ignores clicks fails here.
+    #[test]
+    fn a_menu_click_reaches_what_it_names_and_quit_asks_through_the_guard() {
+        use tauri::Listener;
+        // The responsibilities store Pause everything changes, in a folder of its own.
+        let dir = std::env::temp_dir().join(format!(
+            "ozzie-always-on-menu-{}-{}",
+            std::process::id(),
+            unix_ms()
+        ));
+        let store = Responsibilities::default();
+        let _ = store
+            .0
+            .set(Some(Arc::new(ResponsibilityStore::open(&dir, false))));
+        let app = tauri::test::mock_builder()
+            .manage(QuitGuard::default())
+            .manage(store)
+            .manage(PauseItem(Mutex::new(None)))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        let heard = Arc::new(Mutex::new(Vec::<(&'static str, String)>::new()));
+        for name in ["ozzie:quit-asked", "ozzie:shown", "ozzie:paused"] {
+            let heard = heard.clone();
+            app.listen(name, move |e| {
+                heard.lock().unwrap().push((name, e.payload().to_string()))
+            });
+        }
+        let handle = app.handle();
+        // A click, as Tauri hands it to the installed handler.
+        let click = |id: &str| {
+            on_menu_event(
+                handle,
+                tauri::menu::MenuEvent {
+                    id: tauri::menu::MenuId::new(id),
+                },
+            )
+        };
+        let said = |heard: &Arc<Mutex<Vec<(&'static str, String)>>>| {
+            heard.lock().unwrap().drain(..).collect::<Vec<_>>()
+        };
+
+        // "Quit Ozzie" (the menu bar's, or the app menu's Command-Q) with cards open: the window is shown and asked.
+        app.state::<QuitGuard>().set(2, true);
+        click(crate::app_menu::QUIT_ID);
+        assert_eq!(
+            said(&heard),
+            vec![
+                ("ozzie:shown", "null".to_string()),
+                (
+                    "ozzie:quit-asked",
+                    r#"{"cards":2,"checks":true}"#.to_string()
+                )
+            ]
+        );
+        // The question is open, so the next Quit within ASKED_FOR goes ahead: the click was asked about once.
+        assert_eq!(app.state::<QuitGuard>().ask(Instant::now()), None);
+        app.state::<QuitGuard>().answered();
+        // "Open Ozzie" shows the window; "Pause everything" pauses; anything else does nothing.
+        click("open");
+        assert_eq!(said(&heard), vec![("ozzie:shown", "null".to_string())]);
+        click("pause");
+        assert_eq!(
+            said(&heard),
+            vec![("ozzie:paused", r#"{"paused":true}"#.to_string())]
+        );
+        let paused_all = |app: &tauri::App<tauri::test::MockRuntime>| {
+            app.state::<Responsibilities>().get().unwrap().paused_all()
+        };
+        assert!(paused_all(&app));
+        click("pause");
+        assert_eq!(
+            said(&heard),
+            vec![("ozzie:paused", r#"{"paused":false}"#.to_string())]
+        );
+        click("not-ours");
+        assert_eq!(said(&heard), vec![]);
+        assert!(!paused_all(&app));
+        assert_eq!(
+            app.state::<QuitGuard>().ask(Instant::now()),
+            Some((2, true))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review F, L-7: the app installs its own menu and its one click handler, exactly once, and nothing else in the app
+    /// sets a menu or a menu handler. Read as Rust reads it (syn), since the menu can only be built on the main thread
+    /// and `manage` builds the real app; tests/app_menu.rs builds `app_menu::install` itself and reads AppKit's menu.
+    #[test]
+    fn manage_installs_the_app_menu_and_its_one_click_handler_and_nothing_else_does() {
+        use syn::visit::Visit;
+        #[derive(Default)]
+        struct Calls {
+            /// `path(args)` calls, as "path(arg, arg)" with whitespace removed.
+            fns: Vec<String>,
+            /// Method calls by name, with their arguments.
+            methods: Vec<(String, String)>,
+        }
+        impl<'a> Visit<'a> for Calls {
+            fn visit_expr_call(&mut self, c: &'a syn::ExprCall) {
+                if let syn::Expr::Path(p) = &*c.func {
+                    let path = p
+                        .path
+                        .segments
+                        .iter()
+                        .map(|s| s.ident.to_string())
+                        .collect::<Vec<_>>()
+                        .join("::");
+                    let args = c.args.iter().map(arg).collect::<Vec<_>>().join(",");
+                    self.fns.push(format!("{path}({args})"));
+                }
+                syn::visit::visit_expr_call(self, c);
+            }
+            fn visit_expr_method_call(&mut self, m: &'a syn::ExprMethodCall) {
+                let args = m.args.iter().map(arg).collect::<Vec<_>>().join(",");
+                self.methods.push((m.method.to_string(), args));
+                syn::visit::visit_expr_method_call(self, m);
+            }
+        }
+        fn arg(e: &syn::Expr) -> String {
+            match e {
+                syn::Expr::Path(p) => p
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                syn::Expr::Closure(_) => "closure".into(),
+                syn::Expr::Reference(r) => format!("&{}", arg(&r.expr)),
+                _ => "expr".into(),
+            }
+        }
+        let read = |file: &str| {
+            let source = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src")
+                    .join(file),
+            )
+            .unwrap();
+            syn::parse_file(&source).unwrap()
+        };
+        let calls_in = |items: &[syn::Item], skip_tests: bool| {
+            let mut calls = Calls::default();
+            for item in items {
+                if skip_tests
+                    && let syn::Item::Mod(m) = item
+                    && m.ident == "tests"
+                {
+                    continue;
+                }
+                calls.visit_item(item);
+            }
+            calls
+        };
+        // `manage` installs both, once, through the one function the integration test builds.
+        let always = read("always_on.rs");
+        let manage = always
+            .items
+            .iter()
+            .find_map(|i| match i {
+                syn::Item::Fn(f) if f.sig.ident == "manage" => Some(syn::Item::Fn(f.clone())),
+                _ => None,
+            })
+            .unwrap();
+        let in_manage = calls_in(std::slice::from_ref(&manage), false);
+        assert_eq!(
+            in_manage
+                .fns
+                .iter()
+                .filter(|c| c.starts_with("crate::app_menu::install("))
+                .collect::<Vec<_>>(),
+            vec!["crate::app_menu::install(builder,on_menu_event)"]
+        );
+        // main.rs builds the app through `manage`, once.
+        let main = calls_in(&read("main.rs").items, true);
+        assert_eq!(
+            main.fns
+                .iter()
+                .filter(|c| c.starts_with("always_on::manage("))
+                .count(),
+            1
+        );
+        // `install` sets the built menu and the given handler, once each.
+        let menu = read("app_menu.rs");
+        let in_install = calls_in(&menu.items, false);
+        assert_eq!(
+            in_install
+                .methods
+                .iter()
+                .filter(|(m, _)| m == "on_menu_event")
+                .collect::<Vec<_>>(),
+            vec![&("on_menu_event".to_string(), "on_click".to_string())]
+        );
+        assert_eq!(
+            in_install
+                .methods
+                .iter()
+                .filter(|(m, _)| m == "menu")
+                .collect::<Vec<_>>(),
+            vec![&("menu".to_string(), "build".to_string())]
+        );
+        // Nowhere else in the app: no other menu, menu handler or tray handler, and no default menu.
+        for entry in
+            std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")).unwrap()
+        {
+            let file = entry.unwrap().path();
+            let name = file.file_name().unwrap().to_str().unwrap().to_string();
+            if !name.ends_with(".rs") || name == "app_menu.rs" {
+                continue;
+            }
+            let calls = calls_in(&read(&name).items, true);
+            for (method, args) in &calls.methods {
+                assert!(
+                    !matches!(
+                        method.as_str(),
+                        "on_menu_event"
+                            | "on_tray_icon_event"
+                            | "set_menu"
+                            | "enable_macos_default_menu"
+                    ),
+                    "{name} calls {method}({args})"
+                );
+                // The menu bar icon's own menu is the one other `menu(..)`: its items, never a handler.
+                assert!(
+                    method != "menu" || args == "&menu",
+                    "{name} calls menu({args})"
+                );
+            }
+            assert!(
+                !calls.fns.iter().any(|c| c.starts_with("Menu::default(")),
+                "{name} builds the default menu"
+            );
+        }
+    }
+
+    #[test]
+    fn every_quit_ozzie_goes_through_the_question_and_it_carries_counts_only() {
+        // The menu bar icon's "Quit Ozzie" and the app menu's (Command-Q: tests/app_menu.rs) share one id, and that
+        // id asks first.
+        assert_eq!(
+            menu_action(crate::app_menu::QUIT_ID),
+            Some(MenuAction::Quit)
+        );
+        assert_eq!(menu_action("open"), Some(MenuAction::Open));
+        assert_eq!(menu_action("pause"), Some(MenuAction::Pause));
+        // The system's own items (Hide, Copy, Close Window...) and anything unknown do nothing here.
+        assert_eq!(menu_action("terminate"), None);
+        assert_eq!(menu_action(""), None);
+        assert_eq!(
+            quit_asked(3, true),
+            serde_json::json!({ "cards": 3, "checks": true })
+        );
+    }
+
+    #[test]
+    fn nothing_holds_an_exit_so_logging_out_restarting_shutting_down_and_the_docks_quit_go_ahead() {
+        // Tauri's ExitRequested can't be made outside Tauri, so this reads every source file of the app instead: none
+        // prevents an exit. The question is asked before an exit starts, never by holding one.
+        let needle = concat!("prevent", "_exit");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut read = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let file = entry.unwrap().path();
+            if file.extension().is_some_and(|e| e == "rs") {
+                let source = std::fs::read_to_string(&file).unwrap();
+                assert!(!source.contains(needle), "{} holds an exit", file.display());
+                read += 1;
+            }
+        }
+        assert!(read >= 10);
+    }
 
     #[test]
     fn sleep_is_wall_clock_time_the_mac_was_not_awake() {

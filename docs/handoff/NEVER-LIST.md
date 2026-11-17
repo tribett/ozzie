@@ -1,4 +1,4 @@
-# TableWork — Never List (normative)
+# Ozzie — never list (normative)
 
 Written before features. If a feature cannot live inside this list, the
 feature loses. These are NOT settings. No church, user, tier, or admin can

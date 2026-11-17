@@ -102,8 +102,12 @@ function OwnRegistration({ settings, onSettings, control, connected }: {
  * `firstRun` only changes how a missing connection reads ("Not connected yet.").
  * Buttons carry no `type`: this is not a form, and nothing here submits.
  */
-export function ConnectForm({ status, settings, onSettings, control, firstRun = false, stake }: {
+export function ConnectForm({ status, settings, onSettings, control, firstRun = false, stake, cards = 0, onDiscardCards }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; control: ConnectionControl; firstRun?: boolean;
+  /** Visitor cards open (a count only): "Switch Ozzie to this church?" and Disconnect say first that they discard them. */
+  cards?: number;
+  /** Disconnect was chosen with cards open: App ends them (cards-page.tsx `KeptCards`). */
+  onDiscardCards?: (() => void) | undefined;
   /** Tests only: the Church rules at stake in a switch, instead of reading this Mac's. */
   stake?: RulesAtStake;
 }) {
@@ -164,7 +168,7 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
   const missingLine = missing && inUse && missing !== inUse.organization ? missingCopy(missing, inUse) : "";
   const leftTo = (organization: string) => Boolean(unretired?.left.some(l => l.organization === organization));
   return <div className="form connect-form">
-    {question && atStake && <SwitchQuestionPanel question={question} stake={atStake} working={working} onAnswer={answer} />}
+    {question && atStake && <SwitchQuestionPanel question={question} stake={atStake} working={working} onAnswer={answer} cards={cards} />}
     {answerProblem && question && <p role="alert" className="problem">{answerProblem}</p>}
     {answered && !question && <p className="panel-ok" role="status"><Icon name="check" small /><span>{answeredCopy(answered, leftTo(answered.question.to))}</span></p>}
     {declinedLine && <p className="panel-info" role="status">{declinedLine}</p>}
@@ -194,12 +198,56 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       : <p aria-live="polite">{state}</p>}
     {shownProblem && <p role="alert" className="problem">{shownProblem}</p>}
     {disconnectNote(status) && <p className="small">{disconnectNote(status)}</p>}
-    {saved && !asking && <div><button className="btn btn-quiet btn-sm btn-flush" disabled={working} onClick={() => { void run(() => connection.disconnect()); }}>Disconnect and revoke access</button></div>}
+    {saved && !asking && <DisconnectButton cards={cards} working={working} onDiscardCards={onDiscardCards} onDisconnect={async () => {
+      // What the disconnect came back with, or null when it failed (its problem is shown, like not-revoked).
+      const after: { status: ConnectionStatus | null } = { status: null };
+      await run(async () => { after.status = await connection.disconnect(); return after.status; });
+      return after.status;
+    }} />}
     {builtIn && <details className="listen-more" open={ownIds || undefined}>
       <summary><Icon name="chev" small />Advanced: use your own Planning Center registration</summary>
       <p className="small">For a copy of Ozzie you built yourself, or a church that registered its own Public application in Planning Center. Leave the application ID empty to use Ozzie's.</p>
       <OwnRegistration settings={settings} onSettings={onSettings} control={control} connected={connected} />
     </details>}
+  </div>;
+}
+
+export const DISCONNECT_CARDS_ASK = (n: number) =>
+  `You have ${n === 1 ? "1 visitor card" : `${n} visitor cards`} open. Disconnecting discards ${n === 1 ? "it" : "them"}.`;
+export const DISCONNECT_KEEP = "Keep the cards and stay connected";
+export const DISCONNECT_DISCARD = (n: number) => `Disconnect and discard ${n === 1 ? "the card" : "the cards"}`;
+export const DISCONNECT_FAILED = "Planning Center is still connected, so your visitor cards are still open.";
+/**
+ * "Disconnect and revoke access". While visitor cards are open it asks first: disconnecting forgets the church they
+ * belong to, so a later sign-in could bring in another church without "Switch Ozzie to this church?", and they end
+ * (review P, L4). They end only once Planning Center comes back disconnected; a disconnect that didn't happen (a check
+ * still stopping, a refusal) keeps them, and says so (review G, L-d). With none open it disconnects at once, as before.
+ */
+export function DisconnectButton({ cards, working, onDisconnect, onDiscardCards }: {
+  cards: number; working: boolean;
+  /** Disconnects; resolves with the status it came back with, or null when it failed. */
+  onDisconnect: () => Promise<ConnectionStatus | null>;
+  onDiscardCards?: (() => void) | undefined;
+}) {
+  const id = useId();
+  const [asked, setAsked] = useState(false);
+  const [kept, setKept] = useState(false);
+  const disconnectAndDiscard = async () => {
+    setAsked(false); setKept(false);
+    const after = await onDisconnect();
+    if (after?.state === "disconnected") onDiscardCards?.(); else setKept(true);
+  };
+  if (cards <= 0) return <div><button className="btn btn-forget btn-sm" disabled={working} onClick={() => { void onDisconnect(); }}>Disconnect and revoke access</button></div>;
+  return <div className="stack-tight">
+    <div><button className="btn btn-forget btn-sm" disabled={working} aria-expanded={asked} aria-controls={id} onClick={() => { setKept(false); setAsked(!asked); }}>Disconnect and revoke access</button></div>
+    {kept && <p className="small" role="status">{DISCONNECT_FAILED}</p>}
+    {asked && <div id={id} className="decide" role="group" aria-labelledby={`${id}-q`}>
+      <p id={`${id}-q`} className="find-body">{DISCONNECT_CARDS_ASK(cards)}</p>
+      <div className="find-next">
+        <button className="btn btn-secondary btn-sm" onClick={() => setAsked(false)}>{DISCONNECT_KEEP}</button>
+        <button className="btn btn-quiet btn-sm" disabled={working} onClick={() => { void disconnectAndDiscard(); }}>{DISCONNECT_DISCARD(cards)}</button>
+      </div>
+    </div>}
   </div>;
 }
 
@@ -223,10 +271,10 @@ export function answeredCopy(answered: { decision: SwitchDecision; question: Swi
  * this Mac from before). Nothing has been signed out yet; each button says which church Ozzie keeps, and the lines above
  * them say what each one signs Ozzie out of and what happens to recordings, Church rules and automatic checks.
  */
-export function SwitchQuestionPanel({ question, stake, working, onAnswer }: {
-  question: SwitchQuestion; stake: RulesAtStake; working: boolean; onAnswer: (decision: SwitchDecision) => void;
+export function SwitchQuestionPanel({ question, stake, working, onAnswer, cards = 0 }: {
+  question: SwitchQuestion; stake: RulesAtStake; working: boolean; onAnswer: (decision: SwitchDecision) => void; cards?: number;
 }) {
-  const copy = switchCopy(question, stake);
+  const copy = switchCopy(question, stake, cards);
   return <div className="decide switch-church" role="group" aria-labelledby="switch-church-q">
     <p id="switch-church-q" className="bold">{copy.title}</p>
     <p className="find-body">{copy.lead}</p>

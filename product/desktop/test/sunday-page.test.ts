@@ -9,6 +9,7 @@ import { nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../../../core/sr
 import { fictionalOperations, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { decide, type SundayDecision } from "../../../core/src/sunday-decisions.js";
+import { refusedRead, sundayProblem } from "../src/sunday-source.js";
 
 const rules: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
 const leadRules: SundayRules = { ...rules, sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery Lead" }] };
@@ -24,13 +25,46 @@ function page(b: SundayBrief, decisions: SundayDecision[] = [], operations: Sund
 const nurseryDecision = (b = brief()) => decide(b.findings.find(f => f.kind === "needs-people" && f.position!.name === "Nursery")!, "not-needed", "Only two babies registered", AT);
 const FORBIDDEN = /\b(approve|block|skills?|sessions?|agent|connector|harness|score|rank(ed|ing)?|at risk|drifting)\b/i;
 
+describe("a read Planning Center refused (audit item 5)", () => {
+  const refusedPage = (refused: boolean, onSettings?: () => void) => renderToStaticMarkup(React.createElement(SundayPage, {
+    brief: null, names: {}, busy: false, problem: sundayProblem("denied"), sender: "", connected: true, hasRecording: false, configured: true,
+    canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+    refused, ...(onSettings ? { onSettings } : {}),
+  }));
+  it("says which access could be missing, who can give it, and the next steps, without guessing which", () => {
+    const html = refusedPage(true, () => undefined);
+    const t = text(html);
+    expect(html).toContain('role="alert"');
+    for (const line of [
+      "Planning Center didn't let Ozzie read this Sunday.",
+      "It's one of these, and Ozzie can't tell which from here:",
+      "The Planning Center login you signed in with can't see this service type's plans. A Planning Center administrator at your church can give that login access to it in Planning Center Services.",
+      "That sign-in is no longer accepted. Signing in again fixes this.",
+      "Then sign in again, or choose a Sunday this login can see.",
+    ]) expect(t).toContain(line);
+    expect(html).toContain(">Open Settings to sign in again</button>");
+    expect(html).toContain(">Open Settings to choose another Sunday</button>");
+    expect(t.replaceAll("not ranked", "")).not.toMatch(FORBIDDEN);
+  });
+  it("is told apart from other problems by the native code alone", () => {
+    expect(refusedRead("denied")).toBe(true);
+    expect(refusedRead({ "sunday-check": "denied" })).toBe(true);
+    for (const other of ["rate-limited", "not-connected", "provider-failure", "organization-unverified", undefined]) expect(refusedRead(other), String(other)).toBe(false);
+    expect(sundayProblem("denied")).toBe("Planning Center didn't let Ozzie read this Sunday. Either the login you signed in with can't see this service type's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access; then sign in again under Settings, or choose another Sunday.");
+    // Any other problem stays one plain line.
+    const other = text(refusedPage(false));
+    expect(other).not.toContain("It's one of these");
+  });
+});
+
 describe("Sunday page", () => {
   it("offers Sunday-only decisions and the leader note when nobody on the team qualifies", () => {
     const t = text(page(brief()));
     expect(t).toContain("Covered outside Planning Center");
     expect(t).toContain("Not needed this Sunday");
     expect(t).toContain("Prepare a note to the team's leader");
-    expect(t).toContain("Or, for this Sunday only:");
+    // Under More choices since audit item 29: the card's main actions come first.
+    expect(t).toMatch(/More choices For this Sunday only: Covered outside Planning Center Not needed this Sunday/u);
   });
 
   it("uses no forbidden wording anywhere on the page", () => {
@@ -150,21 +184,24 @@ describe("one count for what the page shows, and what it is showing", () => {
     expect(text(page(exampleBrief, [nurseryDecision(exampleBrief)], exampleOps))).toContain("2 things need a decision and 5 are worth a look. You resolved 1 yourself.");
   });
 
-  it("always says whether it shows a live read, a saved recording or the fictional example, and labels the switch", () => {
+  it("always says whether it shows a live read, the saved copy of a check or the fictional example, and labels the switch", () => {
     const live = buildSundayBrief(nov22Capture(), rules, nov22Capture().completed_at);
     const recording = buildSundayBrief({ ...nov22Capture(), kind: "recording" }, rules, nov22Capture().completed_at);
     const modes: [SundayBrief, string, string | null][] = [
       [live, "Live read from Planning Center Services", null],
       // A live check with no Services read time still says what it is, at the time it finished.
       [{ ...live, checked_at: null }, "Live read from Planning Center Services", null],
-      [recording, "Saved recording of Planning Center Services", "This is not a current check."],
-      [brief(), "Fictional example data", "Fictional example. No church data is shown."],
+      // "Recording" read as audio (audit item 28): a person sees "the saved copy of a check".
+      [recording, "Saved copy of a check of Planning Center Services", "This is not a current check."],
+      // The example's own band is App's, on every page (audit item 2); the page's line still says what this is.
+      [brief(), "Fictional example data", null],
     ];
     for (const [b, line, banner] of modes) {
       const html = page(b);
       expect(text(html)).toMatch(new RegExp(`${line} · \\d+ reads · `, "u"));
       if (banner) expect(text(html)).toContain(banner);
-      expect(html).toContain('role="group" aria-label="What Sunday shows: a live check, the saved recording or the fictional example"');
+      expect(html).toContain('role="group" aria-label="What Sunday shows: a live check, the last saved check or the fictional example"');
+      expect(text(html)).not.toMatch(/recording/iu);
     }
   });
 

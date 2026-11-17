@@ -17,7 +17,7 @@ import type { AgentRuntime, AgentTask, FailureCode, ModelStep, RunOptions, Runti
 import { HarnessHost } from "./host.js";
 import { instructionsFor } from "./instructions.js";
 import { DEFAULT_NAME_MODE, nameOptions, namedIn, type NameMode } from "./names.js";
-import { BRACKETED, HarnessSession, restoreLabels } from "./session.js";
+import { BRACKETED, HarnessSession, keptNames, restoreLabels } from "./session.js";
 import { ASK_SKILL } from "./skills.js";
 import { HarnessTools, type HarnessData } from "./tools.js";
 import { verifier } from "./verify.js";
@@ -193,10 +193,18 @@ export class Harness {
 
   /** On this Mac only: a verified answer's labels back to names and places, and its ISO times in plain words in the church's zone. */
   restore(text: string, options: { sender?: string; firstNames?: boolean } = {}): string {
+    return this.#restore(text, this.tools.data.capture?.names ?? {}, options);
+  }
+  /**
+   * As restore, but each person is kept as their id token (session.ts PERSON_TOKEN), never their name: the form a
+   * write-up is kept in on this Mac, filled in with names only when shown (fillPeople).
+   */
+  keep(text: string): string { return this.#restore(text, keptNames(this.tools.data.capture?.names ?? {})); }
+  #restore(text: string, names: Readonly<Record<string, string>>, options: { sender?: string; firstNames?: boolean } = {}): string {
     const { capture, operations, attention, brief } = this.tools.data;
     const events = Object.fromEntries((attention?.sources ?? []).flatMap(s => "title" in s ? [[s.id, s.title]] : []));
     return restoreLabels(text, this.session, {
-      names: capture?.names ?? {}, places: { ...(capture?.labels ?? {}), ...(operations?.labels ?? {}) }, events,
+      names, places: { ...(capture?.labels ?? {}), ...(operations?.labels ?? {}) }, events,
       ...(capture ? { organization: capture.organization } : {}), timeZone: brief?.time_zone ?? null,
       ...(options.sender !== undefined ? { sender: options.sender } : {}), ...(options.firstNames ? { firstNames: true } : {}),
     });

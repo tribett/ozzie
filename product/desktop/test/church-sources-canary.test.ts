@@ -63,7 +63,7 @@ import { background } from "../src/background.js";
 import { PhoneControl, phoneInvoke } from "../src/phone-notice.js";
 import type { NoticeKind } from "../src/responsibility-runner.js";
 import { briefingVoice } from "../src/briefing.js";
-import { handOff } from "../src/draft-actions.js";
+import { handOff, handOffTo } from "../src/draft-actions.js";
 import { SundayPage } from "../src/sunday-page.js";
 import { TodayPage } from "../src/today-page.js";
 import { draftTurns, greeterTurns, scripted, RULES } from "./harness-fakes.js";
@@ -97,7 +97,7 @@ const zone = "America/Chicago";
 const leaks = (value: unknown) => { const text = JSON.stringify(value) ?? ""; return ALL_MARKERS.filter(m => text.includes(m)); };
 /** Every native command that sends something off this Mac, shows a notice, saves what another app reads, speaks or opens a draft. */
 const SENDING = new Set(["ask_ozzie", "reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "save_shortcuts_check", "notify_sunday_attention",
-  "notify_ozzie", "managed_connect", "ledger_admit", "ledger_event", "ledger_transition", "phone_notice_test", "speak_briefing", "open_draft"]);
+  "notify_ozzie", "managed_connect", "ledger_admit", "ledger_event", "ledger_transition", "phone_notice_test", "speak_briefing", "open_draft", "open_draft_to"]);
 
 /** Native code's side, as church_sources.rs answers: the lists (never a path or an address), the file's bytes, and a link's. */
 function fakeNative() {
@@ -232,10 +232,12 @@ describe("a church's list at run time", async () => {
     const leaderNote = lead ? restoreEscalation(escalationDraft({ finding: lead, leader_id: lead.leaders![0]!, sunday: before.plan.date }),
       { finding: lead, leader_id: lead.leaders![0]!, sunday: before.plan.date }, capture.names, "Pastor Sam") : "";
     for (const text of [note, leaderNote].filter(Boolean)) { await handOff("mail", text); await handOff("messages", text); }
+    // Addressed to its person (audit item 19): the words and the Planning Center id the finding holds, nothing of a list.
+    if (lead) { await handOffTo("mail", leaderNote, lead.leaders![0]!); await handOffTo("messages", leaderNote, lead.leaders![0]!); }
 
     const sent = [...native.calls, ...shared].filter(([command]) => SENDING.has(command));
     expect([...new Set(sent.map(([command]) => command))].sort()).toEqual(
-      ["notify_ozzie", "notify_sunday_attention", "open_draft", "phone_notice_test", "reword_draft", "save_shortcuts_check", "share_last_check", "speak_briefing"]);
+      ["notify_ozzie", "notify_sunday_attention", "open_draft", ...(lead ? ["open_draft_to"] : []), "phone_notice_test", "reword_draft", "save_shortcuts_check", "share_last_check", "speak_briefing"]);
     expect(leaks(sent)).toEqual([]);
     expect(JSON.stringify([...native.calls, ...shared])).not.toContain(ADDRESS_MARKER);
     // What Siri would say from that copy, built as the helper builds it.
@@ -317,10 +319,13 @@ describe("App passes list state only to the Lists & notes page and the box besid
   it("Sunday: the slot is a prop it renders on an open card for that card's position, and passes nowhere else", () => {
     const allowed = [
       /^export type Beside = \(p: \{ kind: string; team_id\?: string; position_id\?: string; name\?: string \}\) => ReactNode;$/u,
-      /^function FindingCard\(\{ item, names, checkedAt, sender, sunday, canReword, onDecide, onHow, feedback = null, occurrence, beside \}: \{$/u,
+      // `people` (audit item 19) is whether the sign-in includes People, for a note's To line, and `asked` the leader's
+      // "Looks good — I'll send it" marks (audit item 18), and `whoCouldHelp` runs the who-could-help procedure for the card's
+      // role through the harness (audit item 9): nothing of a list.
+      /^function FindingCard\(\{ item, names, checkedAt, sender, sunday, canReword, onDecide, whoCouldHelp, feedback = null, occurrence, beside, people = null, asked = null,$/u,
       /^ {2}beside\?: Beside \| undefined;$/u,
       /^ {4}\{beside\?\.\(\{ kind: finding\.kind, \.\.\.\(finding\.position \? \{ team_id: finding\.position\.team_id, position_id: finding\.position\.id, name: finding\.position\.name \} : \{\}\) \}\)\}$/u,
-      /^ {8}feedback=\{controls\} occurrence=\{occurrence\} beside=\{props\.beside\} \/>\)\}$/u,
+      /^ {8}feedback=\{controls\} occurrence=\{occurrence\} beside=\{props\.beside\} people=\{brief\.mode === "fictional" \? null : props\.people\} \/>\)\}$/u,
     ];
     const uses = code("../src/sunday-page.tsx").filter(l => /\b[Bb]eside\b/u.test(l));
     for (const line of uses) expect(allowed.some(a => a.test(line)), line).toBe(true);

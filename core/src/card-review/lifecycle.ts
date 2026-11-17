@@ -43,7 +43,7 @@ export class CardReview {
     if (!Array.isArray(batch) || batch.length < 1 || batch.length > 8 ||
       batch.some(image => !image || typeof image !== "object" || Object.keys(image).sort().join(",") !== "size,type" ||
         !Number.isSafeInteger(image.size) || image.size < 1 || image.size > 8 * 1024 * 1024 ||
-        !["image/png", "image/jpeg"].includes(image.type)) ||
+        !["image/png", "image/jpeg", "image/heic"].includes(image.type)) ||
       batch.reduce((total, image) => total + image.size, 0) > 24 * 1024 * 1024) {
       this.close();
       return "invalid";

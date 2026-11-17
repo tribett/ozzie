@@ -59,9 +59,11 @@ describe("guided setup", () => {
   });
 
   it("reuses the AI help settings and points to What runs automatically for checks and quiet hours", () => {
-    // One name for the AI settings everywhere: they cover rewording drafts and Ask Ozzie's answers.
+    // One name for the AI settings everywhere. Every use of AI is named, here and in the AI help settings (review G): a
+    // job's summary only as often as its plan allows (responsibility-words.ts limitsText).
     expect(render("wording")).toContain("AI help (optional)");
-    expect(render("wording")).toContain("AI help can reword a draft when you ask, and answers your questions in Ask Ozzie.");
+    expect(render("wording")).toContain("AI help can reword a draft when you ask, answers your questions in Ask Ozzie, looks at who could help with a role when you ask from a Sunday card, and writes a short summary of what a job you set up found, as often as its plan allows.");
+    expect(render("wording")).toContain("Ozzie can reword a draft note, answer questions about the Sunday it checked, look at who could help with a role from a Sunday card, and write a short summary of what a job you set up found, as often as its plan allows.");
     expect(render("wording")).not.toMatch(/wording help/iu);
     expect(render("sunday")).not.toMatch(/wording help/iu);
     // Ozzie managed isn't offered as available yet in first-run setup.

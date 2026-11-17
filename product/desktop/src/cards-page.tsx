@@ -1,16 +1,20 @@
-// "Read visitor cards": a temporary, foreground-only review on this Mac.
-// Card photos, recognized text and typed fields live only in the CardReview lifecycle and in memory
-// (the lines this Mac read sit beside it in a ref that is emptied whenever the review closes)
-// for as long as this page is open and in front. Nothing is saved (no storage, files, recordings or
-// logs), nothing goes to an AI model, and nothing is added to Planning Center. Leaving the page,
-// switching away or closing the window discards everything; photos are revoked object URLs.
-import { useLayoutEffect, useRef, useState } from "react";
+// "Read visitor cards": a temporary review on this Mac, kept in memory until the leader discards it (owner decision
+// 2026-11-16, audit item 20). Card photos, recognized text and typed fields live only in the CardReview lifecycle and in
+// memory (the lines this Mac read sit beside it in a ref that is emptied whenever the review closes) for as long as Ozzie
+// is open: switching to another app, going to another page or closing the window keeps them. They end at "Discard these
+// cards" (asked once), when Ozzie closes, when Ozzie switches to another church or when Planning Center is disconnected
+// (`KeptCards`); KEPT_ENDS says which of those ask first (review P, M1 and L4). After the window was off
+// screen (closed or minimized, the screen locked, the Mac asleep) they wait behind "Show the cards", so they aren't on screen for
+// whoever comes back to the Mac. Nothing is saved (no storage, files, recordings or logs), nothing goes to an AI model,
+// and nothing is added to Planning Center; photos are revoked object URLs. App.tsx keeps this page mounted once opened,
+// hidden when another page is shown, and hears only how many cards are open.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { fields, type CardView, type FieldName, type Reading } from "../../../core/src/card-review/lifecycle.js";
 import { followUpFor, possibleMatches, readLines, reviewedList, sameNameCards, suggestFields, type ReadLine, type ReviewedCard } from "../../../core/src/card-fields.js";
 import { CardReviewController } from "../../src/card-review/controller.js";
-import { bindForeground, browserImages } from "../../src/card-review/browser.js";
+import { browserImages } from "../../src/card-review/browser.js";
 import { Icon } from "./icons.js";
 
 /** `unclearLines`: the lines of `text` (from 0) the reader couldn't read clearly. */
@@ -62,21 +66,26 @@ const LIMIT: Record<FieldName, number> = { name: 256, phone: 256, email: 256, re
 export const readingFor = (text: string, hard: boolean): Reading => hard ? "unclear" : text ? "typed" : "blank";
 
 /**
- * Native, on this Mac: Ozzie's own photo window, offering only PNG and JPEG (the two kinds the reader opens). It takes
- * nothing from the page, so the page can never name a file to read; the Mac checks every chosen file (a plain file, a
- * PNG or JPEG by its bytes, within the limits) and replies with the photos only: no names, no paths
+ * Native, on this Mac: Ozzie's own photo window, offering only PNG, JPEG and HEIC (the kinds the reader opens; HEIC is
+ * how an iPhone saves photos). It takes nothing from the page, so the page can never name a file to read; the Mac checks
+ * every chosen file (a plain file, a PNG, JPEG or HEIC by its bytes, within the limits) and replies with the photos only:
+ * no names, no paths
  * (src-tauri/src/card_picker.rs).
  */
 export const cardPhotos = { choose: () => invoke<unknown>("choose_card_photos") };
 
+/** Photos the review couldn't open, said the same wherever it happens. */
+export const UNREADABLE = "Those photos couldn't be opened. Choose PNG, JPEG or HEIC (iPhone photos): up to 8 at a time, 8 MB each.";
 /** Why the Mac refused a choice. Closed codes only; never a file name. */
-export type PickProblem = "not-a-photo" | "too-large" | "too-much-together" | "too-many" | "unreadable" | "unavailable";
+export type PickProblem = "not-a-photo" | "too-large" | "too-many-pixels" | "too-much-together" | "too-many" | "unreadable" | "unavailable";
 export const PICK_PROBLEM: Record<PickProblem, string> = {
-  "not-a-photo": "That isn't a photo Ozzie can read. Choose a PNG or JPEG picture of each card.",
-  "too-large": "That photo is over 8 MB. Choose PNG or JPEG photos of 8 MB or less.",
+  "not-a-photo": "That isn't a photo Ozzie can read. Choose a PNG, JPEG or HEIC (iPhone photos) picture of each card.",
+  "too-large": "That photo is over 8 MB. Choose photos of 8 MB or less: PNG, JPEG or HEIC (iPhone photos).",
+  // Native refuses a picture over 40 million pixels of any kind (card_picker.rs; a 48-megapixel iPhone photo).
+  "too-many-pixels": "That photo is larger than Ozzie can read (over 40 megapixels). On an iPhone, take a new photo of the card at the usual size, or take a screenshot of the photo.",
   "too-much-together": "Those photos are over 24 MB together. Choose fewer at a time.",
   "too-many": "That's more than 8 photos. Choose up to 8 at a time.",
-  unreadable: "Those photos couldn't be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each.",
+  unreadable: UNREADABLE,
   unavailable: "The window for choosing photos couldn't open. Try again.",
 };
 const pickProblem = (code: unknown): PickProblem =>
@@ -85,7 +94,7 @@ const pickProblem = (code: unknown): PickProblem =>
 const MAX_PHOTOS = 8;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 /**
- * The photos in the Mac's reply, in the order chosen: per photo a kind byte (1 PNG, 2 JPEG), its length in 4 bytes and
+ * The photos in the Mac's reply, in the order chosen: per photo a kind byte (1 PNG, 2 JPEG, 3 HEIC), its length in 4 bytes and
  * its bytes. Files are named only "Card 1" and so on. Empty when nothing was chosen; null for a reply that isn't that.
  */
 export function cardPhotoFiles(reply: unknown): File[] | null {
@@ -97,9 +106,10 @@ export function cardPhotoFiles(reply: unknown): File[] | null {
     const kind = bytes[at]!;
     const length = new DataView(bytes.buffer, bytes.byteOffset + at + 1, 4).getUint32(0);
     at += 5;
-    if ((kind !== 1 && kind !== 2) || length < 1 || length > MAX_PHOTO_BYTES || at + length > bytes.length) return null;
-    files.push(new File([bytes.slice(at, at + length)], `Card ${files.length + 1}.${kind === 1 ? "png" : "jpg"}`,
-      { type: kind === 1 ? "image/png" : "image/jpeg" }));
+    const ext = kind === 1 ? "png" : kind === 2 ? "jpg" : kind === 3 ? "heic" : null;
+    if (ext === null || length < 1 || length > MAX_PHOTO_BYTES || at + length > bytes.length) return null;
+    files.push(new File([bytes.slice(at, at + length)], `Card ${files.length + 1}.${ext}`,
+      { type: kind === 1 ? "image/png" : kind === 2 ? "image/jpeg" : "image/heic" }));
     at += length;
   }
   return files;
@@ -268,23 +278,133 @@ export function lookFirst(cards: readonly CardView[], people: Readonly<Record<st
   return out;
 }
 
-export function CardsPage({ people, workspace }: { people: Readonly<Record<string, string>>; workspace: string }) {
-  return <CardsHost key={workspace} people={people} workspace={workspace} />;
+/**
+ * Kept while Ozzie is open (audit item 20): the review is never interrupted by switching apps or pages, only discarded
+ * by the leader or by the page going away (Ozzie quitting). The core lifecycle is told the window is always in front,
+ * so its own foreground rule never closes it.
+ */
+export function bindKeep(controller: CardReviewController, win: Pick<Window, "addEventListener" | "removeEventListener">): () => void {
+  const pagehide = () => { controller.discard(); };
+  win.addEventListener("pagehide", pagehide);
+  return () => { win.removeEventListener("pagehide", pagehide); controller.dispose(); };
+}
+export const keptImages = () => ({ ...browserImages(), foreground: () => true });
+
+export const KEPT_TITLE = "Kept on this Mac until you discard them";
+export const KEPT_BODY = "These cards stay in Ozzie's memory while it is open: switching to another app, going to another page or closing the window keeps them. If the window was closed or minimized, the screen locked or the Mac slept, they wait behind Show the cards. They end when:";
+/** Every way the cards end, and which ask first: native app_menu.rs and always_on.rs (quitting), updates-view.tsx
+ *  (updating), connection.ts `switchCopy` (switching churches). Nothing holds the Mac's own exits. */
+export const KEPT_ENDS = [
+  "You choose Discard these cards.",
+  "You choose Quit Ozzie or press Command-Q. Ozzie asks first.",
+  "You choose Update Ozzie and reopen it. Ozzie asks first.",
+  "Ozzie switches to another church, or you disconnect Planning Center. Ozzie asks first.",
+  "You sign out of this Mac, restart or shut it down, choose Quit from the Dock, or Ozzie stops any other way. These don't ask.",
+] as const;
+export const KEPT_AFTER = "Keep your original photos. Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.";
+export const SHOW_CARDS = "Show the cards";
+export const veiledText = (n: number) => `${n === 1 ? "1 visitor card is" : `${n} visitor cards are`} still open, kept in memory only. They're hidden because Ozzie's window was off screen.`;
+export const DISCARD_ASK = (n: number) => `Discard ${n === 1 ? "this card" : `these ${n} cards`}? Nothing from ${n === 1 ? "it" : "them"} is kept anywhere.`;
+
+/** Tests only: a review already open with cards read, in place of the empty one the page makes. */
+type GivenReview = { controller: CardReviewController; ticket: number };
+
+/** Which church the open visitor cards belong to (`church`), and how many times they have been ended for a change of church. */
+export type CardsAt = { church: string | null; epoch: number };
+/**
+ * The cards as the church Ozzie uses changes (review P, L4). They are kept by the church in use natively, never by an ID
+ * typed in Settings. Cards read with no church in use belong to none, so the first church signed in to keeps them, and
+ * from then on they are that church's. No church's names were beside them meanwhile: names are offered as possible
+ * matches only from a check of the church in use (`namesBeside`), never from a saved copy of the last church's check
+ * that may still be on screen while none is. A change to another church ends
+ * them; it only ever comes from "Switch Ozzie to this church?", which says so first, because native code asks whenever
+ * a sign-in would replace the church it last used (core native-auth connections.rs), and Disconnect, which forgets that
+ * church, ends them itself after its own question (`discarded`). No church in use for a moment (a sign-in under way, a
+ * Keychain write) keeps them. With nothing open, the next cards belong to the church in use now. Returns `at` itself when
+ * nothing changes.
+ */
+export function cardsAt(at: CardsAt, inUse: string | null, open: boolean): CardsAt {
+  if (inUse === at.church) return at;
+  if (!open) return { ...at, church: inUse };
+  if (inUse === null) return at;
+  if (at.church === null) return { ...at, church: inUse };
+  return { church: inUse, epoch: at.epoch + 1 };
+}
+/** A check on screen, as the cards may use it: whose church it is, and the names it read. */
+export type ShownCheck = { organization: string; names: Readonly<Record<string, string>> };
+export const MATCHES_NEED_CHURCH = "Connect Planning Center to see possible matches with this Sunday's check.";
+export const MATCHES_NEED_CHECK = "Possible matches appear once Ozzie has checked this Sunday for the church it's using.";
+export const MATCHES_NOT_IN_EXAMPLE = "While the example is on, no names are offered as possible matches: its people are made up.";
+const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
+/**
+ * The names a card may be compared with (review G): only those a check of the church Ozzie uses now read. None while no
+ * church is in use (a saved copy of the last church's check may be on screen then), none from a check of any other
+ * church whatever Settings names, and none while the example is on (the cards are real, its people made up). `why`
+ * says why none are offered.
+ */
+export function namesBeside(check: ShownCheck | null, inUse: string | null, example: boolean): { names: Readonly<Record<string, string>>; why: string | null } {
+  if (example) return { names: NO_NAMES, why: MATCHES_NOT_IN_EXAMPLE };
+  if (inUse === null) return { names: NO_NAMES, why: MATCHES_NEED_CHURCH };
+  if (!check || check.organization !== inUse) return { names: NO_NAMES, why: MATCHES_NEED_CHECK };
+  return { names: check.names, why: null };
+}
+/**
+ * The visitor cards page as App keeps it: mounted once opened, ended (a new, empty review) when `cardsAt` says the church
+ * changed or `discarded` goes up (Disconnect, after its question). Names beside the cards come only from a check of the
+ * church the cards belong to while it is in use (`namesBeside`). It reads no setting and no ID typed in Settings.
+ */
+export function KeptCards({ check, example, inUse, discarded = 0, onScreen = true, onOpenCards, review }: {
+  /** The check on screen, if any. */
+  check: ShownCheck | null;
+  /** Whether the fictional example is on. */
+  example: boolean;
+  /** The church Ozzie uses now (native), or null while none is. */
+  inUse: string | null;
+  /** How many times the leader chose to disconnect with cards open: each one ends them. */
+  discarded?: number;
+  onScreen?: boolean;
+  onOpenCards?: ((count: number) => void) | undefined;
+  review?: GivenReview | undefined;
+}) {
+  const [open, setOpen] = useState(0);
+  const [at, setAt] = useState<CardsAt>(() => ({ church: inUse, epoch: 0 }));
+  // Decided while rendering, so cards of one church are never drawn, even for a frame, while another is in use.
+  const next = cardsAt(at, inUse, open > 0);
+  if (next !== at) setAt(next);
+  const told = useCallback((n: number) => { setOpen(n); onOpenCards?.(n); }, [onOpenCards]);
+  const beside = namesBeside(check, next.church === inUse ? inUse : null, example);
+  return <CardsPage people={beside.names} noMatches={beside.why} workspace={`cards-${next.epoch}-${discarded}`} onScreen={onScreen} onOpenCards={told} review={review} />;
+}
+export function CardsPage({ people, noMatches = null, workspace, onScreen = true, onOpenCards, review }: {
+  people: Readonly<Record<string, string>>; workspace: string;
+  /** Why no names are offered as possible matches, when none are (`namesBeside`). */
+  noMatches?: string | null;
+  /** Whether Ozzie's window is on screen: once it wasn't, open cards wait behind Show the cards. */
+  onScreen?: boolean;
+  /** How many cards are open (a count only), so quitting can ask first. */
+  onOpenCards?: ((count: number) => void) | undefined;
+  review?: GivenReview | undefined;
+}) {
+  return <CardsHost key={workspace} people={people} noMatches={noMatches} workspace={workspace} onScreen={onScreen} onOpenCards={onOpenCards} given={review} />;
 }
 
-function CardsHost({ people, workspace }: { people: Readonly<Record<string, string>>; workspace: string }) {
+function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given }: {
+  people: Readonly<Record<string, string>>; noMatches: string | null; workspace: string; onScreen: boolean; onOpenCards?: ((count: number) => void) | undefined;
+  given?: GivenReview | undefined;
+}) {
   const [controller, setController] = useState<CardReviewController | null>(null);
   const [, redraw] = useState(0);
-  const [ticket, setTicket] = useState<number | null>(null);
+  const [ticket, setTicket] = useState<number | null>(given?.ticket ?? null);
   const [ui, setUi] = useState<CardsUi>(emptyUi);
   const files = useRef<(File | null)[]>([]);
   /** The lines this Mac read on each card of the open review. Emptied whenever the review closes. */
   const recognized = useRef(new Map<number, readonly ReadLine[]>());
   const current = useRef<number | null>(null);
   const recognizer = useRef<Recognizer>("unknown");
+  const [veiled, setVeiled] = useState(false);
   useLayoutEffect(() => {
-    const review = new CardReviewController(workspace, browserImages());
-    let open = false;
+    const review = given?.controller ?? new CardReviewController(workspace, keptImages());
+    let open = review.status === "active";
     const stopReading = () => { void cardReader.cancel().catch(() => undefined); };
     const unsubscribe = review.subscribe(() => {
       const now = ["choosing", "loading", "active"].includes(review.status);
@@ -294,7 +414,7 @@ function CardsHost({ people, workspace }: { people: Readonly<Record<string, stri
       open = now;
       flushSync(() => redraw(v => v + 1));
     });
-    const unbind = bindForeground(review, window, document);
+    const unbind = bindKeep(review, window);
     setController(review);
     return () => { files.current.fill(null); files.current = []; recognized.current.clear(); current.current = null; unsubscribe(); unbind(); stopReading(); };
   }, [workspace]);
@@ -312,7 +432,19 @@ function CardsHost({ people, workspace }: { people: Readonly<Record<string, stri
       .finally(() => clearTimeout(slow));
     return () => { live = false; clearTimeout(slow); };
   }, []);
+  // Open cards (a count only) for the question on quitting; the window off screen veils them until Show the cards.
+  const status = controller?.status;
+  const openCount = (() => { let n = 0; if (status === "active") controller!.render(v => { n = v.cards.length; }); return n; })();
+  useEffect(() => { onOpenCards?.(openCount); }, [openCount, onOpenCards]);
+  useEffect(() => () => onOpenCards?.(0), [onOpenCards]);
+  useEffect(() => { if (!onScreen && openCount > 0) setVeiled(true); }, [onScreen, openCount]);
   if (!controller) return <div className="col"><p role="status">Preparing a temporary review.</p></div>;
+  if (veiled && openCount > 0) return <div className="col cards">
+    <p className="eyebrow">Visitor cards</p>
+    <h1 className="h1">Read visitor cards</h1>
+    <p className="lede">{veiledText(openCount)}</p>
+    <div className="row"><button type="button" className="btn btn-primary" onClick={() => setVeiled(false)}>{SHOW_CARDS}</button></div>
+  </div>;
 
   const begin = async (t: number, chosen: File[]) => {
     await focused(window, document);
@@ -349,7 +481,7 @@ function CardsHost({ people, workspace }: { people: Readonly<Record<string, stri
     if (controller.finish(ticket) !== "finished") controller.discard();
     setUi(u => ({ ...u, ended: "copied", copied: count, followUps, copyProblem: false }));
   };
-  return <CardsReview controller={controller} ticket={ticket} ui={ui} people={people} onChoose={start}
+  return <CardsReview controller={controller} ticket={ticket} ui={ui} people={people} noMatches={noMatches} onChoose={start}
     lines={controller.status === "active" ? Object.fromEntries(recognized.current) : {}}
     onCopy={() => { void copy(); }}
     onDiscard={() => { if (ticket !== null) controller.discard(ticket); setUi(u => ({ ...u, ended: "discarded" })); }}
@@ -358,12 +490,17 @@ function CardsHost({ people, workspace }: { people: Readonly<Record<string, stri
 }
 
 /** The page body. Rendered by the host above and by the tests with a controller on fixed fictional data. */
-export function CardsReview({ controller, ticket, ui, people, lines, onChoose, onCopy, onDiscard, onSource, onRemoved }: {
+export function CardsReview({ controller, ticket, ui, people, noMatches = null, lines, onChoose, onCopy, onDiscard, onSource, onRemoved, askingToDiscard = false }: {
   controller: CardReviewController; ticket: number | null; ui: CardsUi; people: Readonly<Record<string, string>>;
+  /** Why no names are offered as possible matches, said once cards are open. */
+  noMatches?: string | null | undefined;
   lines: Readonly<Record<number, readonly ReadLine[]>>;
   onChoose: () => void; onCopy: () => void; onDiscard: () => void;
   onSource: (card: number, field: FieldName, from: FieldSource) => void; onRemoved: (card: number) => void;
+  /** Start with "Discard these cards?" asked (tests). */
+  askingToDiscard?: boolean;
 }) {
+  const [discarding, setDiscarding] = useState(askingToDiscard);
   let cards: CardView[] = [];
   controller.render(view => { cards = [...view.cards]; });
   const status = controller.status;
@@ -378,8 +515,10 @@ export function CardsReview({ controller, ticket, ui, people, lines, onChoose, o
     <h1 className="h1">Read visitor cards</h1>
     <p className="lede">Choose photos of several cards at once. Each card stays beside its photo while you check it, then you copy the list or discard it.</p>
     <div className="limits" id="cards-limits">
-      <p className="limits-t"><Icon name="lock" small />A temporary review on this Mac</p>
-      <p>Switching to another app, leaving this page or closing Ozzie discards these cards right away. Keep your original photos. Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.</p>
+      <p className="limits-t"><Icon name="lock" small />{KEPT_TITLE}</p>
+      <p>{KEPT_BODY}</p>
+      <ul>{KEPT_ENDS.map(end => <li key={end}>{end}</li>)}</ul>
+      <p>{KEPT_AFTER}</p>
     </div>
     {ui.recognizer === "not-available"
       ? <p className="panel-info"><Icon name="info" small />This Mac can't read card text, so please type each card.</p>
@@ -388,18 +527,19 @@ export function CardsReview({ controller, ticket, ui, people, lines, onChoose, o
 
     {!open && <div className="row">
       <button type="button" className="btn btn-primary" aria-describedby="cards-limits" onClick={onChoose}>Choose card photos</button>
-      <span className="small">PNG or JPEG · up to 8 at a time · 8 MB each</span>
+      <span className="small">PNG, JPEG or HEIC (iPhone photos) · up to 8 at a time · 8 MB each</span>
     </div>}
     <p className="small" role="status" aria-live="polite">{status === "choosing" ? "Choose the card photos in the window that opened."
       : status === "loading" ? "Opening the photos on this Mac…"
         : active && reading > 0 ? `Reading card ${Math.min(total - reading + 1, total)} of ${total} on this Mac…`
           : active ? `${cards.length} ${cards.length === 1 ? "card" : "cards"} open for checking.` : ""}</p>
-    {status === "error" && <p role="alert" className="problem">Those photos couldn't be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each.</p>}
+    {status === "error" && <p role="alert" className="problem">{UNREADABLE}</p>}
     {ui.refused && !open && status !== "error" && <p role="alert" className="problem">{PICK_PROBLEM[ui.refused]}</p>}
     {ui.ended === "copied" && !open && <div className="panel-ok" role="status"><Icon name="check" />
       <p><strong>Reviewed here; nothing saved to your church's tools.</strong> Copied {ui.copied === 1 ? "1 card" : `${ui.copied} cards`}. Paste the list where your church keeps visitor records.{ui.followUps > 0 && ` The list includes ${ui.followUps === 1 ? "1 prepared follow-up" : `${ui.followUps} prepared follow-ups`}. Choose who will follow up in your church tools; Ozzie won't contact anyone.`} This review is closed and nothing from it was kept in Ozzie. The list is on this Mac's clipboard until you copy something else; if you use Universal Clipboard or a clipboard history app, it may be there too.</p></div>}
-    {status === "closed" && ui.ended !== "copied" && (ui.ended === "discarded" || total > 0) && <p className="panel-sunken">{ui.ended === "discarded" ? "Discarded. Nothing from these cards was kept." : "This review is closed and nothing from it was kept. Switching away from Ozzie or leaving this page closes it."} Choose the photos again to start over.</p>}
+    {status === "closed" && ui.ended !== "copied" && (ui.ended === "discarded" || total > 0) && <p className="panel-sunken">{ui.ended === "discarded" ? "Discarded. Nothing from these cards was kept." : "This review is closed and nothing from it was kept."} Choose the photos again to start over.</p>}
 
+    {active && noMatches && <p className="small">{noMatches}</p>}
     {active && first.length > 0 && <section className="panel-info cards-first" aria-labelledby="first-title">
       <Icon name="eye" />
       <div className="stack-tight">
@@ -414,7 +554,14 @@ export function CardsReview({ controller, ticket, ui, people, lines, onChoose, o
 
     {open && <footer className="cards-end">
       {active && <button type="button" className="btn btn-primary" disabled={!allChecked || reading > 0} onClick={onCopy}>Copy the reviewed list</button>}
-      <button type="button" className="btn btn-secondary" onClick={onDiscard}>Discard these cards</button>
+      {!discarding && <button type="button" className="btn btn-secondary" onClick={() => active ? setDiscarding(true) : onDiscard()}>Discard these cards</button>}
+      {discarding && <div className="decide" role="group" aria-labelledby="cards-discard-q">
+        <p id="cards-discard-q" className="find-body">{DISCARD_ASK(cards.length)}</p>
+        <div className="find-next">
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => { setDiscarding(false); onDiscard(); }}>Yes, discard {cards.length === 1 ? "it" : "them"}</button>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={() => setDiscarding(false)}>Keep {cards.length === 1 ? "it" : "them"}</button>
+        </div>
+      </div>}
       {active && !allChecked && <span className="small">Check every card against its photo before copying.</span>}
       {ui.copyProblem && <p role="alert" className="problem">The list couldn't be copied. Nothing was discarded; try again.</p>}
     </footer>}

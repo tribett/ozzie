@@ -12,12 +12,12 @@ import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-bri
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, openCount } from "../../../core/src/sunday-decisions.js";
-import type { NoticedItem, RunnerView } from "../src/responsibility-runner.js";
+import type { NoticedItem, RunnerView, WriteUp } from "../src/responsibility-runner.js";
 import { copyText, NoticedCard } from "../src/responsibility-views.js";
 import { preparedTitle } from "../src/responsibility-words.js";
 import {
-  ageText, backText, CAN_SET_ASIDE, countText, GROUP_OF, groupToday, ledeText, notesReadyText, pageNotes, reportState, setAsideChoices, sundayCount, sundayCountText,
-  todayItems, todayMemory, type TodayInput, type TodayItem,
+  ageText, backText, CAN_SET_ASIDE, countText, decisionLines, DECISIONS_NAMED, GROUP_OF, groupToday, ledeText, notesReadyText, pageNotes, progressEmptyText, regularLine, regularMissedText, reportState,
+  setAsideChoices, sundayCount, sundayCountText, todayItems, todayMemory, type RegularCheck, type TodayInput, type TodayItem,
 } from "../src/today-groups.js";
 import { TodayPage } from "../src/today-page.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
@@ -41,7 +41,15 @@ function responsibility(id: string, template: keyof typeof TEMPLATES, over: Part
 const noticedItem = (over: Partial<NoticedItem> & Pick<NoticedItem, "id" | "responsibility_id" | "kind">): NoticedItem =>
   ({ template: "keep-sunday-covered", at: FRI, ...over });
 const view = (over: Partial<RunnerView> = {}): RunnerView => ({
-  available: true, paused_all: false, items: [], noticed: [], prepared: {}, next: {}, running: null, unseen: 0, open_today: false, ...over,
+  available: true, paused_all: false, items: [], noticed: [], writeups: {}, next: {}, running: null, unseen: 0, open_today: false, ...over,
+});
+/** A job's write-up as the runner keeps it: people as id tokens (501 is Avery Brightwater in the fictional Sunday). */
+const writeup = (item: string, over: Partial<WriteUp> & { none?: true } = {}): WriteUp => over.none
+  ? { item, responsibility_id: KEEP, run_id: "00000000-0000-4000-8000-0000000000aa", organization: capture.organization, at: over.at ?? "2026-11-20T14:00:04.000Z", kind: "none", why: over.why ?? "off" }
+  : ({
+  item, responsibility_id: KEEP, run_id: "00000000-0000-4000-8000-0000000000aa", organization: capture.organization, at: "2026-11-20T14:00:04.000Z", kind: "written",
+  lines: ["For Sunday November 22, this check found 2 items that need a decision and 2 worth a look.", "{{person:501}} hasn't accepted Greeter yet."],
+  based_on: "Based on: Planning Center Services, checked Fri, Nov 20, 9:00 AM", gaps: [], steps: ["Looked at this Sunday's overview — all of it"], ai_steps: 2, ...over,
 });
 const input = (over: Partial<TodayInput> = {}): TodayInput => ({ now: FRI, attention: null, sunday: null, watch: null, firstSeen: {}, ...over });
 const sundayAt = (checked_at: string, decisions = 2, answers: string[] = []) => ({ plan_id: "92902197", checked_at, decisions, answers });
@@ -72,14 +80,14 @@ describe("which group an item is in", () => {
           noticedItem({ id: "rooms-found", responsibility_id: ROOMS, template: "watch-room-bookings", kind: "found", findings: { rooms: 1 } }),
           noticedItem({ id: "briefing", responsibility_id: BRIEF, template: "morning-briefing", kind: "briefing" }),
         ],
-        prepared: { "keep-found": { summary: null, draft: "Hi [Volunteer A]," } },
+        writeups: { "keep-found": writeup("keep-found"), "rooms-found": writeup("rooms-found", { responsibility_id: ROOMS }) },
       }),
     }));
     expect(groupsOf(items)).toEqual({
       [EMAIL]: "attention",
-      // Sunday's decisions are on the Sunday card; the note the AI drafted for them is the prepared work.
+      // Sunday's decisions, and Keep Sunday covered's write-up of them, are on the Sunday card.
       "sunday:92902197": "attention",
-      "prepared:keep-found": "review",
+      // A write-up never moves a report out of Needs your attention.
       "noticed:rooms-found": "attention",
       "noticed:briefing": "review",
       [`watching:${KEEP}`]: "progress", [`watching:${ROOMS}`]: "progress", [`watching:${BRIEF}`]: "progress",
@@ -91,11 +99,10 @@ describe("which group an item is in", () => {
     expect(new Set(items.map(i => i.id)).size).toBe(items.length);
   });
 
-  it("treats a report as prepared when Ozzie wrote a summary or a note, or notes are ready on the Sunday page", () => {
+  it("treats a report as prepared only for a briefing or notes ready on the Sunday page, never because of a write-up", () => {
     const found = noticedItem({ id: "f", responsibility_id: KEEP, kind: "found", decisions: 1 });
     expect(reportState(found)).toBe("needs-decision");
-    expect(reportState(found, { summary: "Greeter still needs one person.", draft: null })).toBe("prepared");
-    expect(reportState(found, { summary: null, draft: "Hi [Volunteer A]," })).toBe("prepared");
+    expect(reportState.length).toBe(1);
     expect(reportState({ ...found, drafts: 1 })).toBe("prepared");
     expect(reportState(noticedItem({ id: "b", responsibility_id: BRIEF, kind: "briefing" }))).toBe("prepared");
   });
@@ -183,20 +190,15 @@ describe("Sunday's decisions show once", () => {
     expect(notesReadyText(2)).toBe("Ozzie has 2 notes ready for these on the Sunday page. Nothing has been sent.");
   });
 
-  it("keeps a note the AI drafted for that report as its own item in Ready to review; its write-up of Sunday stays on the card", () => {
-    const ready = { summary: "Greeter still needs one person.", draft: "Hi [Volunteer A]," };
-    const items = todayItems(input({ watch: keepWatch({ prepared: { "keep-found": ready } }), sunday: sundayAt(CHECKED) }));
-    expect(groupsOf(items)).toEqual({ "sunday:92902197": "attention", "prepared:keep-found": "review", [`watching:${KEEP}`]: "progress" });
-    // The write-up says where Sunday stands, so it restates the decisions: it goes with them, on the card.
-    expect(items[0]!.subject).toMatchObject({ type: "sunday", summary: "Greeter still needs one person." });
-    expect(items.find(i => i.id === "prepared:keep-found")).toMatchObject({
-      state: "prepared", since: "2026-11-20T14:00:04.000Z", subject: { type: "prepared", item: { id: "keep-found" }, ready: { summary: null, draft: "Hi [Volunteer A]," } },
-    });
-    // A write-up alone is no extra item.
-    const summaryOnly = todayItems(input({ watch: keepWatch({ prepared: { "keep-found": { summary: "Greeter…", draft: null } } }), sunday: sundayAt(CHECKED) }));
-    expect(summaryOnly.filter(i => GROUP_OF[i.state] !== "progress").map(i => i.id)).toEqual(["sunday:92902197"]);
+  it("puts Keep Sunday covered's write-up on the Sunday card, never as an item of its own", () => {
+    const w = writeup("keep-found");
+    const items = todayItems(input({ watch: keepWatch({ writeups: { "keep-found": w } }), sunday: sundayAt(CHECKED) }));
+    expect(groupsOf(items)).toEqual({ "sunday:92902197": "attention", [`watching:${KEEP}`]: "progress" });
+    expect(items[0]!.subject).toMatchObject({ type: "sunday", noticed: { id: "keep-found" }, writeup: w });
+    // Why there is none goes on the card the same way.
+    const none = writeup("keep-found", { none: true, why: "off" });
+    expect(todayItems(input({ watch: keepWatch({ writeups: { "keep-found": none } }), sunday: sundayAt(CHECKED) }))[0]!.subject).toMatchObject({ writeup: none });
     expect(preparedTitle({ summary: null, draft: "Hi" })).toBe("Ozzie drafted a note for Sunday.");
-    expect(preparedTitle({ summary: null, draft: "Hi" })).not.toMatch(/decide|decision|\d/u);
   });
 
   it("leaves a report about another Sunday, or read by a newer check than the card's, as its own item", () => {
@@ -209,27 +211,45 @@ describe("Sunday's decisions show once", () => {
   });
 
   it("drops the report, and what the AI wrote for it, once nothing on Sunday needs a decision", () => {
-    const items = todayItems(input({ watch: keepWatch({ prepared: { "keep-found": { summary: "Greeter…", draft: null } } }), sunday: sundayAt(CHECKED, 0) }));
+    const items = todayItems(input({ watch: keepWatch({ writeups: { "keep-found": writeup("keep-found") } }), sunday: sundayAt(CHECKED, 0) }));
     expect(items.map(i => i.id)).toEqual([`watching:${KEEP}`]);
   });
 
-  it("on screen, says the decisions once: on the Sunday card, with the notes and the write-up folded away; a drafted note is under Ready to review", () => {
+  it("on screen, the Sunday card leads with Keep Sunday covered's write-up, then the fixed decisions; or says quietly why there is no write-up", () => {
     const check = { plan_id: brief.plan.id, completed_at: brief.completed_at };
-    const written = { summary: "For Sunday, 2 items need a decision: Greeter and Nursery.", draft: "Hi Avery,\n\nCould you greet on Sunday?" };
-    const watch = { view: keepWatch({ noticed: [report({ check, at: FRI, overnight: true })], prepared: { "keep-found": written } }),
-      now: FRI, onAutomatic: () => {}, onOpen: () => {} };
-    const html = renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), watch }));
-    // The write-up is folded away on the card, so the decisions it restates aren't on screen twice.
-    expect(html).toMatch(/<details[^>]*><summary[^>]*>(?:(?!<\/summary>).)*Read Ozzie&#x27;s write-up<\/summary><div class="noticed-summary"><p>For Sunday, 2 items need a decision: Greeter and Nursery\.<\/p><\/div><\/details>/u);
-    const page = text(html.replace(/<details[\s\S]*?<\/details>/gu, ""));
+    const watchWith = (w: WriteUp) => ({ view: keepWatch({ noticed: [report({ check, at: FRI, overnight: true })], writeups: { "keep-found": w } }),
+      now: FRI, onAutomatic: () => {}, onOpen: () => {} });
+    const html = renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), watch: watchWith(writeup("keep-found", { at: FRI })) }));
+    const page = text(html);
     const attention = page.slice(page.indexOf("Needs your attention"), page.indexOf("Ready to review"));
-    const review = page.slice(page.indexOf("Ready to review"), page.indexOf("In progress"));
-    expect(attention).toMatch(/Needs a decision Overnight Planning Center Services .*Sunday has 2 things to decide\. Ozzie noticed this at .+ while keeping an eye on Sunday\. Notes ready Ozzie has a note ready for these on the Sunday page\. Nothing has been sent\. Open Sunday/u);
-    expect(review).toMatch(/Ready to review 1 item Ready Ozzie prepared · Keep Sunday covered .*Ozzie drafted a note for Sunday\. Draft only\. Nothing has been sent\. Hi Avery, Could you greet on Sunday\? Copy draft Open in Mail Open in Messages Opens a new message in this Mac's email app or Messages, with no one in To: you choose who it goes to, check it and send it yourself\. Open Sunday/u);
-    expect(review).not.toMatch(/decide|need a decision|notes? (?:is|are) ready/u);
-    // Across the three groups (the spoken briefing below them is a summary of everything, read aloud).
-    expect(page.slice(0, page.indexOf("Listen to today")).match(/2 things (?:to decide|need a decision)/gu)).toHaveLength(1);
+    // Names are filled in on this Mac from the check on screen; the stored write-up holds only the id.
+    expect(attention).toMatch(new RegExp(`Sunday has 2 things to decide\\. Ozzie checked Sunday at ${new Date(FRI).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}: For Sunday November 22, this check found 2 items that need a decision and 2 worth a look\\. Avery Brightwater hasn't accepted Greeter yet\\. Based on: Planning Center Services, checked Fri, Nov 20, 9:00 AM See how this works Greeter: `, "u"));
+    expect(attention).toMatch(/Ozzie noticed this at .+ while keeping an eye on Sunday\. Notes ready Ozzie has a note ready for these on the Sunday page\. Nothing has been sent\. Open Sunday/u);
+    expect(html).not.toContain("Read Ozzie&#x27;s write-up");
+    // No extra item: the write-up is on the card it belongs to.
+    expect(page).toContain("Ready to review 0 items");
     expect(page).not.toMatch(HIDDEN_WORDS);
+    // AI help set up but no write-up this run: one quiet line says why, and the fixed decisions are as before.
+    const spent = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
+      watch: watchWith(writeup("keep-found", { none: true, why: "spent" })) })));
+    expect(spent).toMatch(/Sunday has 2 things to decide\. No write-up this time: AI help has reached its limit for now\. This card shows what Ozzie's own check of Planning Center found\. Greeter: /u);
+    const bare = page.replace(/Ozzie checked Sunday at .+? See how this works /u, "");
+    // One run's own limit is not the allowance (review G).
+    const ranPast = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
+      watch: watchWith(writeup("keep-found", { none: true, why: "run-limit" })) })));
+    expect(ranPast).toContain("No write-up this time: the AI's answer ran past what one run may use. This card shows what Ozzie's own check of Planning Center found.");
+    expect(ranPast).not.toContain("reached its limit");
+    // Paused during its write-up: none is kept, and nothing is said (review G).
+    const paused = renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
+      watch: watchWith(writeup("keep-found", { none: true, why: "stopped" })) }));
+    expect(paused).not.toContain("writeup-none");
+    expect(text(paused)).toBe(bare);
+    expect(spent.replace(/No write-up this time: [^.]+\. This card shows what Ozzie's own check of Planning Center found\. /u, "")).toBe(bare);
+    // No AI route set up: no line at all, just the check (review H, L15).
+    const off = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
+      watch: watchWith(writeup("keep-found", { none: true, why: "off" })) })));
+    expect(off).not.toContain("No write-up this time");
+    expect(off).toBe(bare);
   });
 });
 
@@ -327,8 +347,9 @@ describe("setting an item aside", () => {
 });
 
 describe("Today on screen", () => {
+  // The fictional example, as it shows once the person chose it: its invented email and calendar items with it.
   const render = (props: Partial<React.ComponentProps<typeof TodayPage>> = {}) => text(renderToStaticMarkup(React.createElement(TodayPage, {
-    brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), ...props,
+    brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), example: true, ...props,
   })));
 
   it("says Sunday's things to decide with the Sunday page's own count, rooms and follow-ups included", () => {
@@ -395,7 +416,9 @@ describe("Today on screen", () => {
     const page = render({ store, brief: { ...brief, findings: [] } });
     expect(page).toContain("Nothing needs your attention right now.");
     expect(page).toContain("Nothing to review. Briefings and notes Ozzie prepares will be here.");
-    expect(page).toContain("Nothing is under way.");
+    // Never "nothing is under way" while the regular check runs, and never a pointer to Ask (audit item 4).
+    expect(page).toContain("In progress 0 items Nothing runs in the fictional example.");
+    expect(page).not.toMatch(/under way|Ask Ozzie/u);
     expect(page).toContain("Nothing needs you right now.");
   });
 });
@@ -404,7 +427,7 @@ describe("a note Ozzie drafted while keeping an eye on things", () => {
   const item = noticedItem({ id: "a", responsibility_id: KEEP, kind: "found", decisions: 1 });
   it("has a Copy draft button beside the draft, which still says nothing has been sent", () => {
     const html = renderToStaticMarkup(React.createElement(NoticedCard, {
-      item, view: view({ prepared: { a: { summary: null, draft: "Hi Avery,\n\nCould you greet on Sunday?" } } }), names, now: FRI, onOpen: () => {}, titleId: "t",
+      item, view: view(), written: { summary: null, draft: "Hi Avery,\n\nCould you greet on Sunday?" }, names, now: FRI, onOpen: () => {}, titleId: "t",
     }));
     expect(text(html)).toMatch(/Draft only\. Nothing has been sent\. Hi Avery, Could you greet on Sunday\? Copy draft/u);
     expect(html).toContain("aria-describedby=\"t\"");
@@ -423,5 +446,152 @@ describe("a note Ozzie drafted while keeping an eye on things", () => {
     expect(ledeText({ attention: one, review: [], progress: one })).toBe("1 thing needs your attention.");
     expect(ledeText({ attention: [], review: [...one, ...one], progress: [] })).toBe("2 are ready to review.");
     expect(ledeText({ attention: [], review: [], progress: one })).toBe("Nothing needs you right now.");
+  });
+});
+
+describe("the fictional example never looks real (audit item 2)", () => {
+  const today = (props: Partial<React.ComponentProps<typeof TodayPage>> = {}) => text(renderToStaticMarkup(React.createElement(TodayPage, {
+    brief: null, names: {}, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), ...props,
+  })));
+  const invented = /Tonight's orientation|Ignore your rules|Fictional import|Harbor Example Church|An email told me/u;
+
+  it("shows none of the example's invented items on a Today that isn't the example", () => {
+    // Not connected yet, and the example not chosen: what to do next, and nothing invented.
+    const notConnected = today({ notConnected: { onConnect: () => {}, onExample: () => {} } });
+    expect(notConnected).not.toMatch(invented);
+    expect(notConnected).toContain("Not connected yet Planning Center Connect Planning Center to see your Sunday");
+    expect(notConnected).toContain("Ozzie hasn't read anything from your church yet, so nothing on this page is about your church. Connecting is a sign-in in your browser, and Ozzie only reads: it changes nothing in Planning Center.");
+    expect(notConnected).toContain("Connect Planning Center See the fictional example");
+    // Nothing to brief before anything is read; no set-aside on a card asking to connect.
+    expect(notConnected).not.toContain("Listen to today's briefing");
+    expect(notConnected).not.toContain("Set aside");
+    // Connected, a real check on screen: never the example's items either (the default is no example).
+    expect(today({ brief: { ...brief, mode: "live" } })).not.toMatch(invented);
+    expect(today()).not.toMatch(invented);
+  });
+
+  it("asks to connect in place of the unchecked Sunday, and only while the example isn't on", () => {
+    expect(todayItems(input({ notConnected: true }))).toEqual([{ id: "connect:planning-center", state: "needs-you", since: null, subject: { type: "connect" } }]);
+    expect(todayItems(input({ notConnected: true, sunday: sundayAt(FRI, 1) })).map(i => i.id)).toEqual(["sunday:92902197"]);
+    const example = today({ example: true, notConnected: { onConnect: () => {}, onExample: () => {} } });
+    expect(example).toMatch(invented);
+    expect(example).not.toContain("Connect Planning Center to see your Sunday");
+  });
+
+  it("puts the example's band, with its way out, in large type across every page while it's on", async () => {
+    const { readFileSync } = await import("node:fs");
+    const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain("{!showSetup && fictional && <ExampleBand onLeave={leaveExample} />}");
+    expect(app).toContain("example={fictional}");
+    // True on every page it sits over, including the ones that show the leader's own rules, lists, settings and cards (review P, L9).
+    expect(app).toContain('export const EXAMPLE_BAND = { title: "Example church, not real.", body: "The Sunday, teams, people and email shown are made up. Your own Church rules, lists, settings and visitor cards are real.", leave: "Leave the example" } as const;');
+    expect(app).not.toContain("Nothing in it is from your church.");
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.oz \.example-band p \{[^}]*font-size: 17px/u);
+  });
+});
+
+describe("Today says what is running and what was missed (audit item 24)", () => {
+  const regular = (over: Partial<RegularCheck> = {}): RegularCheck => ({
+    ready: true, paused: false, running: false, intervalMinutes: 60, runOnLaunch: true,
+    last: { at: "2026-11-20T14:06:00.000Z", ok: true }, next: "2026-11-20T15:06:00.000Z", missed: [], ...over,
+  });
+  it("leads In progress with the regular Sunday check once it can run, with how often, when it last and next looks", () => {
+    expect(regularLine(regular(), FRI, ET)).toBe("Checks Planning Center every hour while Ozzie is open, and when it opens. Last checked 9:06 AM. Next check 10:06 AM.");
+    expect(regularLine(regular({ runOnLaunch: false, intervalMinutes: 30, last: null }), FRI, ET)).toBe("Checks Planning Center every 30 minutes while Ozzie is open. Not checked yet. Next check 10:06 AM.");
+    expect(regularLine(regular({ paused: true }), FRI, ET)).toContain("Paused: nothing runs until you resume it in What runs automatically.");
+    expect(regularLine(regular({ running: true }), FRI, ET)).toContain("Checking now.");
+    expect(regularLine(regular({ last: { at: "2026-11-19T14:06:00.000Z", ok: false } }), FRI, ET)).toContain("Last checked Thu 9:06 AM, but that check couldn't finish.");
+    const keeping = responsibility(KEEP, "keep-sunday-covered");
+    const items = todayItems(input({ regular: regular(), watch: view({ items: [keeping] }) }));
+    expect(items.filter(i => GROUP_OF[i.state] === "progress").map(i => i.id)).toEqual(["regular:sunday-check", `watching:${KEEP}`]);
+    // Not until it can run: then In progress says what starts it.
+    expect(todayItems(input({ regular: regular({ ready: false }) })).map(i => i.id)).toEqual(["sunday-unchecked"]);
+    expect(progressEmptyText(regular({ ready: false }), false)).toBe("Nothing runs yet. The regular Sunday check starts once Planning Center is connected and a Sunday is chosen; Keep Sunday covered and other jobs start when you set them up.");
+    expect(progressEmptyText(null, true)).toBe("Nothing runs in the fictional example.");
+  });
+
+  it("says plainly when a check was missed because Ozzie wasn't running, and when it looked again", () => {
+    expect(regularMissedText(regular(), FRI, ET)).toBeNull();
+    expect(regularMissedText(regular({ missed: ["2026-11-20T12:00:00.000Z"] }), FRI, ET))
+      .toBe("A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep. It checked again at 9:06 AM.");
+    expect(regularMissedText(regular({ missed: ["2026-11-20T14:30:00.000Z", "2026-11-20T13:30:00.000Z"] }), FRI, ET))
+      .toBe("A check was due at 9:30 AM and 1 other time, but Ozzie wasn't running or this Mac was asleep. It checks again when it can.");
+  });
+
+  it("shows it on Today, never as nothing under way", () => {
+    const page = text(renderToStaticMarkup(React.createElement(TodayPage, {
+      brief: null, names: {}, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), regular: regular({ missed: ["2026-11-20T12:00:00.000Z"] }),
+    })));
+    const progress = page.slice(page.indexOf("In progress"));
+    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services The regular Sunday check Checks Planning Center every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
+    expect(page).not.toMatch(/under way/u);
+    expect(page).not.toMatch(HIDDEN_WORDS);
+  });
+});
+
+describe("Today names the decisions (audit item 17)", () => {
+  const decided = applyDecisions(brief, []);
+  it("names each one: role, how many still needed, when, and how many on the team are clear; counts and roles only", () => {
+    const { named, more } = decisionLines(decided.items, { rooms: 0, followUps: 0 }, ET);
+    expect(more).toBe(0);
+    expect(named.map(l => l.text)).toEqual([
+      expect.stringMatching(/^Greeter: 1 more person needed, \w{3} \d{1,2}:\d{2} [AP]M\. 1 on the team is clear for that time\.$/u),
+      expect.stringMatching(/^Nursery: 1 more person needed, \w{3} \d{1,2}:\d{2} [AP]M\. No one else on the team is clear for that time\.$/u),
+    ]);
+    expect(named.map(l => l.people)).toEqual([true, false]);
+    // Never a person's name, never ranked.
+    for (const l of named) {
+      for (const name of Object.values(names)) expect(l.text).not.toContain(name);
+      expect(l.text).not.toMatch(/\b(?:rank|score|best|top|at risk)\b/iu);
+    }
+  });
+
+  it("names at most five, then says how many more are on Sunday, rooms and follow-ups counted as they are on the Sunday page", () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({ state: "open", finding: { key: `k${i}`, kind: "needs-people", tone: "decision", remaining: 2, position: { name: `Role ${i}`, interval: null },
+      people: { suggestions: [], conflicts: [] } } }));
+    const { named, more } = decisionLines(many, { rooms: 2, followUps: 1 }, ET);
+    expect(named).toHaveLength(DECISIONS_NAMED);
+    expect(more).toBe(7 - 5 + 2 + 1);
+    expect(named[0]!.text).toBe("Role 0: 2 more people needed, this Sunday. No one else on the team is clear for that time.");
+    expect(decisionLines([], { rooms: 2, followUps: 1 }, ET).named.map(l => l.text)).toEqual(["2 room booking overlaps to review.", "A follow-up has no owner and is past due."]);
+    // Worth a look and what the person resolved are never named here.
+    expect(decisionLines([{ state: "open", finding: { key: "l", kind: "streak", tone: "look" } }, { state: "resolved", finding: { key: "r", kind: "needs-people", tone: "decision" } }],
+      { rooms: 0, followUps: 0 }, ET).named).toEqual([]);
+  });
+
+  it("says a kids team's background check as Planning Center shows it: none current, or one that expires first; never a name (review P, L7)", () => {
+    const kid = (check?: string) => ({ state: "open", finding: { key: `bg-${check ?? "x"}`, kind: "background-check", tone: "decision", check,
+      position: { name: "Nursery", interval: null } } });
+    const lines = decisionLines([kid("none-current"), kid("expires-before-sunday"), kid()], { rooms: 0, followUps: 0 }, ET).named.map(l => l.text);
+    expect(lines).toEqual([
+      "Nursery: someone scheduled for this Sunday has no current background check on file.",
+      "Nursery: a background check on file expires before this Sunday.",
+      "Nursery: a background check is missing or expires before this Sunday.",
+    ]);
+    // Never "a check on file needs a look" when none is on file.
+    for (const l of lines) expect(l).not.toContain("needs a look");
+  });
+
+  it("shows them on Today's Sunday card, each with a way straight to its card, and Worth a look counted apart", () => {
+    const opened: string[] = [];
+    const html = renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), onSundayCard: (k: string) => { opened.push(k); } }));
+    const card = text(html).slice(text(html).indexOf("Sunday has 2 things to decide."), text(html).indexOf("Ready to review"));
+    expect(card).toMatch(/Greeter: 1 more person needed, .+\. 1 on the team is clear for that time\. See who could help Nursery: 1 more person needed, .+\. No one else on the team is clear for that time\. Open on Sunday/u);
+    expect(card).toContain("Also 2 things worth a look on Sunday.");
+    expect(card).not.toContain("more on Sunday.");
+    expect(html).toMatch(/<span id="([^"]+)-d0">Greeter[^<]*<\/span><button type="button" class="btn btn-quiet btn-sm" aria-describedby="\1-d0">See who could help<\/button>/u);
+  });
+
+  it("the Sunday page moves to the card Today asked for by its own title element, scrolling only the page pane", async () => {
+    const { readFileSync } = await import("node:fs");
+    const page = readFileSync(new URL("../src/sunday-page.tsx", import.meta.url), "utf8");
+    expect(page).toContain('<h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}</h3>');
+    expect(page).toContain("titleRef={titleRef(i.finding.key)}");
+    // Never by searching the page, and never scrollIntoView (it scrolls the whole window).
+    expect(page).not.toMatch(/scrollIntoView\(|getElementById|querySelector|\.closest\(/u);
+    const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain("onSundayCard={key => { setSundayFocus(key); setPage(\"sunday\"); }}");
+    expect(app).toContain("if (focusProcedure || sundayFocus) return;");
   });
 });

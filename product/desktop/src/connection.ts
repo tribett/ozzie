@@ -328,7 +328,7 @@ export type SwitchAction = { label: string; decision: SwitchDecision };
  *  - A sign-in Ozzie found saved on this Mac: keep (primary), or sign in to that church instead. Ozzie never switches to
  *    a found sign-in as it is, and the wording doesn't suggest the person made it (review S2, L3).
  */
-export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { from: false, to: false }) {
+export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { from: false, to: false }, cards = 0) {
   const { to, to_name, from, from_name, others, fresh } = question;
   const toShort = churchShort(to, to_name, from_name), fromShort = churchShort(from, from_name, to_name);
   const keepLine = (what: string) => `Keeping ${fromShort} checks its sign-in with Planning Center first. Then Planning Center stops accepting the ${what} sign-in for ${toShort}, and it's removed from this Mac.`;
@@ -355,8 +355,10 @@ export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { fro
     title: churchName(to_name) ? `Switch Ozzie to ${churchName(to_name)}?` : "Switch Ozzie to this church?",
     lead: `You signed in to Planning Center for ${churchLabel(to, to_name)}. Ozzie works with one church at a time, and it's still using ${churchLabel(from, from_name)}.`,
     effects: [
+      // Visitor cards are kept per church (cards-page.tsx `workspace`), so a switch discards them (review P, L4).
+      ...(cards > 0 ? [`You have ${cards === 1 ? "1 visitor card" : `${cards} visitor cards`} open. Switching churches discards ${cards === 1 ? "it" : "them"}.`] : []),
       `Switching checks ${toShort}'s sign-in with Planning Center first. Then Planning Center stops accepting Ozzie's ${several ? "sign-ins" : "sign-in"} for ${leaving}, and ${several ? "they're" : "it's"} removed from this Mac. Your church's information in Planning Center doesn't change.`,
-      `Saved recordings of ${fromShort}'s Sundays stay on this Mac. Ozzie shows them only while it uses ${fromShort}.`,
+      `Saved copies of ${fromShort}'s checks stay on this Mac. Ozzie shows them only while it uses ${fromShort}.`,
       ...(rulesLine ? [rulesLine] : []),
       `What runs automatically stays set up. Ozzie checks ${toShort} on its schedule once you choose which of its Sundays to check.`,
       keepLine("new"),

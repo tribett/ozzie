@@ -17,17 +17,19 @@ export function withRoomRule(rules: SundayRules, room_id: string, next: { setup_
   return { ...rules, rooms: [...roomRules(rules).filter(r => r.room_id !== room_id), ...(next ? [{ room_id, exclusive: true, setup_minutes: next.setup_minutes }] : [])] };
 }
 
+export const PROCEDURES_TITLE = "What the AI is asked to do";
 /**
- * How Ozzie checks: each procedure Ozzie follows, by title and purpose, with its exact text under
- * "See how this works". Read-only; a procedure can't widen what Ozzie may read, and none changes Planning Center.
+ * What the AI is asked to do: each procedure the AI follows when Ozzie asks it for help, by title and purpose, with its
+ * exact text under "See how this works" (the heading says what the text below it says: review H, L6). Read-only; a
+ * procedure can't widen what Ozzie may read, and none changes Planning Center.
  */
 export function HowOzzieChecks({ procedures, focus = null }: { procedures: readonly Skill[]; focus?: string | null }) {
   useEffect(() => {
     if (focus && typeof document !== "undefined") document.getElementById(`procedure-${focus}`)?.scrollIntoView?.({ block: "start" });
   }, [focus]);
   return <section className="find how-checks" aria-labelledby="how-checks-title">
-    <h2 id="how-checks-title" className="h3">How Ozzie checks</h2>
-    <p className="find-body">These are the steps Ozzie follows when it checks Sunday or answers a question, written for people to read. They can't be changed here, and none of them changes anything in Planning Center.</p>
+    <h2 id="how-checks-title" className="h3">{PROCEDURES_TITLE}</h2>
+    <p className="find-body">These are the steps the AI follows when Ozzie asks it for help: answering a question in Ask, writing up a job Ozzie keeps an eye on, and looking at who could help with a role. Ozzie's own checks of Sunday don't use them. They can't be changed here, and none of them changes anything in Planning Center.</p>
     {procedures.map(p => <div key={p.id} id={`procedure-${p.id}`} className="procedure">
       <p className="bold">{p.title}</p>
       <p className="small">{p.purpose}</p>

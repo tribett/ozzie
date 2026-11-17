@@ -52,6 +52,11 @@ export const AUTOMATIC_LABEL = "Check for new versions automatically";
 export const AUTOMATIC_HELP = "On unless you turn it off. Ozzie checks a minute or two after it opens, then about once a day while it runs.";
 export const LATER_BUTTON = "Remind me tomorrow";
 export const REOPEN_NOTE = "Ozzie closes for a moment and opens again. Your Planning Center sign-in, Church rules and what Ozzie keeps an eye on stay as they are.";
+/** Asked first only while visitor cards are open: they live in Ozzie's memory, so reopening ends them (review P, L3). */
+export const UPDATE_CARDS_ASK = (n: number) =>
+  `You have ${n === 1 ? "1 visitor card" : `${n} visitor cards`} open. Updating closes Ozzie for a moment, which discards ${n === 1 ? "it" : "them"}.`;
+export const UPDATE_DISCARD = (n: number) => `Update and discard ${n === 1 ? "the card" : "the cards"}`;
+export const UPDATE_KEEP_CARDS = "Keep the cards and update later";
 export const UPDATE_HOW = [
   "To check, Ozzie asks GitHub, where Ozzie is published, for a short file that names the newest version. Nothing about you or your church goes with it: no names, no Planning Center details, no account.",
   "Ozzie installs a new version only after it proves the download came from FlockConnect and wasn't changed on the way. It never installs an older version.",

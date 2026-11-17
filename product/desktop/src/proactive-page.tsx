@@ -3,6 +3,7 @@ import { describeChange, type SundayChange } from "../../../core/src/sunday-chan
 import type { RunTrigger } from "../../../core/src/schedule.js";
 import { INTERVAL_CHOICES, type HistoryEntry, type ProactiveController, type ProactivePrefs, type ProactiveView, type Readiness } from "./proactive.js";
 import { Icon } from "./icons.js";
+import { SUNDAY_TOGETHER } from "./responsibility-words.js";
 
 export const useProactiveView = (p: ProactiveController) => useSyncExternalStore(p.subscribe, p.view, p.view);
 
@@ -163,7 +164,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
     <p className="lede">Ozzie keeps an eye on what you ask, even with its window closed, and tells you privately when something needs you. It only reads.</p>
     {responsibilities ? responsibilities(regular) : <section className="stack" aria-labelledby="sunday-watch-title">
       <h2 id="sunday-watch-title" className="h3">Keeping an eye on Sunday</h2>
-      <p className="small">While Ozzie is running on this Mac, the regular Sunday check reads Sunday coverage in Planning Center and tells you when something changes.</p>
+      <p className="small">{SUNDAY_TOGETHER}</p>
       {regular}
     </section>}
 

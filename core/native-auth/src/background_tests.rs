@@ -3,7 +3,7 @@
 //! sends a model. Fictional names only.
 use super::*;
 use crate::fixed;
-use crate::model::{ASK_SYSTEM, NOTE_PREFIX, REWORDINGS, SYSTEM};
+use crate::model::{NOTE_PREFIX, REWORDINGS, SYSTEM};
 use serde_json::Value;
 use sha2::Digest;
 
@@ -328,7 +328,6 @@ fn no_fixed_text_ozzie_sends_a_model_holds_the_wording() {
     for envelope in fixed::SAMPLE_ENVELOPES {
         assert!(!in_tool_result(envelope), "{envelope}");
     }
-    assert!(!background_wording(ASK_SYSTEM));
     assert!(!background_wording(SYSTEM));
     for choice in REWORDINGS {
         assert!(!background_wording(&format!("{choice}{NOTE_PREFIX}")));

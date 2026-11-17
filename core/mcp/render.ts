@@ -22,7 +22,7 @@ const ONLY_DESCRIBES = "This copy only describes what Ozzie read. It can't check
 const COMPLETENESS: Readonly<Record<string, string>> = {
   complete: "",
   partial: "Worth a look: part of what this depends on couldn't be read, so it may be incomplete.",
-  stale: "This check is out of date or a saved recording. Treat it as a past check, not how things stand now.",
+  stale: "This check is out of date, or it is a saved copy of a check. Treat it as a past check, not how things stand now.",
   denied: "This isn't part of the church's Planning Center connection.",
 };
 const HEADINGS: Readonly<Record<SharedTool, string>> = {

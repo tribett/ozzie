@@ -66,7 +66,8 @@ export interface Template {
 export const TEMPLATES: Readonly<Record<TemplateId, Template>> = Object.freeze({
   "keep-sunday-covered": {
     id: "keep-sunday-covered", title: "Keep Sunday covered", skill_id: "sunday-ready", watches: ["sunday-roles", "sunday-answers", "sunday-leads"], needs: ["services"],
-    cadence: "daily", on_change: true, defaults: { time: "07:00", weekdays: [], report: "decisions-only", lifetime: "this-sunday" },
+    // Every week until the leader stops it (owner decision 2026-11-16, audit item 23); "Only until this Sunday" is a choice.
+    cadence: "daily", on_change: true, defaults: { time: "07:00", weekdays: [], report: "decisions-only", lifetime: "until-stopped" },
     near_deadline: ["12:00", "17:00"], max: { checks_per_day: 6, ai_steps_per_day: 12 },
   },
   "watch-room-bookings": {
@@ -445,7 +446,8 @@ type LifetimeRead = { kind: "set"; lifetime: Lifetime } | { kind: "ask"; choices
 function parseLifetime(text: string, now: string, zone: string, template: TemplateId, options: PlanOptions): LifetimeRead {
   const until = (date: string | null) => date ? untilLifetime(date, zone) : null;
   const choicesFor = (...dates: string[]) => dates.map(d => until(d)).filter((l): l is Lifetime => l !== null);
-  const unclear = (): LifetimeRead => ({ kind: "ask", choices: [defaultPlan(template, now, zone, options).lifetime, { kind: "until-stopped" }] });
+  // Asked as two different answers: until the Sunday being watched, or until stopped (every default is until stopped now).
+  const unclear = (): LifetimeRead => ({ kind: "ask", choices: [...choicesFor(watchedSunday(now, zone, options)), { kind: "until-stopped" }] });
   // A Sunday is never today: said on a Sunday, it means next week's (sundayAhead). Other days keep their own.
   const coming = (day: number) => day === 0 ? sundayAhead(now, zone) : upcomingWeekday(now, zone, day);
   const next = new RegExp(`\\bnext ${DAY}\\b`, "u").exec(text);

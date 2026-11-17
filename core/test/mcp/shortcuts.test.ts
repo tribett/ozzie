@@ -92,9 +92,9 @@ describe("the answer to \"sunday\"", () => {
       + "Checked in Planning Center today at 10:00 AM. Open Ozzie to check again.");
   });
 
-  it("says a saved recording is a recording, in the past tense", async () => {
+  it("says a saved copy of a check is one, in the past tense", async () => {
     const { text } = await copyFor(harnessData({ mode: "recording" }));
-    expect(ask(text, "2026-11-21T14:00:00Z")).toBe("This is from a saved recording, not a live look at Planning Center. "
+    expect(ask(text, "2026-11-21T14:00:00Z")).toBe("This is from a saved copy of a check, not a live look at Planning Center. "
       + "Sunday, November 22 had 2 open spots across 2 roles. 1 person was pending, and Planning Center showed the request hadn't been sent yet. Checked in Planning Center yesterday at 10:00 AM.");
   });
 
@@ -186,7 +186,7 @@ describe("the answer to \"sunday\"", () => {
     capture.reads = capture.reads.map(r => r.collection === "person_blockouts" && r.person_id === PEOPLE.drew ? { ...r, outcome: "timeout" } : r);
     const { text } = await copyFor(harnessData({ mode: "recording", capture }));
     expect(JSON.parse(text).envelopes[0].completeness).toBe("stale");
-    expect(ask(text, "2026-11-21T14:00:00Z")).toBe("This is from a saved recording, not a live look at Planning Center. "
+    expect(ask(text, "2026-11-21T14:00:00Z")).toBe("This is from a saved copy of a check, not a live look at Planning Center. "
       + "Sunday, November 22 had 2 open spots across 2 roles. 1 person was pending, and Planning Center showed the request hadn't been sent yet. "
       + "Worth a look: part of the check couldn't be read, so this may be incomplete. Checked in Planning Center yesterday at 10:00 AM.");
   });
@@ -263,7 +263,7 @@ const OWN_WORDS = new Set(`
   has had open spot spots across role roles that still need needs needed people request requests hasn't haven't hadn't been accepted yet
   team teams doesn't don't didn't have a confirmed lead kids fewer than your church rules ask you marked as handled yourself
   some findings shown worth look part of the couldn't be read so this may incomplete checked planning center today yesterday at on am pm utc
-  when last things changed since then see latest is too old to say how stands again recording not live fictional example real church
+  when last things changed since then see latest is too old to say how stands again copy not live fictional example real church
   ozzie's was for which passed next chosen
   pending person is are was were with request sent no least list long full more whose answer or serving time
   later mac's clock tell current could can't it there's there shows showed none of count behind

@@ -1,0 +1,52 @@
+/* Ask Ozzie as one surface (audit item 8), and a job's write-up (audit item 6). Layout for these two only; the app's
+   type, colours and readability live in hearth.css and styles.css. Every selector starts .oz and names its own
+   component, so it never reaches another page. */
+
+/* ---- Ask Ozzie: one scrolling column above the question box --------------------------------------------------- */
+.oz .ask-panel .ask-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.oz .ask-panel .ask-scroll > .small { margin: 0; }
+.oz .ask-panel .ask-note { margin: 0; }
+.oz .ask-panel .ask-card { padding: 14px 16px; box-shadow: none; }
+.oz .ask-panel .ask-card .find-top { margin-bottom: 6px; }
+.oz .ask-panel .ask-card .find-title { font-size: 18px; overflow-wrap: anywhere; }
+.oz .ask-panel .ask-card .body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.oz .ask-lines { display: flex; flex-direction: column; gap: 6px; }
+.oz .ask-lines p { white-space: pre-line; overflow-wrap: anywhere; }
+.oz .ask-panel .ask-current { scroll-margin-top: 12px; }
+.oz .ask-panel .ask-src { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.oz .ask-panel .ask-asked { overflow-wrap: anywhere; }
+/* Suggested questions wrap onto as many lines as they need; none is cut off at the panel's edge. */
+.oz .ask-panel .ask-quick, .oz .ask-panel .ask-quick.is-compact { flex-wrap: wrap; overflow: visible; padding: 0; margin: 0; -webkit-mask-image: none; mask-image: none; }
+.oz .ask-panel .ask-quick .chip { flex: 0 1 auto; max-width: 100%; white-space: normal; text-align: left; }
+.oz .ask-panel .ask-earlier { display: flex; flex-direction: column; gap: 4px; }
+.oz .ask-panel .ask-earlier .list { gap: 2px; }
+.oz .ask-panel .ask-reopen { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 32px; padding: 6px 8px; overflow-wrap: anywhere; }
+.oz .ask-panel .ask-about { font-size: var(--t-sm); }
+.oz .ask-panel .ask-about > .small, .oz .ask-panel .ask-about > p { margin-top: 6px; }
+.oz .ask-panel .ask-voice { margin: -8px 16px 12px; }
+
+/* ---- A job's write-up on its card ----------------------------------------------------------------------------- */
+.oz .writeup { margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.oz .writeup-head { font-weight: 600; color: var(--ink); }
+.oz .writeup-lines { display: flex; flex-direction: column; gap: 4px; }
+.oz .writeup-lines p { overflow-wrap: anywhere; }
+.oz .writeup .ask-how { align-self: flex-start; }
+.oz .writeup-none { margin-top: 8px; display: flex; gap: 8px; align-items: flex-start; color: var(--ink-3); }
+.oz .writeup-none .ic { flex: none; margin-top: 2px; }
+.oz .resp-writeup { margin-top: 10px; }
+
+/* ---- "See how this works" as a short account -------------------------------------------------------------------- */
+.oz .task-account p { overflow-wrap: anywhere; }
+/* What happened: a task's account sits inside its row, as its steps did. */
+.oz .recent-task > .task-account { padding: 10px 16px 12px; font-size: var(--t-sm); color: var(--ink-2); }
+.oz .recent-task > .task-account .recent-steps { padding: 0 0 0 4px; }
+.oz .ask-how-body .task-account .recent-steps, .oz .writeup .task-account .recent-steps { padding: 0 0 0 4px; }
+
+/* ---- Sunday cards: See how this works, and the AI's look at who could help (audit item 9) ----------------------- */
+.oz .find-src .why-how { width: 100%; }
+.oz .why-how > .btn { align-self: flex-start; }
+.oz .ai-look { margin-top: 10px; }
+.oz .ai-look-card { padding: 14px 16px; box-shadow: none; display: flex; flex-direction: column; gap: 8px; }
+.oz .ai-look-card .find-top { margin-bottom: 0; }
+.oz .ai-look-card .ask-how { align-self: flex-start; }
+.oz .ai-look-note p + p { margin-top: 4px; }

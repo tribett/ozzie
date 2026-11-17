@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DraftModelRequest } from "../../../core/src/draft-request.js";
-import type { AskModelRequest } from "../../../core/src/ask.js";
 
 /** Ozzie managed's notices (owner decision 2026-10-26): at three quarters, at nine tenths, and paused at the limit. */
 export type ManagedWarning = "three-quarters" | "nine-tenths" | "paused";
@@ -38,11 +37,6 @@ export const model = {
   status: () => invoke<ModelStatus>("model_status"),
   /** Native call; the request has already passed the placeholder boundary. Returns the model's raw reply text. */
   reword: (request: DraftModelRequest) => invoke<string>("reword_draft", { request }),
-  /**
-   * The earlier fact-sheet route (native ask_ozzie), used only by the debug autopilot for comparison. Ask
-   * Ozzie in the app runs through the harness (harness-bridge.ts) and native agent_step.
-   */
-  ask: (request: AskModelRequest) => invoke<string>("ask_ozzie", { request }),
   /** Saves the non-secret route only; keys are added to the Keychain outside the app. */
   setRoute: (route: "managed" | "own" | "local", baseUrl?: string, model?: string) =>
     invoke<ModelStatus>("set_model_route", { route, baseUrl: baseUrl || null, model: model || null }),
@@ -76,9 +70,31 @@ export const planName = (plan: string): string => {
   const words = plan.replace(/-/gu, " ").trim();
   return words ? words[0]!.toUpperCase() + words.slice(1) : "Ozzie managed";
 };
-const paused = (a: ManagedAccount) => a.warning === "paused" || a.used_steps >= a.allowance_steps;
+export const paused = (a: ManagedAccount) => a.warning === "paused" || a.used_steps >= a.allowance_steps;
 /** No plan on ozzie.church (a trial ended without a subscription): no allowance and no reset to wait for. */
-const noPlan = (a: ManagedAccount) => a.plan === "none" || a.allowance_steps <= 0;
+export const noPlan = (a: ManagedAccount) => a.plan === "none" || a.allowance_steps <= 0;
+/**
+ * What a route's row says about itself at a glance (audit item 4): "In use" only when it is the chosen route and AI help
+ * works through it now. Chosen but not ready (Ozzie managed with this Mac not connected, a key not saved yet), or Ozzie
+ * managed with no plan or its allowance spent, says so instead. Nothing on a route that isn't chosen.
+ */
+export function routeBadge(status: ModelStatus | null, route: ModelStatus["route"]): { text: string; tone: "ok" | "muted" | "look" } | null {
+  if (!status || status.route !== route || route === "none") return null;
+  if (!status.configured) return { text: "Chosen, not ready yet", tone: "look" };
+  const account = route === "managed" ? status.account : null;
+  if (account && noPlan(account)) return { text: "Off: no plan right now", tone: "muted" };
+  if (account && paused(account)) return { text: "Paused this month", tone: "muted" };
+  return { text: "In use", tone: "ok" };
+}
+/** The line above the routes: what AI help uses now, in words that agree with the row's own badge. */
+export function routeStatusLine(status: ModelStatus | null): string {
+  if (!status || status.route === "none") return "Not set up. Drafts still work; only rewording and questions are off.";
+  if (!status.configured) return `Chosen: ${status.label}. Not ready yet.`;
+  const account = status.route === "managed" ? status.account : null;
+  if (account && noPlan(account)) return "AI help is off: Ozzie managed has no plan right now. Drafts still work.";
+  if (account && paused(account)) return "AI help is paused until this month's allowance resets. Drafts still work.";
+  return `Using: ${status.label}`;
+}
 export const NO_PLAN_TEXT = "Your Ozzie managed trial has ended, so AI help through ozzie.church is off. Choose a plan at ozzie.church/account to turn it back on. Lists, Church rules, checks and briefings keep working, and nothing charges itself.";
 /** Usage in plain work, never raw counts: "About 60 AI answers left this month. It resets on December 1." */
 export function usageLine(a: ManagedAccount): string {

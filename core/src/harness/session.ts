@@ -116,6 +116,18 @@ export function showTimes(text: string, timeZone?: string | null): string {
 }
 
 /**
+ * A person as a write-up keeps them on this Mac (responsibility-runner.ts): their Planning Center id in a fixed token,
+ * never their name, filled in from the check on screen only when the write-up is shown (fillPeople).
+ */
+export const PERSON_TOKEN = /\{\{person:([A-Za-z0-9_-]{1,64})\}\}/gu;
+/** Names for restoreLabels that keep each person as their token: what a kept write-up is written with. */
+export const keptNames = (names: Readonly<Record<string, string>>): Record<string, string> =>
+  Object.fromEntries(Object.keys(names).filter(id => /^[A-Za-z0-9_-]{1,64}$/u.test(id)).map(id => [id, `{{person:${id}}}`]));
+/** Local only: each person token back to the name the current check holds for that id, or "a team member". */
+export const fillPeople = (text: string, names: Readonly<Record<string, string>>): string =>
+  text.replace(PERSON_TOKEN, (_whole, id: string) => (Object.hasOwn(names, id) ? names[id]?.trim() : "") || GENERIC.person);
+
+/**
  * Local only: labels back to names, and ISO times to plain words. A label this session didn't issue, or with nothing
  * known, becomes plain words, as "[a team member]" (a name part several people share) does (review C11).
  */

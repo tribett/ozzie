@@ -131,20 +131,20 @@ describe("App and Today pass calendar state only where it is shown", () => {
       /^ {4}const forward = \(\) => \{ void calendars\.refreshAccess\(\); \};$/u,
       /^ {2}useEffect\(\(\) => \{ if \(page === "today" && visible\) void calendars\.readIfOld\(\); \}, \[page, visible, calendars, now\]\);$/u,
       /^ {2}const fictionalImport = !calendarsConnected\(calendarState\);$/u,
-      /example=\{!connected && !calendarsConnected\(calendarState\)\}$/u,
-      /^ {10}calendar=\{calendarsConnected\(calendarState\) \? \{ reads: calendarState\.reads, reading: calendarState\.reading, onSettings: \(\) => setPage\("connection"\) \} : null\} \/>\}$/u,
+      // Never under the fictional example's band (audit item 2): the example is the whole of Today while it's on.
+      /^ {10}calendar=\{!fictional && calendarsConnected\(calendarState\) \? \{ reads: calendarState\.reads, reading: calendarState\.reading, onSettings: \(\) => setPage\("connection"\) \} : null\} \/>\}$/u,
       /calendars=\{<CalendarSettings calendars=\{calendars\} \/>\}/u,
       /^import \{ calendarsConnected, createCalendars, useCalendarState \} from "\.\/calendars\.js";$/u,
     ];
     const uses = code("../src/App.tsx").filter(l => /\bcalendars?\b|calendarState|Calendar[A-Z]?\w*/u.test(l) && !/^import \{ CalendarSettings \}/u.test(l));
     for (const line of uses) expect(allowed.some(a => a.test(line)), line).toBe(true);
-    expect(uses.length).toBeGreaterThanOrEqual(9);
+    expect(uses.length).toBeGreaterThanOrEqual(8);
   });
 
   it("Today: only into the calendar group", () => {
     const uses = code("../src/today-page.tsx").filter(l => /(?:^|[\s{(,])calendar(?:\s*=|\?:|\s*&&|\s*\?\.|\.\w)/u.test(l) && !l.startsWith("import "));
     const allowed = [
-      /^ {2}feedback = null, example = true, church = null, calendar = null \}: \{$/u,
+      /^ {2}feedback = null, example = false, church = null, calendar = null, regular = null, notConnected = null, asked = NO_ASKED, onSundayCard,$/u,
       /^ {2}calendar\?: \{ reads: readonly CalendarRead\[\]; reading: boolean; onSettings\?: \(\) => void \} \| null;$/u,
       /^ {4}\{calendar && <CalendarGroup reads=\{calendar\.reads\} now=\{now\} zone=\{zone\} reading=\{calendar\.reading\} onSettings=\{calendar\.onSettings\} \/>\}$/u,
     ];

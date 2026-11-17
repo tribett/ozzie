@@ -10,7 +10,6 @@ _Avoid_: All-church workspace, shared inbox
 
 **Ozzie**:
 The standalone church and ministry administration product, including its app and open-source project. Publicly attributed as “Ozzie by FlockConnect.”
-_Avoid_: TableWork (former name)
 
 **Church rules**:
 The church's own stated expectations for its gatherings — for example how many adults a room needs — written in plain language, visible and changeable by the leader.

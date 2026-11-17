@@ -154,57 +154,80 @@ describe("the limits", () => {
 
 describe("a pathological 2 MB file doesn't freeze the page", () => {
   const TWO_MB = 2 * 1024 * 1024;
+  /** Processor time this test process has used, in milliseconds: time spent waiting for a core is not counted. */
+  const cpuMs = () => { const { user, system } = process.cpuUsage(); return (user + system) / 1000; };
   /**
-   * Parses `text` five times and gives back the middle time, in milliseconds, with the result: one run slowed by a busy
-   * Mac (a cargo build took one to 239 ms, review S, L6) doesn't fail the test. The bound is loose, but each of these
-   * files takes minutes, not milliseconds, with a pass over the text for each field or row.
+   * Pieces of work timed in turn, five times each, giving back each one's least processor time in milliseconds. The
+   * clock on the wall failed here (audit item 32): with every core busy several times over, a run waits for a core
+   * again and again (a cargo build took one to 239 ms, review S, L6), and a long run waits more often than a short one,
+   * so work that grows in step looked as if it grew faster, even comparing the fastest of five. Processor time leaves
+   * the waiting out. Timed in turn, a busy stretch slows all of them alike; measured one after the other, a busy moment
+   * during one alone (the type-checker proofs beside it in the full run) could still tip a comparison.
    */
-  const timed = (text: string) => {
-    const times: number[] = [];
-    let result = parseSheet("");
-    for (let run = 0; run < 5; run++) { const start = performance.now(); result = parseSheet(text); times.push(performance.now() - start); }
-    return { ms: times.sort((a, b) => a - b)[2]!, result };
-  };
-  const LIMIT_MS = 600;
-  /**
-   * Two texts timed in turn, five times each, so both medians are taken under the same load: measured one after the
-   * other, a busy moment during one alone (the type-checker proofs beside it in the full run) can make work that grows
-   * in step look as if it grew with the square.
-   */
-  const timedTogether = (a: string, b: string) => {
-    const times: [number[], number[]] = [[], []];
+  const timedTogether = (...works: (() => unknown)[]) => {
+    const times = works.map((): number[] => []);
     for (let run = 0; run < 5; run++) {
-      for (const [i, text] of [a, b].entries()) { const start = performance.now(); parseSheet(text); times[i]!.push(performance.now() - start); }
+      works.forEach((work, i) => { const start = cpuMs(); work(); times[i]!.push(cpuMs() - start); });
     }
-    return times.map(t => t.sort((x, y) => x - y)[2]!) as [number, number];
+    return times.map(t => Math.min(...t));
   };
+  /** One pass over `text` reading every character: the least any reader of it does. */
+  const onePass = (text: string) => { let odd = 0; for (let i = 0; i < text.length; i++) odd += text.charCodeAt(i) & 1; return odd; };
+  /**
+   * Each file is timed in turn with one pass over its own text, and may take at most PASSES passes' worth (plus a few
+   * milliseconds for times too small to measure well). A fixed number of milliseconds (600) failed under heavy load
+   * instead (audit item 32); measured against a pass over the same text, the bound holds on a slower Mac as well as a
+   * busy one. Measured 2026-11-16, the costliest of these files took about 15 to 25 passes' worth, idle or with every
+   * core busy; each failure these tests guard against takes a pass over the text for each field or row, hundreds of
+   * thousands of passes over 2 MB. The bound sits far from both.
+   */
+  const PASSES = 200;
+  const SLACK_MS = 20;
+  /**
+   * Each test here times its work five times over: a few hundred milliseconds alone, but beyond vitest's 5 s default
+   * with every core busy. Work that took a pass for each field or row would still be stopped by this limit.
+   */
+  const TIMING_LIMIT_MS = 60_000;
+  const timed = (text: string) => {
+    let result = parseSheet("");
+    const [ms, passMs] = timedTogether(() => { result = parseSheet(text); }, () => onePass(text));
+    return { ms: ms!, passMs: passMs!, result };
+  };
+  const expectCheap = ({ ms, passMs }: { ms: number; passMs: number }, what: string) =>
+    expect(ms < passMs * PASSES + SLACK_MS, `${what}: ${ms} ms, one pass ${passMs} ms`).toBe(true);
+
+  it("the pass bound catches work that takes a pass over the text for each character (so the checks below can fail)", () => {
+    const text = "x".repeat(10_000);
+    const [ms, passMs] = timedTogether(() => { for (let i = 0; i < text.length; i++) onePass(text); }, () => onePass(text));
+    expect(ms! < passMs! * PASSES + SLACK_MS, `${ms} ms, one pass ${passMs} ms`).toBe(false);
+  }, TIMING_LIMIT_MS);
 
   it("one quoted field of 2 MB, closed or never closed", () => {
     const closed = timed(`"${"x".repeat(TWO_MB - 2)}"`);
-    expect(closed.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(closed, "closed");
     expect(sheetOf(closed.result).headers).toEqual([`${"x".repeat(119)}…`]);
     const open = timed(`Name\n"${"y".repeat(TWO_MB - 6)}`);
-    expect(open.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(open, "open");
     expect(sheetOf(open.result).rows).toEqual([[`${"y".repeat(499)}…`]]);
     const doubled = timed(`Name\n"${"\"\"".repeat(TWO_MB / 2 - 4)}"`);
-    expect(doubled.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(doubled, "doubled");
     expect(sheetOf(doubled.result).rows).toEqual([[`${"\"".repeat(499)}…`]]);
-  });
+  }, TIMING_LIMIT_MS);
 
   it("a 2 MB line of delimiters, as the header or as a row", () => {
     const asHeader = timed(`Name${",".repeat(TWO_MB - 4)}\nDana Fictional\n`);
-    expect(asHeader.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(asHeader, "as the header");
     expect(sheetOf(asHeader.result).rows).toEqual([["Dana Fictional"]]);
     const asRow = timed(`Name,Team\n${";".repeat(TWO_MB - 10)}`);
-    expect(asRow.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(asRow, "as a row");
     expect(sheetOf(asRow.result).rows).toEqual([[";".repeat(499) + "…", ""]]);
     const commas = timed(`Name,Team\n${",".repeat(TWO_MB - 10)}`);
-    expect(commas.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(commas, "commas");
     expect(sheetOf(commas.result).rows).toEqual([]);
     const tabs = timed(`${"\t".repeat(TWO_MB)}`);
-    expect(tabs.ms).toBeLessThan(LIMIT_MS);
+    expectCheap(tabs, "tabs");
     expect(tabs.result).toEqual({ ok: false, problem: "empty" });
-  });
+  }, TIMING_LIMIT_MS);
 
   /**
    * Whether work grew in step with its size: `large` is four times `small`, so it takes about four times as long, and work
@@ -214,11 +237,10 @@ describe("a pathological 2 MB file doesn't freeze the page", () => {
   const inStep = (small: number, large: number) => large < small * 8 + 3;
   it("the growth check catches work that grows with the square of its size (so the checks below can fail)", () => {
     const square = (n: number) => () => { let sum = 0; for (let i = 0; i < n; i++) for (let j = 0; j < i; j++) sum += j & 1; return sum; };
-    const time = (work: () => number) => { const t: number[] = []; for (let r = 0; r < 5; r++) { const start = performance.now(); work(); t.push(performance.now() - start); } return t.sort((a, b) => a - b)[2]!; };
-    const small = time(square(2500)), large = time(square(10_000));
+    const [small, large] = timedTogether(square(2500), square(10_000));
     expect(small).toBeGreaterThan(0.5);
-    expect(inStep(small, large)).toBe(false);
-  });
+    expect(inStep(small!, large!), `${small} ms, then ${large} ms`).toBe(false);
+  }, TIMING_LIMIT_MS);
 
   it("blank fields past the 30 columns cost about what empty ones do, and four times the fields take about four times as long", () => {
     // Spaces, tabs and a control between the delimiters: each blank, none empty; four fields to eight characters.
@@ -226,24 +248,26 @@ describe("a pathological 2 MB file doesn't freeze the page", () => {
     const empty = (fields: number) => `Name\n${",".repeat(fields)}\n`;
     // 524,288 fields: 1 MB of blank ones.
     const fields = TWO_MB / 4;
-    const most = timed(blank(fields)), baseline = timed(empty(fields));
-    expect(most.ms).toBeLessThan(LIMIT_MS);
+    const [blankText, emptyText, quarterText] = [blank(fields), empty(fields), blank(fields / 4)];
+    const most = timed(blankText);
+    expectCheap(most, "blank fields");
     expect(sheetOf(most.result).rows).toEqual([]);
-    expect(sheetOf(baseline.result).rows).toEqual([]);
-    // The same number of fields, blank or empty: blank ones read their spaces too (about one and a half times as long
-    // when measured), never a pass over the row for each one.
-    expect(most.ms).toBeLessThan(baseline.ms * 3 + 3);
+    expect(sheetOf(parseSheet(emptyText)).rows).toEqual([]);
+    // The same number of fields, blank or empty, timed in turn under the same load: blank ones read their spaces too
+    // (about one and a half times as long when measured), never a pass over the row for each one.
+    const [blankMs, emptyMs] = timedTogether(() => parseSheet(blankText), () => parseSheet(emptyText));
+    expect(blankMs! < emptyMs! * 3 + 3, `${blankMs} ms blank, ${emptyMs} ms empty`).toBe(true);
     // Growth, with a quarter of the fields and all of them timed in turn, under the same load.
-    const [quarterMs, mostMs] = timedTogether(blank(fields / 4), blank(fields));
-    expect(inStep(quarterMs, mostMs), `${quarterMs} ms, then ${mostMs} ms`).toBe(true);
-  });
+    const [quarterMs, mostMs] = timedTogether(() => parseSheet(quarterText), () => parseSheet(blankText));
+    expect(inStep(quarterMs!, mostMs!), `${quarterMs} ms, then ${mostMs} ms`).toBe(true);
+  }, TIMING_LIMIT_MS);
 
   it("2 MB of line breaks, of short rows, and of format characters", () => {
     for (const text of [`Name\n${"\r".repeat(TWO_MB - 5)}`, `Name\n${"\r\n".repeat(TWO_MB / 2 - 3)}`, `Name\n${"a\n".repeat(TWO_MB / 2 - 3)}`,
       `Name\n${cp(0x200b).repeat(TWO_MB / 2)}`, `Name,Team\n${"a,b\n".repeat(TWO_MB / 4 - 3)}`]) {
-      const { ms, result } = timed(text);
-      expect(ms, text.slice(0, 12)).toBeLessThan(LIMIT_MS);
-      expect(result.ok).toBe(true);
+      const time = timed(text);
+      expectCheap(time, JSON.stringify(text.slice(0, 12)));
+      expect(time.result.ok).toBe(true);
     }
-  });
+  }, TIMING_LIMIT_MS);
 });

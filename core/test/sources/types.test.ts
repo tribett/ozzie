@@ -27,6 +27,15 @@ describe("a pointer's title and occurrence (review V)", () => {
     expect(list?.[0]).toMatchObject({ attachments: [{ section: "Who to call", team_id: "1" }, { section: "Who to call", finding_kind: "pending", occurrence: 2 }] });
   });
 
+  it("keeps how many sections shared the title when it was chosen, from 1 and never below its occurrence (audit item 30)", () => {
+    const list = (attachments: unknown[]) => parseSourceList([{ id: "n1", kind: "notes", label: "Policy", shown: "policy.md", read_at: null, attachments }]);
+    expect(list([{ section: "Who to call", team_id: "1", of: 1 }, { section: "Who to call", finding_kind: "pending", occurrence: 2, of: 3 }])?.[0])
+      .toMatchObject({ attachments: [{ section: "Who to call", team_id: "1", of: 1 }, { section: "Who to call", finding_kind: "pending", occurrence: 2, of: 3 }] });
+    for (const bad of [{ of: 0 }, { of: 1.5 }, { of: "2" }, { of: 20_001 }, { occurrence: 3, of: 2 }, { of: null }]) {
+      expect(list([{ section: "Who to call", team_id: "1", ...bad }]), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
   it("checks a title with joiners set aside, so a runtime reading them another way never makes the whole list unreadable", () => {
     const zwj = String.fromCodePoint(0x200d);
     // A joiner this page's rule would drop (before a space), as native code may have kept it.

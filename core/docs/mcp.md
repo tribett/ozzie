@@ -7,7 +7,7 @@ until they do, and turning it off removes the shared copy.
 
 Only the church's current check is shared. When Ozzie has nothing current to share (no check yet
 since it opened, a check of another church, the church changed in Settings, Planning Center
-disconnected, saved recordings deleted, or a check it refused to share), it removes the copy rather
+disconnected, saved checks deleted, or a check it refused to share), it removes the copy rather
 than leave an older one. Every result says when its facts were checked, not when the copy was saved.
 
 ## What it can do
@@ -22,8 +22,8 @@ Four tools, none of which takes an argument:
 | `what_happened` | What Ozzie did recently: checks, questions and procedures, when they ran and how they ended. |
 
 The words are Ozzie's own sentences, the same templates Ask Ozzie's answers use
-(`core/src/harness/compose.ts`). Uncertain items are labelled "Worth a look"; a saved recording or an
-out-of-date check says so.
+(`core/src/harness/compose.ts`). Uncertain items are labelled "Worth a look"; the saved copy of an
+earlier check, or an out-of-date check, says so.
 
 ## What it can't do
 
@@ -282,5 +282,5 @@ and has no override for the copy's path.
   plain file, and the `ozzie://` pages limited to Today and Sunday.
 - `product/desktop/test/share-check.test.ts`: off unless native says on, a failed removal said plainly
   and left on to try again, only placeholder results handed to native, the copy removed whenever
-  nothing current is shared (no check, another church, disconnected, deleted recordings, a refused
+  nothing current is shared (no check, another church, disconnected, deleted saved checks, a refused
   share), plain Settings copy.

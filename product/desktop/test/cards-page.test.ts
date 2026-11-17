@@ -7,8 +7,8 @@ import { CardReviewController } from "../../src/card-review/controller.js";
 import type { CardView } from "../../../core/src/card-review/lifecycle.js";
 import { readLines, reviewedList, type ReadLine } from "../../../core/src/card-fields.js";
 import {
-  cardPhotoFiles, CardsReview, checkCard, emptyUi, escapeCloses, listFor, lookFirst, pickCards, PICK_PROBLEM, placeLine, readCardsLocally, readingFor,
-  type CardsUi, type CardTextResult, type FieldSource, type ReadState,
+  bindKeep, cardPhotoFiles, CardsReview, checkCard, DISCARD_ASK, emptyUi, escapeCloses, keptImages, KEPT_AFTER, KEPT_BODY, KEPT_ENDS, listFor, lookFirst, pickCards, PICK_PROBLEM, placeLine,
+  readCardsLocally, readingFor, SHOW_CARDS, veiledText, type CardsUi, type CardTextResult, type FieldSource, type ReadState,
 } from "../src/cards-page.js";
 
 // Invented people and synthetic printed-card text only. No real card or photo is used.
@@ -90,6 +90,21 @@ describe("reading visitor cards on this Mac", () => {
     const { controller, states } = await readWith([new Error("closed reason only"), { status: "read", text: CARD_A, unclearLines: [] }]);
     expect(states).toEqual({ 1: "failed", 2: "read" });
     expect(cardsOf(controller)[0]!.fields.name.state).toBe("unreviewed");
+    // The reader's "unreadable" (a photo that decodes to nothing) is the same: left for typing, said on the card.
+    const unreadable = await readWith([Object.assign(new Error("unreadable"), {}), { status: "read", text: CARD_A, unclearLines: [] }]);
+    expect(unreadable.states).toEqual({ 1: "failed", 2: "read" });
+    const html = renderToStaticMarkup(React.createElement(CardsReview, {
+      controller: unreadable.controller, ticket: unreadable.ticket, ui: { ...emptyUi, reading: unreadable.states }, people, lines: {}, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {},
+    }));
+    expect(html).toContain("This card couldn&#x27;t be read. Please type it.");
+    // The reader's "too-many-pixels" is the same on a card: left for typing, in the card's own words, never the pick problem.
+    const pixels = await readWith([Object.assign(new Error("too-many-pixels"), {}), { status: "read", text: CARD_A, unclearLines: [] }]);
+    expect(pixels.states).toEqual({ 1: "failed", 2: "read" });
+    const pixelsHtml = renderToStaticMarkup(React.createElement(CardsReview, {
+      controller: pixels.controller, ticket: pixels.ticket, ui: { ...emptyUi, reading: pixels.states }, people, lines: {}, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {},
+    }));
+    expect(pixelsHtml).toContain("This card couldn&#x27;t be read. Please type it.");
+    expect(pixelsHtml).not.toContain("megapixels");
   });
 
   it("a line this Mac couldn't read clearly keeps its words only as a flagged suggestion to check", async () => {
@@ -175,7 +190,11 @@ describe("the review page", () => {
     const html = render(controller, null);
     expect(html).toContain("Read visitor cards");
     expect(html).toContain("Choose card photos");
-    expect(html).toContain("discards these cards right away");
+    // Kept until the leader discards them or quits Ozzie (audit item 20), and said so before any photo is chosen.
+    expect(html).toContain(KEPT_BODY.replaceAll("'", "&#x27;"));
+    for (const end of KEPT_ENDS) expect(html).toContain(`<li>${end.replaceAll("'", "&#x27;")}</li>`);
+    expect(html).toContain(KEPT_AFTER);
+    expect(html).not.toContain("discards these cards right away");
     expect(html).toContain("Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.");
     expect(render(controller, null, { recognizer: "not-available" })).toContain("This Mac can&#x27;t read card text, so please type each card.");
     expect(html).not.toContain("Getting this Mac ready");
@@ -372,12 +391,15 @@ describe("photos, controls and what is announced", () => {
     const reply = frameOf([1, PNG], [2, jpeg]);
     const files = cardPhotoFiles(reply.buffer)!;
     expect(files.map(f => [f.name, f.type, f.size])).toEqual([["Card 1.png", "image/png", PNG.byteLength], ["Card 2.jpg", "image/jpeg", jpeg.byteLength]]);
+    // An iPhone photo (HEIC) is kind 3 (src-tauri card_picker.rs).
+    const heic = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
+    expect(cardPhotoFiles(frameOf([3, heic], [1, PNG]).buffer)!.map(f => [f.name, f.type, f.size])).toEqual([["Card 1.heic", "image/heic", heic.byteLength], ["Card 2.png", "image/png", PNG.byteLength]]);
     expect(new Uint8Array(await files[1]!.arrayBuffer())).toEqual(jpeg);
     expect(cardPhotoFiles(reply)).toHaveLength(2);
     expect(cardPhotoFiles(new ArrayBuffer(0))).toEqual([]);
     // Anything that isn't the Mac's reply opens nothing.
     for (const bad of [
-      frameOf([3, PNG]), frameOf([0, PNG]), frameOf([1, new Uint8Array(0)]), frameOf([1, PNG]).slice(0, 9), new Uint8Array([1, 0, 0]),
+      frameOf([4, PNG]), frameOf([0, PNG]), frameOf([1, new Uint8Array(0)]), frameOf([1, PNG]).slice(0, 9), new Uint8Array([1, 0, 0]),
       frameOf(...Array.from({ length: 9 }, () => [1, PNG] as [number, Uint8Array])), new Uint8Array([1, 0x00, 0x80, 0x00, 0x01, 137]),
     ]) expect(cardPhotoFiles(bad.buffer.slice(bad.byteOffset, bad.byteOffset + bad.byteLength)), String(bad.slice(0, 6))).toBeNull();
     for (const bad of [null, undefined, "photos", [1, 2, 3], { 0: 1 }]) expect(cardPhotoFiles(bad)).toBeNull();
@@ -405,12 +427,14 @@ describe("photos, controls and what is announced", () => {
     const cancelled = await run(async () => new ArrayBuffer(0));
     expect([cancelled.controller.status, cancelled.chosen, cancelled.refused]).toEqual(["closed", [], []]);
     for (const [code, words] of [
-      ["not-a-photo", "That isn&#x27;t a photo Ozzie can read. Choose a PNG or JPEG picture of each card."],
-      ["too-large", "That photo is over 8 MB. Choose PNG or JPEG photos of 8 MB or less."],
+      ["not-a-photo", "That isn&#x27;t a photo Ozzie can read. Choose a PNG, JPEG or HEIC (iPhone photos) picture of each card."],
+      ["too-large", "That photo is over 8 MB. Choose photos of 8 MB or less: PNG, JPEG or HEIC (iPhone photos)."],
       ["too-much-together", "Those photos are over 24 MB together. Choose fewer at a time."],
       ["too-many", "That&#x27;s more than 8 photos. Choose up to 8 at a time."],
       ["unavailable", "The window for choosing photos couldn&#x27;t open. Try again."],
-      ["something-new", "Those photos couldn&#x27;t be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each."],
+      // Native's own code for a picture over 40 million pixels (a 48-megapixel iPhone photo), said as such.
+      ["too-many-pixels", "That photo is larger than Ozzie can read (over 40 megapixels). On an iPhone, take a new photo of the card at the usual size, or take a screenshot of the photo."],
+      ["something-new", "Those photos couldn&#x27;t be opened. Choose PNG, JPEG or HEIC (iPhone photos): up to 8 at a time, 8 MB each."],
     ] as const) {
       const r = await run(() => Promise.reject(code));
       const problem = code === "something-new" ? "unreadable" : code;
@@ -428,12 +452,12 @@ describe("photos, controls and what is announced", () => {
     expect([busy.controller.status, busy.refused]).toEqual(["closed", []]);
   });
 
-  it("still refuses anything but PNG and JPEG in the review itself, with the same message", async () => {
+  it("still refuses anything but PNG, JPEG and HEIC in the review itself, with the same message", async () => {
     for (const file of [new File(["# notes"], "README.md", { type: "text/markdown" }), new File(["<svg/>"], "visitor-a.svg", { type: "image/svg+xml" })]) {
       const controller = new CardReviewController("fictional-test", { foreground: () => true, createURL: () => "blob:x", revokeURL() {}, decode: async () => true });
       const ticket = controller.choose(() => {})!;
       expect(await controller.select(ticket, [file])).toBe("invalid");
-      expect(renderPage(controller, null)).toContain("Those photos couldn&#x27;t be opened. Choose PNG or JPEG photos: up to 8 at a time, 8 MB each.");
+      expect(renderPage(controller, null)).toContain("Those photos couldn&#x27;t be opened. Choose PNG, JPEG or HEIC (iPhone photos): up to 8 at a time, 8 MB each.");
     }
   });
 
@@ -482,4 +506,77 @@ describe("photos, controls and what is announced", () => {
     expect(found.length).toBeGreaterThanOrEqual(3);
     for (const region of found) for (const word of CARD_WORDS) expect(region, region).not.toContain(word);
   });
+});
+
+describe("cards are kept until the leader discards them or quits Ozzie (audit item 20)", () => {
+  /** A window that records its listeners, so the test can say "the leader switched apps", "the screen locked", "Ozzie quit". */
+  const fakeWindow = () => {
+    const on = new Map<string, () => void>();
+    return { on, addEventListener: (t: string, l: () => void) => { on.set(t, l); }, removeEventListener: (t: string) => { on.delete(t); } };
+  };
+  it("switching apps, hiding the window or the page leaving the screen never discards them; the page going away (quitting) does", async () => {
+    const { controller } = await openReview(2);
+    const win = fakeWindow();
+    const unbind = bindKeep(controller, win as never);
+    // Only the page going away is listened for: no blur, focus or visibility handler can close the review.
+    expect([...win.on.keys()]).toEqual(["pagehide"]);
+    expect(controller.status).toBe("active");
+    expect(cardsOf(controller)).toHaveLength(2);
+    win.on.get("pagehide")!();
+    expect(controller.status).toBe("closed");
+    expect(cardsOf(controller)).toEqual([]);
+    unbind();
+    expect(win.on.size).toBe(0);
+    // The images the page gives the review always say Ozzie is in front, so the core rule never closes it on its own.
+    expect(keptImages().foreground()).toBe(true);
+  });
+
+  it("says what now happens, in plain words, and asks once before discarding", async () => {
+    // The veil follows the window being on screen (window-visible.ts: the page's visibility), which a minimized window
+    // isn't (review G).
+    expect(KEPT_BODY).toBe("These cards stay in Ozzie's memory while it is open: switching to another app, going to another page or closing the window keeps them. If the window was closed or minimized, the screen locked or the Mac slept, they wait behind Show the cards. They end when:");
+    // Exactly when they end, and which of those ask first (review P, M1 and L4): the app menu's Quit Ozzie and Command-Q,
+    // an update, a switch of church and Disconnect ask (a first sign-in keeps them: test/cards-church.test.ts); signing out of the Mac, restarting or shutting it down and the Dock's Quit don't.
+    expect(KEPT_ENDS).toEqual([
+      "You choose Discard these cards.",
+      "You choose Quit Ozzie or press Command-Q. Ozzie asks first.",
+      "You choose Update Ozzie and reopen it. Ozzie asks first.",
+      "Ozzie switches to another church, or you disconnect Planning Center. Ozzie asks first.",
+      "You sign out of this Mac, restart or shut it down, choose Quit from the Dock, or Ozzie stops any other way. These don't ask.",
+    ]);
+    expect(KEPT_AFTER).toBe("Keep your original photos. Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.");
+    const { controller, ticket } = await openReview(2);
+    const asked = renderToStaticMarkup(React.createElement(CardsReview, {
+      controller, ticket, ui: emptyUi, people, lines: {}, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {}, askingToDiscard: true,
+    }));
+    expect(asked).toContain(DISCARD_ASK(2));
+    expect(DISCARD_ASK(2)).toBe("Discard these 2 cards? Nothing from them is kept anywhere.");
+    expect(asked).toContain(">Yes, discard them</button>");
+    expect(asked).toContain(">Keep them</button>");
+    expect(veiledText(3)).toBe("3 visitor cards are still open, kept in memory only. They're hidden because Ozzie's window was off screen.");
+    expect(SHOW_CARDS).toBe("Show the cards");
+  });
+
+  it("App keeps the page mounted once opened, hidden on other pages and during setup, and hears only how many cards are open", () => {
+    const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain('{(page === "cards" || cardsOpened) && <div hidden={showSetup || page !== "cards"} className="cards-kept">');
+    expect(app).toContain("onScreen={visible} onOpenCards={setOpenCards}");
+    const page = readFileSync(new URL("../src/cards-page.tsx", import.meta.url), "utf8");
+    expect(page).not.toContain("bindForeground");
+  });
+
+  it("their text stays out of every way off this Mac: nothing that sends anything reaches the cards' code", async () => {
+    const { ALL, NATIVE_COMMANDS, names, reach, source } = await import("../../../core/test/stays-on-this-mac-imports.js");
+    const CARDS = (p: string) => p === "product/desktop/src/cards-page.tsx" || p.startsWith("product/src/card-review/") || p.startsWith("core/src/card-review/") || p === "core/src/card-fields.ts";
+    const SENDING = ["ask_ozzie", "reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect",
+      "save_shortcuts_check", "speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center", "phone_notice_test", "ledger_admit", "ledger_event", "ledger_transition"];
+    const boundary = ALL.filter(p => !CARDS(p) && (SENDING.some(c => names(source(p), c)) || p.startsWith("core/src/harness/") || p.startsWith("core/mcp/")));
+    expect(boundary.length).toBeGreaterThan(5);
+    expect(boundary.flatMap(p => [...reach(p)].filter(CARDS).map(c => `${p} → ${c}`))).toEqual([]);
+    // The cards page names only the card reader's and the photo window's commands.
+    const named = NATIVE_COMMANDS.filter(c => names(source("product/desktop/src/cards-page.tsx"), c)).sort();
+    expect(named).toEqual(["cancel_card_reading", "choose_card_photos", "prepare_card_reader", "read_card_text"]);
+    // Only App.tsx imports the page.
+    expect(ALL.filter(p => !CARDS(p) && [...reach(p, true)].includes("product/desktop/src/cards-page.tsx") && p !== "product/desktop/src/App.tsx" && p !== "product/desktop/src/main.tsx")).toEqual([]);
+  }, 30_000); // reads the whole source tree; slow when the Mac is busy
 });

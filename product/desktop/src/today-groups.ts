@@ -6,9 +6,9 @@
 //     while keeping an eye on things, Sunday not checked yet, or access Ozzie doesn't have.
 //   Ready to review: work Ozzie prepared that waits for the person to read: a briefing, a written
 //     summary, a drafted note.
-//   In progress: work under way that isn't waiting on the person. What Ozzie keeps an eye on (with any
-//     problem, such as a missed check, on the same card), and requests sent in Planning Center that are
-//     waiting for an answer.
+//   In progress: work under way that isn't waiting on the person. The regular Sunday check, while it runs (with
+//     a check it missed on the same card), what else Ozzie keeps an eye on (with any problem, such as a missed
+//     check, on the same card), and requests sent in Planning Center that are waiting for an answer.
 //
 // The group follows from an item's state alone, never from the kind of finding, so new kinds land in
 // the right group without changes here. Each item is in exactly one group and counts once; counts are
@@ -18,11 +18,10 @@
 // Sunday's decisions show once, on the Sunday card. A Keep Sunday covered report about the Sunday on the
 // card, read by the card's own check or an older one, is the same matter: it is folded into the card,
 // which says Ozzie noticed it, what changed, and how many notes are ready on the Sunday page. The AI's
-// write-up of that Sunday restates the decisions, so it goes on the card too, folded away until asked
-// for. A note the AI drafted is prepared work of its own in Ready to review, named as a drafted note and
-// never repeating the decisions. A report about another Sunday, or read by a newer check than the card's,
-// is its own item. Once nothing on Sunday needs a decision, the folded report and what was written for it
-// leave Today.
+// write-up of that run (audit item 6) leads the card, or the card says quietly why there is none. A write-up
+// never moves an item between groups: where an item goes follows from the fixed check alone. A report about
+// another Sunday, or read by a newer check than the card's, is its own item. Once nothing on Sunday needs a
+// decision, the folded report and its write-up leave Today.
 //
 // Sunday's count is one number wherever it shows (the sidebar, the Sunday card, the Sunday page): things
 // to decide as the Sunday page shows them (core sunday-brief `sundayShownCount`), meaning Services findings,
@@ -32,7 +31,7 @@ import type { AttentionFinding, Message } from "../../../core/src/attention-impo
 import type { Responsibility } from "../../../core/src/harness/responsibilities.js";
 import { addDays, DAY_MS, weekdayOf } from "../../../core/src/harness/responsibilities.js";
 import { isTimeZone, localDate, localDay } from "../../../core/src/church-time.js";
-import type { NoticedItem, RunnerView } from "./responsibility-runner.js";
+import type { NoticedItem, RunnerView, WriteUp } from "./responsibility-runner.js";
 import type { KeyValueStore } from "./proactive.js";
 
 export type GroupId = "attention" | "review" | "progress";
@@ -47,13 +46,15 @@ export const CAN_SET_ASIDE: Readonly<Record<GroupId, boolean>> = Object.freeze({
 /** What a card shows. Rendering only: the group comes from `state`. */
 export type TodaySubject =
   | { type: "email"; finding: AttentionFinding }
-  /** `noticed`: the Keep Sunday covered report folded into the card, if any; `summary`: the AI's write-up for it. */
-  | { type: "sunday"; decisions: number; noticed: NoticedItem | null; summary: string | null }
+  /** `noticed`: the Keep Sunday covered report folded into the card, if any; `writeup`: its run's write-up, or why there is none. */
+  | { type: "sunday"; decisions: number; noticed: NoticedItem | null; writeup: WriteUp | null }
   | { type: "sunday-unchecked" }
+  /** Planning Center isn't connected and the fictional example isn't on: what to do next, never invented items (audit item 2). */
+  | { type: "connect" }
   | { type: "noticed"; item: NoticedItem }
-  /** A note the AI drafted for a report folded into the Sunday card (`ready.summary` is on the card, so null here). */
-  | { type: "prepared"; item: NoticedItem; ready: Written }
   | { type: "watching"; responsibility: Responsibility; notes: NoticedItem[] }
+  /** The regular Sunday check (proactive.ts), once it can run: how often, when it last and next looks, what it missed. */
+  | { type: "regular"; check: RegularCheck }
   | { type: "answers"; positions: string[] };
 export interface TodayItem {
   /** Name-free and stable: what set-aside and first-seen times are kept by on this Mac. */
@@ -66,9 +67,6 @@ export interface TodayItem {
   subject: TodaySubject;
 }
 
-/** A summary or a drafted note the AI wrote, kept in memory on this Mac. */
-export interface Written { summary: string | null; draft: string | null }
-
 /** The Sunday as the latest check read it, with the person's own decisions applied. */
 export interface TodaySunday {
   plan_id: string;
@@ -79,8 +77,20 @@ export interface TodaySunday {
   /** Positions with a request Planning Center records as sent and not yet accepted. */
   answers: string[];
 }
+/**
+ * The regular Sunday check as Today shows it (audit item 24), from What runs automatically's schedule. Times are ISO;
+ * `missed`: when each scheduled check it missed in the last day was due (Ozzie closed or this Mac asleep), newest first.
+ */
+export interface RegularCheck {
+  ready: boolean; paused: boolean; running: boolean; intervalMinutes: number; runOnLaunch: boolean;
+  last: { at: string; ok: boolean } | null; next: string | null; missed: string[];
+}
 export interface TodayInput {
   now: string;
+  /** The regular Sunday check; null where it isn't shown (the fictional example, or no schedule). */
+  regular?: RegularCheck | null;
+  /** Planning Center isn't connected (and the example isn't on): Today asks for it in place of the unchecked Sunday. */
+  notConnected?: boolean;
   /** The fictional email and calendar import, shown at its own clock. */
   attention: { findings: readonly AttentionFinding[]; messages: readonly Message[]; evaluated_at: string; zone: string } | null;
   /** null: Sunday hasn't been checked (in this run of the app). */
@@ -101,10 +111,10 @@ const ms = (iso: string) => Date.parse(iso);
 /** An id in the characters kept on this Mac (an import's finding id is JSON). */
 const safeId = (raw: string) => raw.replace(/[^\w:.-]+/gu, "_").slice(0, 200);
 
-/** Whether a noticed report waits for review (something prepared) or needs a decision. */
-export function reportState(item: NoticedItem, prepared?: Written): ItemState {
+/** Whether a noticed report waits for review (a briefing, or notes the check prepared) or needs a decision. Never from a write-up. */
+export function reportState(item: NoticedItem): ItemState {
   if (item.kind === "briefing") return "prepared";
-  return prepared?.summary || prepared?.draft || (item.drafts ?? 0) > 0 ? "prepared" : "needs-decision";
+  return (item.drafts ?? 0) > 0 ? "prepared" : "needs-decision";
 }
 
 /**
@@ -139,15 +149,13 @@ export function todayItems(input: TodayInput): TodayItem[] {
   const noticed: TodayItem[] = [];
   for (const [rid, item] of reports) {
     if (!current(rid)) continue;
-    const written = view?.prepared[item.id];
-    // About the Sunday on the card: the card carries its decisions, notes and write-up; a drafted note is its own item.
+    // About the Sunday on the card: the card carries its decisions, notes and write-up.
     if (onSundayCard(item, input.sunday)) {
       if (input.sunday.decisions === 0) continue;
       if (!foldedIntoSunday || item.at > foldedIntoSunday.at) foldedIntoSunday = item;
-      if (written?.draft) noticed.push({ id: `prepared:${item.id}`, state: "prepared", since: item.at, subject: { type: "prepared", item, ready: { summary: null, draft: written.draft } } });
       continue;
     }
-    noticed.push({ id: `noticed:${item.id}`, state: reportState(item, written), since: item.at, subject: { type: "noticed", item } });
+    noticed.push({ id: `noticed:${item.id}`, state: reportState(item), since: item.at, subject: { type: "noticed", item } });
   }
 
   if (input.attention) {
@@ -157,11 +165,12 @@ export function todayItems(input: TodayInput): TodayItem[] {
       items.push({ id: `email:${safeId(finding.id)}`, state: "needs-decision", since: received ?? finding.imported_at, clock: { now: evaluated_at, zone }, subject: { type: "email", finding } });
     }
   }
-  if (!input.sunday) items.push({ id: "sunday-unchecked", state: "needs-you", since: null, subject: { type: "sunday-unchecked" } });
+  if (!input.sunday) items.push(input.notConnected ? { id: "connect:planning-center", state: "needs-you", since: null, subject: { type: "connect" } }
+    : { id: "sunday-unchecked", state: "needs-you", since: null, subject: { type: "sunday-unchecked" } });
   else if (input.sunday.decisions > 0) {
     const id = `sunday:${input.sunday.plan_id}`;
-    const summary = foldedIntoSunday ? view?.prepared[foldedIntoSunday.id]?.summary ?? null : null;
-    items.push({ id, state: "needs-decision", since: seen(id), subject: { type: "sunday", decisions: input.sunday.decisions, noticed: foldedIntoSunday, summary } });
+    const writeup = foldedIntoSunday ? view?.writeups[foldedIntoSunday.id] ?? null : null;
+    items.push({ id, state: "needs-decision", since: seen(id), subject: { type: "sunday", decisions: input.sunday.decisions, noticed: foldedIntoSunday, writeup } });
   }
   items.push(...noticed);
   for (const [rid, item] of access) {
@@ -170,6 +179,10 @@ export function todayItems(input: TodayInput): TodayItem[] {
     items.push({ id: `noticed:${item.id}`, state: "needs-you", since: item.at, subject: { type: "noticed", item } });
   }
 
+  // Always on once it can run, so it leads what's in progress; before then the group says what starts it.
+  if (input.regular && (input.regular.ready || input.regular.paused)) {
+    items.push({ id: "regular:sunday-check", state: "under-way", since: null, subject: { type: "regular", check: input.regular } });
+  }
   for (const r of view?.items ?? []) {
     if (r.status === "ended") continue;
     const notes = (view?.noticed ?? []).filter(i => i.responsibility_id === r.id && NOTE.has(i.kind) && !(i.kind === "couldnt-check" && i.access)
@@ -240,6 +253,76 @@ export function backText(until: string, now: string, zone: string): string {
   return days < 7 ? `Back ${weekday}` : `Back ${weekday}, ${new Date(until).toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: z })}`;
 }
 
+const every = (minutes: number) => minutes === 60 ? "every hour" : minutes % 60 === 0 ? `every ${minutes / 60} hours` : `every ${minutes} minutes`;
+const at = (iso: string, now: string, zone: string) => localDate(iso, zoneOr(zone)) === localDate(now, zoneOr(zone)) ? clock(iso, zone)
+  : `${new Date(iso).toLocaleDateString("en-US", { weekday: "short", timeZone: zoneOr(zone) })} ${clock(iso, zone)}`;
+/**
+ * What the regular Sunday check is doing, in one line (audit item 24): "Checks Planning Center every hour while Ozzie is
+ * open. Last checked 9:06 AM. Next check 10:06 AM."
+ */
+export function regularLine(c: RegularCheck, now: string, zone: string): string {
+  const how = `Checks Planning Center ${every(c.intervalMinutes)} while Ozzie is open${c.runOnLaunch ? ", and when it opens" : ""}.`;
+  const last = c.last ? ` Last checked ${at(c.last.at, now, zone)}${c.last.ok ? "" : ", but that check couldn't finish"}.` : " Not checked yet.";
+  const next = c.paused ? " Paused: nothing runs until you resume it in What runs automatically." : c.running ? " Checking now." : c.next ? ` Next check ${at(c.next, now, zone)}.` : "";
+  return `${how}${last}${next}`;
+}
+/** A scheduled check missed in the last day, said plainly with when, and when it looked again if it has. */
+export function regularMissedText(c: RegularCheck, now: string, zone: string): string | null {
+  const due = c.missed[0];
+  if (!due) return null;
+  const others = c.missed.length > 1 ? ` and ${c.missed.length - 1} other ${c.missed.length === 2 ? "time" : "times"}` : "";
+  const after = c.last && ms(c.last.at) > ms(due) ? ` It checked again at ${at(c.last.at, now, zone)}.` : " It checks again when it can.";
+  return `A check was due at ${at(due, now, zone)}${others}, but Ozzie wasn't running or this Mac was asleep.${after}`;
+}
+/** In progress with nothing in it: what would start something, never a pointer to Ask (audit item 4). */
+export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean): string {
+  if (example) return "Nothing runs in the fictional example.";
+  if (regular && !regular.ready) return "Nothing runs yet. The regular Sunday check starts once Planning Center is connected and a Sunday is chosen; Keep Sunday covered and other jobs start when you set them up.";
+  return "Nothing is running. Keep Sunday covered and other jobs start when you set them up in What runs automatically.";
+}
+
+/** One decision Today names (audit item 17): its words, the Sunday card it opens, and whether that card lists people. */
+export interface DecisionLine { key: string; text: string; people: boolean; count?: number }
+/** At most this many decisions are named on Today; the rest are counted, "and 2 more on Sunday". */
+export const DECISIONS_NAMED = 5;
+type Decided = { finding: { key: string; kind: string; tone: string; position?: { name: string; interval: { starts_at: string } | null }; remaining?: number;
+  people?: { suggestions: readonly unknown[]; conflicts: readonly unknown[] }; check?: string | undefined } ; state: string };
+const more = (n: number) => n === 1 ? "1 more person needed" : `${n} more people needed`;
+/**
+ * The Sunday decisions Today names, in the Sunday page's order: role, how many still needed, when, and how many on the
+ * team are clear for that time. Counts and role names only: never a person's name, never ranked or scored. Rooms and
+ * follow-ups that need a decision are named by what they are. `named` is at most DECISIONS_NAMED; `more` the rest.
+ */
+export function decisionLines(items: readonly Decided[], ops: { rooms: number; followUps: number }, zone: string): { named: DecisionLine[]; more: number } {
+  const z = zoneOr(zone);
+  const at = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: z });
+  const lines: DecisionLine[] = items.filter(i => i.state !== "resolved" && i.finding.tone === "decision").map(({ finding: f }) => {
+    const role = f.position?.name ?? "A role";
+    const when = f.position?.interval ? at(f.position.interval.starts_at) : "this Sunday";
+    switch (f.kind) {
+      case "needs-people": {
+        const clear = f.people?.suggestions.length ?? 0;
+        const team = clear === 0 ? "no one else on the team is clear" : clear === 1 ? "1 on the team is clear" : `${clear} on the team are clear`;
+        return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}, ${when}. ${team.charAt(0).toUpperCase()}${team.slice(1)} for that time.`,
+          people: clear + (f.people?.conflicts.length ?? 0) > 0 };
+      }
+      case "too-few-confirmed": return { key: f.key, text: `${role}: fewer confirmed people than your rule asks, ${when}.`, people: false };
+      // As Planning Center People shows it (core kids-rules.ts `check`), never whose (review P, L7).
+      case "background-check": return { key: f.key, people: false, text: f.check === "none-current" ? `${role}: someone scheduled for ${when} has no current background check on file.`
+        : f.check === "expires-before-sunday" ? `${role}: a background check on file expires before ${when}.`
+          : `${role}: a background check is missing or expires before ${when}.` };
+      case "lead-missing": return { key: f.key, text: `${role}: no one is scheduled to lead, ${when}.`, people: false };
+      default: return { key: f.key, text: `${role}: needs a decision, ${when}.`, people: false };
+    }
+  });
+  // Rooms and follow-ups are named together, each line standing for as many decisions as it counts.
+  if (ops.rooms) lines.push({ key: "rooms", text: ops.rooms === 1 ? "A room has overlapping bookings to review." : `${ops.rooms} room booking overlaps to review.`, people: false, count: ops.rooms });
+  if (ops.followUps) lines.push({ key: "follow-ups", text: ops.followUps === 1 ? "A follow-up has no owner and is past due." : `${ops.followUps} follow-ups have no owner and are past due.`, people: false, count: ops.followUps });
+  const named = lines.slice(0, DECISIONS_NAMED);
+  const total = lines.reduce((n, l) => n + (l.count ?? 1), 0);
+  return { named, more: total - named.reduce((n, l) => n + (l.count ?? 1), 0) };
+}
+
 /** The count beside a group's heading: items, never people. */
 export const countText = (n: number) => `${n} ${n === 1 ? "item" : "items"}`;
 
@@ -250,7 +333,7 @@ export const countText = (n: number) => `${n} ${n === 1 ? "item" : "items"}`;
 export const sundayCount = (open: { decisions: number } | null) => open?.decisions ?? 0;
 export const sundayCountText = (n: number) => `${n} ${n === 1 ? "thing" : "things"} to decide`;
 
-/** Notes ready on the Sunday page for a report folded into the Sunday card: its notes, less the one the AI drafted (that one is its own item). */
+/** Notes ready on the Sunday page for a report folded into the Sunday card (less one an older version counted as the AI's). */
 export const pageNotes = (item: NoticedItem) => Math.max(0, (item.drafts ?? 0) - (item.drafted ? 1 : 0));
 export const notesReadyText = (n: number) => `Ozzie has ${n === 1 ? "a note" : `${n} notes`} ready for these on the Sunday page. Nothing has been sent.`;
 

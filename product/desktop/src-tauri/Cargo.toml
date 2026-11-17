@@ -1,6 +1,6 @@
 [package]
 name = "ozzie-desktop"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
@@ -38,6 +38,15 @@ objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSWindow", "NSWorkspace"] }
 # Already locked through tauri: O_NOFOLLOW and O_NONBLOCK when a chosen card photo is opened.
 libc = "=0.2.191"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# tests/app_menu.rs reads the app menu back from AppKit (already locked; these features come with tauri's menus).
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"] }
+
+[[test]]
+name = "app_menu"
+# AppKit menus can only be made on the main thread and the test harness runs tests on others, so this one has its own main.
+harness = false
 
 [features]
 default = ["custom-protocol"]

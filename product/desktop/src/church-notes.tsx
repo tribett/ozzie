@@ -15,7 +15,7 @@
 // check on Ozzie's own code, not a sandbox).
 import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
-import { MAX_HITS, occurrenceOf, searchNotes, sectionFor, sectionName, type NoteRange, type Notes, type NoteSection } from "../../../core/src/sources/notes.js";
+import { MAX_HITS, occurrenceOf, pointerState, searchNotes, sectionName, titleCount, type NoteRange, type Notes, type NoteSection } from "../../../core/src/sources/notes.js";
 import { MAX_LABEL, NOTE_FINDING_KINDS, type NoteAttachment, type NotesSource } from "../../../core/src/sources/types.js";
 import { GUESSED_LETTERS_NOTES, LINES_CUT, LONG_LINES_CUT, NOTE_KIND_WORDS, NOTES_FRAME, readFrom } from "../../../core/src/sources/words.js";
 import { plainLine } from "../../../core/src/sources/text.js";
@@ -24,7 +24,10 @@ import { Icon } from "./icons.js";
 
 export { TOO_MANY_POINTERS };
 export const NOTES_TITLE = "Notes";
-export const NOTES_BODY = "Add your church's own notes, such as a child safety policy, and Ozzie shows them here in sections, with a find box: a new section starts at each # heading, or, in a file with no headings, at each blank line. You can point to a section from the Sunday cards you choose.";
+/** The one sentence before the button (audit item 26); how notes are split and saved is folded under HOW_NOTES. */
+export const NOTES_BODY = "Add your church's own notes, such as a child safety policy, to read and search them here and point to a section from the Sunday cards you choose.";
+export const HOW_NOTES = "How to save notes";
+export const NOTES_SECTIONS = "Ozzie shows notes in sections, with a find box: a new section starts at each # heading, or, in a file with no headings, at each blank line.";
 export const AS_WRITTEN = "Notes are shown as written, except that hidden format characters are removed, tabs and other control characters become spaces, and a line over 2,000 characters or a file over 20,000 lines is cut, which the notes then say.";
 export const ADD_NOTES = "Add notes from this Mac";
 export const ADD_NOTES_HELP = "Choose a file saved as plain text (.txt) or Markdown (.md), up to 1 MB. In Word choose File › Save As and pick Plain Text. In Pages choose File › Export To › Plain Text.";
@@ -50,6 +53,9 @@ export const removeNotesConfirm = (label: string) => `Remove “${label}” from
 export const sectionsShown = (shown: number, all: number) => `Showing the first ${shown} of ${all.toLocaleString("en-US")} sections.`;
 /** A section once pointed to from Sunday that is no longer in the file (review V, L3). */
 export const goneNotice = (name: string) => `“${name}” was shown on Sunday, but it is no longer in these notes. If a section with that title comes back, Ozzie shows it there again.`;
+/** A pointed title now shared by a different number of sections (audit item 30): Ozzie stops showing it on Sunday rather than guess. */
+export const changedNotice = (title: string, count: number) =>
+  `These notes changed: there ${count === 1 ? "is now 1 section" : `are now ${count.toLocaleString("en-US")} sections`} called “${title}”. Choose again, so Sunday shows the one you mean.`;
 /** What the page lays out at once, as for a list's table (church-lists-page.tsx); "Show more" lays out more. */
 export const SHOWN_SECTIONS = 200;
 export const SHOWN_CHARACTERS = 150_000;
@@ -124,7 +130,8 @@ export const NotesFound = memo(function NotesFound({ notes, query }: { notes: No
       const title = hits.find(h => h.line === "title");
       const name = named(notes, index);
       return <div key={index} className="note-found">
-        <h3 className="note-title">{title ? <><Marked text={section.title} ranges={title.ranges} />{name.slice(section.title.length)}</> : name}</h3>
+        {/* A heading found is shown as written, every word of it, since that is what was searched. */}
+        <h3 className="note-title">{title ? <><Marked text={section.written ?? section.title} ranges={title.ranges} />{name.slice(section.title.length)}</> : name}</h3>
         <div className="note-text">{hits.filter(h => h.line !== "title").map(h => <div key={String(h.line)} className="note-line">
           <Marked text={section.lines[h.line as number]!} ranges={h.ranges} /></div>)}</div>
       </div>;
@@ -148,25 +155,27 @@ const samePointer = (a: NoteAttachment, b: NoteAttachment) =>
  * The pointers once the leader chooses for one section (its title and which occurrence of it): its own pointer
  * replaced by the choice ("team:<id>", "kind:<kind>", or "" for not on Sunday); every other pointer as it was.
  */
-export function choosePointer(attachments: readonly NoteAttachment[], title: string, occurrence: number, choice: string): NoteAttachment[] {
+export function choosePointer(attachments: readonly NoteAttachment[], title: string, occurrence: number, choice: string, of?: number): NoteAttachment[] {
   if (choice === KEEP) return [...attachments];
   const [what, target = ""] = choice.split(/:(.*)/su);
-  const which = occurrence > 1 ? { occurrence } : {};
+  // How many sections share the title now, so a later change is said rather than followed (audit item 30).
+  const which = { ...(occurrence > 1 ? { occurrence } : {}), ...(of !== undefined ? { of } : {}) };
   const next: NoteAttachment | null = what === "team" ? { section: title, team_id: target, ...which }
     : what === "kind" ? { section: title, finding_kind: target, ...which } : null;
   return [...attachments.filter(a => !means(a, title, occurrence)), ...(next ? [next] : [])];
 }
 /** Where a section is pointed to from Sunday: nowhere, a team's cards, or the cards about one kind of finding. */
-function AttachChoice({ title, occurrence, attachments, teams, onChange }: {
-  title: string; occurrence: number; attachments: readonly NoteAttachment[]; teams: ReadonlyMap<string, string>;
+function AttachChoice({ title, occurrence, of, attachments, teams, onChange }: {
+  title: string; occurrence: number; of: number; attachments: readonly NoteAttachment[]; teams: ReadonlyMap<string, string>;
   onChange: (change: (now: readonly NoteAttachment[]) => readonly NoteAttachment[]) => void;
 }) {
   const id = useId();
-  const mine = attachments.find(a => means(a, title, occurrence));
+  // A pointer whose title is now shared by a different number of sections names none of them (audit item 30).
+  const mine = attachments.find(a => means(a, title, occurrence) && (a.of === undefined || a.of === of));
   const value = !mine ? "" : "team_id" in mine ? (teams.has(mine.team_id) ? `team:${mine.team_id}` : KEEP) : `kind:${mine.finding_kind}`;
   return <div className="own-field">
     <label className="field-l" htmlFor={id}>{ATTACH_LABEL}</label>
-    <select id={id} className="input own-column" value={value} onChange={e => { const choice = e.target.value; onChange(now => choosePointer(now, title, occurrence, choice)); }}>
+    <select id={id} className="input own-column" value={value} onChange={e => { const choice = e.target.value; onChange(now => choosePointer(now, title, occurrence, choice, of)); }}>
       <option value="">{NOT_ON_SUNDAY}</option>
       {value === KEEP && <option value={KEEP}>{KEEP_CHOICE}</option>}
       {teams.size > 0 && <optgroup label={TEAM_CARDS}>{[...teams].map(([team, name]) => <option key={team} value={`team:${team}`}>{name}</option>)}</optgroup>}
@@ -221,7 +230,8 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
   const save = (edit: Parameters<ChurchSources["updateNotes"]>[1]) => { setProblem(null); void sources.updateNotes(source.id, edit).then(setProblem); };
   const renamed = plainLine(name, MAX_LABEL);
   const count = notes ? Math.min(notes.sections.length, shownCount) : 0;
-  const gone = notes ? source.attachments.filter(a => !sectionFor(notes, a)) : [];
+  const gone = notes ? source.attachments.filter(a => pointerState(notes, a) === "gone") : [];
+  const changed = notes ? source.attachments.filter(a => pointerState(notes, a) === "changed") : [];
   return <section className="find church-list church-notes" aria-labelledby={`${id}-t`}>
     <h2 id={`${id}-t`} className="settings-t">{source.label}</h2>
     <div className="checkline">
@@ -241,6 +251,10 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
     </ul>}
     {gone.map((a, i) => <div key={i} className="note-gone find-next">
       <span className="small">{goneNotice(a.occurrence ? `${a.section} (${a.occurrence})` : a.section)}</span>
+      <button type="button" className="btn btn-quiet btn-sm" onClick={() => save({ attachments: now => now.filter(x => !samePointer(x, a)) })}>{FORGET_POINTER}</button>
+    </div>)}
+    {notes && changed.map((a, i) => <div key={`c${i}`} className="note-gone find-next">
+      <span className="small">{changedNotice(a.section, titleCount(notes, a.section))}</span>
       <button type="button" className="btn btn-quiet btn-sm" onClick={() => save({ attachments: now => now.filter(x => !samePointer(x, a)) })}>{FORGET_POINTER}</button>
     </div>)}
     <div className="own-field">
@@ -266,7 +280,7 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
             <Lines section={section} budget={budgets.get(index) ?? SHOWN_CHARACTERS}
               onMore={() => setBudgets(now => new Map(now).set(index, (now.get(index) ?? SHOWN_CHARACTERS) + SHOWN_CHARACTERS))} />
             {/* A section without a title can't be named on Sunday, so it offers no choice (review V, L2). */}
-            {section.title && <AttachChoice title={section.title} occurrence={occurrenceOf(notes, index)} attachments={source.attachments} teams={teams}
+            {section.title && <AttachChoice title={section.title} occurrence={occurrenceOf(notes, index)} of={titleCount(notes, section.title)} attachments={source.attachments} teams={teams}
               onChange={attachments => save({ attachments })} />}
           </div>}
         </details>)}
@@ -294,12 +308,12 @@ export function ChurchNotes({ sources, state, positions }: {
   return <div className="col church-notes-part">
     <h2 className="h2">{NOTES_TITLE}</h2>
     <p className="lede">{NOTES_BODY}</p>
-    <p className="small">{AS_WRITTEN}</p>
     <div className="row">
       <button type="button" className="btn btn-secondary" disabled={choosing} onClick={choose}>
         {choosing ? <><Icon name="spinner" small spin />Choosing a file…</> : ADD_NOTES}</button>
     </div>
-    <p className="small">{ADD_NOTES_HELP}</p>
+    <details className="listen-more"><summary><Icon name="chev" small />{HOW_NOTES}</summary>
+      <div className="stack-tight"><p className="small">{ADD_NOTES_HELP}</p><p className="small">{NOTES_SECTIONS}</p><p className="small">{AS_WRITTEN}</p></div></details>
     {problem && <p role="alert" className="problem">{problem}</p>}
     {state.sources !== null && state.notes.length === 0 && <p className="small">{NO_NOTES}</p>}
     {state.notes.map(n => <NotesCard key={n.id} source={n} read={state.noteReads.get(n.id)} positions={positions} sources={sources} reading={state.reading}

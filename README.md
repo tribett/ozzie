@@ -27,11 +27,32 @@ invented people). No church data is shown.
   requests (Services plans, positions and schedules, and the upcoming plans
   setup lists to choose from; with your consent, Calendar room bookings,
   People workflow cards, cleared People background checks for people
-  scheduled on kids teams, and Groups events). It never
-  writes, edits or deletes anything in Planning Center. The list of reads is
-  in [docs/build/sunday-capture-contract.md](docs/build/sunday-capture-contract.md).
+  scheduled on kids teams, and Groups events; each only if you turn it
+  on, People forms, Check-Ins and Registrations, below; and, with People
+  access, one person's email addresses or phone numbers when you open a note
+  for them, below). It never
+  writes, edits or deletes anything in Planning Center. The Services, Calendar,
+  People and Groups reads are listed in
+  [docs/build/sunday-capture-contract.md](docs/build/sunday-capture-contract.md);
+  every read, these three and the two below included, is an operation in
+  `core/native-auth/src/source.rs`. For a note's To line Ozzie reads only
+  `/people/v2/people/{id}?include=emails&fields[Person]=child,emails&fields[Email]=address,primary,blocked`
+  (Mail) or
+  `/people/v2/people/{id}?include=phone_numbers&fields[Person]=child,phone_numbers&fields[PhoneNumber]=number,primary,location`
+  (Messages), for that one person (`core/native-auth/src/contact.rs`).
   Signing in, renewing access and disconnecting use Planning Center's standard
   OAuth sign-in endpoints.
+- **People forms, Check-Ins and signups, if you turn them on.** Each is its
+  own choice under Settings › Forms, check-ins and signups. For the People
+  forms you choose to watch, Ozzie reads how many new submissions there are,
+  when each was sent and whom it is for, never a form's answers; those names
+  stay on your Mac like every other name Ozzie reads. Check-Ins and
+  Registrations are read as counts only: how many checked in to each room at
+  last Sunday's times (regular, guest and volunteer, as Planning Center counts
+  them), and how many registered for each upcoming signup against its limit and
+  when registration closes; never who checked in or who registered. These facts
+  are shown on your Mac only: they aren't part of what Ask, AI help or other AI
+  apps can see (`core/src/church-reads/`).
 - **Shows facts with their source and check time.** Each finding says which of
   your church rules it relates to and what it checked. Anything Ozzie is unsure
   about is labelled "Worth a look".
@@ -41,25 +62,76 @@ invented people). No church data is shown.
   never says "adults"), and anyone scheduled on a kids team without a current
   background check on file, or with one that expires before Sunday. A read
   that failed or was refused is listed as not checked, never as "no check".
-- **Drafts, never sends.** Notes are drafts you copy into your own email or
-  phone.
+- **Drafts, never sends.** A note is a draft you copy, or open unsent in your
+  own email app or Messages, and send yourself. When you choose Open in Mail
+  or Open in Messages on a note Ozzie prepared for one person, and Ozzie has
+  People access, it reads that person's email addresses (for Mail) or phone
+  numbers (for Messages) from Planning Center, and whether Planning Center
+  lists them as a child, for that one person only. It uses one address or
+  mobile number only to fill in To on your Mac, keeps it nowhere, and never
+  sends it to AI, other AI apps, Siri or a notice. A person Planning Center
+  lists as a child is never addressed; when someone has several addresses and
+  Planning Center doesn't mark exactly one as primary, or Ozzie can't read
+  one, To is left empty and the note says why. To is filled in only for
+  people a Sunday check of the church Ozzie is using has shown since Ozzie
+  opened, a team's leader included. One note is addressed at a time, with at
+  most 10 reads from Planning Center a minute; while a Sunday check is reading
+  Planning Center, Ozzie doesn't read the address at all, and after 8 seconds
+  Ozzie stops waiting: in both cases the note opens with To empty and says
+  why, and anything read later is dropped
+  (`core/native-auth/src/contact.rs`). Once the note opens, the app it opened
+  in holds it, not Ozzie: an unsent message in an email app stays in its
+  drafts, which your mail account may keep on its server.
+- **"Looks good — I'll send it."** On a note for one person, this marks on
+  your Mac that you said you'd ask them, so Sunday and Today show it, with
+  Undo. Nothing is sent and Planning Center doesn't change.
+- **Open in Planning Center.** Each Sunday card and person row can open that
+  plan or person in Planning Center in your browser. Ozzie changes nothing
+  there.
 - **Learns your corrections as Church rules you can see.** Every finding card
   offers "This isn't right", "Stop flagging this", "Always do this" and, per
   kind of finding, "Always tell me right away" or "Put this in the briefing".
-  Each choice is confirmed with Undo and listed on the Church rules page,
-  where you can delete it. Nothing is learned silently.
+  "This isn't right" first asks what is wrong: only "The role isn't open"
+  (or, on other findings, "This finding is wrong") hides it, until Planning
+  Center changes; "A person's details are wrong" or "Something else" keeps it
+  showing with your note. Each choice is confirmed with Undo and
+  listed on the Church rules page, where you can delete it. Nothing is
+  learned silently.
+- **Says what to do when a read is refused.** When Planning Center doesn't
+  allow a read, the Sunday page says which access could be missing, that a
+  Planning Center administrator at your church can give it, and opens Settings
+  for the next step.
 - **Sorts Today.** Needs your attention, Ready to review and In progress,
   with counts of items (never people), how long each has waited, and "Set
-  aside until tomorrow" for things that can wait.
+  aside until tomorrow" for things that can wait. Today names each of
+  Sunday's decisions (the role, how many it still needs, when, and how many on
+  the team are clear for that time), each with a way straight to its card,
+  and says when the regular Sunday check last looked, when it looks next and
+  whether a check was missed.
+- **Shows your own calendars on Today, if you choose.** Under Settings ›
+  Calendars: Apple Calendar on your Mac (macOS asks you once; only the
+  calendars you tick are read, by a small helper with no network access) and
+  up to 8 private calendar links, such as a Google, Outlook or iCloud
+  calendar's secret iCal address, kept only in your Mac's Keychain. Today
+  shows what is on them today and over the next seven days, and two timed
+  events that overlap. Ozzie never adds, changes or deletes an event. What it
+  reads from your calendars stays on your Mac: it isn't sent to AI help and
+  isn't shared with other AI apps (`core/src/calendar/`,
+  `core/native-auth/src/calendar_link.rs`).
 - **Keeps a record of what happened**, including checks that could not finish:
-  each task, the fixed tools it used and how it ended, never a question,
-  answer or name.
+  each task opens to a short account of what started it, what Ozzie looked
+  at, whether and how often it asked the AI, and how it ended, never a
+  question, answer or name.
 - **Keeps an eye on things when you ask it to.** From Ask Ozzie you can hand
-  it an ongoing job ("Keep an eye on Sunday", room bookings, follow-ups
-  without an owner, group night clashes, a morning briefing). Ozzie shows the
-  plan (schedule, limits, how long) and starts only after you confirm it. It
-  lives in the menu bar and keeps running with the window closed, can open
-  when you log in (off unless you turn it on), checks on schedule, notices
+  it an ongoing job (Keep Sunday covered, room bookings, follow-ups without
+  an owner, group night clashes, a morning briefing). Ozzie shows the plan
+  (schedule, limits, how long) and starts only after you confirm it. Keep
+  Sunday covered runs every week until you stop it, or only until this Sunday
+  if you choose. Ozzie lives in the menu bar and keeps running when you close
+  its window. Setup asks "Start Ozzie when you turn on this Mac?" with Yes
+  chosen (an install set up earlier is asked once, on Today), and Ozzie asks
+  before quitting while checks are on or visitor cards are open. It checks on
+  schedule, notices
   when what it reads in Planning Center has changed since the last check (it
   re-reads and compares; Planning Center doesn't notify it), and comes to you with a discreet notification
   whose text never holds a name or detail, outside quiet hours (9 PM to 7 AM
@@ -71,29 +143,71 @@ invented people). No church data is shown.
 - **Ask by typing or speaking.** The microphone in Ask uses Apple's
   on-device speech recognition only (US English). Your words fill the box;
   nothing is asked until you press Ask, and no audio is kept or sent.
-- **Reads visitor cards on your Mac.** Photos of printed or typed cards are
-  read by Apple's Vision text recognition in a small signed helper (nothing
-  to install), without rewording what was written. Words read with low
-  confidence are flagged; a person checks every card, and the cards are gone
-  when the page closes. Nothing from a card goes to an AI model or into
-  Planning Center.
+- **Reads visitor cards on your Mac.** Photos of printed or typed cards (PNG,
+  JPEG, or HEIC as an iPhone saves them) are read by Apple's Vision text
+  recognition in a small signed helper (nothing to install), without
+  rewording what was written. The helper runs in a sandbox with no network
+  and no file writes. A PNG or JPEG is read under that sandbox alone; only
+  when it reads a HEIC may the helper ask Apple's built-in video decoder
+  service to decode the photo, the one thing outside the helper it may use
+  (`product/desktop/src-tauri/src/local_tools.rs`,
+  `CARD_HEIC_READER_POLICY`). Videos, photo sequences and AVIF pictures are
+  refused, and a photo over 40 megapixels is refused with its own sentence.
+  Words read with low confidence are flagged, and a person checks every card.
+  The cards stay only in Ozzie's memory, never saved, until you discard them,
+  Ozzie closes, Ozzie switches to another church or you disconnect Planning
+  Center. Quitting Ozzie from its menu or with Command-Q asks first when
+  cards are open or checks are on, and so do updating Ozzie, switching
+  churches and disconnecting when cards are open; signing out of this Mac,
+  restarting or shutting it down, or Quit from the Dock, does not ask, and
+  the cards are discarded. Cards read before Planning Center is connected
+  stay when you connect it. After the window was closed or minimized, the
+  screen locked or the Mac slept they wait behind "Show the cards". Names from
+  this Sunday's check are offered beside a card as possible matches only when
+  the check is of the church Ozzie is using; while no church is in use, and
+  while the example is on, none are. Nothing
+  from a card goes to an AI model or into Planning Center.
 - **Shares its last check with other AI apps, if you turn it on.** Off by
   default. Another AI app on the same Mac (for example Claude Desktop) can
   read Ozzie's last saved check through a small read-only server, with
-  placeholders instead of names and no background-check facts. See
+  placeholders instead of names and no background-check facts. Settings ›
+  Other AI apps gives ready-made setup for Claude, Claude Code, Codex, Cursor,
+  VS Code, LM Studio and Gemini CLI, and **Add Ozzie to Claude** hands Claude
+  for Mac a small setup file that Claude asks you to install. See
   [core/docs/mcp.md](core/docs/mcp.md).
+- **Answers "Is Sunday covered?" from Spotlight and Shortcuts, if you turn it
+  on.** Off by default (Settings › Siri and Shortcuts). Ozzie's own actions,
+  "Is Sunday covered", "Open Ozzie's Sunday page" and "Open Ozzie's Today
+  page", run from Spotlight and the Shortcuts app once Ozzie is in your
+  Applications folder and has been opened from there. The answer is
+  counts and times from a small copy of Ozzie's last check, never a name, a
+  role, team or room name or a background check, and answering uses no AI and
+  reads nothing from Planning Center. On macOS 27.2 the newest Siri didn't run
+  these actions when this was checked, so Ozzie promises Spotlight and
+  Shortcuts, not Siri
+  ([docs/adr/0007-siri-actions-app-intents-extension.md](docs/adr/0007-siri-actions-app-intents-extension.md)).
+- **Shows lists and notes your church keeps, if you add them.** A spreadsheet
+  or a published sheet, matched to Sunday cards, and notes split into sections
+  you can find; they stay on your Mac. See
+  [Lists and notes you add](#lists-and-notes-you-add).
 - **Sends a notice to your phone too, if you turn it on.** Off by default.
   Each time Ozzie sends a notice, the same fixed line can also reach your own
   phone through ntfy.sh, a free service Ozzie doesn't run. See
   [A notice on your phone](#a-notice-on-your-phone) for exactly what leaves
   the Mac and who can see it.
+- **Readable.** Body text is 16 px and click areas are at least 44 px; the
+  sidebar keeps its words at every width (below 760 px it becomes a bar with
+  Menu); Ozzie honours the Mac's Increase contrast, Reduce motion and Reduce
+  transparency settings. It has not been tested with VoiceOver.
 - **Works without a connection.** "See the fictional example" shows the app
-  with an invented church.
+  with an invented church, marked "Example church, not real." on every page,
+  with "Leave the example". A Today that isn't connected shows no invented
+  items: it asks you to connect Planning Center or see the example.
 
 ## What Ozzie never does
 
-The full list is in [docs/handoff/NEVER-LIST.md](docs/handoff/NEVER-LIST.md)
-(written when the project was called TableWork). In short, Ozzie never:
+The full list is in [docs/handoff/NEVER-LIST.md](docs/handoff/NEVER-LIST.md).
+In short, Ozzie never:
 
 - sends a message to a church member;
 - writes a sermon, devotional or pastoral teaching;
@@ -106,11 +220,95 @@ The full list is in [docs/handoff/NEVER-LIST.md](docs/handoff/NEVER-LIST.md)
 
 These are not settings. No user, church or plan can switch them off.
 
+## What the AI does, and what fixed logic does
+
+Ozzie uses an AI model in a few narrow places and fixed, tested code
+everywhere else. That is a design choice: facts a church acts on must not
+depend on how a model answers on a given day. The model selects; Ozzie's code
+states.
+
+- **Fixed logic, no AI.** The Sunday findings, the list of who could help
+  with an open role, the notes Ozzie prepares, notices and when they go, the schedules and
+  change checks of the jobs Ozzie keeps an eye on, the morning briefing and
+  Thursday's Sunday Ready brief, Today, calendars, forms, Check-Ins and
+  Registrations, lists and notes, visitor cards (Apple's on-device text
+  recognition, then fixed rules), and the answers Spotlight, Shortcuts and
+  other AI apps get. Each is covered by tests with fixed, invented data, and
+  all of it works with no AI route set up.
+- **The agent loop runs in three places.** A model chooses among 13 read-only
+  tools over Ozzie's last check, reads what they return and may call more, for
+  at most 6 model steps and 10 tool calls per task
+  (`core/src/harness/contract.ts`). It runs for a question in Ask Ozzie, for
+  the write-up of each run of a job Ozzie keeps an eye on, and when you ask
+  Ozzie to look at who could help with an open role on a Sunday card.
+- **Ask Ozzie.** Ask opens only when you choose it. A question about what
+  Ozzie read runs the loop with the procedure
+  `core/skills/answer-from-what-was-read.md`, as a task of its own, and the
+  answer is shown as a card with its sources, check time and the steps taken
+  ("See how this works"). Earlier questions are listed to reopen while Ozzie
+  is open, in memory only. Asking for help or for the visitor-card page,
+  asking Ozzie to keep an eye on something, and questions about kids teams
+  and background checks are answered on your Mac without any AI.
+- **The write-up of an automatic job.** When an AI route is set up and the
+  job's plan allows AI steps, each run also runs that job's procedure through
+  the loop, after the fixed check has decided any notice. The write-up is kept
+  with its run on your Mac and nowhere else (the last five per job): people
+  only as their Planning Center ids, filled in with names when it is shown;
+  role, room, follow-up and group names as Planning Center has them, which can
+  include a person's name if your church typed one there. It is forgotten when
+  the job stops or ends, when Ozzie switches church, when you delete saved
+  checks and whenever Planning Center is disconnected, including one the AI
+  was still writing, and none is shown until Ozzie knows which church it is
+  using. It leads that job's card on Today; What runs automatically shows it
+  under the run. When AI help is set up and a run has none, the card says why,
+  except when you paused the job while it was being written; with no AI route
+  the card shows Ozzie's own check alone. It decides nothing: the findings, the counts and whether a
+  notice goes out come from the fixed checks, and a test shows they are the
+  same with and without it.
+- **Who could help, looked at by the AI.** On an open role's Sunday card,
+  while AI help is set up, "Ask Ozzie to look at who could help" runs
+  `core/skills/who-could-help.md` through the loop. Code narrows what the
+  tools read to that one role at that one service time before the loop
+  starts. When the AI chose facts about the role, the card shows Ozzie's lines
+  for them and everyone the check listed, taken from Ozzie's own list with the
+  same labels, alphabetically, never from the AI's copy, which can be
+  shortened to fit what the AI may read (the card says when it was). It never
+  marks which ones the AI named. Otherwise one line says it had nothing to
+  add, couldn't tell more, or asked for a note, which isn't prepared there.
+- **The model's whole output is a list of fact ids.** Every tool result states
+  its facts with ids, and the model's final answer can only name some of them.
+  Ozzie checks each id and writes every sentence itself from fixed templates
+  (`core/src/harness/verify.ts`, `core/src/harness/compose.ts`).
+- **"Change the wording" is one fixed model call**, not the loop: Ozzie's own
+  draft, with placeholders for names, and one of four fixed choices (warmer,
+  shorter, more casual, more formal). Native code checks the request before it
+  goes, and the reply is used only if it keeps the placeholders and passes
+  Ozzie's checks on it (`core/src/draft-request.ts`,
+  `core/native-auth/src/model.rs`).
+
+How the harness fits together, and how to extend it, is in
+[core/README.md](core/README.md) and
+[core/docs/extending.md](core/docs/extending.md).
+
+## Roadmap
+
+- **Automatic jobs through the loop.** Today a job's findings come from the
+  fixed checks and only its write-up from the loop. Next, the schedule starts
+  the job's procedure, the model chooses the permitted reads for the findings
+  themselves, and the fixed checks stay as the check on its answer.
+- **Procedures a church can add.** Today the six procedures in `core/skills/`
+  are compiled into the app and pinned in native code. A church's own
+  procedure would be checked, shown in full and confirmed once before it runs.
+- **A command-line entry for the core.** Run a check and ask a question
+  against a saved check with any OpenAI-compatible model, without the
+  desktop app.
+
 ## How names stay off AI models
 
 AI is optional. Without it, every check and draft still works. With it, Ozzie
-can reword a draft note, answer a question about the Sunday it checked, and
-summarise what a job it keeps an eye on found.
+can reword a draft note, answer a question about the Sunday it checked, write
+up what a job it keeps an eye on found, and look at who could help with an
+open role.
 
 - **Placeholders, not names.** A draft goes to the model in placeholder form,
   for example "Hi [Volunteer A], could you serve as [Role]?". The model only
@@ -154,9 +352,11 @@ summarise what a job it keeps an eye on found.
   to any AI route or included in the copy shared with other AI apps, not even
   as placeholders (`core/src/kids-rules.ts`, `forModels`).
 - **Names stay on your Mac.** The names Ozzie read from Planning Center are
-  used for display. A saved check (shown, with its original time, when
-  Planning Center can't be reached) keeps the names it showed, in a file only
-  your user account can read.
+  used for display, and an email address or mobile number only to fill in To
+  on a note you open (never kept). A saved check (shown, with its original
+  time, when Planning Center can't be reached) keeps the names it showed, in a
+  file only your user account can read; it never holds an email address or
+  phone number.
 
 ## A notice on your phone
 
@@ -188,7 +388,7 @@ else, even if your Mac's own notifications are turned off for Ozzie:
   Settings shows when the last phone notice went and whether it was sent.
 - **The channel:** `ozzie-` and 160 random bits from the operating system,
   kept in your Mac's Keychain, never in a file, the record of what happened,
-  the recordings Ozzie saves of its checks, or a log. It is shown in Settings
+  the copies Ozzie saves of its checks, or a log. It is shown in Settings
   and put on the clipboard when you copy it. Anyone who learned it could read
   those sentences and could also send your phone a notice that looks like
   Ozzie's; Ozzie's own notices are only these fixed lines and never hold a
@@ -242,6 +442,8 @@ Siri, or put in any notice.
   or not text. It sends nothing about your church. The site in the link, and
   any site that link sends Ozzie on to, sees when it is read, your Mac's
   internet address, and that the request comes from Ozzie. At most 8 links.
+  A published sheet can be read by anyone who has the link. For a list with
+  people's names, use a file on this Mac instead.
 - **Notes:** a file saved as plain text or Markdown, up to 1 MB, that you
   choose in Ozzie's own open panel, read from where it is like a list's file
   (the same places refused). The panel offers plain text, Markdown and PDF
@@ -263,7 +465,9 @@ Siri, or put in any notice.
   card it shows only the title of a section you pointed there (numbered when
   titles repeat), as your church's own notes, not checked by Ozzie. Ozzie never follows notes
   and never compares their words with Planning Center or with anyone's name;
-  the find box searches them on this Mac.
+  the find box searches them on this Mac. If the notes change so that a
+  different number of sections share a title you pointed to, Ozzie shows a
+  notice asking you to choose again instead of following another section.
 - **Matches are yours:** you pick the column that names a team or role and
   match its values to Planning Center teams and positions. Ozzie may suggest a
   team or position with the same name; a suggestion counts only after you
@@ -304,8 +508,13 @@ turned off there).
 
 Requirements:
 
-- macOS 14 or later on Apple Silicon, with the Xcode Command Line Tools
-- Node.js 22.19 or later (`.node-version` names the version we test with)
+- macOS 14 or later on Apple Silicon, with the Xcode Command Line Tools;
+  `pnpm build:desktop` also needs Xcode itself, which builds the Spotlight
+  and Shortcuts actions (without it the tests still run, and the app bundle
+  stops at the missing actions;
+  [ADR 0007](docs/adr/0007-siri-actions-app-intents-extension.md))
+- Node.js 22.23.4, pinned in `.node-version` and `.nvmrc` (the tests refuse
+  to start on Node older than 22.19)
 - pnpm 10
 - Rust 1.99.1 through rustup (`rustup toolchain install 1.99.1`); the crates
   pin it in `rust-toolchain.toml`
@@ -324,6 +533,11 @@ pnpm dev                      # browser walkthrough with invented data
 not signed or notarized. A copy you build yourself opens normally; a copy
 downloaded from elsewhere is blocked by macOS until you allow it under System
 Settings, Privacy & Security.
+
+A few tests need a Mac's own services and are skipped by default. The one
+that reads fictional card pictures with Apple Vision runs with
+`cargo test reads_the_fictional -- --ignored` in `product/desktop/src-tauri`
+(the first run compiles Vision's models for a minute or two).
 
 ### Connect Planning Center
 
@@ -392,22 +606,27 @@ in the open code.
 ## Repository layout
 
 - `core/` — shared logic with no user interface: Sunday coverage findings,
-  operations findings (rooms, follow-ups, group events), the placeholder
-  boundary, church time zones, and safety primitives (authorization broker,
-  egress boundary, ledger). Tested with fixed, invented data.
+  operations findings (rooms, follow-ups, group events), forms, Check-Ins and
+  Registrations facts, calendars, lists and notes, the placeholder boundary,
+  church time zones, and safety primitives (authorization broker, ledger).
+  Tested with fixed, invented data.
 - `core/src/harness/`, `core/skills/` — the question and procedure harness:
   the fixed read-only tools, the closed grammars and pinned texts the native
   check also compiles in, answer verification and the answer composer, two
-  interchangeable loops (one built on the pinned Pi library, one in plain TypeScript), the
-  procedures in plain language, and the ongoing jobs Ozzie can keep an eye on.
+  interchangeable loops (the app runs the one built on the pinned Pi library;
+  the plain TypeScript one passes the same tests and is offered only in debug
+  builds), the procedures in plain language, and the ongoing jobs Ozzie can
+  keep an eye on. [core/README.md](core/README.md) explains how the pieces fit
+  and [core/docs/extending.md](core/docs/extending.md) how to extend them.
 - `core/mcp/` — the small read-only server that lets another AI app read
   Ozzie's last saved check (placeholders only, no network, no writes).
 - `core/native-auth/` — Rust crate: Planning Center OAuth, Keychain storage,
   the allowlisted read path, model routes, the native checks on every model
   step, the local task record and the store for ongoing jobs.
 - `product/desktop/` — the Tauri desktop app (React web view plus Rust
-  shell), with two small Swift helpers for card reading (Apple Vision) and
-  on-device speech recognition.
+  shell), with small Swift helpers in `src-tauri/helpers/`: card reading
+  (Apple Vision), on-device speech recognition, Apple Calendar, the server
+  other AI apps start, and the Spotlight and Shortcuts answers and actions.
 - `product/web/` — a browser walkthrough of the Sunday review with invented
   data.
 - `product/src/`, `product/test/` — review logic shared by the apps, and its

@@ -16,7 +16,20 @@
 // and caught up ONCE. A run that couldn't finish, or couldn't start, says so and is tried again
 // later, within limits. A refused run is never asked for again before the store would allow it, so
 // nothing here loops. Name-free storage: items keep counts, codes, times and person ids (resolved
-// only at render). A written summary and a drafted note live in memory only, for this run of the app.
+// only at render).
+//
+// The AI's write-up of a run (audit item 6) is kept with that run on this Mac, under a key of its own: Ozzie's own
+// sentences with each person as their Planning Center id (core session.ts PERSON_TOKEN), filled in with names from the
+// check on screen only when shown, and role, room, follow-up and group names as Planning Center has them (which can
+// include a person's name if a church typed one there; review H, M4); the run's steps in plain words, and where its
+// facts came from; or, when AI help is set up and there is none, why (AI help's allowance used for now, the answer ran
+// past what one run may use, an answer that didn't check out, or one that couldn't be prepared; nothing when the run
+// was paused during it). It decides nothing: findings, counts, notices and the native run row are worked out before
+// it and without it, and the notice is decided before the write-up is asked for. The last WRITEUPS_KEPT_PER_JOB of
+// each job are kept; a job's are forgotten when it is stopped or ends, every other church's when Ozzie switches church
+// (keepWriteupsFor), and all of them when saved checks are deleted or Planning Center is disconnected
+// (forgetAllWriteups), one still being prepared included. Nothing else reads that key: not the task record, not the
+// copy for other AI apps or Siri, and never a notice.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import {
   changeEligible, checksFreeAt, dueNow, includesSundayReady, quietDeferral, refusedUntil, retryAt, scheduledSlots, settledPlan, TEMPLATES, type LocalState, type Plan,
@@ -32,7 +45,7 @@ import { sundayOperations } from "../../../core/src/operations-capture.js";
 import {
   alwaysFor, briefTarget, changeFindingKind, feedbackOf, foundOf, keptForBriefing, routeChanges, routeFindings, stableFindingKey, type FoundKey,
 } from "../../../core/src/finding-feedback.js";
-import { checkFailure, retryDenied, StepFailure, stepFailure, type Invoke } from "./harness-bridge.js";
+import { checkFailure, retryDenied, StepFailure, stepFailure, StepNotes, stepNotes, type Invoke } from "./harness-bridge.js";
 import type { KeyValueStore } from "./proactive.js";
 import { heldMacOnly, THIS_MAC_ONLY, thisMacOnly, type NoticeOptions } from "./phone-notice.js";
 
@@ -73,7 +86,7 @@ export function nativeResponsibilities(invoke: Invoke = nativeInvoke): Responsib
   };
 }
 /** A responsibility run's only path to a model: native responsibility_agent_step, paid from the run's grant. */
-export function responsibilityStep(runId: string, invoke: Invoke = nativeInvoke): ModelStep {
+export function responsibilityStep(runId: string, invoke: Invoke = nativeInvoke, notes: StepNotes = stepNotes): ModelStep {
   return async (request, signal) => {
     if (signal.aborted) throw new StepFailure("transport");
     let stop = () => {};
@@ -84,7 +97,8 @@ export function responsibilityStep(runId: string, invoke: Invoke = nativeInvoke)
     });
     try {
       return await Promise.race([retryDenied(() => invoke<Awaited<ReturnType<ModelStep>>>("responsibility_agent_step", { runId, request }), signal)
-        .catch(error => { throw new StepFailure(stepFailure(error)); }), aborted]);
+        // The native code is noted by task, so a spent allowance is told apart from the run's own limit (review G).
+        .catch(error => { notes.record(request.task_id, error); throw new StepFailure(stepFailure(error)); }), aborted]);
     } finally { stop(); }
   };
 }
@@ -124,10 +138,10 @@ export interface NoticedItem {
   /** rooms: overlaps a room rule confirms (Needs a decision); rooms_uncertain: the rest (Worth a look), as on the Sunday page. */
   findings?: { rooms?: number; rooms_uncertain?: number; follow_ups?: number; groups?: number };
   changes?: SundayChange[];
-  /** Notes ready to review on the Sunday page, plus any the AI drafted. */
+  /** Notes ready to review on the Sunday page (the fixed check's; a write-up never adds one). */
   drafts?: number;
+  /** Kept on items saved before write-ups were kept with their runs; no longer written. */
   summarized?: boolean;
-  /** The AI drafted a note (one of `drafts`). */
   drafted?: boolean;
   /** ended: the date it was for. */
   until?: string;
@@ -148,8 +162,40 @@ export interface NoticedItem {
    */
   notice?: "sent" | "held" | "sent-later" | "in-app" | "unavailable" | "briefing" | "in-briefing" | "none";
 }
-/** What a run with an AI model prepared, restored on this Mac. Kept in memory only. */
-export interface Prepared { status: "verified" | "failed" | "cancelled"; code: FailureCode | null; summary: string | null; draft: string | null; ai_steps: number }
+/**
+ * What the AI wrote for a run, in the form kept on this Mac: Ozzie's own sentences for the facts it chose, people as id
+ * tokens (core session.ts `Harness.keep`), where those facts came from and when, what wasn't complete, and the steps.
+ */
+export interface Written { lines: string[]; based_on: string; gaps: string[]; steps: string[] }
+/** What a run with an AI model prepared: a verified write-up, or why there is none. */
+export interface Prepared {
+  status: "verified" | "failed" | "cancelled"; code: FailureCode | null; writeup: Written | null; ai_steps: number;
+  /** A "limit" that was an AI help allowance (the route's cap, today's steps, the church's managed allowance), not the run's own. */
+  allowance?: boolean;
+}
+/**
+ * Why a run has no write-up: AI help off, AI help's allowance used for now, the answer ran past what one run may use
+ * (review G), the answer didn't check out, or it couldn't be prepared. "off" and "stopped" (paused during the write-up)
+ * are never kept, so a card says nothing for them.
+ */
+export type NoWriteup = "off" | "spent" | "run-limit" | "unverified" | "unavailable" | "stopped";
+/** One run's write-up as kept with it on this Mac (header): people as Planning Center ids; other names as Planning Center has them. */
+export interface WriteUp extends Partial<Written> {
+  /** The noticed item it belongs to (its id), its job, run, the church it was read from, and when. */
+  item: string; responsibility_id: string; run_id: string; organization: string; at: string;
+  kind: "written" | "none";
+  /** none: why. */
+  why?: NoWriteup;
+  /** written: how many times the AI was asked. */
+  ai_steps?: number;
+}
+/** How many write-ups each job keeps. */
+export const WRITEUPS_KEPT_PER_JOB = 5;
+const WRITEUPS_KEPT = 40;
+/** Whether a native refusal was an AI help allowance (the route's cap, today's steps, the church's managed allowance). */
+export const allowanceSpent = (native: string | undefined) => native === "budget" || native === "daily-limit" || native === "allowance-paused";
+const whyNot = (code: FailureCode | null, allowance = false): NoWriteup =>
+  code === "fidelity" ? "unverified" : code === "limit" ? allowance ? "spent" : "run-limit" : code === "no-model" ? "off" : "unavailable";
 
 export interface RunnerContext {
   /** A saved connection and a chosen Sunday (proactiveReadiness "ready"). */
@@ -173,8 +219,11 @@ export interface RunnerHooks {
   context(): RunnerContext;
   /** One fresh deterministic check through the app's own path (recorded in the task ledger). */
   check(): Promise<SundayCapture>;
-  /** With an AI model: the template's procedure for this run, its steps paid from the grant. `signal` aborts when it's paused. */
-  prepare(r: Responsibility, grant: Grant, capture: SundayCapture, signal?: AbortSignal): Promise<Prepared | null>;
+  /**
+   * With an AI model: the template's procedure for this run, its steps paid from the grant, written up in the form kept
+   * on this Mac. `signal` aborts when it's paused; `trigger`: why this run started, for What happened.
+   */
+  prepare(r: Responsibility, grant: Grant, capture: SundayCapture, signal?: AbortSignal, trigger?: RunTrigger): Promise<Prepared | null>;
   /**
    * Whether a check is of the church Ozzie uses now. A check of another church (one finished or shared from before a
    * switch) is never reused or acted on. Absent: every check is.
@@ -213,8 +262,8 @@ export interface RunnerView {
   paused_all: boolean;
   items: Responsibility[];
   noticed: NoticedItem[];
-  /** Summaries and drafts prepared this session, by noticed item id. */
-  prepared: Readonly<Record<string, { summary: string | null; draft: string | null }>>;
+  /** Each run's write-up (or why there is none), by noticed item id, kept on this Mac. People are id tokens. */
+  writeups: Readonly<Record<string, WriteUp>>;
   next: Readonly<Record<string, string | null>>;
   running: string | null;
   unseen: number;
@@ -248,6 +297,10 @@ export interface Runner {
   runNow(id: string): Promise<RunResult>;
   markSeen(): void;
   clearOpenToday(): void;
+  /** Ozzie uses this church now: every other church's write-ups are forgotten. */
+  keepWriteupsFor(organization: string): void;
+  /** Saved checks were deleted, or Planning Center was disconnected: every write-up is forgotten (review H, M4). */
+  forgetAllWriteups(): void;
   view(): RunnerView;
   subscribe(listener: () => void): () => void;
 }
@@ -266,6 +319,8 @@ const KEYS = {
   state: "ozzie.responsibilities.state.v1", noticed: "ozzie.responsibilities.noticed.v1", seen: "ozzie.responsibilities.seen.v1", held: "ozzie.responsibilities.held.v1",
   /** Responsibilities already moved to the settled defaults, so a person's later choice of the old time stays. */
   settled: "ozzie.responsibilities.settled.v1",
+  /** Each run's write-up (header): people as Planning Center ids. Read and written only here. */
+  writeups: "ozzie.responsibilities.writeups.v1",
 };
 const NOTICED_KEPT = 30;
 const HELD_KEPT = 30;
@@ -358,7 +413,12 @@ export function createRunner(deps: RunnerDeps): Runner {
   let noticed: NoticedItem[] = read<{ version: 1; items: NoticedItem[] }>(deps.store, KEYS.noticed)?.items ?? [];
   let held: Held[] = read<Held[]>(deps.store, KEYS.held) ?? [];
   let seenAt = read<string>(deps.store, KEYS.seen);
-  const prepared: Record<string, { summary: string | null; draft: string | null }> = {};
+  let writeups: WriteUp[] = (read<{ version: 1; items: WriteUp[] }>(deps.store, KEYS.writeups)?.items ?? []).filter(w => w && typeof w.item === "string");
+  /**
+   * The church Ozzie uses now, once App says (keepWriteupsFor): only its write-ups are shown, so no id is ever filled
+   * with another church's names, and none at all until it is known (review H, L9).
+   */
+  let church: string | null = null;
   const wakes: { from: string; to: string }[] = [];
   let launchedAt = deps.now();
   /** The zone at launch, for responsibilities confirmed before the store kept their own. Never changes mid-session. */
@@ -379,10 +439,24 @@ export function createRunner(deps: RunnerDeps): Runner {
     deps.store.set(KEYS.state, JSON.stringify(saved));
     deps.store.set(KEYS.noticed, JSON.stringify({ version: 1, items: noticed }));
     deps.store.set(KEYS.held, JSON.stringify(held));
+    deps.store.set(KEYS.writeups, JSON.stringify({ version: 1, items: writeups }));
   };
+  /**
+   * How many times every write-up was forgotten (deleted saved checks, a disconnect, a switch of church): a write-up
+   * still being prepared then is dropped when it comes back (review G, N2). Stopping a job aborts its run, so its write-up
+   * never comes back. One for another church is kept but never shown (build).
+   */
+  let forgotten = 0;
+  /** A run's write-up, kept with it: the newest WRITEUPS_KEPT_PER_JOB of each job. Never read by anything that decides. */
+  const keepWriteup = (w: WriteUp, since: number) => {
+    if (since !== forgotten) return;
+    const mine = [w, ...writeups.filter(x => x.responsibility_id === w.responsibility_id && x.item !== w.item)].slice(0, WRITEUPS_KEPT_PER_JOB);
+    writeups = [...mine, ...writeups.filter(x => x.responsibility_id !== w.responsibility_id)].slice(0, WRITEUPS_KEPT);
+  };
+  const forgetWriteups = (keep: (w: WriteUp) => boolean) => { writeups = writeups.filter(keep); };
   const attention = (i: NoticedItem) => i.kind === "found" || i.kind === "couldnt-check" || i.kind === "missed" || i.kind === "briefing";
   const build = (): RunnerView => ({
-    available, paused_all: listing?.paused_all ?? false, items: listing?.items ?? [], noticed, prepared: { ...prepared }, next, running: running?.id ?? null,
+    available, paused_all: listing?.paused_all ?? false, items: listing?.items ?? [], noticed, writeups: Object.fromEntries(writeups.filter(w => church !== null && w.organization === church).map(w => [w.item, w])), next, running: running?.id ?? null,
     unseen: noticed.filter(i => attention(i) && (!seenAt || i.at > seenAt)).length, open_today: openToday,
   });
   let snapshot = build();
@@ -431,6 +505,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     try {
       listing = await deps.native.list();
       available = true;
+      // A job that ended, or that Ozzie no longer keeps, takes its write-ups with it.
+      const current = new Set(listing.items.filter(r => r.status !== "ended").map(r => r.id));
+      forgetWriteups(w => current.has(w.responsibility_id));
       const now = deps.now();
       for (const r of listing.items) {
         const s = stateOf(r.id);
@@ -696,10 +773,6 @@ export function createRunner(deps: RunnerDeps): Runner {
         changes = compared.changes;
         memory = compared.memory;
       }
-      let ready: Prepared | null = null;
-      if (ctx.modelReady && grant.ai_steps > 0) {
-        try { ready = await guard(hooks.prepare(r, grant, capture, abort.signal)); } catch (error) { if (error === CANCELLED) throw error; ready = null; }
-      }
       const reported = new Set(stateOf(r.id).reported);
       const newKeys = found.keys.filter(k => !reported.has(k));
       // The person's Church rules on notices: "Put this in the briefing" keeps a kind out of them; "Always
@@ -710,7 +783,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       const worse = listed.some(c => c.effect === "worse");
       const count = found.decisions + found.looks + (found.findings.rooms ?? 0) + (found.findings.rooms_uncertain ?? 0) + (found.findings.follow_ups ?? 0)
         + (r.template === "group-night-clashes" ? 0 : (found.findings.groups ?? 0));
-      const drafts = found.drafts + (ready?.draft ? 1 : 0);
+      const drafts = found.drafts;
       const briefing = r.template === "morning-briefing";
       // "Put this in the briefing": the briefing lists what the person's Church rules keep for it.
       const forBriefing = briefing ? keptForBriefing(found.all, entries) : [];
@@ -718,10 +791,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       const item = add({
         responsibility_id: r.id, template: r.template, at: now, kind, trigger, run_id: grant.run_id, check: { plan_id: capture.plan_id, completed_at: capture.completed_at },
         decisions: found.decisions, looks: found.looks, findings: found.findings,
-        changes: listed, drafts, summarized: Boolean(ready?.summary), drafted: Boolean(ready?.draft), ...(briefing && includesSundayReady(now, zoneOf(r)) ? { sunday_ready: true } : {}),
+        changes: listed, drafts, ...(briefing && includesSundayReady(now, zoneOf(r)) ? { sunday_ready: true } : {}),
         ...(forBriefing.length ? { kept: forBriefing } : {}),
       });
-      if (ready?.summary || ready?.draft) prepared[item.id] = { summary: ready.summary, draft: ready.draft };
       saved[r.id] = { ...stateOf(r.id), failures: 0, retry_at: null, memory, reported: [...new Set([...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
       if (briefing) {
         const n = foldIntoBriefing(item);
@@ -741,6 +813,22 @@ export function createRunner(deps: RunnerDeps): Runner {
       const macOnly = noticeKind === "needs-decision" && thisMacOnly([...routed.notify.map(changeKind), ...(cause ?? []).map(f => f.kind)]);
       if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent, cause, macOnly);
       else patch(item.id, { notice: briefingOnly ? "briefing" : "none" });
+      // The AI's write-up, or why there is none: after the notice is decided and sent or held, so a notice never waits on
+      // the model and quiet hours are judged at check time (review H, L14). Everything above is worked out without it.
+      // Pausing now stops the write-up only; the check and its notice stand. With no AI route set up, nothing is kept
+      // and the card shows the check alone (L15).
+      let ready: Prepared | null = null;
+      let why: NoWriteup | null = !ctx.modelReady ? "off" : grant.ai_steps <= 0 ? "spent" : null;
+      const since = forgotten;
+      if (!why) {
+        try { ready = await guard(hooks.prepare(r, grant, capture, abort.signal, trigger)); }
+        catch (error) { if (error !== CANCELLED && !abort.signal.aborted) ready = null; else why = "stopped"; }
+        why ??= !ready ? "unavailable" : ready.status === "verified" && ready.writeup ? null : whyNot(ready.code, ready.allowance);
+      }
+      const about = { item: item.id, responsibility_id: r.id, run_id: grant.run_id, organization: capture.organization, at: item.at };
+      if (why !== "off" && why !== "stopped") {
+        keepWriteup(ready?.writeup && !why ? { ...about, kind: "written", ...ready.writeup, ai_steps: ready.ai_steps } : { ...about, kind: "none", why: why ?? "unavailable" }, since);
+      }
       await deps.native.end(r.id, grant.run_id, "ok", null, count, drafts).catch(() => undefined);
       log(`responsibility: run status=ok code=- noticed=${count} drafts=${drafts}${ready ? ` summary=${ready.status}` : ""}`);
       // "none": nothing new for this run to tell, or paused before its notice. Anything else is a decision.
@@ -885,8 +973,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     resume: async id => { await deps.native.resume(id); await refresh(); await afterPause(false, id); void serial(tickOnce); },
     stop: async id => {
       await deps.native.stop(id);
-      // Stopped by a person: it never says it ended as planned.
+      // Stopped by a person: it never says it ended as planned, and its write-ups go with it.
       saved[id] = { ...stateOf(id), ended_told: true };
+      forgetWriteups(w => w.responsibility_id !== id);
       await refresh();
       await afterPause(true, id);
     },
@@ -914,6 +1003,16 @@ export function createRunner(deps: RunnerDeps): Runner {
       emit();
     },
     clearOpenToday() { if (openToday) { openToday = false; emit(); } },
+    // Called on every status that is disconnected, so it changes nothing visible unless there is something to forget.
+    forgetAllWriteups() { forgotten++; if (writeups.length) { writeups = []; emit(); } },
+    keepWriteupsFor(organization) {
+      const before = writeups.length, was = church;
+      // A switch from another church also drops one still being prepared (review G, N2).
+      if (was !== null && was !== organization) forgotten++;
+      church = organization;
+      forgetWriteups(w => w.organization === organization);
+      if (writeups.length !== before || was !== church) emit();
+    },
     view: () => snapshot,
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };

@@ -7,14 +7,14 @@ import { SundayPage } from "../src/sunday-page.js";
 import { RulesPage } from "../src/rules-page.js";
 import { TodayPage } from "../src/today-page.js";
 import { SundayReadyBrief, sundayReadyLine } from "../src/sunday-ready.js";
-import { FindingFeedback, FromYourCards, type FeedbackControls, type FeedbackSource } from "../src/finding-feedback.js";
+import { correctionChoices, correctionSaid, FindingFeedback, FromYourCards, type FeedbackControls, type FeedbackSource } from "../src/finding-feedback.js";
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { nov22Capture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
 import { FICTIONAL_ROOM, fictionalOperations, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { decide } from "../../../core/src/sunday-decisions.js";
-import { briefTarget, type FeedbackEntry } from "../../../core/src/finding-feedback.js";
+import { briefTarget, type CorrectionWhat, type FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import { evaluateAttentionImport } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
 
@@ -92,14 +92,60 @@ describe("the controls on each finding card", () => {
   });
 });
 
+describe("This isn't right asks what is wrong before hiding anything (audit item 28)", () => {
+  const b = briefOf();
+  const role = briefTarget(b.findings.find(f => f.kind === "needs-people" && f.position!.name === "Greeter")!, b.plan.id, b.plan.dates);
+  const streak = briefTarget(b.findings.find(f => f.kind === "streak")!, b.plan.id, b.plan.dates);
+  const form = (t: typeof role, startWhat: CorrectionWhat | null = null) => renderToStaticMarkup(React.createElement(FindingFeedback, {
+    target: t, feedback: controls(), startOpen: "correct", startWhat }));
+  it("on an open role: the role isn't open, a person's details, or something else, with nothing chosen and nothing hidden yet", () => {
+    const html = form(role);
+    const t = text(html);
+    expect(t).toContain("What isn't right?");
+    expect(t).toContain("The role isn't open Ozzie hides it for this Sunday and keeps your note. It comes back if Planning Center changes.");
+    expect(t).toContain("A person's details are wrong Ozzie keeps showing the open role and keeps your note.");
+    expect(t).toContain("Something else Ozzie keeps showing it and keeps your note.");
+    expect(html).not.toMatch(/type="radio"[^>]*checked/u);
+    expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*>Choose what isn&#x27;t right<\/button>/u);
+    expect(t.indexOf("What isn't right?")).toBeLessThan(t.indexOf("What should Ozzie have seen? (optional)"));
+  });
+  it("names the effect on its button: only the role itself hides it", () => {
+    expect(form(role, "finding")).toContain(">Hide it for this Sunday</button>");
+    for (const w of ["person", "other"] as const) expect(form(role, w)).toContain(">Keep it showing and save my note</button>");
+  });
+  it("on other kinds: the finding itself, or something else", () => {
+    const t = text(form(streak));
+    expect(t).toContain("This finding is wrong Ozzie hides it for this Sunday");
+    expect(t).toContain("Something else");
+    expect(t).not.toContain("A person's details are wrong");
+    expect(correctionChoices("attention", "for this import", "what was imported").map(c => c.label)).toEqual(["This finding is wrong", "Something else"]);
+  });
+  it("confirms what happened, with where it can be undone later", () => {
+    expect(correctionSaid("finding", "for this Sunday")).toBe("Got it. I've hidden this for this Sunday and kept your note. Undo brings it back now; later, it's under “What you've told Ozzie” on Church rules.");
+    expect(correctionSaid("person", "for this Sunday")).toBe("Got it. I kept your note, and this still shows. You can delete the note under “What you've told Ozzie” on Church rules.");
+  });
+  it("a note that keeps the role showing is on the Sunday page and listed on Church rules as still showing", () => {
+    const entry: FeedbackEntry = { type: "correction", id: "c", kind: "needs-people", at: AT, key: role.key, occurrence: role.occurrence, facts: role.facts,
+      scope: role.scope, labels: { occurrence: "November 22, 2026" }, note: "Drew moved to the 11:00", what: "person" };
+    const t = text(page(briefOf(nov22Capture(), [entry]), [entry]));
+    expect(t).toContain("Greeter still needs one more person.");
+    expect(t).not.toContain("Hidden by you");
+    const rules = text(renderToStaticMarkup(React.createElement(FromYourCards, { feedback: controls([entry]) })));
+    expect(rules).toContain("You said: “Drew moved to the 11:00” It still shows.");
+    expect(t.replaceAll("not ranked", "")).not.toMatch(FORBIDDEN);
+  });
+});
+
 describe("what the person's entries do on the Sunday page", () => {
   it("a stopped finding is gone, counted and listed as set aside with a way back; nothing else moves", () => {
     const streak = briefOf().findings.find(f => f.kind === "streak")!;
     const entry: FeedbackEntry = { type: "stop", id: "s", kind: "streak", at: AT, scope: { person_id: streak.person_id! }, labels: {} };
     const t = text(page(briefOf(nov22Capture(), [entry]), [entry]));
     expect(t).not.toContain(`${names[streak.person_id!]} is scheduled 3 Sundays in a row.`);
-    expect(t).toContain("One finding is set aside by your Church rules.");
-    expect(t).toContain("Set aside by your Church rules");
+    // The leader hid it, so the page says so, not that a rule did (audit item 4).
+    expect(t).toContain("You hid one finding: it's under “Hidden by you” at the end of this page, where you can bring it back.");
+    expect(t).toContain("Hidden by you");
+    expect(t).not.toMatch(/set aside by your Church rules/iu);
     expect(t).toContain(`Don't flag serving streaks for ${names[streak.person_id!]}.`);
     expect(t).toContain("Start flagging this again");
     expect(t).toContain("Greeter still needs one more person.");
@@ -176,7 +222,7 @@ describe("Church rules lists what the person said, and lets them change it", () 
 
 describe("Today", () => {
   it("This isn't right on the email-and-calendar finding sets it aside for that import", () => {
-    const shown = text(renderToStaticMarkup(React.createElement(TodayPage, { brief: null, onSunday: () => undefined, feedback: source(), store: memory() })));
+    const shown = text(renderToStaticMarkup(React.createElement(TodayPage, { brief: null, onSunday: () => undefined, feedback: source(), store: memory(), example: true })));
     expect(shown).toContain("2 things need your attention.");
     expect(shown).toContain("This isn't right");
     // Email and calendar bring no notices, so no notice choices and nothing to stop flagging.
@@ -187,7 +233,7 @@ describe("Today", () => {
     const f = report.findings[0]!;
     const entry: FeedbackEntry = { type: "correction", id: "c", kind: "attention", at: AT, key: f.id, occurrence: f.imported_at.slice(0, 10),
       facts: JSON.stringify([...f.source_ids].sort()), scope: {}, labels: {}, note: "" };
-    const hidden = text(renderToStaticMarkup(React.createElement(TodayPage, { brief: null, onSunday: () => undefined, feedback: source([entry]), store: memory() })));
+    const hidden = text(renderToStaticMarkup(React.createElement(TodayPage, { brief: null, onSunday: () => undefined, feedback: source([entry]), store: memory(), example: true })));
     expect(hidden).not.toContain(f.title);
     // Set aside before grouping: only the unchecked Sunday is left to need attention.
     expect(hidden).toContain("1 thing needs your attention.");

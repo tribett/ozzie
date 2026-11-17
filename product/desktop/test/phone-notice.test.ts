@@ -83,7 +83,7 @@ describe("the words in Settings", () => {
   });
 
   it("say where the channel name can be seen, and that a notice only about a background check stays on this Mac (review N, L5, L6)", () => {
-    expect(PHONE_HOW).toContain("The channel name is kept in this Mac's Keychain. It isn't in the recordings Ozzie saves of its checks or in Ozzie's record of what happened.");
+    expect(PHONE_HOW).toContain("The channel name is kept in this Mac's Keychain. It isn't in the copies Ozzie saves of its checks or in Ozzie's record of what happened.");
     expect(PHONE_HOW).toContain("The channel name is shown on this screen and put on the clipboard when you copy it. If either was shared, in a screen recording or a screenshot for example, make a new one.");
     expect(PHONE_HOW.join(" ")).not.toMatch(/isn't in saved recordings/u);
     expect(PHONE_BACKGROUND).toBe("A notice that is only about a background check stays on this Mac: nothing goes to your phone for it.");
@@ -119,7 +119,8 @@ describe("the words in Settings", () => {
   it("off: the switch and what it would send, no steps and no channel", () => {
     const html = render({ initial: { on: false, channel: null }, invoke: vi.fn() as unknown as Invoke });
     const words = prose(html);
-    expect(html).toContain(`<h2 id="phone-title" class="h3">${PHONE_TITLE}</h2>`);
+    // A card under "What Ozzie runs and notices" in Settings (audit item 27).
+    expect(html).toContain(`<h3 id="phone-title" class="settings-t">${PHONE_TITLE}</h3>`);
     expect(html).not.toMatch(/<input type="checkbox" checked/u);
     for (const line of [PHONE_BODY, PHONE_SWITCH, PHONE_OFF_NOTE, PHONE_WHAT, PHONE_SEEN, PHONE_RISK, PHONE_QUIET, ...PHONE_HOW]) expect(words).toContain(line);
     expect(words).not.toContain(PHONE_STEPS[0]);

@@ -39,7 +39,7 @@ describe("Switch Ozzie to this church?", () => {
     expect(shown).toContain("You signed in to Planning Center for Fictional Hope Chapel (organization 2002). Ozzie works with one church at a time, and it's still using Fictional Grace Church (organization 1001).");
     // Review S2, N1: Planning Center stops accepting it; it isn't only this Mac.
     expect(shown).toContain("Switching checks Fictional Hope Chapel's sign-in with Planning Center first. Then Planning Center stops accepting Ozzie's sign-in for Fictional Grace Church (organization 1001), and it's removed from this Mac. Your church's information in Planning Center doesn't change.");
-    expect(shown).toContain("Saved recordings of Fictional Grace Church's Sundays stay on this Mac. Ozzie shows them only while it uses Fictional Grace Church.");
+    expect(shown).toContain("Saved copies of Fictional Grace Church's checks stay on this Mac. Ozzie shows them only while it uses Fictional Grace Church.");
     expect(shown).toContain("What runs automatically stays set up. Ozzie checks Fictional Hope Chapel on its schedule once you choose which of its Sundays to check.");
     expect(shown).toContain("Keeping Fictional Grace Church checks its sign-in with Planning Center first. Then Planning Center stops accepting the new sign-in for Fictional Hope Chapel, and it's removed from this Mac.");
     const html = page(stillOn1001());
@@ -64,6 +64,19 @@ describe("Switch Ozzie to this church?", () => {
     expect(switchProblem("sign-in-instead", found)).toBe("Ozzie doesn't switch to a sign-in it found. To use organization 6006, choose Sign in to organization 6006 instead.");
     expect(answeredCopy({ decision: "sign-in", question: found, stake: { from: false, to: false } }, false)).toBe(
       "Ozzie still uses Fictional Grace Church (organization 1001). Sign in to organization 6006; once you have, Ozzie asks before it stops using Fictional Grace Church.");
+  });
+  it("with visitor cards open, says first that switching discards them, on the page and in setup (review P, L4)", () => {
+    // The cards are kept per church (cards-page.tsx `workspace`): a switch ends them, so the question says so first.
+    expect(switchCopy(asked, { from: false, to: false }, 3).effects[0]).toBe("You have 3 visitor cards open. Switching churches discards them.");
+    expect(switchCopy(asked, { from: false, to: false }, 1).effects[0]).toBe("You have 1 visitor card open. Switching churches discards it.");
+    expect(switchCopy(asked).effects.join(" ")).not.toContain("visitor card");
+    // Keeping the church in use keeps them, and a found sign-in never switches, so neither says it.
+    expect(switchCopy(found, { from: false, to: false }, 3).effects.join(" ")).not.toContain("visitor card");
+    const shown = text(renderToStaticMarkup(React.createElement(ConnectionPage, {
+      status: stillOn1001(), settings, onSettings: () => {}, onStatus: () => {}, oneClick: true, cards: 2,
+    })));
+    expect(shown).toContain("You have 2 visitor cards open. Switching churches discards them.");
+    expect(text(page(stillOn1001()))).not.toContain("visitor card");
   });
   it("says truthfully what happens to Church rules set for a church's own teams and rooms", () => {
     const set = switchCopy(asked, { from: true, to: false }).effects;
@@ -113,6 +126,12 @@ describe("Switch Ozzie to this church?", () => {
       initial: "connect",
     }));
     expect(text(html)).toContain("Switch Ozzie to Fictional Hope Chapel?");
+    // With visitor cards open, setup's question says what switching does to them, as Settings does (review P, L4).
+    const withCards = renderToStaticMarkup(React.createElement(SetupFlow, {
+      status: stillOn1001(), settings, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS, onModel() {}, onClose() {}, onExample() {}, onAutomatic() {},
+      initial: "connect", cards: 1,
+    }));
+    expect(text(withCards)).toContain("You have 1 visitor card open. Switching churches discards it.");
   });
   it("uses only plain words, and never calls the tool a person", () => {
     for (const q of [asked, unnamed, found, { ...asked, fresh: false, others: ["1001", "3003"] }]) {

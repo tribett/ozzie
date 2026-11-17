@@ -203,9 +203,9 @@ describe("every tool's words, over every kind of check", () => {
     expect(INSTRUCTIONS).toContain("Labels such as [Person 1] are only meaningful within one copy of the check");
   });
 
-  it("says a saved recording is a past check", async () => {
+  it("says a saved copy of a check is a past check", async () => {
     const { text } = await sharedFor(harnessData({ mode: "recording" }));
-    expect(textOf(call(serverOver(() => text), "sunday_readiness"))).toContain("This check is out of date or a saved recording.");
+    expect(textOf(call(serverOver(() => text), "sunday_readiness"))).toContain("This check is out of date, or it is a saved copy of a check.");
   });
 
   it("gives the Church rules in words and the procedures Ozzie follows", async () => {

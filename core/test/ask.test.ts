@@ -208,7 +208,7 @@ describe("Ask facts", () => {
     const recording = { ...nov22Capture(), kind: "recording" as const };
     const gaps = (c: typeof failed) => contextFor(new AskSession(), buildSundayBrief(c, rules, "2026-11-20T15:05:00Z")).gaps;
     expect(gaps(failed).join(" ")).toContain("1 Planning Center read didn't complete.");
-    expect(gaps(recording)).toContain("This is a saved recording, not a current check.");
+    expect(gaps(recording)).toContain("This is a saved copy of a check, not a current check.");
     const crowd = Array.from({ length: 400 }, (_, i) => String(1000 + i));
     const big = synthetic(["Greeter"], []);
     big.findings[0]!.people!.left_out = crowd.map(person_id => ({ person_id, reasons: ["Recorded overlapping blockout."] }));

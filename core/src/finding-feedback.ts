@@ -51,8 +51,22 @@ export interface FeedbackTarget {
 }
 
 interface Base { id: string; kind: string; at: string }
-/** "This isn't right": hides this one occurrence while its facts stay the same, and keeps what the person said. */
-export interface CorrectionEntry extends Base { type: "correction"; key: string; occurrence: string; facts: string; scope: FeedbackScope; labels: FeedbackLabels; note: string }
+/**
+ * What the person said isn't right (audit item 28): the finding itself ("The role isn't open"), which hides this
+ * occurrence; or a person's details on it, or something else, which keep it showing and only keep what they said.
+ * Entries made before the question was asked have none, and meant the finding.
+ */
+export type CorrectionWhat = "finding" | "person" | "other";
+export const CORRECTION_WHATS: readonly CorrectionWhat[] = ["finding", "person", "other"];
+/**
+ * "This isn't right": with `what` the finding (or none, from before the question), hides this one occurrence while its
+ * facts stay the same; otherwise keeps it showing. Either way it keeps what the person said.
+ */
+export interface CorrectionEntry extends Base {
+  type: "correction"; key: string; occurrence: string; facts: string; scope: FeedbackScope; labels: FeedbackLabels; note: string; what?: CorrectionWhat;
+}
+/** Whether a correction hides its finding: only one about the finding itself. */
+export const hidesFinding = (e: Pick<CorrectionEntry, "what">) => (e.what ?? "finding") === "finding";
 /** "Stop flagging this": this kind of finding, for this scope, from the next check on. */
 export interface StopEntry extends Base { type: "stop"; scope: FeedbackScope; labels: FeedbackLabels }
 /** "Always do this": prepare this for every matching finding. */
@@ -114,7 +128,7 @@ export function stopFor(entries: readonly FeedbackEntry[], t: Pick<FeedbackTarge
 }
 export function correctionFor(entries: readonly FeedbackEntry[], t: Pick<FeedbackTarget, "kind" | "key" | "occurrence" | "facts">): CorrectionEntry | null {
   if (NEVER_HIDDEN.has(t.kind)) return null;
-  return entries.find((e): e is CorrectionEntry => e.type === "correction" && e.kind === t.kind && e.key === t.key && e.occurrence === t.occurrence && e.facts === t.facts) ?? null;
+  return entries.find((e): e is CorrectionEntry => e.type === "correction" && hidesFinding(e) && e.kind === t.kind && e.key === t.key && e.occurrence === t.occurrence && e.facts === t.facts) ?? null;
 }
 export function alwaysFor(entries: readonly FeedbackEntry[], t: Pick<FeedbackTarget, "kind" | "scope" | "action">): AlwaysEntry | null {
   if (!t.action) return null;
@@ -305,12 +319,14 @@ const keepLabels = (labels: FeedbackLabels | undefined): FeedbackLabels =>
   Object.fromEntries(LABEL_KEYS.flatMap(k => typeof labels?.[k] === "string" && labels[k]!.trim() ? [[k, labels[k]!.trim().slice(0, 300)]] : [])) as FeedbackLabels;
 const idFor = (parts: unknown[]) => JSON.stringify(parts).slice(0, 600);
 
-export function correctionEntry(t: FeedbackTarget, note: string, at: string): CorrectionEntry {
+/** `what`: what isn't right; only "finding" (the default, as before the question was asked) hides it. */
+export function correctionEntry(t: FeedbackTarget, note: string, at: string, what: CorrectionWhat = "finding"): CorrectionEntry {
   if (!canCorrect(t)) throw new Error("This can't be set aside: part of the check couldn't be read.");
+  if (!CORRECTION_WHATS.includes(what)) throw new Error("That can't be saved.");
   const text = clean(note);
   if (text.length > NOTE_MAX) throw new Error(`Keep it shorter (${NOTE_MAX} characters at most).`);
   return { type: "correction", id: idFor(["correction", t.kind, t.key, t.occurrence, at]), kind: t.kind, key: t.key, occurrence: t.occurrence, facts: t.facts,
-    scope: { ...t.scope }, labels: keepLabels(t.labels), note: text, at };
+    scope: { ...t.scope }, labels: keepLabels(t.labels), note: text, at, ...(what === "finding" ? {} : { what }) };
 }
 export function stopEntry(t: FeedbackTarget, scope: FeedbackScope, at: string): StopEntry {
   if (!stopScopes(t).some(s => sameScope(s, scope))) throw new Error("That can't be stopped this way.");
@@ -326,13 +342,18 @@ export function urgencyEntry(t: Pick<FeedbackTarget, "kind" | "tone">, level: Ur
   return { type: "urgency", id: idFor(["urgency", t.kind, at]), kind: t.kind, level, at };
 }
 
-/** Adds an entry, replacing one that says the same thing (one urgency per kind). Oldest go first past the limit. */
+/**
+ * Adds an entry, replacing one that says the same thing (one urgency per kind). On one finding, a correction replaces
+ * only an earlier one about the same `what`: a note about a person's details never undoes "the finding isn't right", or
+ * the other way round (review P, L9). Oldest go first past the limit.
+ */
 export function withEntry(entries: readonly FeedbackEntry[], entry: FeedbackEntry): FeedbackEntry[] {
   const same = (e: FeedbackEntry) => e.type === entry.type && e.kind === entry.kind && (
     entry.type === "urgency" ||
     (entry.type === "stop" && sameScope((e as StopEntry).scope, entry.scope)) ||
     (entry.type === "always" && (e as AlwaysEntry).action === entry.action && sameScope((e as AlwaysEntry).scope, entry.scope)) ||
-    (entry.type === "correction" && (e as CorrectionEntry).key === entry.key && (e as CorrectionEntry).occurrence === entry.occurrence));
+    (entry.type === "correction" && (e as CorrectionEntry).key === entry.key && (e as CorrectionEntry).occurrence === entry.occurrence
+      && ((e as CorrectionEntry).what ?? "finding") === (entry.what ?? "finding")));
   return [...entries.filter(e => !same(e)), entry].slice(-FEEDBACK_MAX);
 }
 export const withoutEntry = (entries: readonly FeedbackEntry[], id: string) => entries.filter(e => e.id !== id);
@@ -346,7 +367,8 @@ const isLabels = (v: unknown): v is FeedbackLabels => isRecord(v) && Object.keys
 function isEntry(v: unknown): v is FeedbackEntry {
   if (!isRecord(v) || !isText(v.id, 600) || !isText(v.kind, 64) || !isText(v.at, 40)) return false;
   switch (v.type) {
-    case "correction": return isText(v.key, 600) && isText(v.occurrence, 64) && isText(v.facts, 4000, 0) && isScope(v.scope) && isLabels(v.labels) && isText(v.note, NOTE_MAX, 0);
+    case "correction": return isText(v.key, 600) && isText(v.occurrence, 64) && isText(v.facts, 4000, 0) && isScope(v.scope) && isLabels(v.labels) && isText(v.note, NOTE_MAX, 0)
+      && (v.what === undefined || (CORRECTION_WHATS as readonly unknown[]).includes(v.what));
     case "stop": return isScope(v.scope) && hasScope(v.scope) && isLabels(v.labels) && !NEVER_STOPPED.has(v.kind);
     case "always": return isScope(v.scope) && hasScope(v.scope) && isLabels(v.labels) && (ALWAYS_ACTIONS as readonly unknown[]).includes(v.action);
     case "urgency": return (v.level === "right-away" || v.level === "briefing") && !NEVER_HIDDEN.has(v.kind);
@@ -410,12 +432,14 @@ export function urgencyText(e: Pick<UrgencyEntry, "kind" | "level">): string {
 export function correctionSubject(e: Pick<CorrectionEntry, "kind" | "scope" | "labels">, nameOf: NameOf): string {
   return capital(`${kindWords(e.kind)} ${scopeWords(e.scope, e.labels, nameOf)}`.trim());
 }
+/** What the person said in a correction, as the rules list says it. */
+const CORRECTION_SAID: Readonly<Record<CorrectionWhat, string>> = { finding: "this wasn't right", person: "a person's details were wrong", other: "something else wasn't right" };
 /** What one entry says, in a sentence. */
 export function entryText(e: FeedbackEntry, nameOf: NameOf): string {
   switch (e.type) {
     case "stop": return stopText(e, nameOf);
     case "always": return alwaysText(e, nameOf);
     case "urgency": return urgencyText(e);
-    case "correction": return `${correctionSubject(e, nameOf)}: you said this wasn't right${e.labels.occurrence ? ` for ${e.labels.occurrence}` : ""}.`;
+    case "correction": return `${correctionSubject(e, nameOf)}: you said ${CORRECTION_SAID[e.what ?? "finding"]}${e.labels.occurrence ? ` for ${e.labels.occurrence}` : ""}.`;
   }
 }

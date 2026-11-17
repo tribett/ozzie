@@ -925,13 +925,18 @@ fn target_for(collection: Collection) -> Target {
         Collection::CheckInsEventPeriods => Target::checkins_event("620").within(&window()),
         Collection::CheckInsLocationCounts => Target::checkins_event_time("630"),
         Collection::RegistrationsAttendees => Target::signup("640"),
+        // Filling in To on a drafted note (contact_tests.rs).
+        Collection::PersonEmails | Collection::PersonPhoneNumbers => Target::people_person("50"),
     }
 }
 /// A valid request for every collection: the picker's reads come before a plan is chosen, so
-/// service types name no service type or plan, and upcoming plans name no plan.
+/// service types name no service type or plan, and upcoming plans name no plan; a person's
+/// contact read names neither.
 fn valid(collection: Collection) -> SourceRequest {
     let (service_type, plan) = match collection {
-        Collection::ServiceTypes => ("", ""),
+        Collection::ServiceTypes | Collection::PersonEmails | Collection::PersonPhoneNumbers => {
+            ("", "")
+        }
         Collection::UpcomingPlans => ("10", ""),
         _ => ("10", "20"),
     };
@@ -946,7 +951,7 @@ fn valid(collection: Collection) -> SourceRequest {
     )
     .unwrap()
 }
-const ALL: [Collection; 30] = [
+const ALL: [Collection; 32] = [
     Collection::Plan,
     Collection::Organization,
     Collection::PlanTimes,
@@ -977,6 +982,8 @@ const ALL: [Collection; 30] = [
     Collection::CheckInsLocationCounts,
     Collection::RegistrationsSignups,
     Collection::RegistrationsAttendees,
+    Collection::PersonEmails,
+    Collection::PersonPhoneNumbers,
 ];
 
 #[test]

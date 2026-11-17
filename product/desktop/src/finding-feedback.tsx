@@ -5,8 +5,8 @@
 // so a new kind of finding gets the same controls.
 import { useId, useState, type ReactNode } from "react";
 import {
-  alwaysEntry, alwaysFor, alwaysScope, alwaysText, canCorrect, canDemote, canPromote, correctionEntry, correctionSubject, entryText, kindWords, NOTE_MAX, stopEntry, stopScopes,
-  stopText, urgencyEntry, urgencyFor, withEntry, withoutEntry, type FeedbackEntry, type FeedbackScope, type FeedbackTarget, type UrgencyEntry,
+  alwaysEntry, alwaysFor, alwaysScope, alwaysText, canCorrect, canDemote, canPromote, correctionEntry, correctionSubject, entryText, hidesFinding, kindWords, NOTE_MAX, stopEntry,
+  stopScopes, stopText, urgencyEntry, urgencyFor, withEntry, withoutEntry, type CorrectionWhat, type FeedbackEntry, type FeedbackScope, type FeedbackTarget, type UrgencyEntry,
 } from "../../../core/src/finding-feedback.js";
 import { Icon } from "./icons.js";
 
@@ -60,16 +60,56 @@ export const URGENCY_NOW: Record<UrgencyEntry["level"], (kind: string) => string
 };
 
 /**
+ * What "This isn't right" asks before anything is hidden (audit item 28): the finding itself first, which hides it for
+ * this occurrence; then, on an open role, a person's details on the card; then something else. Only the first hides it;
+ * the others keep it showing and keep what the person said.
+ */
+export function correctionChoices(kind: string, occasion: string, source: string): { what: CorrectionWhat; label: string; effect: string }[] {
+  const role = kind === "needs-people";
+  return [
+    { what: "finding", label: role ? "The role isn't open" : "This finding is wrong", effect: `Ozzie hides it ${occasion} and keeps your note. It comes back if ${source} changes.` },
+    ...(role ? [{ what: "person" as const, label: "A person's details are wrong", effect: "Ozzie keeps showing the open role and keeps your note." }] : []),
+    { what: "other", label: "Something else", effect: "Ozzie keeps showing it and keeps your note." },
+  ];
+}
+/** What the page confirms, with Undo, once a correction is saved. */
+export const correctionSaid = (what: CorrectionWhat, occasion: string) => what === "finding"
+  ? `Got it. I've hidden this ${occasion} and kept your note. Undo brings it back now; later, it's under “What you've told Ozzie” on Church rules.`
+  : "Got it. I kept your note, and this still shows. You can delete the note under “What you've told Ozzie” on Church rules.";
+
+/**
  * The controls under a finding. `urgency`: false where notices don't apply (the fictional email import).
  * `occasion` and `source`: what one occurrence is and where its facts come from, in words.
  * A choice that sets this finding aside makes the card disappear; the page says what happened, with Undo.
  */
-export function FindingFeedback({ target, feedback, urgency = true, occasion = "for this Sunday", source = "Planning Center" }: {
+/**
+ * What a person's Church rules already do for this card, said in words: how soon Ozzie tells them about this kind, and
+ * that a note was prepared because of a rule. State, not a choice, so a Sunday card shows it beside the note it explains
+ * even while More choices is closed (review F, L-5).
+ */
+export function FeedbackState({ target, feedback, urgency = true }: { target: FeedbackTarget; feedback: FeedbackControls | null | undefined; urgency?: boolean }) {
+  if (!feedback) return null;
+  const always = target.action ? alwaysFor(feedback.entries, target) : null;
+  const level = urgencyFor(feedback.entries, target.kind);
+  const said = urgency && level && (level === "right-away" ? canPromote(target) : canDemote(target));
+  if (!said && !always) return null;
+  return <div className="feedback-state">
+    {said && <p className="small">{URGENCY_NOW[level](target.kind)}</p>}
+    {always && <p className="small"><Icon name="rules" small /> Prepared because of your Church rule: “{sentence(alwaysText(always, nameOf(feedback.names)))}.”</p>}
+  </div>;
+}
+
+export function FindingFeedback({ target, feedback, urgency = true, occasion = "for this Sunday", source = "Planning Center", startOpen = null, startWhat = null, state = true }: {
   target: FeedbackTarget; feedback: FeedbackControls | null | undefined; urgency?: boolean; occasion?: string; source?: string;
+  /** False where the card shows FeedbackState itself, outside a fold. */
+  state?: boolean;
+  /** Tests only: start with one of the forms open, and (This isn't right) one choice made. */
+  startOpen?: "correct" | "stop" | "always" | null; startWhat?: CorrectionWhat | null;
 }) {
   const id = useId();
-  const [stage, setStage] = useState<null | "correct" | "stop" | "always">(null);
+  const [stage, setStage] = useState<null | "correct" | "stop" | "always">(startOpen);
   const [note, setNote] = useState("");
+  const [what, setWhat] = useState<CorrectionWhat | null>(startWhat);
   const [scope, setScope] = useState(0);
   const [problem, setProblem] = useState("");
   if (!feedback) return null;
@@ -80,9 +120,9 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion = "
   const always = target.action ? alwaysFor(entries, target) : null;
   const level = urgencyFor(entries, target.kind);
   const promote = urgency && canPromote(target), demote = urgency && canDemote(target);
-  const save = (entry: FeedbackEntry, said: string) => {
-    feedback.change(withEntry(entries, entry), `${said} It's on your Church rules, where you can change it any time.`);
-    setStage(null); setProblem("");
+  const save = (entry: FeedbackEntry, said: string, whole = false) => {
+    feedback.change(withEntry(entries, entry), whole ? said : `${said} It's on your Church rules, where you can change it any time.`);
+    setStage(null); setProblem(""); setWhat(null);
   };
   const attempt = (work: () => void) => { try { work(); } catch (error) { setProblem(error instanceof Error ? error.message : "That couldn't be saved."); } };
   const toggle = (want: UrgencyEntry["level"]) => attempt(() => {
@@ -102,20 +142,27 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion = "
       {demote && <button type="button" className="btn btn-quiet btn-sm" aria-pressed={level === "briefing"} onClick={() => toggle("briefing")}>
         {level === "briefing" && <Icon name="check" small />}Put this in the briefing</button>}
     </div>
-    {urgency && level && (level === "right-away" ? promote : demote) && <p className="small">{URGENCY_NOW[level](target.kind)}</p>}
-    {always && <p className="small"><Icon name="rules" small /> Prepared because of your Church rule: “{sentence(alwaysText(always, who))}.”</p>}
+    {state && urgency && level && (level === "right-away" ? promote : demote) && <p className="small">{URGENCY_NOW[level](target.kind)}</p>}
+    {state && always && <p className="small"><Icon name="rules" small /> Prepared because of your Church rule: “{sentence(alwaysText(always, who))}.”</p>}
     {stage === "correct" && <form id={`${id}-form`} className="decide" onSubmit={e => {
       e.preventDefault();
-      attempt(() => save(correctionEntry(target, note, now()), `Got it. I've set this aside ${occasion} and kept your note.`));
+      if (!what) return;
+      attempt(() => save(correctionEntry(target, note, now(), what), correctionSaid(what, occasion), true));
     }}>
+      {/* What isn't right comes first, and nothing is chosen for the person: only the finding itself hides it. */}
+      <fieldset className="plan-report"><legend className="bold">What isn't right?</legend>
+        {correctionChoices(target.kind, occasion, source).map((c, i) => <label key={c.what} className="confirmation">
+          <input type="radio" name={`${id}-what`} checked={what === c.what} autoFocus={i === 0} onChange={() => { setWhat(c.what); setProblem(""); }} />
+          <span><span className="bold">{c.label}</span> <span className="small">{c.effect}</span></span></label>)}
+      </fieldset>
       <label className="field-l" htmlFor={`${id}-note`}>What should Ozzie have seen? (optional)</label>
-      <input id={`${id}-note`} className="input" value={note} maxLength={NOTE_MAX} autoFocus placeholder="A few words, for example: they moved to the 11:00 service"
+      <input id={`${id}-note`} className="input" value={note} maxLength={NOTE_MAX} placeholder="A few words, for example: they moved to the 11:00 service"
         onChange={e => { setNote(e.target.value); setProblem(""); }} />
-      <p className="input-help">Kept on this Mac and never sent to an AI. This hides it {occasion} only; it comes back if {source} changes.</p>
+      <p className="input-help">Kept on this Mac and never sent to an AI.</p>
       {problem && <p role="alert" className="problem">{problem}</p>}
       <div className="find-next">
-        <button type="submit" className="btn btn-primary btn-sm">Hide it {occasion}</button>
-        <button type="button" className="btn btn-quiet btn-sm" onClick={() => setStage(null)}>Never mind</button>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={!what}>{what === "finding" ? `Hide it ${occasion}` : what ? "Keep it showing and save my note" : "Choose what isn't right"}</button>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={() => { setStage(null); setWhat(null); }}>Never mind</button>
       </div>
     </form>}
     {stage === "stop" && <form id={`${id}-form`} className="decide" onSubmit={e => {
@@ -185,14 +232,16 @@ export function FromYourCards({ feedback }: { feedback: FeedbackControls | null 
         <span className="small">{URGENCY_NOW[e.level](e.kind)}</span>))}</ul></>}
     {corrections.length > 0 && <><h3 className="bold">Corrections you've made</h3>
       <ul className="list">{corrections.map(e => row(e, `${correctionSubject(e, who)}${e.labels.occurrence ? `, ${e.labels.occurrence}` : ""}`, "Delete my correction",
-        "Your correction is deleted. If Planning Center still shows it, it's back on the Sunday page.",
-        <span className="small">{e.note ? `You said: “${e.note}”` : "You said this wasn't right."} {e.kind === "attention"
-          ? "Hidden for that import only." : "Hidden for that Sunday only, while Planning Center shows the same."}</span>))}</ul></>}
+        hidesFinding(e) ? "Your correction is deleted. If Planning Center still shows it, it's back on the Sunday page." : "Your note is deleted.",
+        <span className="small">{e.note ? `You said: “${e.note}”` : e.what === "person" ? "You said a person's details were wrong." : e.what === "other" ? "You said something else wasn't right." : "You said this wasn't right."} {
+          !hidesFinding(e) ? "It still shows." : e.kind === "attention" ? "Hidden for that import only." : "Hidden for that Sunday only, while Planning Center shows the same."}</span>))}</ul></>}
   </section>;
 }
 
-/** Findings set aside by the person's Church rules, each with what set it aside and a way back. */
-export function SetAside({ entries, feedback, label = "Set aside by your Church rules" }: {
+/** Where the Sunday page lists what the leader hid. */
+export const HIDDEN_BY_YOU = "Hidden by you";
+/** Findings the leader hid ("This isn't right", "Stop flagging this"), each with what they said and a way back. */
+export function SetAside({ entries, feedback, label = HIDDEN_BY_YOU }: {
   entries: readonly FeedbackEntry[]; feedback: FeedbackControls | null | undefined; label?: string;
 }) {
   if (!feedback || !entries.length) return null;
@@ -200,7 +249,7 @@ export function SetAside({ entries, feedback, label = "Set aside by your Church 
   const who = nameOf(feedback.names);
   return <section className="stack set-aside" aria-label={label}>
     <h2 className="h3">{label}</h2>
-    <p className="small">Ozzie still read these. They aren't shown because of what you told it; nothing in Planning Center changed.</p>
+    <p className="small">Ozzie still read these. They're hidden because of what you told it, and they're listed on Church rules too; nothing in Planning Center changed.</p>
     <ul className="list">{unique.map(e => <li key={e.id}><Icon name="rules" small /><span>{entryText(e, who)}</span>
       <button type="button" className="btn btn-quiet btn-sm" onClick={() => feedback.change(withoutEntry(feedback.entries, e.id), e.type === "stop" ? "Ozzie will flag this again." : "Your correction is deleted.")}>
         {e.type === "stop" ? "Start flagging this again" : "Show it again"}</button></li>)}</ul>

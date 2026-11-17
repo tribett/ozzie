@@ -1,9 +1,12 @@
-// Ask Ozzie: a leader asks about what Ozzie has already read, and a model answers from a
-// placeholder-only fact sheet. This is the second placeholder boundary (never-list 7: real
-// people's names never go to a model), held to the same rules as draft-request.ts.
+// Ask Ozzie: a leader asks about what Ozzie has already read. This is the second placeholder
+// boundary (never-list 7: real people's names never go to a model), held to the same rules as
+// draft-request.ts. The app sends only the prepared question (`asked.sent`) on, through the harness
+// (core/src/harness/index.ts prepareAgentQuestion) and native agent_step; the fact sheet and its
+// request below are the earlier route's, whose native command and check were removed on 2026-11-16
+// (audit item 11). They are kept for the boundary they share and its tests.
 //
-// What may leave this Mac, and only through the native route (core/native-auth/src/model.rs `ask`):
-//  1. ASK_SYSTEM: fixed here and compared byte for byte natively. It also carries the meaning of
+// What the earlier fact-sheet request held:
+//  1. ASK_SYSTEM: fixed here. It also carries the meaning of
 //     every fact code, so the user message holds almost no prose for a short name to collide with.
 //  2. Fact lines built here from the Sunday brief, never from source text: one-letter codes,
 //     counts, local times and session labels only. People are always [Person N] and positions are
@@ -452,7 +455,7 @@ export function buildAskContext(session: AskSession, sources: AskSources, option
   const usable = !nameIn(facts, names) && !contactIn(facts);
   const n = brief.sources.failed.length;
   const gaps = [
-    ...(brief.mode === "recording" ? ["This is a saved recording, not a current check."] : []),
+    ...(brief.mode === "recording" ? ["This is a saved copy of a check, not a current check."] : []),
     ...(brief.stale ? ["This check is more than 30 minutes old, so it may not be current."] : []),
     ...(n ? [`${n} Planning Center ${n === 1 ? "read" : "reads"} didn't complete.`] : []),
     ...(brief.findings.some(f => f.kind === "worth-a-look" || f.kind === "lead-unverified") ? ["Some coverage couldn't be verified."] : []),

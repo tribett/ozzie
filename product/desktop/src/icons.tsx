@@ -16,6 +16,9 @@ const paths: ReadonlyMap<string, string> = new Map(Object.entries({
   history: "M3 12a9 9 0 1 0 3-6.7M3 4v5h5m4-1v5l3 2",
   repeat: "M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3",
   link: "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1m2 5a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
+  // Three sliders, for Settings (a chain link read as "links", not settings: audit item 22c).
+  sliders: "M4 6h9m4 0h3M4 12h3m4 0h9M4 18h11m4 0h1M15 4v4M9 10v4M17 16v4",
+  menu: "M4 6h16M4 12h16M4 18h16",
   lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
   spinner: "M12 3a9 9 0 1 0 9 9",
   chev: "m9 6 6 6-6 6",

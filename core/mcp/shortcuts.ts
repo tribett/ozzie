@@ -217,7 +217,7 @@ function sundayAnswer(text: string | null, nowMs: number, zone: string): string 
   if (o.sunday && dayNumber(o.sunday) < dayNumber(today)) {
     return `Ozzie's last check was for ${dayWords(o.sunday)}, which has passed. ${checked} Open Ozzie to check the next Sunday.`;
   }
-  if (o.mode === "recording") return ["This is from a saved recording, not a live look at Planning Center.", ...factLines(o, true), checked].join(" ");
+  if (o.mode === "recording") return ["This is from a saved copy of a check, not a live look at Planning Center.", ...factLines(o, true), checked].join(" ");
   if (o.stale) {
     return `Ozzie's last look at Planning Center is too old to say how ${o.sunday ? dayWords(o.sunday) : "the chosen Sunday"} stands. ${checked} Open Ozzie to check again.`;
   }

@@ -292,6 +292,11 @@ pub struct StoredAttachment {
     /// V, M1), as every pointer written before this did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
+    /// How many sections had this title when the leader chose it (audit item 30), so the page can say the notes changed
+    /// rather than follow a different section once that number changes. From 1, never below `occurrence`; a pointer
+    /// written before this has none, which the page reads as unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of: Option<u32>,
 }
 /// One list as kept on this Mac. `path` never leaves native code.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -370,6 +375,8 @@ fn valid_attachment(a: &StoredAttachment) -> bool {
     title_like(&a.section)
         && a.occurrence
             .is_none_or(|n| (2..=MAX_NOTE_LINES).contains(&n))
+        && a.of
+            .is_none_or(|n| (1..=MAX_NOTE_LINES).contains(&n) && a.occurrence.unwrap_or(1) <= n)
         && match (a.team_id.as_deref(), a.finding_kind.as_deref()) {
             (Some(team), None) => valid_team_id(team),
             (None, Some(kind)) => NOTE_FINDING_KINDS.contains(&kind),
@@ -523,6 +530,9 @@ pub struct AttachmentInput {
     pub finding_kind: Option<String>,
     #[serde(default)]
     pub occurrence: Option<u32>,
+    /// How many sections had this title when the leader chose it (audit item 30). Absent: unknown.
+    #[serde(default)]
+    pub of: Option<u32>,
 }
 
 /// A match as the page sends it with `church_source_set`.
@@ -899,6 +909,7 @@ impl Sources {
                 team_id: a.team_id,
                 finding_kind: a.finding_kind,
                 occurrence,
+                of: a.of,
             };
             if !valid_attachment(&attachment)
                 || kept

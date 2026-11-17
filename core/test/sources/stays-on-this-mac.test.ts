@@ -35,7 +35,7 @@ const PAGE_SIDE = (path: string) =>
 const CHURCH_SOURCE = (path: string) => path.startsWith("core/src/sources/") || PAGE_SIDE(path);
 
 /** Native commands that reach a model (any route), send a notice, or write the copy for other AI apps or for Siri. */
-const SENDING = ["ask_ozzie", "reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect", "save_shortcuts_check"];
+const SENDING = ["reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect", "save_shortcuts_check"];
 /**
  * The phone notice's own sending command, once there is one that carries text. Today the phone notice rides on the two
  * notice commands above (src-tauri/src/phone_notice.rs), and phone_notice_test sends a fixed line; add a command here
@@ -43,12 +43,12 @@ const SENDING = ["ask_ozzie", "reword_draft", "agent_step", "responsibility_agen
  */
 const PHONE_NOTICE_SENDING: readonly string[] = [];
 /** Commands that carry text off the page on this Mac: the briefing read aloud, and a draft opened in Mail or Messages. */
-const OFF_THE_PAGE = ["speak_briefing", "open_draft"];
+const OFF_THE_PAGE = ["speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center"];
 const OUTWARD = [...SENDING, ...PHONE_NOTICE_SENDING, ...OFF_THE_PAGE];
 /** Modules that build what a model, a notice, Siri or another AI app is given (the calendar test's list, and the brief and listen-script builders). */
 const BUILDERS = [
-  "core/src/ask.ts", "core/src/draft-request.ts", "core/src/egress.ts", "core/src/broker.ts", "core/src/finding-feedback.ts", "core/src/kids-rules.ts",
-  "core/src/reminder-draft.ts", "core/src/escalation-draft.ts", "core/src/coverage-drafts.ts", "core/src/sunday-brief.ts", "core/src/spoken-briefing.ts",
+  "core/src/ask.ts", "core/src/draft-request.ts", "core/src/broker.ts", "core/src/finding-feedback.ts", "core/src/kids-rules.ts",
+  "core/src/reminder-draft.ts", "core/src/escalation-draft.ts", "core/src/sunday-brief.ts", "core/src/spoken-briefing.ts",
   "product/desktop/src/ask-panel.tsx", "product/desktop/src/draft-actions.tsx", "product/desktop/src/finding-feedback.tsx", "product/desktop/src/sunday-ready.tsx",
 ];
 const boundary = [...new Set([
@@ -81,7 +81,7 @@ describe("church-added lists and notes never reach a model, a notice, Siri or th
     expect(pageSide).toEqual(["product/desktop/src/church-link-form.tsx", "product/desktop/src/church-lists-page.tsx", "product/desktop/src/church-notes.tsx",
       "product/desktop/src/church-own-words.tsx", "product/desktop/src/church-sources.ts"]);
     for (const p of pageSide) expect([...reach(APP)], p).toContain(p);
-  });
+  }, HATCH_TIME_LIMIT_MS);
 
   it("follows every import in the app's source folders: none resolves to nothing, to JavaScript from TypeScript, or is computed", () => {
     expect(unfollowed()).toEqual([]);

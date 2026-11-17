@@ -20,11 +20,11 @@ import {
 
 const CALENDAR = (path: string) => path.startsWith("core/src/calendar/") || /^product\/desktop\/src\/(calendars\.ts|calendar-[\w-]+\.(?:tsx?|jsx?|mjs))$/u.test(path);
 /** Native commands that reach a model (any route), send a notice, or write the copy for other AI apps. */
-const SENDING = ["ask_ozzie", "reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect"];
+const SENDING = ["reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect"];
 /** Modules that build what a model, a notice or another AI app is given. */
 const BUILDERS = [
-  "core/src/ask.ts", "core/src/draft-request.ts", "core/src/egress.ts", "core/src/broker.ts", "core/src/finding-feedback.ts", "core/src/kids-rules.ts",
-  "core/src/reminder-draft.ts", "core/src/escalation-draft.ts", "core/src/coverage-drafts.ts",
+  "core/src/ask.ts", "core/src/draft-request.ts", "core/src/broker.ts", "core/src/finding-feedback.ts", "core/src/kids-rules.ts",
+  "core/src/reminder-draft.ts", "core/src/escalation-draft.ts",
   "product/desktop/src/ask-panel.tsx", "product/desktop/src/draft-actions.tsx", "product/desktop/src/finding-feedback.tsx", "product/desktop/src/sunday-ready.tsx",
 ];
 const boundary = [...new Set([
@@ -53,7 +53,7 @@ describe("calendar text never reaches a model, a notice or the copy for other AI
     // The worker is followed from where it is started: the calendar code and the church's time zone rules, nothing else.
     expect(imports(BRIDGE)).toContain(WORKER);
     expect([...reach(WORKER, false)].filter(p => !CALENDAR(p))).toEqual(["core/src/church-time.ts"]);
-  });
+  }, 60_000);
 
   it("follows every import in the app's source folders: none resolves to nothing, to JavaScript from TypeScript, or is computed", () => {
     expect(unfollowed()).toEqual([]);

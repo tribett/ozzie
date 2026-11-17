@@ -19,11 +19,25 @@ export interface BackgroundHandlers {
   shown?: () => void;
   /** Debug builds only: the hidden-window probe. */
   probe?: (phase: "hidden" | "report") => void;
+  /**
+   * Quitting would stop checks or lose visitor cards, so native code held it and asks in the window (audit items 20
+   * and 23): counts only.
+   */
+  quitAsked?: (what: { cards: number; checks: boolean }) => void;
 }
 
 export const autostart: Autostart = {
   get: () => invoke<boolean>("autostart_get"),
   set: enabled => invoke<boolean>("autostart_set", { enabled }),
+};
+/**
+ * Asking before quitting (src-tauri/src/always_on.rs QuitGuard): the page says how many visitor cards are open (a count
+ * only) and whether checks are on; the leader's answer quits now or keeps Ozzie running.
+ */
+export const quitting = {
+  guard: (cards: number, checks: boolean) => { void invoke("quit_guard_set", { cards: Math.max(0, Math.min(99, Math.floor(cards))), checks }).catch(() => undefined); },
+  quit: () => invoke<void>("quit_now"),
+  keep: () => { void invoke("quit_kept").catch(() => undefined); },
 };
 export const background = {
   /** Debug-only switches; all off in a release build. */
@@ -47,6 +61,8 @@ export const background = {
     if (handlers.paused) add<{ paused: boolean }>("ozzie:paused", p => handlers.paused!(p.paused));
     if (handlers.shown) add<unknown>("ozzie:shown", () => handlers.shown!());
     if (handlers.probe) add<{ phase: "hidden" | "report" }>("ozzie:probe", p => handlers.probe!(p.phase));
+    if (handlers.quitAsked) add<{ cards?: unknown; checks?: unknown }>("ozzie:quit-asked", p => handlers.quitAsked!({
+      cards: Number.isSafeInteger(p?.cards) && (p.cards as number) > 0 ? Math.min(p.cards as number, 99) : 0, checks: p?.checks === true }));
     return () => { for (const stop of stops) void stop.then(f => f()); };
   },
 };

@@ -71,14 +71,21 @@ fn web_page_type(content_type: &str) -> bool {
             || media.eq_ignore_ascii_case("application/xhtml+xml")
     })
 }
+/// Format characters that make text read as something else, which church-added text drops wherever Ozzie shows it:
+/// the soft hyphen, the Arabic letter mark, the Mongolian vowel separator, zero-width characters and marks, direction
+/// overrides and isolates, invisible operators, the byte-order mark, interlinear annotation and tag characters. A copy
+/// of core/src/sources/text.ts `hidden` (itself the desktop app's calendars.rs rule, which this crate cannot use),
+/// held to it by core/test/fixtures/sources/hidden.json, which that side writes and sheet_link_tests.rs reads.
+fn hidden(c: char) -> bool {
+    matches!(c, '\u{ad}' | '\u{61c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{e0001}'
+        | '\u{e0020}'..='\u{e007f}')
+}
 /// What may come before a web page's first `<` and is skipped to find it: white space (a non-breaking space
-/// included), the byte-order mark, the zero-width space, the word joiner and the zero-width joiners.
+/// included) and every hidden character (audit item 33: once only the byte-order mark, the zero-width space, the word
+/// joiner and the zero-width joiners).
 fn before_text(c: char) -> bool {
-    c.is_whitespace()
-        || matches!(
-            c,
-            '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}'
-        )
+    c.is_whitespace() || hidden(c)
 }
 /// A body read as text from its start, however long what comes before its first character runs (review U, note 1;
 /// the body is at most `MAX_SHEET_BYTES`): UTF-16 with its byte-order mark, else UTF-8, else (when what starts it

@@ -113,6 +113,31 @@ describe("This isn't right", () => {
     expect(find(brief(other, withFeedback([entry])), "needs-people", "Nursery")).toBeDefined();
   });
 
+  it("asks what isn't right: only the finding itself hides it; a person's details or something else keep it showing (audit item 28)", () => {
+    const first = brief();
+    const nursery = target(first, "needs-people", "Nursery");
+    for (const what of ["person", "other"] as const) {
+      const entry = correctionEntry(nursery, "Drew moved to the 11:00", AT, what);
+      expect(entry).toMatchObject({ type: "correction", what, note: "Drew moved to the 11:00" });
+      const kept = brief(nov22Capture(), withFeedback([entry]));
+      expect(find(kept, "needs-people", "Nursery")).toBeDefined();
+      expect(kept.hidden ?? []).toEqual([]);
+      expect(applyFeedback([nursery], x => x, [entry]).hidden).toEqual([]);
+      // It is kept with the Church rules, and read back as written.
+      expect(feedbackOf({ feedback: [entry] })).toEqual([entry]);
+    }
+    expect(entryText(correctionEntry(nursery, "", AT, "person"), nameOf)).toBe(`Open roles for Nursery: you said a person's details were wrong for ${first.plan.dates}.`);
+    expect(entryText(correctionEntry(nursery, "", AT, "other"), nameOf)).toBe(`Open roles for Nursery: you said something else wasn't right for ${first.plan.dates}.`);
+    // The finding itself: hidden, as before; such an entry carries no `what`, like every entry made before the question.
+    const hide = correctionEntry(nursery, "", AT, "finding");
+    expect(hide).not.toHaveProperty("what");
+    expect(find(brief(nov22Capture(), withFeedback([hide])), "needs-people", "Nursery")).toBeUndefined();
+    // Anything else in `what` is not this version's entry.
+    expect(feedbackOf({ feedback: [{ ...hide, what: "role" }] })).toEqual([]);
+    expect(feedbackOf({ feedback: [{ ...hide, what: "finding" }] })).toHaveLength(1);
+    expect(() => correctionEntry(nursery, "", AT, "role" as never)).toThrow();
+  });
+
   it("keeps an optional note short", () => {
     const t = target(brief(), "streak");
     expect(correctionEntry(t, "", AT).note).toBe("");
@@ -311,6 +336,24 @@ describe("keeping entries", () => {
     expect(feedbackOf({ feedback: junk })).toEqual([one]);
     expect(feedbackOf({ feedback: "nope" })).toEqual([]);
     expect(feedbackOf({})).toEqual([]);
+  });
+
+  it("keeps one note per kind on the same finding: a second of another kind never replaces the first (review P, L9)", () => {
+    const nursery = target(brief(), "needs-people", "Nursery");
+    const hide = correctionEntry(nursery, "Nursery is covered by the 9:00 team", AT, "finding");
+    const person = correctionEntry(nursery, "Drew moved to the 11:00", "2026-11-20T15:20:00Z", "person");
+    const other = correctionEntry(nursery, "The room changed", "2026-11-20T15:25:00Z", "other");
+    // Each kind is kept beside the others, in the order said, and the finding stays hidden by the first.
+    const all = withEntry(withEntry(withEntry([], hide), person), other);
+    expect(all).toEqual([hide, person, other]);
+    expect(applyFeedback([nursery], x => x, all).hidden.map(h => h.entry)).toEqual([hide]);
+    // In either order: a note about a person never undoes "the finding isn't right".
+    expect(withEntry(withEntry([], person), hide)).toEqual([person, hide]);
+    // A second note of the same kind replaces that kind's earlier one, as before.
+    const person2 = correctionEntry(nursery, "Drew is back at 9:00", "2026-11-20T15:30:00Z", "person");
+    expect(withEntry(all, person2)).toEqual([hide, other, person2]);
+    const hide2 = correctionEntry(nursery, "", "2026-11-20T15:35:00Z", "finding");
+    expect(withEntry(all, hide2)).toEqual([person, other, hide2]);
   });
 
   it("names a new kind of finding plainly until it has its own words", () => {

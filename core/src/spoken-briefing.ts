@@ -204,7 +204,7 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   if (sunday) {
     const at = when(sunday.checked_at ?? sunday.completed_at, ctx.timeZone);
     times.push(sunday.mode === "fictional" ? `The Sunday check is the fictional example, read ${at}.`
-      : sunday.mode === "recording" ? `Sunday comes from a saved recording made ${at}. It isn't a fresh check.`
+      : sunday.mode === "recording" ? `Sunday comes from the saved copy of a check made ${at}. It isn't a fresh check.`
         : `Planning Center was checked ${at}.${sunday.stale ? " That's more than 30 minutes ago, so it may not be current." : ""}`);
   }
 

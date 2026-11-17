@@ -15,7 +15,7 @@ import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sun
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { captureRooms, sundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
-import { SundayPage, useSundayDecisions } from "./sunday-page.js";
+import { SundayPage, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
 import { ConnectionPage } from "./connection-page.js";
@@ -24,24 +24,31 @@ import { sundayCount, sundayCountText } from "./today-groups.js";
 import { Icon } from "./icons.js";
 import { model } from "./model.js";
 import { devChurchRules, devKidsRules, responsibilityAutopilot, runAutopilot } from "./autopilot.js";
-import { loadRules, loadSettings, saveRules, saveSettings, sundayProblem, sundaySource, type RecordingSummary } from "./sunday-source.js";
+import { loadRules, loadSettings, refusedRead, saveRules, saveSettings, sundayProblem, sundaySource, type RecordingSummary } from "./sunday-source.js";
 import { browserStore, desktopProactive, proactiveReadiness, verifySavedOnLaunch, type ProactiveHooks } from "./proactive.js";
 import { ProactivePage, useProactiveView } from "./proactive-page.js";
 import { AskIcon, AskPanel, type AskFn, type PlanHooks } from "./ask-panel.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { HarnessData } from "../../../core/src/harness/index.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
+import { composeAnswer } from "../../../core/src/harness/compose.js";
 import { parseRequest } from "../../../core/src/harness/responsibilities.js";
 import {
   askOzzie, buildHarnessData, createAppHarness, desktopRecorder, devLoop, enableDebugLines, grantedFor, localTriggers, procedures as loadProcedures,
-  PROCEDURE_ORDER, shownAnswer, type LoopChoice,
+  keptWriteup, lookAtWhoCouldHelp, PROCEDURE_ORDER, stepNotes, type LoopChoice,
 } from "./harness-bridge.js";
 import { modelSteps, type TaskRow } from "./harness-words.js";
-import { CardsPage } from "./cards-page.js";
-import { SetupFlow, setupMemory } from "./setup-flow.js";
+import { KeptCards } from "./cards-page.js";
+import { SetupFlow, setupMemory, startMemory, type Step as SetupStep } from "./setup-flow.js";
+import type { RegularCheck } from "./today-groups.js";
+import { askedMark, askedMemory, askedText, holding, type AskedMark } from "./asked.js";
+import type { AskedLine, AskedSlot } from "./sunday-page.js";
+import { localDate } from "../../../core/src/church-time.js";
+import { openInPlanningCenter } from "./planning-center-pages.js";
 import { invoke } from "@tauri-apps/api/core";
-import { autostart, background, startProbe } from "./background.js";
-import { createRunner, handChanges, nativeResponsibilities, responsibilityStep, type RunnerHooks } from "./responsibility-runner.js";
+import { autostart, background, quitting, startProbe } from "./background.js";
+import { QuitQuestion, useQuitGuard, type QuitAsk } from "./quit-question.js";
+import { allowanceSpent, createRunner, handChanges, nativeResponsibilities, responsibilityStep, type RunnerHooks } from "./responsibility-runner.js";
 import { ResponsibilityList, useRunnerView, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import type { FeedbackSource } from "./finding-feedback.js";
@@ -61,7 +68,7 @@ const nav: { id: Page; label: string; icon: string }[] = [
   { id: "today", label: "Today", icon: "clock" }, { id: "sunday", label: "Sunday", icon: "sun" }, { id: "cards", label: "Visitor cards", icon: "user" },
   { id: "rules", label: "Church rules", icon: "rules" }, { id: "lists", label: "Lists & notes", icon: "table" },
   { id: "automatic", label: "What runs automatically", icon: "repeat" },
-  { id: "activity", label: "What happened", icon: "history" }, { id: "connection", label: "Settings", icon: "link" },
+  { id: "activity", label: "What happened", icon: "history" }, { id: "connection", label: "Settings", icon: "sliders" },
 ];
 const proactive = desktopProactive();
 // What Ozzie keeps an eye on (responsibility-runner.ts): one per webview, like the Sunday schedule.
@@ -96,6 +103,17 @@ function useDarkAppearance(): boolean {
   return dark;
 }
 
+/** The words on the fictional example's band (audit item 2): true on every page while the example is on. */
+export const EXAMPLE_BAND = { title: "Example church, not real.", body: "The Sunday, teams, people and email shown are made up. Your own Church rules, lists, settings and visitor cards are real.", leave: "Leave the example" } as const;
+/** Across the top of every page while the fictional example is on, with a way out. */
+export function ExampleBand({ onLeave }: { onLeave: () => void }) {
+  return <div className="example-band" role="note">
+    <Icon name="info" />
+    <p><strong>{EXAMPLE_BAND.title}</strong> {EXAMPLE_BAND.body}</p>
+    <button type="button" className="btn btn-secondary btn-sm" onClick={onLeave}>{EXAMPLE_BAND.leave}</button>
+  </div>;
+}
+
 export function App() {
   const [page, setPage] = useState<Page>("today");
   const [status, setShownStatus] = useState<ConnectionStatus | null>(null);
@@ -104,6 +122,9 @@ export function App() {
   const setStatus = useCallback((next: ConnectionStatus | null) => {
     if (!fresher(next, newestStatus.current)) return;
     if (next?.revision !== undefined) newestStatus.current = next.revision;
+    // Every status passes here (the poll, the scheduler, the launch check, Settings and setup): one that is disconnected
+    // forgets every write-up, including one still being prepared (review H, M4; review G, N2).
+    if (next?.state === "disconnected") runner.forgetAllWriteups();
     setShownStatus(next);
   }, []);
   const [settings, setSettings] = useState(loadSettings);
@@ -116,10 +137,35 @@ export function App() {
   const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
+  // Planning Center refused the last check: the Sunday page says which access and what next (audit item 5).
+  const [refused, setRefused] = useState(false);
   const [now, setNow] = useState(() => new Date().toISOString());
   const [modelReady, setModelReady] = useState(false);
   // Guided setup: shown on its own until skipped or finished; Settings can reopen it.
   const [setup, setSetup] = useState<"auto" | "open" | "closed">(() => setupMemory.closed() ? "closed" : "auto");
+  // Which step guided setup opens at: "Connect Planning Center" on a not-connected Today opens it at signing in.
+  const [setupAt, setSetupAt] = useState<SetupStep>("about");
+  // Visitor cards (audit item 20): the page stays mounted once opened, so its cards are kept while Ozzie is open, hidden
+  // on other pages; App hears only how many are open, for the question on quitting.
+  const [cardsOpened, setCardsOpened] = useState(false);
+  // Each Disconnect the leader chose with cards open ends them (cards-page.tsx `KeptCards`, review P L4).
+  const [cardsDiscarded, setCardsDiscarded] = useState(0);
+  const discardCards = () => setCardsDiscarded(n => n + 1);
+  const [openCards, setOpenCards] = useState(0);
+  // "Start Ozzie when you turn on this Mac?" (audit item 23): asked in setup, or once on Today of an install set up
+  // before setup asked it, while Ozzie doesn't start with the Mac. Never changed without the leader's click.
+  const [startAsked, setStartAsked] = useState(() => startMemory.asked());
+  const [startOn, setStartOn] = useState<boolean | null>(null);
+  const [startFailed, setStartFailed] = useState(false);
+  const answerStart = (on: boolean) => {
+    setStartFailed(false);
+    void autostart.set(on).then(now => { startMemory.answer(); setStartAsked(true); setStartOn(now); }, () => setStartFailed(true));
+  };
+  // Native code asks before quitting from Ozzie's menu or with Command-Q (audit items 20 and 23, review P M1): what quitting
+  // would stop or lose, counts only.
+  const [quitAsk, setQuitAsk] = useState<QuitAsk | null>(null);
+  // A Sunday card Today asked to open at (audit item 17).
+  const [sundayFocus, setSundayFocus] = useState<string | null>(null);
   const [launched, setLaunched] = useState(false);
   // The debug-only hidden-window probe and stand-in update test never read the Keychain (where the AI key lives).
   useEffect(() => {
@@ -145,10 +191,10 @@ export function App() {
       if (!info.probe && !update?.probe) void calendars.load();
     }).catch(() => undefined);
   }, [calendars]);
-  // Ask Ozzie: docked beside the work column on a wide window, otherwise opened on request.
   // One set of placeholder labels for the whole app, so a person or role keeps its label across questions.
   const [harnessSession] = useState(() => new HarnessSession());
-  const [askOpen, setAskOpen] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(min-width: 1440px)").matches);
+  // Ask Ozzie opens when the leader chooses, on any width (audit item 8), and stays as they left it while Ozzie runs.
+  const [askOpen, setAskOpen] = useState(false);
   // Ozzie's procedures (core/skills), checked and hashed once; shown on Church rules and followed by Ask.
   const [procedures, setProcedures] = useState<ReadonlyMap<string, Skill> | null>(null);
   useEffect(() => { loadProcedures().then(setProcedures).catch(() => setProcedures(null)); }, []);
@@ -210,6 +256,8 @@ export function App() {
     setRulesByChurch(moved.store);
   }, [inUseOrg]);
   useEffect(() => saveRulesByChurch(rulesByChurch), [rulesByChurch]);
+  // A job's write-ups belong to the church they were read from: another church's are forgotten (audit item 6).
+  useEffect(() => { if (inUseOrg) runner.keepWriteupsFor(inUseOrg); }, [inUseOrg]);
   const rules = rulesInUse(savedRules, rulesByChurch, inUseOrg, settings.organization);
   // The church Ozzie last used, kept while the church in use drops out for a moment (a Keychain write): Ask's answers
   // belong to it, and start afresh with another church (review S2, L2).
@@ -250,6 +298,7 @@ export function App() {
   // Seen in Ozzie only while the window is on screen: with it closed, Ozzie keeps running in the menu bar.
   const visible = useWindowVisible();
   useEffect(() => { if (page === "automatic" && visible) proactive.markSeen(); }, [page, automatic.unseen, visible]);
+  useEffect(() => { if (page === "cards") setCardsOpened(true); }, [page]);
   // Run a due check as soon as a saved connection and a chosen Sunday are known, not at the next timer tick.
   const readiness = proactiveReadiness(settings, status);
   useEffect(() => { if (readiness === "ready") { void proactive.tick(); void runner.tick(); } }, [readiness]);
@@ -284,20 +333,27 @@ export function App() {
       return c;
     },
     belongs,
-    // With an AI model: the template's procedure through the harness, each step paid from this run's grant.
-    prepare: async (r, grant, c, signal) => {
+    // With an AI model: the template's procedure through the harness, each step paid from this run's grant. Its
+    // write-up is kept with the run, people as id tokens (harness-bridge keptWriteup); it decides nothing.
+    prepare: async (r, grant, c, signal, trigger) => {
       const s = runnerState.current;
       if (!s.procedures || !belongs(c)) return null;
       const data = buildHarnessData({ capture: c, fictional: false, rules: s.rules, decisions: s.decisions, status: s.status, configured: s.configured, now: new Date().toISOString() });
       const h = createAppHarness({ workspace_id: s.workspace, data, skills: s.procedures, session: harnessSession, loop: s.loop, recorder: desktopRecorder(), step: responsibilityStep(grant.run_id) });
-      const observer = desktopRecorder().task("skill", r.skill_id);
+      const observer = desktopRecorder().task("skill", r.skill_id, trigger ? `job:${r.template}:${trigger}` : undefined);
       // A pause aborts the run's signal, which stops the AI work at once (the loop cancels its step and tools).
       const outcome = await h.runSkill(r.skill_id, { onEvent: observer.onEvent, ...(signal ? { signal } : {}) });
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
       const ai_steps = modelSteps(outcome.events);
-      if (outcome.status !== "verified" || !outcome.answer) return { status: outcome.status, code: outcome.code, summary: null, draft: null, ai_steps };
-      const shown = shownAnswer(h, outcome, s.procedures.get(r.skill_id), "");
-      return { status: "verified", code: null, summary: shown.body, draft: shown.draft, ai_steps };
+      // A "limit" from a spent allowance, not this run's own limit, as native named it (review G).
+      const native = stepNotes.take(outcome.events[0]?.task_id ?? "");
+      if (outcome.status !== "verified" || !outcome.answer) {
+        return { status: outcome.status, code: outcome.code, writeup: null, ai_steps, allowance: allowanceSpent(native) };
+      }
+      const writeup = keptWriteup(h, outcome);
+      const task = outcome.events[0]?.task_id;
+      if (task) desktopRecorder().ended(task, composeAnswer(outcome.answer, outcome.evidence).kind);
+      return { status: "verified", code: null, writeup, ai_steps };
     },
   }), [harnessSession]);
   // The native timer wakes the page (even with the window closed), reports Mac sleep, Pause everything
@@ -310,6 +366,7 @@ export function App() {
       // Pause everything takes effect at once; lifting it puts the Sunday check back as it was.
       paused: paused => { proactive.pauseWithEverything(paused); void runner.pausedElsewhere(paused); },
       shown: openToday,
+      quitAsked: setQuitAsk,
     });
     document.addEventListener("visibilitychange", openToday);
     return () => { stop(); document.removeEventListener("visibilitychange", openToday); };
@@ -360,6 +417,23 @@ export function App() {
   useEffect(() => saveRules(savedRules), [savedRules]);
 
   const brief = useMemo(() => capture ? buildSundayBrief(capture, rules, fictional ? capture.completed_at : now, fictional) : null, [capture, rules, now, fictional]);
+  // "Looks good — I'll send it" marks (asked.ts, audit item 18): kept on this Mac by ids; dropped once the plan changes for
+  // that person or the Sunday passes. Never part of the fictional example, and handed to the pages only as words and Undo.
+  const [askedStore] = useState(() => askedMemory(browserStore, () => localDate(new Date().toISOString(), brief?.time_zone ?? macZone())));
+  const [askedMarks, setAskedMarks] = useState<AskedMark[]>(() => askedStore.all());
+  const liveBrief = brief && !fictional && brief.mode === "live" ? brief : null;
+  useEffect(() => { if (liveBrief) setAskedMarks(askedStore.settle(liveBrief)); }, [liveBrief?.plan.id, liveBrief?.completed_at, askedStore]);
+  const askedLines: AskedLine[] = holding(askedMarks, fictional ? null : brief).map(m => {
+    const f = brief!.findings.find(x => x.key === m.key);
+    return { key: m.key, person_id: m.person_id, text: askedText(m, capture?.names ?? {}, f?.position?.name ?? null), undo: () => setAskedMarks(askedStore.undo(m)) };
+  });
+  const askedSlot: AskedSlot = {
+    lines: askedLines,
+    onMark: (finding, person) => {
+      const mark = brief && !fictional ? askedMark(brief, finding, person, new Date().toISOString()) : null;
+      if (mark) setAskedMarks(askedStore.add(mark));
+    },
+  };
   // Someone looking at Ozzie sees a current picture: with the window on screen, a live check that has
   // gone out of date is read again (stale-refresh.ts). Paused checks stay paused.
   const lastRefresh = useRef(0);
@@ -426,12 +500,18 @@ export function App() {
     const timer = setInterval(load, 5000);
     return () => { alive = false; clearInterval(timer); };
   }, [page, ledgerVersion, recorder]);
-  const showProcedure = (id: string) => { setFocusProcedure(id); setPage("rules"); };
+  // "Ask Ozzie to look at who could help" on a Sunday card (audit item 9): the who-could-help procedure through the harness for
+  // that one role, recorded in the task ledger like any task. Only while AI help is set up; the fixed list stays either way.
+  const whoCouldHelp: WhoCouldHelp | undefined = useMemo(() => procedures && modelReady
+    ? (finding, signal) => lookAtWhoCouldHelp(d => createAppHarness({ workspace_id: workspace, data: d, skills: procedures, session: harnessSession, loop, recorder }),
+      dataNow.current, finding, { signal, recorder, skills: procedures, sender: yourName.get() })
+      .finally(() => { void recorder.idle().then(() => setLedgerVersion(v => v + 1)); })
+    : undefined, [procedures, modelReady, workspace, loop, recorder, harnessSession]);
 
   const act = async (work: () => Promise<SundayCapture>, isFictional = false) => {
-    setBusy(true); setProblem("");
+    setBusy(true); setProblem(""); setRefused(false);
     try { setCapture(await work()); setFictional(isFictional); setNow(new Date().toISOString()); }
-    catch (error) { setProblem(sundayProblem(error)); }
+    catch (error) { setProblem(sundayProblem(error)); setRefused(refusedRead(error)); }
     finally { setBusy(false); }
   };
   // Same check as always (re-verify a saved connection, then read), through the one path that
@@ -448,11 +528,33 @@ export function App() {
   showingSetup.current = showSetup;
   useOpenedPage(opened => { setFocusProcedure(null); setPage(opened); }, () => !showingSetup.current);
   useLayoutEffect(() => {
-    if (focusProcedure) return;
+    // Opening a procedure, or a Sunday card from Today, moves to it instead.
+    if (focusProcedure || sundayFocus) return;
     if (mainRef.current) mainRef.current.scrollTop = 0;
     if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
   }, [page, showSetup, focusProcedure]);
-  const endSetup = (then: Page) => { setupMemory.close(); setSetup("closed"); setPage(then); };
+  const endSetup = (then: Page) => { setupMemory.close(); setSetup("closed"); setSetupAt("about"); setPage(then); setStartAsked(startMemory.asked()); };
+  // Whether Ozzie starts with this Mac, read when setup is closed (the debug probe never asks).
+  useEffect(() => {
+    if (setup !== "closed") return;
+    let alive = true;
+    void background.info().then(info => { if (!info.probe) autostart.get().then(on => { if (alive) setStartOn(on); }, () => undefined); });
+    return () => { alive = false; };
+  }, [setup]);
+  // The fictional example (audit item 2): opened from setup, Today or Sunday; a band on every page says so while it is on.
+  const showExample = () => { void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); };
+  const leaveExample = () => { setCapture(null); setFictional(false); setProblem(""); setRefused(false); };
+  // The regular Sunday check as Today shows it (audit item 24): its schedule, last and next look, and what it missed today.
+  // What quitting would stop or lose, told to native code as it changes: open cards (a count) and whether the regular
+  // Sunday check or any job is on.
+  useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch });
+  const regular: RegularCheck = {
+    ready: readiness === "ready", paused: automatic.schedule.paused, running: automatic.running || busy,
+    intervalMinutes: automatic.prefs.intervalMinutes, runOnLaunch: automatic.prefs.runOnLaunch,
+    last: automatic.schedule.last_run ? { at: automatic.schedule.last_run.finished_at, ok: automatic.schedule.last_run.outcome === "ok" } : null,
+    next: automatic.schedule.next_run_at,
+    missed: automatic.history.filter(e => e.kind === "missed" && e.scheduled_for && Date.parse(now) - Date.parse(e.at) < 86_400_000).map(e => e.scheduled_for!),
+  };
   // Names for "What changed" come only from the current real check of the same organization.
   const changeNames = capture && !fictional && capture.organization === org ? capture.names : {};
   // The church's time zone as Planning Center Services gave it, from a real check of the same organization only.
@@ -482,50 +584,77 @@ export function App() {
   // Closing Ask puts keyboard focus back on the button that opens it, rather than nowhere.
   const askEntry = useRef<HTMLButtonElement>(null);
   const closeAsk = () => { setAskOpen(false); askEntry.current?.focus(); };
+  // A narrow window (or large text) shows the pages under Menu in a bar across the top, named as in the sidebar.
+  const [menu, setMenu] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const side = useRef<HTMLElement>(null);
+  // While it's open, Escape (wherever the focus is: a click doesn't move it on a Mac) or a click outside closes it.
+  useEffect(() => {
+    if (!menu) return;
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { setMenu(false); menuButton.current?.focus(); } };
+    const outside = (e: PointerEvent) => { if (!(e.target instanceof Node && side.current?.contains(e.target))) setMenu(false); };
+    document.addEventListener("keydown", key);
+    document.addEventListener("pointerdown", outside);
+    return () => { document.removeEventListener("keydown", key); document.removeEventListener("pointerdown", outside); };
+  }, [menu]);
   // Things to decide, the same number as Today's Sunday card and the Sunday page (Worth a look is listed there, not counted here).
   const sundayBadge = sundayCount(open);
   const automaticCount = page !== "automatic" ? automatic.unseen + watch.unseen : 0;
-  // A narrow window (or large text) shows the sidebar as icons; each label stays for VoiceOver and shows beside its icon on hover or keyboard focus.
+  // The sidebar keeps its words at every width (audit item 22c); a narrow window puts them under Menu, which Escape closes.
+  // Its two lines (reads only; the church in use) go under Menu too, and the church stays in the bar (review F, L-6).
+  const churchLine = !connected ? "Planning Center not connected" : inUse?.name ? `Planning Center: ${inUse.name}` : `Planning Center organization ${status!.organization}`;
   return <div className={`oz app${dark ? " dark" : ""}`}>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
-      <aside className="side">
+      <aside ref={side} className={`side${menu ? " is-menu" : ""}`}>
         <div className="brand"><img className="logo" src="/ozzie.svg" alt="Ozzie by FlockConnect" /></div>
-        <nav className="nav">{nav.map(n => <a key={n.id} href={`#${n.id}`} className="nav-i" data-label={n.label} aria-current={!showSetup && page === n.id ? "page" : undefined}
-          onClick={e => { e.preventDefault(); if (showSetup) setSetup("closed"); setFocusProcedure(null); setPage(n.id); }}><Icon name={n.icon} /><span className="nav-label">{n.label}</span>
+        <button type="button" ref={menuButton} className="btn btn-secondary side-menu" aria-expanded={menu} aria-controls="side-nav"
+          onClick={() => setMenu(!menu)}><Icon name="menu" />Menu</button>
+        <p className="small side-bar-org">{churchLine}</p>
+        <div id="side-nav" className="side-pages">
+        <nav className="nav" aria-label="Pages">{nav.map(n => <a key={n.id} href={`#${n.id}`} className="nav-i" aria-current={!showSetup && page === n.id ? "page" : undefined}
+          onClick={e => { e.preventDefault(); setMenu(false); if (showSetup) setSetup("closed"); setFocusProcedure(null); setPage(n.id); }}><Icon name={n.icon} /><span className="nav-label">{n.label}</span>
           {n.id === "sunday" && sundayBadge > 0 && <span className="count"><span aria-hidden="true">{sundayBadge}</span>
             <span className="sr-only">, {sundayCountText(sundayBadge)}</span></span>}
           {n.id === "automatic" && automaticCount > 0 && <span className="count"><span aria-hidden="true">{automaticCount}</span>
             <span className="sr-only">, {automaticCount} new</span></span>}</a>)}</nav>
-        <button type="button" ref={askEntry} className="btn btn-secondary ask-entry" aria-expanded={askOpen} aria-controls="ask-panel"
-          onClick={() => setAskOpen(!askOpen)}><AskIcon /><span className="nav-label">Ask Ozzie</span></button>
         <div className="side-foot">
           <p className="quiet-note"><Icon name="lock" small /><span className="nav-label">Reads only. Names Ozzie reads stay on this Mac.</span></p>
-          <p className="small side-org">{!connected ? "Planning Center not connected" : inUse?.name ? `Planning Center: ${inUse.name}` : `Planning Center organization ${status!.organization}`}</p>
+          <p className="small side-org">{churchLine}</p>
         </div>
+        </div>
+        <button type="button" ref={askEntry} className="btn btn-secondary ask-entry" aria-expanded={askOpen} aria-controls="ask-panel"
+          onClick={() => { setMenu(false); setAskOpen(!askOpen); }}><AskIcon /><span className="nav-label">Ask Ozzie</span></button>
       </aside>
       <main className="main" ref={mainRef}>
-        {showSetup && <SetupFlow status={status} settings={settings} onSettings={setSettings} onStatus={setStatus} prefs={automatic.prefs} onModel={setModelReady}
-          onClose={() => endSetup("today")} onAutomatic={() => endSetup("automatic")}
-          onExample={() => { endSetup("sunday"); void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }} />}
+        {showSetup && <SetupFlow key={setupAt} initial={setupAt} status={status} settings={settings} onSettings={setSettings} onStatus={setStatus} prefs={automatic.prefs} onModel={setModelReady}
+          cards={openCards} onDiscardCards={discardCards} onClose={() => endSetup("today")} onAutomatic={() => endSetup("automatic")}
+          onExample={() => { endSetup("sunday"); showExample(); }} />}
+        {!showSetup && fictional && <ExampleBand onLeave={leaveExample} />}
         {!showSetup && <>
         {switchQuestion && page !== "connection" && <SwitchWaiting question={switchQuestion} onOpen={() => setPage("connection")} />}
-        {page === "today" && <UpdateLine state={updateState} nowMs={Date.parse(now)} />}
+        {page === "today" && <UpdateLine state={updateState} nowMs={Date.parse(now)} cards={openCards} />}
+        {/* The fictional example is the whole of Today while it's on: its invented Sunday and email, and none of this Mac's
+            own jobs, events or the regular check, so nothing of the church's sits under the example's band (audit item 2). */}
         {page === "today" && <TodayPage brief={brief} names={capture?.names} sundayDecisions={decisions} operations={operations} onSunday={() => setPage("sunday")}
-          watch={{ view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={!connected && !calendarsConnected(calendarState)}
+          watch={fictional ? null : { view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={fictional} now={now}
+          notConnected={!connected && !fictional ? { onConnect: () => { setSetupAt("connect"); setSetup("open"); }, onExample: showExample } : null}
+          regular={fictional ? null : regular} asked={askedLines} onSundayCard={key => { setSundayFocus(key); setPage("sunday"); }}
+          startQuestion={!startAsked && startOn === false && connected && !fictional ? { onYes: () => answerStart(true), onNo: () => answerStart(false), failed: startFailed } : null}
           church={<ChurchReadsToday capture={capture} rules={rules} names={capture?.names} feedback={feedback} now={now} />}
-          calendar={calendarsConnected(calendarState) ? { reads: calendarState.reads, reading: calendarState.reading, onSettings: () => setPage("connection") } : null} />}
+          calendar={!fictional && calendarsConnected(calendarState) ? { reads: calendarState.reads, reading: calendarState.reading, onSettings: () => setPage("connection") } : null} />}
         {page === "sunday" && <SundayPage brief={brief} names={capture?.names ?? {}} busy={busy} problem={problem} sender=""
           connected={connected} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady}
           decisions={decisions} onDecisions={setDecisions} operations={operations}
           onCheck={() => { void check(); }}
           onRecording={() => { if (latest) void act(() => sundaySource.loadRecording(org, latest.path_id)); }}
-          onExample={() => { void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true); }}
+          onExample={showExample}
           onLaterExample={fictional && capture?.completed_at === nov22Capture().completed_at
             ? () => { void act(() => Promise.resolve(withFictionalOperations(nov22LaterCapture())), true); } : undefined}
-          onHow={procedures ? showProcedure : undefined} feedback={feedback} onSettings={() => setPage("connection")}
+          whoCouldHelp={whoCouldHelp} feedback={feedback} onSettings={() => setPage("connection")} refused={refused}
+          people={{ granted: operationsGranted(status), onAdd: () => setPage("connection") }} asked={askedSlot} focus={sundayFocus} onFocused={() => setSundayFocus(null)}
+          openInPlanningCenter={fictional ? null : openInPlanningCenter} pane={mainRef}
           church={<CheckInsSunday capture={capture} rules={rules} names={capture?.names ?? {}} feedback={feedback} now={now} />}
           beside={card => <ChurchOwnWords state={sourcesState} card={card} onOpen={target => { churchSources.focus(target); setPage("lists"); }} />} />}
-        {page === "cards" && <CardsPage people={capture?.names ?? {}} workspace={org || "this-mac"} />}
         {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions} keptElsewhere={Object.entries(rulesByChurch.kept).map(([organization, k]) => ({ organization, ...(k.name ? { name: k.name } : {}) }))}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}
           procedures={orderedProcedures} focus={focusProcedure} church={<ChurchReadsRules rules={rules} onChange={setRules} capture={capture} status={status} />} />}
@@ -533,17 +662,22 @@ export function App() {
         {page === "automatic" && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId}
           readiness={readiness} busy={busy} now={now} churchTimeZone={churchZone}
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={p => proactive.setPrefs(p)}
-          responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} />} />}
+          responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} names={changeNames} />} />}
         {page === "activity" && <ActivityPage capture={capture} notGranted={operationsAsked.get() && Boolean(status?.scopes) && !operationsGranted(status)}
-          tasks={tasks} procedures={procedures} trigger={triggers.get} />}
-        {page === "connection" && <ConnectionPage status={status} settings={settings} onSettings={setSettings} onStatus={setStatus}
+          tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} />}
+        {page === "connection" && <ConnectionPage status={status} settings={settings} onSettings={setSettings} onStatus={setStatus} cards={openCards} onDiscardCards={discardCards}
           recordingCount={recordings.length} onModel={setModelReady} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}
-          sharing={sharing.settings} siri={shortcuts.settings} updates={<UpdatesSection state={updateState} nowMs={Date.parse(now)} />} calendars={<CalendarSettings calendars={calendars} />}
-          onAutomatic={() => setPage("automatic")} onSetup={() => setSetup("open")} autostart={autostart}
-          onDeleteRecordings={() => { sharing.forget(); shortcuts.forget(); if (org) void sundaySource.deleteRecordings(org).finally(() => { refreshRecordings(); if (capture?.kind === "recording") setCapture(null); }); }} />}
+          sharing={sharing.settings} siri={shortcuts.settings} updates={<UpdatesSection state={updateState} nowMs={Date.parse(now)} cards={openCards} />} calendars={<CalendarSettings calendars={calendars} />}
+          onAutomatic={() => setPage("automatic")} onSetup={() => setSetup("open")} onLists={() => setPage("lists")} autostart={autostart}
+          onDeleteRecordings={() => { sharing.forget(); shortcuts.forget(); runner.forgetAllWriteups(); if (org) void sundaySource.deleteRecordings(org).finally(() => { refreshRecordings(); if (capture?.kind === "recording") setCapture(null); }); }} />}
         </>}
+        {/* Outside the pages above, so guided setup or another page never unmounts it: the cards end only as KeptCards
+            says (cards-page.tsx), and names beside them come only from a check of the church in use. */}
+        {(page === "cards" || cardsOpened) && <div hidden={showSetup || page !== "cards"} className="cards-kept">
+          <KeptCards check={capture && { organization: capture.organization, names: capture.names }} example={fictional} inUse={inUseOrg ?? null} discarded={cardsDiscarded} onScreen={visible} onOpenCards={setOpenCards} /></div>}
       </main>
+      {quitAsk && <QuitQuestion ask={quitAsk} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
       <AskPanel key={askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
         page={showSetup ? "setup" : page} plans={plans} />
     </div>

@@ -15,8 +15,8 @@ export const SIRI_NEVER = "They never hear a name, a role, team or room name, a 
 export const SIRI_HOW = [
   "While this is on, Ozzie keeps a small copy of its last check's Sunday overview on this Mac. People and roles appear in it only as labels like [Role 1], and answers don't say even those, only counts and times.",
   "When Spotlight or a shortcut asks, a small part of Ozzie reads that copy and answers. It doesn't open Ozzie's window or check Planning Center again.",
-  "macOS lets Ozzie's own actions in Siri and Shortcuts read only that copy among Ozzie's files: not your saved recordings, not the copy for other AI apps, not your documents, and nothing from Planning Center.",
-  "When the check is more than 30 minutes old, a saved recording, Ozzie's fictional example, or marked with a time later than this Mac's clock, the answer says so. When there's no current check, it says that instead.",
+  "macOS lets Ozzie's own actions in Siri and Shortcuts read only that copy among Ozzie's files: not your saved checks, not the copy for other AI apps, not your documents, and nothing from Planning Center.",
+  "When the check is more than 30 minutes old, the saved copy of an earlier check, Ozzie's fictional example, or marked with a time later than this Mac's clock, the answer says so. When there's no current check, it says that instead.",
   "A link like ozzie://sunday only opens that page in Ozzie, and only while this is on. A link can't ask Ozzie anything or change anything.",
   "Turning this off removes the copy. Siri and Shortcuts then hear only that this is turned off in Ozzie's Settings.",
   "Only a shortcut you make yourself with Run Shell Script needs Shortcuts' Allow Running Scripts setting, which lets every shortcut on this Mac run commands, not only Ozzie's. Ozzie's own actions don't need it.",
@@ -130,11 +130,13 @@ export function ShortcutsSetup({ on, path, actions, find = findHelper, findBundl
   </div>;
 }
 
-/** The Settings section. `path` and `actions` (tests) are passed to the setup steps. */
+/**
+ * The Settings card, under "Other AI apps, Spotlight and Shortcuts" (audit item 27). `path` and `actions` (tests) are
+ * passed to the setup steps.
+ */
 export function SiriShortcutsSection({ on, onChange, problem, path, actions }: ShortcutsSettings & { path?: string | null; actions?: boolean }) {
-  return <section className="settings-sec" aria-labelledby="siri-title">
-    <h2 id="siri-title" className="h3">Siri and Shortcuts</h2>
-    <div className="find">
+  return <section className="find" aria-labelledby="siri-title">
+    <h3 id="siri-title" className="settings-t">Siri and Shortcuts</h3>
       <p className="find-body">{SIRI_BODY}</p>
       <div className="stack-tight">
         <label className="confirmation"><input type="checkbox" checked={on} onChange={e => onChange(e.target.checked)} />
@@ -148,6 +150,5 @@ export function SiriShortcutsSection({ on, onChange, problem, path, actions }: S
         <summary>See how this works</summary>
         <ul className="small">{SIRI_HOW.map(line => <li key={line}>{line}</li>)}</ul>
       </details>
-    </div>
   </section>;
 }

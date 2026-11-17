@@ -145,7 +145,7 @@ pub const MAX_ARGUMENT_CHARS: usize = 2_000;
 /// phone number.
 pub const MAX_ARGUMENT_INTEGER: i64 = 100_000;
 pub const MAX_REPLY_CHARS: usize = 4_000;
-/// Fixed reporting tags for agent steps, as MANAGED_TAGS and ASK_TAGS are. Never `ai-reporting-user`.
+/// Fixed reporting tags for agent steps, as MANAGED_TAGS is for rewording. Never `ai-reporting-user`.
 pub const AGENT_TAGS: (&str, &str) = ("ai-reporting-tags", "app:ozzie,route:managed,feature:agent");
 const TEMPERATURE: f64 = 0.2;
 /// Label kinds the placeholder boundary writes as `[Kind N]` or `[Kind A]` (contract.ts ToolEnvelope:

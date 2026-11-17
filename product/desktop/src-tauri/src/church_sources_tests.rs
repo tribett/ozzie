@@ -2273,7 +2273,12 @@ fn attach(section: &str, team: Option<&str>, kind: Option<&str>) -> AttachmentIn
         team_id: team.map(str::to_owned),
         finding_kind: kind.map(str::to_owned),
         occurrence: None,
+        of: None,
     }
+}
+fn of(mut a: AttachmentInput, of: u32) -> AttachmentInput {
+    a.of = Some(of);
+    a
 }
 fn nth(mut a: AttachmentInput, occurrence: u32) -> AttachmentInput {
     a.occurrence = Some(occurrence);
@@ -2561,6 +2566,77 @@ fn a_pointer_keeps_which_occurrence_of_a_repeated_title() {
             "{written}"
         );
     }
+}
+
+/// Audit item 30: a pointer keeps how many sections had its title when the leader chose it, so the page can say the notes
+/// changed instead of following a different section. Checked natively: a whole number from 1 to MAX_NOTE_LINES, never
+/// below the occurrence it names; a pointer written before has none, read as "unknown", and is kept as it was.
+#[test]
+fn a_pointer_keeps_how_many_sections_shared_its_title() {
+    let dir = Scratch::new("notes-of");
+    let sources = dir.sources();
+    sources
+        .add_kind(&dir.file("policy.md", NOTES), "notes", ids())
+        .unwrap();
+    let view = sources
+        .set_notes(
+            "src-1",
+            "Policy",
+            vec![
+                of(attach("Who to call", Some("1"), None), 1),
+                of(nth(attach("Who to call", None, Some("pending")), 2), 3),
+                attach("Keys", Some("1"), None),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&view).unwrap()["attachments"],
+        serde_json::json!([{ "section": "Who to call", "team_id": "1", "of": 1 },
+            { "section": "Who to call", "finding_kind": "pending", "occurrence": 2, "of": 3 }, { "section": "Keys", "team_id": "1" }])
+    );
+    // Kept as given, and read back the same after Ozzie starts again.
+    assert_eq!(
+        serde_json::to_value(&dir.sources().list().unwrap()[0]).unwrap()["attachments"],
+        serde_json::to_value(&view).unwrap()["attachments"]
+    );
+    let before = std::fs::read_to_string(dir.list_path()).unwrap();
+    for (bad, why) in [
+        (of(attach("Keys", Some("1"), None), 0), "none"),
+        (
+            of(attach("Keys", Some("1"), None), MAX_NOTE_LINES + 1),
+            "too many",
+        ),
+        (
+            of(nth(attach("Keys", Some("1"), None), 3), 2),
+            "fewer than its occurrence",
+        ),
+    ] {
+        assert_eq!(
+            sources.set_notes("src-1", "Policy", vec![bad]),
+            Err(SourceError::Unavailable),
+            "{why}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(dir.list_path()).unwrap(), before);
+    // A kept list that says otherwise isn't this version's.
+    for written in ["0", "\"3\"", "1.5", "-1"] {
+        std::fs::write(
+            dir.list_path(),
+            before.replace("\"of\":3", &format!("\"of\":{written}")),
+        )
+        .unwrap();
+        assert_eq!(
+            dir.sources().list(),
+            Err(SourceError::ListUnreadable),
+            "{written}"
+        );
+    }
+    std::fs::write(dir.list_path(), before.replace("\"of\":3", "\"of\":1")).unwrap();
+    assert_eq!(
+        dir.sources().list(),
+        Err(SourceError::ListUnreadable),
+        "an occurrence past its count"
+    );
 }
 
 /// Review V's open question, failing soft: whether a joiner stays in a title depends on each runtime's Unicode data, so

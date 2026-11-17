@@ -61,12 +61,12 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
     {brief.mode === "fictional" && <p className="small">Fictional example. No church data is shown.</p>}
     <p className="small">{decide.length ? `${decide.length === 1 ? "One thing needs" : `${decide.length} things need`} a decision` : "Nothing needs a decision"}
       {looks.length ? `, and ${looks.length} ${looks.length === 1 ? "is" : "are"} worth a look` : ""}.
-      {resolved ? ` You resolved ${resolved} yourself.` : ""}{setAside ? ` ${setAside} set aside by your Church rules.` : ""}</p>
+      {resolved ? ` You resolved ${resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>
     {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names)))}</>}
     {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names)))}</>}
     {others.length > 0 && <><p className="small bold">Rooms, follow-ups and group meetings</p>{list(others)}</>}
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
-    <p className="small">{brief.mode === "recording" ? "From a saved recording made" : "Read from Planning Center"} {time(brief.checked_at ?? brief.completed_at)}.</p>
+    <p className="small">{brief.mode === "recording" ? "From the saved copy of a check made" : "Read from Planning Center"} {time(brief.checked_at ?? brief.completed_at)}.</p>
     <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSunday}>Open Sunday to decide</button></div>
   </section>;
 }

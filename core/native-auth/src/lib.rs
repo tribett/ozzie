@@ -4,6 +4,7 @@ pub mod background;
 pub mod calendar_link;
 pub mod callback;
 pub mod connections;
+pub mod contact;
 pub mod credentials;
 pub mod fixed;
 pub mod hosted;

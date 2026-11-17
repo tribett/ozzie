@@ -61,11 +61,12 @@ export function ChurchOwnWords({ state, card, onOpen, max = ROWS_BESIDE }: {
         : <p className="small">{moreRows(rows.rows.length - max)}</p>)}
     </section>)}
     {notes.map(({ source, sections }) => <section className="church-own-words own-notes" key={`notes-${source.id}`}>
+      {/* The words wrap in their own box and Open keeps its place beside them, so a narrow card never leaves Open alone on
+          a line after a dangling "·" (audit item 34). */}
       {sections.map(([index, title]) => <p className="own-frame" key={index}>
-        {notesBeside(title || UNTITLED)}
-        {onOpen && <><span aria-hidden="true"> · </span>
-          <button type="button" className="btn btn-quiet btn-sm" aria-label={openLabel(title || UNTITLED)} onClick={() => onOpen({ id: source.id, section: index })}>
-            {OPEN_NOTES}</button></>}
+        <span className="own-frame-t">{notesBeside(title || UNTITLED)}</span>
+        {onOpen && <button type="button" className="btn btn-quiet btn-sm own-open" aria-label={openLabel(title || UNTITLED)} onClick={() => onOpen({ id: source.id, section: index })}>
+          {OPEN_NOTES}</button>}
       </p>)}
     </section>)}
   </>;

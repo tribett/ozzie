@@ -1624,6 +1624,73 @@ pub fn delete_recordings(dir: &Path, organization: &str) -> io::Result<usize> {
     Ok(removed)
 }
 
+/// The Sunday check, setup's picker and filling in To on a note (contact.rs) share one Planning
+/// Center connection, so they take turns: one reader at a time, the whole time it uses the
+/// connection. A second check, or a second note, is refused at once rather than queued. A check
+/// waits out a picker read or a note (each bounded) so it never records `busy` gaps because of
+/// them; a picker read waits for the others up to its own bound; a note never waits, and opens with
+/// no one in To instead. With nobody else reading, a turn is taken at once and nothing about the
+/// reader changes. (Moved from the desktop app's main.rs, so the rule lives in core.)
+#[derive(Clone, Default)]
+pub struct Turns(std::sync::Arc<(std::sync::Mutex<Option<Reader>>, std::sync::Condvar)>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reader {
+    Check,
+    Picker,
+    /// Filling in To on a note: one person's email address or mobile number (contact.rs).
+    Note,
+}
+/// A held turn; dropping it lets the next reader in.
+pub struct Turn(Turns);
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let (held, freed) = &*(self.0).0;
+        *held.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        freed.notify_all();
+    }
+}
+impl Turns {
+    /// The turn for `reader`, waiting up to `wait` for whoever holds it; `Busy` past that, and at
+    /// once for a second check or a second note.
+    pub fn take(&self, reader: Reader, wait: Duration) -> Result<Turn, SourceError> {
+        let (held, freed) = &*self.0;
+        let deadline = Instant::now() + wait;
+        let mut current = held.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match *current {
+                None => {
+                    *current = Some(reader);
+                    return Ok(Turn(self.clone()));
+                }
+                Some(holder) if holder == reader && reader != Reader::Picker => {
+                    return Err(SourceError::Busy);
+                }
+                Some(_) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(SourceError::Busy);
+                    }
+                    current = freed
+                        .wait_timeout(current, left)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0;
+                }
+            }
+        }
+    }
+    /// The turn for `reader` only if nobody holds it now; otherwise who does. Never waits.
+    pub fn take_now(&self, reader: Reader) -> Result<Turn, Reader> {
+        let mut current = self.0.0.lock().unwrap_or_else(|e| e.into_inner());
+        match *current {
+            None => {
+                *current = Some(reader);
+                Ok(Turn(self.clone()))
+            }
+            Some(holder) => Err(holder),
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "sunday_check_tests.rs"]
 mod tests;

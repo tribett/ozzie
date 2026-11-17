@@ -35,7 +35,8 @@ describe("the two reads behind the picker", () => {
     expect(choicesProblem("not-connected")).toBe("Connect Planning Center first. Then your upcoming Sundays are listed here.");
     expect(choicesProblem({ "sunday-choices": "rate-limited" })).toContain("asked Ozzie to slow down");
     expect(choicesProblem({ "sunday-choices": "busy" })).toContain("Try again in a moment.");
-    expect(choicesProblem({ "sunday-choices": "denied" })).toBe("Planning Center didn't let this account list its plans. Enter the plan by hand instead.");
+    // A refused read says which access could be missing, who can give it and what next (audit item 5).
+    expect(choicesProblem({ "sunday-choices": "denied" })).toBe("Planning Center didn't let Ozzie list your church's plans. Either the login you signed in with can't see Planning Center Services, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access to Services; then sign in again. You can also enter a plan by hand.");
     expect(choicesProblem({ "sunday-choices": "organization-unverified" })).toContain("couldn't be verified");
     const odd = choicesProblem({ "sunday-choices": "provider-failure", detail: "Avery Brightwater <script>" });
     expect(odd).toBe("Planning Center couldn't be read just now. Try again, or enter the plan by hand.");
@@ -89,7 +90,7 @@ describe("the picker on screen", () => {
     expect(text(view({ types: ready({ items: [], more: false }), plans: { state: "idle" } }))).toContain("Planning Center shows no service types this account can see.");
     expect(text(view({ plans: ready({ items: [], more: false }) }))).toContain("No upcoming plans in this service type. Choose another, or enter the plan by hand below.");
     const problem = text(view({ types: { state: "problem", text: choicesProblem("denied") }, plans: { state: "idle" } }));
-    expect(problem).toContain("Planning Center didn't let this account list its plans.");
+    expect(problem).toContain("Planning Center didn't let Ozzie list your church's plans.");
     expect(problem).toContain("Try again");
     expect(text(view({ settings: { ...settings, serviceTypeId: "1500", planId: "92900001" } }))).toContain("Chosen now: a plan entered by hand. It isn't in this list.");
   });

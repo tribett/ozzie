@@ -5,7 +5,6 @@ import { sundaySource, type Settings } from "./sunday-source.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { acceptModelReply, buildRewordRequest, templateDraft } from "../../../core/src/draft-request.js";
-import { acceptAskReply, AskSession, buildAskContext, prepareAsk, restoreAnswer } from "../../../core/src/ask.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { BACKGROUND_CHECKS, kidsTeams } from "../../../core/src/kids-rules.js";
 import type { TaskOutcome } from "../../../core/src/harness/contract.js";
@@ -206,22 +205,7 @@ export async function runAutopilot(settings: Settings, rules: SundayRules, opera
       await log(`recording: saved=${saved.length} kind=${recording.kind} reads=${recording.reads.length} same_findings=${same} same_church=${sameChurch}`);
     } else await log("recording: none saved");
 
-    // Ask Ozzie through the real route: log only whether each question passed every check, never text.
-    if (route.configured) {
-      const session = new AskSession();
-      const context = buildAskContext(session, { brief, names: capture.names, organization: capture.organization, decisions: [] });
-      for (const question of ["Who could cover the open Greeter spot this Sunday?", "What still needs a decision before Sunday?"]) {
-        if (!context) { await log("ask: no context"); break; }
-        const prepared = prepareAsk(session, context, question);
-        if (!prepared.ok) { await log("ask: refused before sending"); continue; }
-        try {
-          const reply = await model.ask(prepared.asked.request);
-          const answer = restoreAnswer(acceptAskReply(reply, prepared.asked), "");
-          await log(`ask: ok chars=${JSON.stringify(answer).length}`);
-        } catch (e) { await log(`ask: refused ${code(e)}`); }
-      }
-    }
-
+    // Ask Ozzie runs through the harness and native agent_step only (harnessSteps below); the earlier fact-sheet route is gone.
     const need = brief.findings.find(f => f.kind === "needs-people" && f.people?.suggestions.length);
     if (!need || !route.configured) await log("reword: skipped");
     else {

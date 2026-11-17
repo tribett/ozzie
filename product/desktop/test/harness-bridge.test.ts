@@ -344,8 +344,10 @@ describe("Ask Ozzie as a harness task", () => {
       expect(turn.answer.body).toBe("Riley Thornbury has no overlap found for Greeter.\n\nThat doesn't mean they're free or willing; only they can say.");
       expect(turn.answer.basedOn).toMatch(/^Based on: fictional example data as of /u);
       expect(turn.answer.procedure).toEqual({ title: "Answer from what was read", body: skills.get("answer-from-what-was-read")!.body });
-      expect(turn.answer.steps).toEqual(["Looked at who on the team could help — complete", "Checked the facts it chose against what was read"]);
+      // What it looked at; asking the AI and checking its choice are said apart (harness-words aiText).
+      expect(turn.answer.steps).toEqual(["Looked at who is on the team for an open role — all of it"]);
       expect(turn.answer.aiSteps).toBe(2);
+      expect(turn.answer.end).toBe("facts");
       expect(turn.answer.notCovered).toBe(false);
       expect(turn.answer.draft).toBeNull();
     });
@@ -428,7 +430,7 @@ describe("Ask answers written on this Mac", () => {
     const m = scripted([]);
     const native = fakeLedger();
     const kept = new Map<string, string>();
-    const rec = recorder(native.invoke, { triggers: { get: id => kept.get(id) as never, set: (id, t) => { kept.set(id, t); } } });
+    const rec = recorder(native.invoke, { triggers: { get: id => kept.get(id) as never, set: (id, t) => { kept.set(id, t); }, end: () => undefined, setEnd: () => {} } });
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "Is the nursery ready for Sunday?", { skills, recorder: rec });
     if (turn.state !== "answered") throw new Error(turn.state);
     expect(m.requests).toHaveLength(0);
@@ -449,7 +451,7 @@ describe("Ask answers written on this Mac", () => {
       expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\. .* From Planning Center People, checked 10:00 AM on November 20\. Kept on this Mac; never sent to an AI\.$/u),
     ]);
     expect(a.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center People, checked .+; your Church rules$/u);
-    expect(a.steps).toEqual(["Looked at this Sunday's overview — complete", "Looked at Sunday's open roles — complete", "Looked at background checks, kept on this Mac"]);
+    expect(a.steps).toEqual(["Looked at this Sunday's overview — all of it", "Looked at the open roles for Sunday — all of it", "Looked at background checks, kept on this Mac"]);
     expect(a.notCovered).toBe(false);
     expect(a.body).not.toMatch(/\[(?:Person|Role) \d+\]/u);
   });
@@ -487,8 +489,8 @@ describe("Ask answers written on this Mac", () => {
     ]);
     expect(turn.answer.added).toBe(true);
     expect(turn.answer.basedOn).toMatch(/Planning Center Services, checked .+Planning Center Calendar, checked .+Planning Center People, checked /u);
-    expect(turn.answer.steps).toEqual(["Looked at this Sunday's overview — complete", "Checked the facts it chose against what was read",
-      "Looked at room bookings — complete", "Looked at follow-ups without an owner — complete", "Looked at background checks, kept on this Mac"]);
+    expect(turn.answer.steps).toEqual(["Looked at this Sunday's overview — all of it",
+      "Looked at room bookings — all of it", "Looked at follow-ups without an owner — all of it", "Looked at background checks, kept on this Mac"]);
     expect(JSON.stringify(m.requests)).not.toMatch(/background/iu);
   });
 

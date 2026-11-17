@@ -191,6 +191,13 @@ pub enum Collection {
     /// One open signup's active attendees (`filter=active`): whether each is active, canceled or
     /// waitlisted, and nothing else, so they can be counted. No name, person or registration.
     RegistrationsAttendees,
+    // Filling in To on a drafted note (contact.rs): in-process only, never on the stdin protocol,
+    // never part of a Sunday check or a recording. One person's own People record, with only whether
+    // Planning Center lists them as a child and that person's email addresses or phone numbers.
+    /// One person's email addresses (`include=emails`): `address`, `primary` and `blocked` only.
+    PersonEmails,
+    /// One person's phone numbers (`include=phone_numbers`): `number`, `primary` and `location` only.
+    PersonPhoneNumbers,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -217,6 +224,9 @@ enum Scope {
     CheckInsEventTime,
     /// A Registrations Signup (`/registrations/v2/signups/{id}`).
     Signup,
+    /// A People Person's own record (`/people/v2/people/{id}`), whose parent is the Organization.
+    /// It names its person as `PeoplePerson` reads do (`people_person_id`).
+    PersonRecord,
 }
 impl Collection {
     /// Contract name recorded in a Sunday capture.
@@ -251,6 +261,8 @@ impl Collection {
             Self::CheckInsLocationCounts => "checkins_location_counts",
             Self::RegistrationsSignups => "registrations_signups",
             Self::RegistrationsAttendees => "registrations_attendees",
+            Self::PersonEmails => "person_emails",
+            Self::PersonPhoneNumbers => "person_phone_numbers",
         }
     }
     pub fn product(self) -> Product {
@@ -264,7 +276,9 @@ impl Collection {
             | Self::PeopleWorkflowSnoozedCards
             | Self::PeopleBackgroundChecks
             | Self::PeopleForms
-            | Self::PeopleFormSubmissions => Product::People,
+            | Self::PeopleFormSubmissions
+            | Self::PersonEmails
+            | Self::PersonPhoneNumbers => Product::People,
             Self::GroupsPersonMemberships | Self::GroupsGroupEvents => Product::Groups,
             Self::CheckInsEvents
             | Self::CheckInsLocations
@@ -310,13 +324,15 @@ impl Collection {
             Self::CheckInsLocations | Self::CheckInsEventPeriods => Scope::CheckInsEvent,
             Self::CheckInsLocationCounts => Scope::CheckInsEventTime,
             Self::RegistrationsAttendees => Scope::Signup,
+            Self::PersonEmails | Self::PersonPhoneNumbers => Scope::PersonRecord,
         }
     }
     /// Which Sunday ids a request names: (service type, plan). Every Sunday read names both;
-    /// the picker's reads come before a plan is chosen and must leave the rest empty.
+    /// the picker's reads come before a plan is chosen and must leave the rest empty, and a
+    /// person's contact read belongs to no plan at all.
     fn context(self) -> (bool, bool) {
         match self {
-            Self::ServiceTypes => (false, false),
+            Self::ServiceTypes | Self::PersonEmails | Self::PersonPhoneNumbers => (false, false),
             Self::UpcomingPlans => (true, false),
             _ => (true, true),
         }
@@ -354,14 +370,17 @@ impl Collection {
         )
     }
     fn paginated(self) -> bool {
-        !matches!(self, Self::Plan | Self::Organization)
+        !matches!(
+            self,
+            Self::Plan | Self::Organization | Self::PersonEmails | Self::PersonPhoneNumbers
+        )
     }
     fn path(self) -> &'static str {
         match self {
             Self::NeededPositions => "needed_positions",
             Self::TeamMembers => "team_members",
             Self::PlanTimes => "plan_times",
-            Self::Plan | Self::Organization => "",
+            Self::Plan | Self::Organization | Self::PersonEmails | Self::PersonPhoneNumbers => "",
             Self::TeamPositionAssignments => "person_team_position_assignments",
             Self::TeamLeaders => "team_leaders",
             Self::PersonSchedules | Self::PersonSchedulesUnfiltered => "schedules",
@@ -417,6 +436,7 @@ impl Collection {
             Self::CheckInsLocationCounts => "LocationEventTime",
             Self::RegistrationsSignups => "Signup",
             Self::RegistrationsAttendees => "Attendee",
+            Self::PersonEmails | Self::PersonPhoneNumbers => "Person",
         }
     }
 }
@@ -701,7 +721,11 @@ impl SourceRequest {
             (Scope::CheckInsEventTime, &self.checkins_event_time_id),
             (Scope::Signup, &self.signup_id),
         ];
-        let scope = self.collection.scope();
+        // A person's own record names that person as their background checks do.
+        let scope = match self.collection.scope() {
+            Scope::PersonRecord => Scope::PeoplePerson,
+            scope => scope,
+        };
         let scoped = ids.iter().all(|(owner, id)| {
             if *owner == scope {
                 id.as_deref().is_some_and(numeric_id)
@@ -795,6 +819,20 @@ impl SourceRequest {
             // A count names its room only when the room is included (Planning Center's published
             // LocationEventTime renders no relationships); the included rooms are dropped unread.
             Collection::CheckInsLocationCounts => fixed(&[("include", "location")]),
+            // Addressing one note (contact.rs): the person's child flag and one kind of contact
+            // detail, each with only the fields choosing it needs (People 2025-11-10 OpenAPI: the
+            // person read's `include`, `fields[Person]`, `fields[Email]` and `fields[PhoneNumber]`).
+            // No name, birthdate, household, address, other contact kind or anything else.
+            Collection::PersonEmails => fixed(&[
+                ("include", "emails"),
+                ("fields[Person]", "child,emails"),
+                ("fields[Email]", "address,primary,blocked"),
+            ]),
+            Collection::PersonPhoneNumbers => fixed(&[
+                ("include", "phone_numbers"),
+                ("fields[Person]", "child,phone_numbers"),
+                ("fields[PhoneNumber]", "number,primary,location"),
+            ]),
             _ => Vec::new(),
         }
     }
@@ -827,6 +865,7 @@ impl SourceRequest {
                 self.checkins_event_time_id.as_deref().unwrap_or_default(),
             ),
             Scope::Signup => ("Signup", self.signup_id.as_deref().unwrap_or_default()),
+            Scope::PersonRecord => ("Organization", &self.organization),
         }
     }
     fn path(&self) -> String {
@@ -862,18 +901,26 @@ impl SourceRequest {
             Scope::CheckInsEvent => under("events", &self.checkins_event_id),
             Scope::CheckInsEventTime => under("event_times", &self.checkins_event_time_id),
             Scope::Signup => under("signups", &self.signup_id),
+            Scope::PersonRecord => format!(
+                "{prefix}/people/{}",
+                self.people_person_id.as_deref().unwrap_or_default()
+            ),
         }
     }
     pub fn url(&self) -> String {
         let path = self.path();
-        if !self.collection.paginated() {
-            return format!("{ORIGIN}{path}");
-        }
         let mut query: Vec<String> = self
             .query()
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        // One record: its fixed query only (none for the plan and the organization), no paging.
+        if !self.collection.paginated() {
+            if query.is_empty() {
+                return format!("{ORIGIN}{path}");
+            }
+            return format!("{ORIGIN}{path}?{}", query.join("&"));
+        }
         query.push(format!("per_page={}", self.per_page));
         query.push(format!("offset={}", self.offset));
         format!("{ORIGIN}{path}?{}", query.join("&"))
@@ -1045,6 +1092,18 @@ const EVENT_TIME_LINKS: &[(&str, &[&str])] =
     &[("event", &["Event"]), ("event_period", &["EventPeriod"])];
 /// Included EventResourceRequest: approval status and what it links, nothing else.
 const RESOURCE_REQUEST: Schema = &[("approval_status", true, Fact::Code)];
+/// A contact read's included rows (contact.rs): what choosing one needs, nothing else. The value is
+/// bounded text here; contact.rs decides whether it is a usable address or number.
+const EMAIL: Schema = &[
+    ("address", true, Fact::Text),
+    ("primary", false, Fact::Flag),
+    ("blocked", false, Fact::Flag),
+];
+const PHONE_NUMBER: Schema = &[
+    ("number", true, Fact::Text),
+    ("primary", false, Fact::Flag),
+    ("location", false, Fact::Text),
+];
 const RESOURCE_REQUEST_LINKS: &[(&str, &[&str])] = &[("event", EVENT), ("resource", RESOURCE)];
 fn identity(v: &Value, types: &[&str]) -> Result<Value, SourceError> {
     let id = v
@@ -1379,6 +1438,15 @@ impl SourceRequest {
     fn types(&self) -> &'static [&'static str] {
         match self.profile {
             Profile::Protocol => PROTOCOL_TYPES,
+            // The person's own record, and nothing else, is the row of a contact read.
+            Profile::Capture
+                if matches!(
+                    self.collection,
+                    Collection::PersonEmails | Collection::PersonPhoneNumbers
+                ) =>
+            {
+                PERSON
+            }
             Profile::Capture if self.collection.product() != Product::Services => OPERATIONS_TYPES,
             Profile::Capture => CAPTURE_TYPES,
         }
@@ -1415,6 +1483,8 @@ impl SourceRequest {
             (Collection::CheckInsLocationCounts, "event_time") => &["EventTime"],
             (Collection::CheckInsLocationCounts, _) => LOCATION,
             (Collection::GroupsPersonMemberships | Collection::GroupsGroupEvents, _) => GROUP,
+            (Collection::PersonEmails, _) => &["Email"],
+            (Collection::PersonPhoneNumbers, _) => &["PhoneNumber"],
             _ => self.types(),
         }
     }
@@ -1560,6 +1630,11 @@ impl SourceRequest {
                 ("canceled", false, Fact::Flag),
                 ("waitlisted", false, Fact::Flag),
             ],
+            // Whether Planning Center lists the person as a child, stated exactly: a record without
+            // it is refused, and a child is never addressed (contact.rs).
+            Collection::PersonEmails | Collection::PersonPhoneNumbers => {
+                &[("child", true, Fact::Flag)]
+            }
         }
     }
     fn relationships(&self) -> &'static [&'static str] {
@@ -1627,6 +1702,9 @@ impl SourceRequest {
             Collection::CheckInsLocationCounts => &["location", "event_time"],
             // An attendee's person, registration, emergency contact and option are all dropped.
             Collection::RegistrationsAttendees => &[],
+            // Which included rows are the person's own: every other link is dropped.
+            Collection::PersonEmails => &["emails"],
+            Collection::PersonPhoneNumbers => &["phone_numbers"],
         }
     }
     /// Included resource types this read asked for. Protocol reads never keep `included`.
@@ -1641,6 +1719,8 @@ impl SourceRequest {
             Collection::CalendarResourceBookings => &["EventResourceRequest"],
             Collection::CheckInsEventPeriods => &["EventTime"],
             Collection::PeopleFormSubmissions => &["Person"],
+            Collection::PersonEmails => &["Email"],
+            Collection::PersonPhoneNumbers => &["PhoneNumber"],
             _ => &[],
         }
     }
@@ -1773,6 +1853,10 @@ fn confirm(request: &SourceRequest, row: &Value) -> Result<(), SourceError> {
             flag("active") == Some(true)
                 && flag("canceled") != Some(true)
                 && flag("waitlisted") != Some(true)
+        }
+        // Exactly the person asked about, never anyone else's record.
+        Collection::PersonEmails | Collection::PersonPhoneNumbers => {
+            row["id"].as_str() == request.people_person_id.as_deref()
         }
         _ => true,
     };
@@ -1925,6 +2009,10 @@ fn project_included(
                 .ok_or(SourceError::InvalidResponse)?;
             json!({"name":name})
         }
+        // A contact read's rows: their links (back to the person) are dropped; the person's own
+        // `emails` or `phone_numbers` link says which rows are theirs.
+        "Email" => select(EMAIL, Some(attrs))?,
+        "PhoneNumber" => select(PHONE_NUMBER, Some(attrs))?,
         _ => select(PLAN_TIME, Some(attrs))?,
     };
     Ok(result)

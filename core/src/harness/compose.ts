@@ -194,7 +194,7 @@ function summary(tool: string, p: Row): string | null {
     case "sunday.overview": {
       const sunday = str(p["sunday"]);
       const d = num(p["needs_a_decision"]) ?? 0, w = num(p["worth_a_look"]) ?? 0, failed = num(p["reads_not_completed"]) ?? 0;
-      const mode = p["mode"] === "recording" ? " This is a saved recording, not a current check." : p["mode"] === "fictional" ? " This is fictional example data." : "";
+      const mode = p["mode"] === "recording" ? " This is a saved copy of a check, not a current check." : p["mode"] === "fictional" ? " This is fictional example data." : "";
       const kept = p["kept_on_this_mac"] === "some findings are shown only in Ozzie on this Mac" ? " Some findings are shown only in Ozzie on this Mac, on the Sunday page." : "";
       return `For ${sunday && sunday !== "not known" ? `Sunday ${sunday}` : "this Sunday"}, this check found ${plural(d, "item", "items")} that need${d === 1 ? "s" : ""} a decision and ${w} worth a look.${failed ? ` ${plural(failed, "Planning Center read", "Planning Center reads")} didn't complete.` : ""}${kept}${mode}`;
     }

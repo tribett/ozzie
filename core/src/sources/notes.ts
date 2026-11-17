@@ -149,7 +149,10 @@ export function parseNotes(input: string): NotesResult {
 
 /** A stretch of a title or line, in UTF-16 offsets: `text.slice(start, end)` is what to highlight. */
 export interface NoteRange { start: number; end: number }
-/** The places found in one section's title (only for a heading) or one of its lines. */
+/**
+ * The places found in one section's heading (only for a heading: its text as written when that differs from its title,
+ * so `ranges` are in `written ?? title`) or one of its lines.
+ */
 export interface NoteHit { section: number; line: "title" | number; ranges: NoteRange[] }
 /** `more`: the find stopped at MAX_HITS places. */
 export interface NoteSearch { hits: NoteHit[]; more: boolean }
@@ -189,7 +192,7 @@ function folded(text: string, cache: Map<string, string>): { text: string; from:
 
 /**
  * Where `query` appears in the notes, ignoring case and accents (and compatibility forms such as ligatures and
- * full-width letters): each section's heading title, then its lines, in order. Ranges in a line don't overlap. Stops
+ * full-width letters): each section's heading (all of it as written, past a cut title too), then its lines, in order. Ranges in a line don't overlap. Stops
  * after MAX_HITS places. An empty query finds nothing.
  */
 export function searchNotes(notes: Notes, query: string): NoteSearch {
@@ -214,18 +217,33 @@ export function searchNotes(notes: Notes, query: string): NoteSearch {
     return more;
   };
   for (const [i, s] of notes.sections.entries()) {
-    if (s.heading && s.title && find(i, "title", s.title)) return { hits, more: true };
+    if (s.heading && s.title && find(i, "title", s.written ?? s.title)) return { hits, more: true };
     for (const [j, line] of s.lines.entries()) if (line && find(i, j, line)) return { hits, more: true };
   }
   return { hits, more: false };
 }
 
+/** How many sections have this title now. */
+export const titleCount = (notes: Notes, title: string): number => notes.sections.reduce((n, s) => n + (s.title === title ? 1 : 0), 0);
+/**
+ * Whether a pointer still names its section: "ok"; "gone" when no section has its title (or not that many); "changed"
+ * when it kept how many sections shared its title (audit item 30) and that number is different now, so which one it
+ * meant can't be told and it names none rather than a different one.
+ */
+export function pointerState(notes: Notes, attachment: NoteAttachment): "ok" | "gone" | "changed" {
+  const count = titleCount(notes, attachment.section);
+  if (!attachment.section || count === 0) return "gone";
+  if (attachment.of !== undefined && attachment.of !== count) return "changed";
+  return (attachment.occurrence ?? 1) <= count ? "ok" : "gone";
+}
+
 /**
  * The section a pointer names: the one with its title, the first or (when titles repeat) the occurrence it keeps; with
- * where it is. Null when there is no such section any more.
+ * where it is. Null when there is no such section any more, or when the number of sections with its title has changed
+ * since the leader chose it (`pointerState` "changed"): then it never names a different one.
  */
 export function sectionFor(notes: Notes, attachment: NoteAttachment): { index: number; section: NoteSection } | null {
-  if (!attachment.section) return null;
+  if (!attachment.section || pointerState(notes, attachment) !== "ok") return null;
   let left = attachment.occurrence ?? 1;
   for (const [index, section] of notes.sections.entries()) if (section.title === attachment.section && --left === 0) return { index, section };
   return null;

@@ -57,6 +57,11 @@ export type NoteFindingKind = (typeof NOTE_FINDING_KINDS)[number];
 export type NoteAttachment = ({ section: string; team_id: string } | { section: string; finding_kind: string }) & {
   /** Which section with this title, when titles repeat: 2 for the second, and so on; the first leaves it out (review V, M1). */
   occurrence?: number;
+  /**
+   * How many sections had this title when the leader chose it (audit item 30). When that number changes, the pointer
+   * doesn't follow a different section: the notes say they changed. Absent (a pointer chosen before this): unknown.
+   */
+  of?: number;
 };
 export interface NotesSource {
   id: string;
@@ -100,13 +105,18 @@ const JOINERS = /[\u200c\u200d]/gu;
 const isTitle = (v: unknown): v is string => typeof v === "string" && v !== "" && [...v].length <= MAX_TITLE && isPlain(v.replace(JOINERS, ""), MAX_TITLE);
 function attachmentOf(v: unknown): NoteAttachment | null {
   if (!plain(v) || !isTitle(v["section"])) return null;
-  let occurrence: { occurrence: number } | object = {};
+  let occurrence: { occurrence?: number; of?: number } = {};
   if (Object.hasOwn(v, "occurrence")) {
     const n = v["occurrence"];
     if (typeof n !== "number" || !Number.isInteger(n) || n < 2 || n > MAX_NOTE_LINES) return null;
     occurrence = { occurrence: n };
   }
-  const keys = Object.keys(v).filter(k => k !== "occurrence");
+  if (Object.hasOwn(v, "of")) {
+    const n = v["of"];
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_NOTE_LINES || n < (occurrence.occurrence ?? 1)) return null;
+    occurrence = { ...occurrence, of: n };
+  }
+  const keys = Object.keys(v).filter(k => k !== "occurrence" && k !== "of");
   const only = (names: string[]) => keys.length === names.length && names.every(k => keys.includes(k));
   if (only(["section", "team_id"])) return teamId(v["team_id"]) ? { section: v["section"], team_id: v["team_id"], ...occurrence } : null;
   if (only(["section", "finding_kind"])) {

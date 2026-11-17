@@ -4,6 +4,7 @@
 // (AGENTS.md): no "skill", "agent", "session", "log", "connector" or "harness" on any user surface.
 import type { FailureCode, Skill, TaskEvent, ToolEnvelope, ToolName } from "../../../core/src/harness/contract.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../../../core/src/harness/contract.js";
+import { TEMPLATE_IDS, TEMPLATES, type RunTrigger, type TemplateId } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import { REFUSALS } from "../../../core/src/ask.js";
 
@@ -46,26 +47,29 @@ export function ledgerDetail(type: TaskEvent["type"], detail: string, outcome?: 
 
 // ---- Tools and statuses ------------------------------------------------------------------------
 
+/** What each of the 13 read-only tools is, as one plain sentence (audit item 7). Never the tool's own name. */
 export const TOOL_PHRASES: Readonly<Record<ToolName, string>> = Object.freeze({
   "sunday.overview": "Looked at this Sunday's overview",
-  "sunday.open_needs": "Looked at Sunday's open roles",
-  "sunday.who_could_help": "Looked at who on the team could help",
-  "sunday.pending_requests": "Looked at pending requests",
+  "sunday.open_needs": "Looked at the open roles for Sunday",
+  "sunday.who_could_help": "Looked at who is on the team for an open role",
+  "sunday.pending_requests": "Looked at requests still waiting for an answer",
   "sunday.rule_checkins": "Looked at the check-ins your Church rules suggest",
-  "sunday.not_checked": "Looked at what wasn't checked",
+  "sunday.not_checked": "Looked at what the check couldn't read",
   "rooms.conflicts": "Looked at room bookings",
   "followups.unowned": "Looked at follow-ups without an owner",
-  "groups.clashes": "Looked at group meetings",
+  "groups.clashes": "Looked at group meetings on Sunday",
   "today.attention": "Looked at the fictional email and calendar import",
   "rules.current": "Looked at your Church rules",
-  "planning_center.refresh": "Checked Planning Center again",
-  "drafts.prepare_note": "Prepared a draft note",
+  // Said from the record alone, so true whichever way the tool answered (review H, L2); a finished answer's own steps say
+  // exactly what happened (outcomeSteps, from its results).
+  "planning_center.refresh": "Looked at whether Planning Center needed reading again",
+  "drafts.prepare_note": "Asked for a draft note",
 });
 /** How complete one read was, or why it couldn't be used. */
 export const STATUS_WORDS: Readonly<Record<string, string>> = Object.freeze({
-  complete: "complete",
-  partial: "part of this couldn't be read",
-  stale: "from a saved check",
+  complete: "all of it",
+  partial: "part of it couldn't be read",
+  stale: "from a check that is too old to treat as current",
   denied: "not shared with Ozzie",
   "provider-failure": "couldn't be read just now",
   unverified: "couldn't be confirmed",
@@ -181,6 +185,10 @@ export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow[
       const phrase = name && ALLOWLIST.has(name)
         ? kind === "check" && name === "planning_center.refresh" ? "Read this Sunday from Planning Center" : TOOL_PHRASES[name as ToolName]
         : "Tried something Ozzie doesn't allow";
+      // Checking again isn't offered to a job's run (refused there): it was never done, so it never reads as done.
+      if (kind !== "check" && name === "planning_center.refresh" && status === "denied") return "Didn't read Planning Center again: that isn't possible here";
+      // A draft isn't a read: "all of it" would say nothing.
+      if (name === "drafts.prepare_note" && status === "complete") return phrase;
       const words = STATUS_WORDS[status] ?? (FAILURES.has(status) ? reason(status) : "didn't finish");
       return `${phrase} — ${words}`;
     }
@@ -200,16 +208,35 @@ export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow[
   }
 }
 
-/** A finished task's runtime events as plain steps (tools and the final check of the answer). */
-export function outcomeSteps(events: readonly TaskEvent[]): string[] {
+/**
+ * What a finished task looked at, as plain steps: one per tool it used, with how complete each read was. With its
+ * results (`evidence`, in call order), checking again and drafting say what really happened (review H, L2), and a saved
+ * copy of a check is called one (L3).
+ */
+export function outcomeSteps(events: readonly TaskEvent[], evidence: readonly ToolEnvelope[] = [], mode?: "live" | "recording" | "fictional"): string[] {
+  const results = [...evidence];
   return events.flatMap(e => {
-    if (e.type !== "tool" && e.type !== "verified") return [];
+    if (e.type !== "tool") return [];
     const detail = ledgerDetail(e.type, e.detail);
-    const text = detail === null ? null : stepText(e.type, detail);
+    let text = detail === null ? null : stepText(e.type, detail);
+    const [name, status] = e.detail.split(":");
+    // Its own result: the next one of that tool with that completeness (a refused call may or may not have one).
+    const at = results.findIndex(r => r.tool === name && r.completeness === status);
+    const found = at >= 0 ? results.splice(at, 1)[0]! : null;
+    const payload = (found && status !== "denied" ? found.payload : null) as Record<string, unknown> | null;
+    const how = STATUS_WORDS[status ?? ""] ?? "";
+    if (name === "planning_center.refresh" && payload) {
+      text = payload["status"] === "checked again" ? `Read Planning Center again — ${how}` : "Saw that the last check was recent enough";
+    } else if (name === "drafts.prepare_note" && payload) {
+      text = typeof payload["draft"] === "string" ? "Prepared a draft note" : "Asked for a draft note; none was prepared";
+    }
+    if (text && status === "stale" && mode === "recording") text = text.replace(STATUS_WORDS.stale!, "from a saved copy of a check");
     return text ? [text] : [];
   });
 }
 export const modelSteps = (events: readonly TaskEvent[]) => events.filter(e => e.type === "model").length;
+/** How many times a recorded task asked the AI: native records each step twice, as reserved ("1") and finished ("1 stop"). */
+export const askedInRecord = (row: Pick<TaskRow, "events">) => row.events.filter(e => e.type === "model" && /^[1-9]\d? \S/u.test(e.detail)).length;
 
 // ---- Where an answer came from ---------------------------------------------------------------------
 
@@ -225,7 +252,7 @@ const IMPORT_SOURCE = "Fictional email and calendar import";
 export function basedOnBrief(brief: SundayBrief): string {
   const at = brief.checked_at ?? brief.completed_at;
   const sunday = brief.mode === "fictional" ? `fictional example data as of ${when(at)}`
-    : brief.mode === "recording" ? `a saved recording of the Planning Center check at ${when(at)}`
+    : brief.mode === "recording" ? `a saved copy of the Planning Center check at ${when(at)}`
       : `Planning Center check at ${when(at)}`;
   return `Based on: ${sunday}${brief.mode === "fictional" ? ", plus the fictional email import" : ""}`;
 }
@@ -243,7 +270,7 @@ export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" |
   if (pco.length) {
     const newest = pco.map(([, t]) => t).sort().at(-1)!;
     if (mode === "fictional") parts.push(`fictional example data as of ${when(newest)}`);
-    else if (mode === "recording") parts.push(`a saved recording of the Planning Center check at ${when(newest)}`);
+    else if (mode === "recording") parts.push(`a saved copy of the Planning Center check at ${when(newest)}`);
     else parts.push(...pco.map(([source, t]) => `${source}, checked ${when(t)}`));
   }
   if (latest.has(IMPORT_SOURCE)) parts.push("the fictional email import");
@@ -251,7 +278,7 @@ export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" |
   return `Based on: ${parts.join("; ") || "what Ozzie read"}`;
 }
 
-/** What an answer's reads couldn't fully cover, as "Worth a look" lines. A saved recording is already labelled as one. */
+/** What an answer's reads couldn't fully cover, as "Worth a look" lines. A saved copy of a check is already labelled as one. */
 export function evidenceGaps(evidence: readonly ToolEnvelope[], mode: "live" | "recording" | "fictional"): string[] {
   const out = new Set<string>();
   for (const e of evidence) {
@@ -267,6 +294,22 @@ export function evidenceGaps(evidence: readonly ToolEnvelope[], mode: "live" | "
 
 /** How a Sunday check started, or that a question was answered on this Mac without the AI, kept on this Mac by task id. */
 export type CheckTrigger = "automatic" | "manual" | "on-this-mac";
+/**
+ * How any task started, kept on this Mac by task id beside the ledger (which has no field for it): a Sunday check's
+ * trigger, a question answered on this Mac, a job's run (`job:<template>:<trigger>`), or "Ask Ozzie to look at who could
+ * help" from a Sunday card. Closed, name-free words only.
+ */
+export type TaskStart = CheckTrigger | `job:${TemplateId}:${RunTrigger}` | "who-could-help";
+/** How a verified answer ended, kept the same way: which closed answer form it took. Never its facts or words. */
+export type TaskEnd = "facts" | "not-covered" | "nothing-needs-a-decision" | "draft";
+export const TASK_ENDS: readonly TaskEnd[] = ["facts", "not-covered", "nothing-needs-a-decision", "draft"];
+const RUN_TRIGGERS: readonly RunTrigger[] = ["start", "scheduled", "catch-up", "retry", "change", "manual"];
+/** Whether text is a TaskStart (what the local store accepts back). */
+export function isTaskStart(value: unknown): value is TaskStart {
+  if (value === "automatic" || value === "manual" || value === "on-this-mac" || value === "who-could-help") return true;
+  const m = typeof value === "string" ? /^job:([a-z-]+):([a-z-]+)$/u.exec(value) : null;
+  return Boolean(m && (TEMPLATE_IDS as readonly string[]).includes(m[1]!) && (RUN_TRIGGERS as readonly string[]).includes(m[2]!));
+}
 const clockText = (iso: string, now: Date) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "an unknown time";
@@ -277,16 +320,18 @@ const clockText = (iso: string, now: Date) => {
 const things = (n: number) => `${n} ${n === 1 ? "thing" : "things"} looked at`;
 
 /** One line per task, e.g. "Answered a question · checked · 3 things looked at · 9:42 PM". */
-export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<string, Skill> | null; trigger?: CheckTrigger; now?: Date } = {}): string {
+export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<string, Skill> | null; trigger?: TaskStart; now?: Date } = {}): string {
   const now = options.now ?? new Date();
   const tools = row.events.filter(e => e.type === "tool");
   const at = clockText(row.created_at, now);
   let title: string, outcome: string | null;
   if (row.kind === "check") {
     title = options.trigger === "manual" ? "Sunday check you started" : options.trigger === "automatic" ? "Automatic Sunday check" : "Sunday check";
-    outcome = row.state === "verified" ? (tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "part of this couldn't be read" : null) : null;
+    outcome = row.state === "verified" ? (tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "part of it couldn't be read" : null) : null;
   } else {
-    const procedure = row.kind === "skill" ? options.procedures?.get(row.skill_id)?.title ?? "A check Ozzie ran" : null;
+    // A job's run is named by the job; anything else by its procedure.
+    const job = options.trigger?.startsWith("job:") ? TEMPLATES[options.trigger.split(":")[1] as TemplateId]?.title : undefined;
+    const procedure = row.kind === "skill" ? job ?? options.procedures?.get(row.skill_id)?.title ?? "A check Ozzie ran" : null;
     title = row.kind === "ask" ? row.state === "verified" ? options.trigger === "on-this-mac" ? "Answered on this Mac" : "Answered a question" : "A question" : procedure!;
     outcome = row.state === "verified" ? `checked · ${things(tools.length)}` : null;
   }
@@ -296,10 +341,67 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
   return [title, outcome, at].filter(Boolean).join(" · ");
 }
 
-/** A task's steps in plain words, in order. */
-export function taskSteps(row: TaskRow): string[] {
-  return row.events.flatMap(e => {
-    const text = stepText(e.type, e.detail, row.kind);
-    return text ? [text] : [];
-  });
+/**
+ * One task as a short account (audit item 7): what started it, what Ozzie looked at (each read in plain words, with how
+ * much of it could be read), whether and how often it asked the AI, and how it ended. From the ledger's name-free events
+ * and the start and end kept beside it on this Mac; no question, answer or source text, no tool's own name.
+ */
+export interface Account { started: string; looked: string[]; ai: string; ended: string }
+const JOB_WHY: Readonly<Record<RunTrigger, string>> = Object.freeze({
+  start: "when you started it", scheduled: "on schedule", "catch-up": "to catch up on a check it missed", retry: "to try again after a problem",
+  change: "because something changed", manual: "when you chose Check now",
+});
+const timesText = (n: number) => n === 1 ? "once" : n === 2 ? "twice" : `${n} times`;
+/** "Keep Sunday covered ran on schedule, at 9:00 AM." */
+export const jobStarted = (template: TemplateId, trigger: RunTrigger, at: string) => `${TEMPLATES[template].title} ran ${JOB_WHY[trigger]}, at ${at}.`;
+/** "Ozzie asked the AI twice." with what the AI does, or that no AI was used and why. */
+export function aiText(kind: TaskRow["kind"], start: TaskStart | undefined, asked: number, verified: boolean, unanswered = false): string {
+  if (kind === "check") return "No AI was used: this was Ozzie's own check of Planning Center.";
+  if (start === "on-this-mac") return "No AI was used: Ozzie answered this on this Mac from its last check.";
+  // A step reserved but never finished was sent for, with no answer back (review G).
+  if (!asked) return unanswered ? "Ozzie got no answer from the AI." : "Ozzie didn't reach the AI.";
+  return `Ozzie asked the AI ${timesText(asked)}.${verified ? " The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything." : ""}`;
+}
+export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefined; end?: TaskEnd | undefined; procedures?: ReadonlyMap<string, Skill> | null; now?: Date } = {}): Account {
+  const now = options.now ?? new Date();
+  const at = clockText(row.created_at, now);
+  const { start, end } = options;
+  const job = start?.startsWith("job:") ? start.split(":") as [string, TemplateId, RunTrigger] : null;
+  let started: string;
+  if (row.kind === "check") {
+    started = start === "manual" ? `You asked Ozzie to check Planning Center at ${at}.` : start === "automatic" ? `Ozzie checked Sunday automatically at ${at}.` : `Ozzie checked Sunday at ${at}.`;
+  } else if (row.kind === "ask") started = `You asked a question at ${at}.`;
+  else if (job) started = jobStarted(job[1], job[2], at);
+  else if (start === "who-could-help") started = `You asked Ozzie to look at who could help with a role, at ${at}.`;
+  else started = `${options.procedures?.get(row.skill_id)?.title ?? "A check Ozzie runs"} ran at ${at}.`;
+  const looked = row.events.flatMap(e => e.type === "tool" ? [stepText("tool", e.detail, row.kind)!] : []);
+  const asked = askedInRecord(row);
+  const tools = row.events.filter(e => e.type === "tool");
+  let ended: string;
+  switch (row.state) {
+    case "verified":
+      if (row.kind === "check") ended = tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "Finished, though part of the check couldn't be read." : "Finished.";
+      // Its card shows what the AI found next to the full list, never a draft, and says when the AI didn't ask for the
+      // list of people (review H, M3; review G, N3, N4).
+      else if (start === "who-could-help") {
+        const looked = tools.some(e => /^sunday\.who_could_help (?:complete|partial|stale)$/u.test(e.detail));
+        ended = end === "not-covered" ? "The AI couldn't tell more than the list showed, and Ozzie said so."
+          : end === "draft" ? "Finished. The AI asked for a note, which isn't prepared from this card."
+            : looked ? "Finished. Ozzie showed what the AI found beside the list from its own check."
+              : "Finished. The AI didn't ask for the list of people; Ozzie showed what it said about the role.";
+      }
+      else if (end === "nothing-needs-a-decision") ended = "Nothing needed a decision.";
+      else if (end === "not-covered") ended = "What Ozzie read didn't answer it, and the answer said so.";
+      else if (end === "draft") ended = "Answered with a draft note for you to read and send yourself.";
+      else ended = row.kind === "ask" ? "Answered." : job ? "Finished. Ozzie wrote up the facts the AI chose, and the write-up is with this job." : "Finished. Ozzie wrote up the facts the AI chose.";
+      break;
+    case "failed":
+      ended = row.failure === "fidelity" ? "The AI's answer didn't check out against what Ozzie read, so nothing was shown."
+        : row.failure === "limit" ? "Stopped at its limit." : `Couldn't finish: ${reason(row.failure)}.`;
+      break;
+    // Pausing or stopping a job, or stopping a question: a person did it either way (review H, L12).
+    case "cancelled": ended = "Stopped by you."; break;
+    default: ended = "Still running.";
+  }
+  return { started, looked, ai: aiText(row.kind, start, asked, row.state === "verified", row.events.some(e => e.type === "model")), ended };
 }

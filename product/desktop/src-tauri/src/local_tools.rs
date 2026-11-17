@@ -109,8 +109,24 @@ macro_rules! card_reader_rules {
 /// nothing: no network, no file writes at all, no other programs, no home folder. The compiled
 /// models are read-only here. Verified 2026-11-14 on macOS 27.2 in an app bundle and a development
 /// folder: text identical to an unsandboxed run on the fictional cards; without the GPU client it
-/// silently reads nothing, without the Neural Engine or /usr/share it fails.
+/// silently reads nothing, without the Neural Engine or /usr/share it fails. PNG and JPEG photos are
+/// read under this policy; a HEIC under `CARD_HEIC_READER_POLICY`.
 pub const CARD_READER_POLICY: &str = card_reader_rules!();
+
+/// Reading a HEIC card (an iPhone photo): the reading policy and one rule more, used only when the
+/// photo is a HEIC by its bytes (`card_image_kind`). Verified 2026-11-16 on macOS 27.2: without the
+/// rule a HEIC decodes to an empty picture with no error (the reader refuses it as unreadable); with
+/// it, the same text as the PNG of the same card. The IOSurface accelerator a HEIC decode also asks
+/// for wasn't needed and stays denied.
+pub const CARD_HEIC_READER_POLICY: &str = concat!(
+    card_reader_rules!(),
+    r#"; HEIC only. ImageIO decodes HEVC only through Apple's video decoder service, which runs in Apple's own sandbox, not
+; this one. That sandbox is broader than the reader's: it can read files the reader can't, though it has no network and
+; can't write. What is handed to it is the photo the leader chose, nothing else. Allowed by the owner's decision of
+; 2026-11-16; PNG and JPEG cards, and preparing on the practice picture, never get this rule.
+(allow mach-lookup (xpc-service-name "com.apple.coremedia.videodecoder"))
+"#
+);
 
 /// Preparing, once per launch: the same reader on Ozzie's fixed practice picture (never a card)
 /// may also compile Apple's models into their two cache folders and let the Neural Engine service
@@ -183,6 +199,10 @@ pub enum LocalToolError {
     TooMuchText,
     /// The review closed while its card was being read; the text was thrown away.
     Cancelled,
+    /// The photo is a type the reader opens, but it decoded to nothing (or not at all): never shown as a blank card.
+    Unreadable,
+    /// A picture of more than MAX_IMAGE_PIXELS (a 48-megapixel iPhone photo, say).
+    TooManyPixels,
 }
 
 /// `not-available` when this Mac has no local recognizer; the page then offers empty fields.
@@ -631,10 +651,12 @@ pub(crate) fn run_bounded(
     Ok(out)
 }
 
-/// Ozzie's helpers say why they stopped with an exit code (sysexits): 69 this Mac can't do it,
-/// 74 too much text. Anything else, including a crash, is a plain failure.
+/// Ozzie's helpers say why they stopped with an exit code (sysexits): 66 the card reader's photo
+/// decoded to nothing, 69 this Mac can't do it, 74 too much text. Anything else, including a crash,
+/// is a plain failure.
 fn exit_error(code: Option<i32>) -> LocalToolError {
     match code {
+        Some(66) => LocalToolError::Unreadable,
         Some(69) => LocalToolError::Unavailable,
         Some(74) => LocalToolError::TooMuchText,
         _ => LocalToolError::Failed,
@@ -691,27 +713,736 @@ fn jpeg_size(image: &[u8]) -> Option<(u64, u64)> {
         at += length;
     }
 }
-/// The two kinds of photo the card reader opens (helpers/card-reader.swift: public.png and
-/// public.jpeg only), told apart by their bytes, never by a file name.
+/// The ISO-BMFF boxes laid end to end in `data`, as (type, body). None if one is malformed or runs
+/// past the end (a truncated file), or as soon as there are more than `limit` of them.
+fn bmff_boxes_at_most(data: &[u8], limit: usize) -> Option<Vec<([u8; 4], &[u8])>> {
+    let mut boxes = Vec::new();
+    let mut at = 0usize;
+    while at < data.len() {
+        if boxes.len() >= limit {
+            return None;
+        }
+        let size = u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?);
+        let kind: [u8; 4] = data.get(at + 4..at + 8)?.try_into().ok()?;
+        let (header, size) = match size {
+            0 => (8, data.len() - at),
+            1 => (
+                16,
+                usize::try_from(u64::from_be_bytes(
+                    data.get(at + 8..at + 16)?.try_into().ok()?,
+                ))
+                .ok()?,
+            ),
+            n => (8, usize::try_from(n).ok()?),
+        };
+        if size < header || size > data.len() - at {
+            return None;
+        }
+        boxes.push((kind, &data[at + header..at + size]));
+        at += size;
+    }
+    Some(boxes)
+}
+/// Most items a HEIC may hold: its pictures, tiles, thumbnails and details. A 48-megapixel iPhone
+/// photo has about 200.
+const MAX_HEIC_ITEMS: usize = 1024;
+/// The HEIF brands a HEIC photo starts with, as its file type's major brand: HEVC still pictures
+/// (heic; heix, heim, heis for extended, multi-layer and scalable ones) and the general still
+/// picture brand (mif1, which ImageIO reports as public.heif). Not a sequence (msf1, hevc, hevx:
+/// ImageIO says public.heics), AVIF (avif) or video (isom, mp42, qt).
+const HEIC_BRANDS: [&[u8; 4]; 5] = [b"heic", b"heix", b"heim", b"heis", b"mif1"];
+/// Width and height of a HEIC photo's primary picture, from its own boxes: the file type first, with
+/// a HEIC brand; a `meta` box for pictures (`pict`) naming the primary item, which must be HEVC
+/// (`hvc1`) or a grid of tiles (`grid`, how iPhones store photos); and that item's `ispe`, its size.
+/// A HEIC holding several pictures (a burst, a Live Photo's still with its others) gives the primary
+/// one's size, the picture the reader reads; but every item in it is held to its own rules first
+/// (each HEVC picture to its parameters, each grid to its tiles, a tone map to two pictures) and all
+/// of them together to MAX_HEIC_FILE_PIXELS, and the file may say what it holds only once.
+fn heic_size(image: &[u8]) -> Option<(u64, u64)> {
+    let full = |body: &[u8]| -> Option<(u8, u32)> {
+        let head = body.get(..4)?;
+        Some((head[0], u32::from_be_bytes([0, head[1], head[2], head[3]])))
+    };
+    let u16_at = |b: &[u8], at: usize| -> Option<u32> {
+        Some(u32::from(u16::from_be_bytes(
+            b.get(at..at + 2)?.try_into().ok()?,
+        )))
+    };
+    let u32_at = |b: &[u8], at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    };
+    let top = bmff_boxes_at_most(image, 64)?;
+    let (kind, ftyp) = top.first()?;
+    if kind != b"ftyp" || !HEIC_BRANDS.iter().any(|b| ftyp.get(..4) == Some(&b[..])) {
+        return None;
+    }
+    // One of each box that says what the file holds: a second `meta` (or a second item list,
+    // reference list or property list inside it) could show ImageIO a different file from this one.
+    let once = |boxes: &[([u8; 4], &[u8])], names: &[&[u8; 4]]| {
+        names
+            .iter()
+            .all(|name| boxes.iter().filter(|(k, _)| k == *name).count() <= 1)
+    };
+    if !once(&top, &[b"meta"]) {
+        return None;
+    }
+    let meta = top.iter().find(|(k, _)| k == b"meta")?.1;
+    let children = bmff_boxes_at_most(meta.get(4..)?, 64)?;
+    if !once(
+        &children,
+        &[
+            b"hdlr", b"pitm", b"iinf", b"iloc", b"iref", b"iprp", b"idat",
+        ],
+    ) {
+        return None;
+    }
+    let child = |name: &[u8; 4]| children.iter().find(|(k, _)| k == name).map(|(_, b)| *b);
+    if child(b"hdlr")?.get(8..12)? != b"pict" {
+        return None;
+    }
+    let pitm = child(b"pitm")?;
+    let primary = match full(pitm)?.0 {
+        0 => u16_at(pitm, 4)?,
+        _ => u32_at(pitm, 4)?,
+    };
+    // Every item and its type, from the item information: at most MAX_HEIC_ITEMS of them, declared or
+    // present, before anything is decoded (review Z, L2: a small file of 65,025 items that all point
+    // at one tile cost half a minute and 650 MB a card).
+    let iinf = child(b"iinf")?;
+    let (declared, entries) = if full(iinf)?.0 == 0 {
+        (u16_at(iinf, 4)?, 6)
+    } else {
+        (u32_at(iinf, 4)?, 8)
+    };
+    if declared as usize > MAX_HEIC_ITEMS {
+        return None;
+    }
+    let infes: Vec<&[u8]> = bmff_boxes_at_most(iinf.get(entries..)?, MAX_HEIC_ITEMS)?
+        .into_iter()
+        .filter(|(k, _)| k == b"infe")
+        .map(|(_, infe)| infe)
+        .collect();
+    if infes.len() > MAX_HEIC_ITEMS {
+        return None;
+    }
+    let items = infes
+        .into_iter()
+        .map(|infe| {
+            let (id, kind_at) = match full(infe)?.0 {
+                2 => (u16_at(infe, 4)?, 8),
+                3 => (u32_at(infe, 4)?, 10),
+                _ => return None,
+            };
+            Some((id, infe.get(kind_at..kind_at + 4)?))
+        })
+        .collect::<Option<Vec<(u32, &[u8])>>>()?;
+    // Looked up by number, each item once (an item numbered twice is no photo).
+    let types: std::collections::HashMap<u32, &[u8]> = items.iter().copied().collect();
+    if types.len() != items.len() {
+        return None;
+    }
+    let type_of = |id: u32| types.get(&id).copied();
+    // Each item's properties: `ipco` lists them, `ipma` gives each item its own by number (from 1).
+    let iprp = bmff_boxes_at_most(child(b"iprp")?, 64)?;
+    if !once(&iprp, &[b"ipco", b"ipma"]) {
+        return None;
+    }
+    let properties = bmff_boxes_at_most(
+        iprp.iter().find(|(k, _)| k == b"ipco")?.1,
+        MAX_HEIC_REFERENCES,
+    )?;
+    let ipma = iprp.iter().find(|(k, _)| k == b"ipma")?.1;
+    let (version, flags) = full(ipma)?;
+    let (id_len, index_len) = (
+        if version < 1 { 2 } else { 4 },
+        if flags & 1 == 1 { 2 } else { 1 },
+    );
+    let associations = usize::try_from(u32_at(ipma, 4)?).ok()?;
+    if associations > MAX_HEIC_ITEMS {
+        return None;
+    }
+    let mut at = 8;
+    let mut associated: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::with_capacity(associations);
+    for _ in 0..associations {
+        let id = if id_len == 2 {
+            u16_at(ipma, at)?
+        } else {
+            u32_at(ipma, at)?
+        };
+        let count = usize::from(*ipma.get(at + id_len)?);
+        at += id_len + 1;
+        let indexes = (0..count)
+            .map(|i| {
+                let at = at + i * index_len;
+                Some(if index_len == 2 {
+                    u16_at(ipma, at)? & 0x7fff
+                } else {
+                    u32::from(*ipma.get(at)? & 0x7f)
+                })
+            })
+            .collect::<Option<Vec<u32>>>()?;
+        at += count * index_len;
+        if associated.insert(id, indexes).is_some() {
+            return None;
+        }
+    }
+    // An item's one property of `kind`, by its number: None for an item with two (review G, L-1:
+    // ImageIO takes an item's last `hvcC`, this check took its first).
+    let only = |id: u32, kind: &[u8; 4]| -> Option<usize> {
+        let mut found = associated.get(&id)?.iter().filter_map(|&index| {
+            let at = usize::try_from(index).ok()?.checked_sub(1)?;
+            (properties.get(at)?.0 == *kind).then_some(at)
+        });
+        let first = found.next()?;
+        found.next().is_none().then_some(first)
+    };
+    // An item's own size: its `ispe`.
+    let size_of = |id: u32| -> Option<(u64, u64)> {
+        let ispe = properties.get(only(id, b"ispe")?)?.1;
+        Some((u64::from(u32_at(ispe, 4)?), u64::from(u32_at(ispe, 8)?)))
+    };
+    // An HEVC picture's coded size, from the sequence parameters in its `hvcC`, held to its `ispe`:
+    // cropped to exactly that, coded at most 63 more each way (coding-block padding). Review F, L-1:
+    // tiles claiming 196 by 196 that were each an 8192 by 8192 picture cost the reader 27 s and the
+    // page's own picture 74 s. A picture that isn't a tile may also be coded at up to 255 each way,
+    // whatever it says: Apple codes a small picture at no less than 160 by 64 (a 24 by 24 one is
+    // coded 160 by 64), and so little costs nothing. One `hvcC` shared by many tiles, as Apple writes
+    // them, is read once.
+    let parsed: std::cell::RefCell<std::collections::HashMap<usize, Option<HevcSize>>> =
+        Default::default();
+    let coded_of = |id: u32, tile: bool| -> Option<(u64, u64)> {
+        let index = only(id, b"hvcC")?;
+        let known = parsed.borrow().get(&index).copied();
+        let sps = match known {
+            Some(sps) => sps,
+            None => {
+                let sps = hevc_size(properties.get(index)?.1);
+                parsed.borrow_mut().insert(index, sps);
+                sps
+            }
+        }?;
+        let (width, height) = size_of(id)?;
+        let padded = |coded: u64, shown: u64| coded < shown + 64 || (!tile && coded <= 255);
+        (sps.cropped == (width, height)
+            && padded(sps.coded.0, width)
+            && padded(sps.coded.1, height))
+        .then_some(sps.coded)
+    };
+    let size = size_of(primary)?;
+    if !matches!(type_of(primary)?, b"hvc1" | b"grid") {
+        return None;
+    }
+    // Every item, not only the primary, is held to the rules (review F, L-2: an alpha picture that was
+    // a grid naming one tile 65,025 times held the reader for its 30 s): HEVC pictures to their
+    // parameters, grids to theirs, a tone map (an HDR gain map's) to two pictures of the file. Exif
+    // and XMP (`mime`) details are never decoded. Any other kind of item is no photo.
+    // References parsed once (review G, L-2: parsed again for every grid and tone map, a file of
+    // 1,020 tone maps and 600,000 filler references took seconds a check).
+    let refs = heic_reference_map(&children)?;
+    if items.iter().filter(|(_, kind)| *kind == b"tmap").count() > MAX_HEIC_TONE_MAPS {
+        return None;
+    }
+    let mut tiles: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut pixels: u64 = 0;
+    let tile_coded = |id: u32| coded_of(id, true);
+    for &(id, kind) in &items {
+        match kind {
+            // HEVC pictures are held to their parameters below, once it is known which are tiles.
+            b"hvc1" => {}
+            b"grid" => {
+                let (canvas, named) = heic_grid_fits(
+                    image,
+                    &children,
+                    &refs,
+                    id,
+                    size_of(id)?,
+                    &type_of,
+                    &size_of,
+                    &tile_coded,
+                )?;
+                pixels = pixels.checked_add(canvas)?;
+                tiles.extend(named);
+            }
+            b"tmap" => {
+                let inputs = refs.get(&(*b"dimg", id))?;
+                if inputs.len() != 2
+                    || inputs[0] == inputs[1]
+                    || inputs.contains(&id)
+                    || !inputs
+                        .iter()
+                        .all(|&i| matches!(type_of(i), Some(b"hvc1" | b"grid")))
+                {
+                    return None;
+                }
+                let (width, height) = size_of(id)?;
+                pixels = pixels.checked_add(width.checked_mul(height)?)?;
+            }
+            b"Exif" | b"mime" => {}
+            _ => return None,
+        }
+    }
+    for &(id, kind) in &items {
+        if kind == b"hvc1" && !tiles.contains(&id) {
+            let (width, height) = coded_of(id, false)?;
+            pixels = pixels.checked_add(width.checked_mul(height)?)?;
+        }
+    }
+    // Too much in all is no photo, unless the photo alone is already over the limit: then it is
+    // refused as too many pixels (review G, L-3: a 48-megapixel Portrait photo with its mattes is
+    // about 138 megapixels in all).
+    let over = size.0.checked_mul(size.1)? > MAX_IMAGE_PIXELS;
+    (pixels <= MAX_HEIC_FILE_PIXELS || over).then_some(size)
+}
+/// Tone maps in one file: Apple writes one, for its HDR gain map.
+const MAX_HEIC_TONE_MAPS: usize = 4;
+/// References in one file, all told; one item may name at most MAX_HEIC_ITEMS.
+const MAX_HEIC_REFERENCES: usize = 4096;
+/// A file's item references (`iref`), by kind and the item that makes them, read once. None when
+/// they are malformed, an item makes the same kind of reference twice, one names more than
+/// MAX_HEIC_ITEMS items, or there are more than MAX_HEIC_REFERENCES of them or of the boxes that
+/// hold them (read no further than that).
+/// Item references by kind and the item that makes them.
+type HeicReferences = std::collections::HashMap<([u8; 4], u32), Vec<u32>>;
+fn heic_reference_map(children: &[([u8; 4], &[u8])]) -> Option<HeicReferences> {
+    let mut map = HeicReferences::new();
+    let Some((_, iref)) = children.iter().find(|(k, _)| k == b"iref") else {
+        return Some(map);
+    };
+    let id_len = if *iref.first()? == 0 { 2 } else { 4 };
+    let id_at = |b: &[u8], at: usize| -> Option<u32> {
+        if id_len == 2 {
+            Some(u32::from(u16::from_be_bytes(
+                b.get(at..at + 2)?.try_into().ok()?,
+            )))
+        } else {
+            Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
+        }
+    };
+    let mut total = 0usize;
+    for (kind, reference) in bmff_boxes_at_most(iref.get(4..)?, MAX_HEIC_REFERENCES)? {
+        let from = id_at(reference, 0)?;
+        let count = usize::from(u16::from_be_bytes(
+            reference.get(id_len..id_len + 2)?.try_into().ok()?,
+        ));
+        total += count;
+        if count > MAX_HEIC_ITEMS || total > MAX_HEIC_REFERENCES {
+            return None;
+        }
+        let to = (0..count)
+            .map(|i| id_at(reference, id_len + 2 + i * id_len))
+            .collect::<Option<Vec<u32>>>()?;
+        if map.insert((kind, from), to).is_some() {
+            return None;
+        }
+    }
+    Some(map)
+}
+/// Every picture a HEIC's items decode to, all told (the photo, its HDR gain map and tone map, a
+/// portrait's depth and mattes, a thumbnail): three times the limit for the photo alone.
+const MAX_HEIC_FILE_PIXELS: u64 = 3 * MAX_IMAGE_PIXELS;
+/// The coded and the cropped (shown) size of an HEVC picture, from its sequence parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HevcSize {
+    coded: (u64, u64),
+    cropped: (u64, u64),
+}
+/// Reads bits from an HEVC parameter set (its emulation-prevention bytes already removed).
+struct Bits<'a> {
+    data: &'a [u8],
+    at: usize,
+}
+impl Bits<'_> {
+    fn bit(&mut self) -> Option<u64> {
+        let byte = *self.data.get(self.at / 8)?;
+        let bit = (byte >> (7 - self.at % 8)) & 1;
+        self.at += 1;
+        Some(u64::from(bit))
+    }
+    fn bits(&mut self, count: u32) -> Option<u64> {
+        (0..count).try_fold(0u64, |value, _| Some((value << 1) | self.bit()?))
+    }
+    fn skip(&mut self, count: usize) -> Option<()> {
+        self.at = self.at.checked_add(count)?;
+        (self.at <= self.data.len().checked_mul(8)?).then_some(())
+    }
+    /// An unsigned exponential-Golomb number, refused past 32 leading zeros.
+    fn ue(&mut self) -> Option<u64> {
+        let mut zeros = 0;
+        while self.bit()? == 0 {
+            zeros += 1;
+            if zeros > 32 {
+                return None;
+            }
+        }
+        Some((1u64 << zeros) - 1 + self.bits(zeros)?)
+    }
+}
+/// The size an HEVC picture is coded at and shown at, from the one sequence parameter set (NAL unit
+/// type 33) in its `hvcC` configuration (ISO/IEC 14496-15), read only as far as the conformance
+/// window (ITU-T H.265 7.3.2.2). None when there is no such set, more than one, or it doesn't parse.
+fn hevc_size(hvcc: &[u8]) -> Option<HevcSize> {
+    if *hvcc.first()? != 1 {
+        return None;
+    }
+    // Apple's decoder reads every parameter set in the configuration by its own NAL unit header,
+    // not by the label of the array it is in (review G, L-1: a small SPS in the SPS array beside a
+    // big SPS in the PPS or SEI array). So: arrays only of VPS (32), SPS (33), PPS (34) and SEI
+    // (39, 40); every unit of the type its array says, of layer 0 and a valid temporal id (0 for a
+    // parameter set); one SPS, at most one VPS, eight PPS and eight SEI, none over 1,024 bytes.
+    let arrays = *hvcc.get(22)?;
+    let mut at = 23usize;
+    let mut sps: Option<&[u8]> = None;
+    let mut counts = [0usize; 64];
+    for _ in 0..arrays {
+        let nal_type = *hvcc.get(at)? & 0x3F;
+        if !matches!(nal_type, 32 | 33 | 34 | 39 | 40) {
+            return None;
+        }
+        let count = u16::from_be_bytes(hvcc.get(at + 1..at + 3)?.try_into().ok()?);
+        at += 3;
+        for _ in 0..count {
+            let length = usize::from(u16::from_be_bytes(hvcc.get(at..at + 2)?.try_into().ok()?));
+            let unit = hvcc.get(at + 2..at.checked_add(2 + length)?)?;
+            at += 2 + length;
+            let header = unit.get(..2)?;
+            let own_type = (header[0] >> 1) & 0x3F;
+            let layer = ((header[0] & 1) << 5) | (header[1] >> 3);
+            let temporal = header[1] & 7;
+            let parameter_set = nal_type != 39 && nal_type != 40;
+            if header[0] & 0x80 != 0
+                || own_type != nal_type
+                || layer != 0
+                || temporal == 0
+                || (parameter_set && temporal != 1)
+                || length > 1024
+            {
+                return None;
+            }
+            counts[usize::from(nal_type)] += 1;
+            if nal_type == 33 {
+                sps = Some(unit);
+            }
+        }
+    }
+    if counts[33] != 1 || counts[32] > 1 || counts[34] > 8 || counts[39] + counts[40] > 8 {
+        return None;
+    }
+    let unit = sps?;
+    // The NAL unit header (two bytes, type 33), then the payload without emulation-prevention bytes.
+    if (unit.get(..2)?[0] >> 1) & 0x3F != 33 {
+        return None;
+    }
+    let mut payload = Vec::with_capacity(unit.len());
+    let mut zeros = 0;
+    for &byte in &unit[2..] {
+        if zeros >= 2 && byte == 3 {
+            zeros = 0;
+            continue;
+        }
+        zeros = if byte == 0 { zeros + 1 } else { 0 };
+        payload.push(byte);
+    }
+    let mut bits = Bits {
+        data: &payload,
+        at: 0,
+    };
+    // sps_video_parameter_set_id, sps_max_sub_layers_minus1, sps_temporal_id_nesting_flag.
+    bits.skip(4)?;
+    let sub_layers = usize::try_from(bits.bits(3)?).ok()?;
+    bits.skip(1)?;
+    // profile_tier_level(1, sub_layers): the general profile (88 bits) and level (8), each sub-layer's
+    // two present flags, padding to eight, then each present sub-layer profile (88) and level (8).
+    bits.skip(96)?;
+    let mut present = Vec::with_capacity(sub_layers);
+    for _ in 0..sub_layers {
+        present.push((bits.bit()? == 1, bits.bit()? == 1));
+    }
+    if sub_layers > 0 {
+        bits.skip(2 * (8 - sub_layers))?;
+    }
+    for (profile, level) in present {
+        if profile {
+            bits.skip(88)?;
+        }
+        if level {
+            bits.skip(8)?;
+        }
+    }
+    let _sps_id = bits.ue()?;
+    let chroma = bits.ue()?;
+    let separate_planes = match chroma {
+        0..=2 => false,
+        3 => bits.bit()? == 1,
+        _ => return None,
+    };
+    let width = bits.ue()?;
+    let height = bits.ue()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    // The conformance window, in chroma samples (H.265 Table 6-1: SubWidthC, SubHeightC).
+    let (sub_w, sub_h) = match (chroma, separate_planes) {
+        (1, _) => (2, 2),
+        (2, _) => (2, 1),
+        _ => (1, 1),
+    };
+    let (mut crop_w, mut crop_h) = (0u64, 0u64);
+    if bits.bit()? == 1 {
+        crop_w = bits.ue()?.checked_add(bits.ue()?)?.checked_mul(sub_w)?;
+        crop_h = bits.ue()?.checked_add(bits.ue()?)?.checked_mul(sub_h)?;
+    }
+    Some(HevcSize {
+        coded: (width, height),
+        cropped: (width.checked_sub(crop_w)?, height.checked_sub(crop_h)?),
+    })
+    .filter(|s| s.cropped.0 > 0 && s.cropped.1 > 0)
+}
+/// Whether a HEIC's grid (the photo, or any other picture in the file) is what it says: tiles that
+/// are all HEVC pictures of one size, coded at one size, at most MAX_HEIC_ITEMS of them, each named
+/// once in the grid's one `dimg` reference; and the grid's own description (rows, columns and output
+/// size, read from the grid item's data) matching them. The tiles must cover the output with less
+/// than one tile to spare each way, so what is decoded is the picture and at most a tile's border
+/// around it, and never more than twice MAX_IMAGE_PIXELS (review of 960b1010: one tile named 65,025
+/// times, or tiles far larger than the output, were the same half-minute, 650 MB decode the item
+/// limit stopped). Gives back the pixels its tiles decode to, as coded, and the tiles it names.
+#[allow(clippy::too_many_arguments)]
+fn heic_grid_fits<'a>(
+    image: &[u8],
+    children: &[([u8; 4], &[u8])],
+    refs: &HeicReferences,
+    grid_id: u32,
+    (width, height): (u64, u64),
+    type_of: &dyn Fn(u32) -> Option<&'a [u8]>,
+    size_of: &dyn Fn(u32) -> Option<(u64, u64)>,
+    coded_of: &dyn Fn(u32) -> Option<(u64, u64)>,
+) -> Option<(u64, Vec<u32>)> {
+    let child = |name: &[u8; 4]| children.iter().find(|(k, _)| k == name).map(|(_, b)| *b);
+    let u16_at = |b: &[u8], at: usize| -> Option<u64> {
+        Some(u64::from(u16::from_be_bytes(
+            b.get(at..at + 2)?.try_into().ok()?,
+        )))
+    };
+    let u32_at = |b: &[u8], at: usize| -> Option<u64> {
+        Some(u64::from(u32::from_be_bytes(
+            b.get(at..at + 4)?.try_into().ok()?,
+        )))
+    };
+    let u64_at = |b: &[u8], at: usize| -> Option<u64> {
+        Some(u64::from_be_bytes(b.get(at..at + 8)?.try_into().ok()?))
+    };
+    let uint = |b: &[u8], at: usize, size: usize| -> Option<u64> {
+        match size {
+            0 => Some(0),
+            4 => u32_at(b, at),
+            8 => u64_at(b, at),
+            _ => None,
+        }
+    };
+    // The tiles: exactly one `dimg` reference from the grid, naming each tile once.
+    let named = refs.get(&(*b"dimg", grid_id))?.clone();
+    let count = named.len();
+    if count == 0 || count > MAX_HEIC_ITEMS {
+        return None;
+    }
+    let mut ids = named.clone();
+    // Each an HEVC picture with its own size, all the same and none empty, all coded alike.
+    let (tile_w, tile_h) = size_of(ids[0])?;
+    if tile_w == 0 || tile_h == 0 {
+        return None;
+    }
+    let (coded_w, coded_h) = coded_of(ids[0])?;
+    for &id in &ids {
+        if type_of(id)? != b"hvc1"
+            || size_of(id)? != (tile_w, tile_h)
+            || coded_of(id)? != (coded_w, coded_h)
+        {
+            return None;
+        }
+    }
+    ids.sort_unstable();
+    if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+    // The grid's description, from its item's data: in this file (`mdat`, construction method 0) or
+    // in the meta box (`idat`, method 1), as `iloc` says; one extent, nowhere else.
+    let iloc = child(b"iloc")?;
+    let version = *iloc.first()?;
+    if version > 2 {
+        return None;
+    }
+    let sizes = |byte: u8| -> Option<(usize, usize)> {
+        let (high, low) = (usize::from(byte >> 4), usize::from(byte & 0xF));
+        matches!(high, 0 | 4 | 8).then_some(())?;
+        Some((high, low))
+    };
+    let (offset_size, length_size) = sizes(*iloc.get(4)?)?;
+    let (base_size, index_size) = sizes(*iloc.get(5)?)?;
+    let index_size = if version == 0 { 0 } else { index_size };
+    if !matches!(length_size, 0 | 4 | 8) || !matches!(index_size, 0 | 4 | 8) {
+        return None;
+    }
+    let (entries, mut at) = if version < 2 {
+        (u16_at(iloc, 6)?, 8)
+    } else {
+        (u32_at(iloc, 6)?, 10)
+    };
+    if usize::try_from(entries).ok()? > MAX_HEIC_ITEMS {
+        return None;
+    }
+    let item_len = if version < 2 { 2 } else { 4 };
+    let mut found = None;
+    for _ in 0..entries {
+        let id = if item_len == 2 {
+            u16_at(iloc, at)?
+        } else {
+            u32_at(iloc, at)?
+        };
+        at += item_len;
+        let method = if version >= 1 {
+            let method = u16_at(iloc, at)? & 0xF;
+            at += 2;
+            method
+        } else {
+            0
+        };
+        let data_reference = u16_at(iloc, at)?;
+        at += 2;
+        let base = uint(iloc, at, base_size)?;
+        at += base_size;
+        let extents = usize::try_from(u16_at(iloc, at)?).ok()?;
+        at += 2;
+        let extent_len = index_size + offset_size + length_size;
+        if id == u64::from(grid_id) {
+            if found.is_some() || data_reference != 0 || extents != 1 {
+                return None;
+            }
+            let offset = uint(iloc, at + index_size, offset_size)?;
+            let length = uint(iloc, at + index_size + offset_size, length_size)?;
+            found = Some((method, base.checked_add(offset)?, length));
+        }
+        at = at.checked_add(extents.checked_mul(extent_len)?)?;
+        iloc.get(..at)?;
+    }
+    let (method, start, length) = found?;
+    let source = match method {
+        0 => image,
+        1 => child(b"idat")?,
+        _ => return None,
+    };
+    let start = usize::try_from(start).ok()?;
+    let end = start.checked_add(usize::try_from(length).ok()?)?;
+    let grid = source.get(start..end)?;
+    // ISO/IEC 23008-12 ImageGrid: version 0, flags (bit 0: 32-bit sizes), rows and columns less one,
+    // the output width and height.
+    if *grid.first()? != 0 {
+        return None;
+    }
+    let (rows, columns) = (u64::from(*grid.get(2)?) + 1, u64::from(*grid.get(3)?) + 1);
+    let (out_w, out_h) = if grid.get(1)? & 1 == 1 {
+        (u32_at(grid, 4)?, u32_at(grid, 8)?)
+    } else {
+        (u16_at(grid, 4)?, u16_at(grid, 6)?)
+    };
+    if rows * columns != count as u64 || (out_w, out_h) != (width, height) {
+        return None;
+    }
+    // The tiles cover the output, with less than one tile to spare each way.
+    let canvas_w = tile_w.checked_mul(columns)?;
+    let canvas_h = tile_h.checked_mul(rows)?;
+    if canvas_w < out_w
+        || canvas_h < out_h
+        || canvas_w - tile_w >= out_w
+        || canvas_h - tile_h >= out_h
+    {
+        return None;
+    }
+    // What the tiles decode to, as coded, is at most a quarter more than the picture (Apple's grids
+    // spare 1 to 5 per cent), 4 megapixels besides (a small picture in a few large tiles), and one row
+    // and one column of tiles of at most 512 (review G, L-4: a long, thin strip such as 16,000 by
+    // 100 spares most of its one row of 512 tiles), and never twice the pixel limit: two 8192 by
+    // 4320 tiles over a picture of 8193 by 4320 took the reader 2.9 s and 630 MB.
+    let decoded = coded_w
+        .checked_mul(coded_h)?
+        .checked_mul(u64::try_from(count).ok()?)?;
+    let output = out_w.checked_mul(out_h)?;
+    let row_and_column = coded_h
+        .min(512)
+        .checked_mul(coded_w.checked_mul(columns)?)?
+        .checked_add(coded_w.min(512).checked_mul(coded_h.checked_mul(rows)?)?)?;
+    let allowed = output
+        .checked_add(output / 4)?
+        .checked_add(1 << 22)?
+        .checked_add(row_and_column)?;
+    if decoded > allowed || canvas_w.checked_mul(canvas_h)? > 2 * MAX_IMAGE_PIXELS {
+        return None;
+    }
+    Some((decoded, named))
+}
+/// The three kinds of photo the card reader opens (helpers/card-reader.swift: public.png,
+/// public.jpeg, and public.heic or public.heif), told apart by their bytes, never by a file name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardImageKind {
     Png,
     Jpeg,
+    Heic,
 }
-/// PNG or JPEG within the review's size limit, checked before any process starts: by signature,
-/// and by the picture size its header declares (never zero, at most MAX_IMAGE_PIXELS).
-pub fn card_image_kind(image: &[u8]) -> Option<CardImageKind> {
+/// Why a photo isn't one the card reader opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardImageProblem {
+    /// Not a PNG, JPEG or HEIC by its bytes, outside the review's size limit, or declaring no size.
+    NotAPhoto,
+    /// A picture of more than MAX_IMAGE_PIXELS, such as a 48-megapixel iPhone photo (review Z, I3).
+    TooManyPixels,
+}
+/// PNG, JPEG or HEIC within the review's size limit, checked before any process starts: by
+/// signature (a HEIC by its file type box and primary picture), and by the picture size its header
+/// declares (never zero, at most MAX_IMAGE_PIXELS).
+pub fn card_image_check(image: &[u8]) -> Result<CardImageKind, CardImageProblem> {
     if image.is_empty() || image.len() > MAX_IMAGE_BYTES {
-        return None;
+        return Err(CardImageProblem::NotAPhoto);
     }
-    let (kind, (width, height)) = match png_size(image) {
-        Some(size) => (CardImageKind::Png, size),
-        None => (CardImageKind::Jpeg, jpeg_size(image)?),
+    let size = if let Some(size) = png_size(image) {
+        Some((CardImageKind::Png, size))
+    } else if image.starts_with(&[0xFF, 0xD8]) {
+        jpeg_size(image).map(|size| (CardImageKind::Jpeg, size))
+    } else {
+        heic_size(image).map(|size| (CardImageKind::Heic, size))
     };
-    (width > 0 && height > 0 && width.saturating_mul(height) <= MAX_IMAGE_PIXELS).then_some(kind)
+    match size {
+        Some((kind, (width, height))) if width > 0 && height > 0 => {
+            if width.saturating_mul(height) <= MAX_IMAGE_PIXELS {
+                Ok(kind)
+            } else {
+                Err(CardImageProblem::TooManyPixels)
+            }
+        }
+        _ => Err(CardImageProblem::NotAPhoto),
+    }
 }
+/// The kind alone, for tests.
+#[cfg(test)]
+pub fn card_image_kind(image: &[u8]) -> Option<CardImageKind> {
+    card_image_check(image).ok()
+}
+#[cfg(test)]
 pub fn card_image_ok(image: &[u8]) -> bool {
     card_image_kind(image).is_some()
+}
+impl From<CardImageProblem> for LocalToolError {
+    fn from(problem: CardImageProblem) -> Self {
+        match problem {
+            CardImageProblem::NotAPhoto => LocalToolError::InvalidInput,
+            CardImageProblem::TooManyPixels => LocalToolError::TooManyPixels,
+        }
+    }
+}
+/// The policy a card of `kind` is read under: Apple's video decoder service only for a HEIC.
+pub fn reading_policy(kind: CardImageKind) -> &'static str {
+    match kind {
+        CardImageKind::Png | CardImageKind::Jpeg => CARD_READER_POLICY,
+        CardImageKind::Heic => CARD_HEIC_READER_POLICY,
+    }
 }
 
 /// What reads card text on this Mac, decided once per launch by `Cards::recognizer`.
@@ -802,15 +1533,13 @@ impl Cards {
         }
     }
     pub fn read(&self, image: Vec<u8>) -> Result<CardText, LocalToolError> {
-        if !card_image_ok(&image) {
-            return Err(LocalToolError::InvalidInput);
-        }
+        let kind = card_image_check(&image).map_err(LocalToolError::from)?;
         // A review that closes while the reader is still being prepared drops this card.
         let since = self.generation.load(Ordering::SeqCst);
         match self.recognizer() {
             Recognizer::Vision(reader) => {
                 let out = self.read_with(
-                    reader.command(CARD_READER_POLICY),
+                    reader.command(reading_policy(kind)),
                     image,
                     RECOGNITION_TIMEOUT,
                     MAX_PIECES_BYTES,
@@ -1176,9 +1905,8 @@ pub async fn read_card_text(
     let tauri::ipc::InvokeBody::Raw(image) = request.body() else {
         return Err(LocalToolError::InvalidInput);
     };
-    if !card_image_ok(image) {
-        return Err(LocalToolError::InvalidInput);
-    }
+    // Checked once, in `Cards::read`, off the async runtime: the check of a crafted file was
+    // seconds (review G, L-2).
     let image = image.clone();
     let cards = tools.cards.clone();
     tauri::async_runtime::spawn_blocking(move || cards.read(image))
@@ -1616,10 +2344,11 @@ pub(crate) mod tests {
         }
         assert_eq!(reading.matches("(allow process-exec").count(), 1);
         assert!(reading.contains("(allow process-exec (literal (param \"HELPER\")))"));
-        // Preparing is reading plus writing the two model caches, and nothing else.
-        let extra = CARD_PREPARE_POLICY
-            .strip_prefix(CARD_READER_POLICY)
-            .unwrap();
+        // Preparing is the shared rules plus writing the two model caches, and nothing else; it
+        // never gets the video decoder service, which only reading a HEIC card needs.
+        let shared = card_reader_rules!();
+        let extra = CARD_PREPARE_POLICY.strip_prefix(shared).unwrap();
+        assert!(!CARD_PREPARE_POLICY.contains("videodecoder"));
         let extra = rules(extra);
         assert_eq!(
             extra,
@@ -1628,6 +2357,1452 @@ pub(crate) mod tests {
              (require-all (extension-class \"com.apple.app-sandbox.read\") (subpath (param \"MODEL_CACHE\"))))"
         );
         assert!(!extra.contains("network"));
+    }
+
+    /// A policy's rules without its comments.
+    fn policy_rules(policy: &str) -> String {
+        policy
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with(';'))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    const VIDEO_DECODER_RULE: &str =
+        "(allow mach-lookup (xpc-service-name \"com.apple.coremedia.videodecoder\"))";
+
+    /// Both reading policies, whole and without their comments: any further widening fails here. A
+    /// PNG or JPEG card is read under the policy as it was before HEIC; a HEIC card under that and
+    /// one rule more, Apple's video decoder service (review Z, L1). The IOSurface accelerator a HEIC
+    /// decode also asks for, and every other service, stay denied in both.
+    #[test]
+    fn both_reading_policies_are_pinned_and_only_heic_gets_the_video_decoder_service() {
+        let plain = "(version 1) (deny default) (allow process-exec (literal (param \"HELPER\"))) \
+             (allow file-read* (literal \"/\") (subpath (param \"APP\")) (literal \"/System\") \
+             (literal \"/System/Volumes\") (literal \"/System/Volumes/Data\") (literal \"/System/Volumes/Preboot\") \
+             (subpath \"/System/Library\") (subpath \"/System/Cryptexes\") (subpath \"/System/iOSSupport\") \
+             (subpath \"/System/Volumes/Preboot/Cryptexes\") (subpath \"/usr/lib\") (subpath \"/usr/share\") \
+             (subpath (param \"MODEL_CACHE\")) (subpath (param \"METAL_CACHE\"))) \
+             (allow file-read-metadata (literal \"/var\") (path-ancestors (param \"APP\")) \
+             (path-ancestors (param \"MODEL_CACHE\")) (path-ancestors (param \"METAL_CACHE\"))) \
+             (allow sysctl-read) \
+             (allow iokit-open (iokit-user-client-class \"AGXDeviceUserClient\" \"IOSurfaceRootUserClient\" \
+             \"AppleVirtIONeuralEngineDeviceUserClient\" \"H11ANEInDirectPathClient\" \"H1xANELoadBalancerDirectPathClient\")) \
+             (allow mach-lookup (global-name \"com.apple.appleneuralengine\" \"com.apple.bsd.dirhelper\"))";
+        assert_eq!(policy_rules(CARD_READER_POLICY), plain);
+        assert_eq!(
+            policy_rules(CARD_HEIC_READER_POLICY),
+            format!("{plain} {VIDEO_DECODER_RULE}")
+        );
+        // The plain policy is the shared rules, byte for byte; the HEIC one adds exactly that rule.
+        let shared = card_reader_rules!();
+        assert_eq!(CARD_READER_POLICY, shared);
+        let added = CARD_HEIC_READER_POLICY.strip_prefix(shared).unwrap();
+        assert_eq!(policy_rules(added), VIDEO_DECODER_RULE);
+        for policy in [CARD_READER_POLICY, CARD_PREPARE_POLICY] {
+            assert!(!policy.contains("videodecoder") && !policy.contains("xpc-service-name"));
+        }
+        for denied in [
+            "IOSurfaceAcceleratorClient",
+            "AppleAVD",
+            "com.apple.coremedia.videoencoder",
+            "com.apple.MTLCompilerService",
+            "com.apple.windowserver",
+            "com.apple.tccd",
+            "network",
+        ] {
+            assert!(
+                !policy_rules(CARD_HEIC_READER_POLICY).contains(denied),
+                "{denied}"
+            );
+        }
+        // A comment that names no private document (the public copy has none to point to).
+        assert!(!CARD_HEIC_READER_POLICY.contains("docs/"));
+    }
+
+    /// Each card is read under the policy its own bytes call for: PNG and JPEG never reach Apple's
+    /// video decoder service.
+    #[test]
+    fn a_png_or_jpeg_card_is_read_without_the_video_decoder_and_only_a_heic_with_it() {
+        for (image, policy) in [
+            (png(1200, 800), CARD_READER_POLICY),
+            (jpeg(0xC0, 4032, 3024), CARD_READER_POLICY),
+            (heic(4032, 3024), CARD_HEIC_READER_POLICY),
+        ] {
+            let kind = card_image_kind(&image).unwrap();
+            assert_eq!(reading_policy(kind), policy, "{kind:?}");
+            assert_eq!(
+                reading_policy(kind).contains(VIDEO_DECODER_RULE),
+                kind == CardImageKind::Heic
+            );
+        }
+    }
+
+    /// A grid's own description (ISO/IEC 23008-12 ImageGrid) and where `iloc` says it is: in the
+    /// meta box's `idat` (construction method 1, as Apple writes it) or in `mdat` (method 0).
+    #[derive(Clone, Copy)]
+    struct Layout {
+        version: u8,
+        rows_less_one: u8,
+        columns_less_one: u8,
+        output: (u32, u32),
+        wide: bool,
+        method: u16,
+        /// Added to the offset `iloc` gives, to point it somewhere else.
+        shift: u32,
+    }
+    /// An HEVC sequence parameter set's payload (before emulation prevention), as an encoder writes
+    /// it: `sub_layers` (0 to 7) sub-layers each with a profile and level, a picture `coded` at that
+    /// size and cropped by `crop` (left, right, top, bottom, in chroma samples) in `chroma` format.
+    fn sps_payload(coded: (u32, u32), crop: [u32; 4], chroma: u32, sub_layers: u8) -> Vec<u8> {
+        let mut bits: Vec<bool> = Vec::new();
+        let put = |bits: &mut Vec<bool>, value: u64, count: u32| {
+            for i in (0..count).rev() {
+                bits.push((value >> i) & 1 == 1);
+            }
+        };
+        let ue = |bits: &mut Vec<bool>, value: u32| {
+            let value = u64::from(value) + 1;
+            let length = 64 - value.leading_zeros();
+            for _ in 1..length {
+                bits.push(false);
+            }
+            for i in (0..length).rev() {
+                bits.push((value >> i) & 1 == 1);
+            }
+        };
+        put(&mut bits, 0, 4);
+        put(&mut bits, u64::from(sub_layers), 3);
+        put(&mut bits, 1, 1);
+        // General profile (Main: space 0, tier 0, idc 1, compatible with 1 and 2), its flags, level 4.1.
+        put(&mut bits, 0x01, 8);
+        put(&mut bits, 0x6000_0000, 32);
+        put(&mut bits, 0x9000_0000_0000, 48);
+        put(&mut bits, 123, 8);
+        for _ in 0..sub_layers {
+            put(&mut bits, 0b11, 2);
+        }
+        if sub_layers > 0 {
+            put(&mut bits, 0, 2 * (8 - u32::from(sub_layers)));
+        }
+        for _ in 0..sub_layers {
+            put(&mut bits, 0x01, 8);
+            put(&mut bits, 0x6000_0000, 32);
+            put(&mut bits, 0, 48);
+            put(&mut bits, 120, 8);
+        }
+        ue(&mut bits, 0);
+        ue(&mut bits, chroma);
+        if chroma == 3 {
+            put(&mut bits, 0, 1);
+        }
+        ue(&mut bits, coded.0);
+        ue(&mut bits, coded.1);
+        if crop == [0; 4] {
+            put(&mut bits, 0, 1);
+        } else {
+            put(&mut bits, 1, 1);
+            for c in crop {
+                ue(&mut bits, c);
+            }
+        }
+        // The rest of a real set (bit depths and so on), then the stop bit.
+        put(&mut bits, 0, 24);
+        bits.push(true);
+        while !bits.len().is_multiple_of(8) {
+            bits.push(false);
+        }
+        bits.chunks(8)
+            .map(|b| b.iter().fold(0u8, |v, &bit| (v << 1) | u8::from(bit)))
+            .collect()
+    }
+    /// An `hvcC` holding one SPS NAL unit with `payload`, emulation prevention added.
+    fn hvcc_with(payload: &[u8]) -> Vec<u8> {
+        let mut nal = vec![0x42, 0x01];
+        let mut zeros = 0;
+        for &byte in payload {
+            if zeros >= 2 && byte <= 3 {
+                nal.push(3);
+                zeros = 0;
+            }
+            zeros = if byte == 0 { zeros + 1 } else { 0 };
+            nal.push(byte);
+        }
+        let mut out = vec![
+            1, 0x01, 0x60, 0, 0, 0, 0x90, 0, 0, 0, 0, 0, 123, 0xF0, 0, 0xFC, 0xFD, 0xF8, 0xF8, 0,
+            0, 0x0F, 1, 0xA1, 0, 1,
+        ];
+        out.extend_from_slice(&(nal.len() as u16).to_be_bytes());
+        out.extend_from_slice(&nal);
+        out
+    }
+    /// A NAL unit: its two-byte header (`kind`, `layer`, temporal id plus one), then `payload`.
+    fn nal(kind: u8, layer: u8, temporal: u8, payload: &[u8]) -> Vec<u8> {
+        let mut unit = vec![(kind << 1) | (layer >> 5), ((layer & 0x1F) << 3) | temporal];
+        unit.extend_from_slice(payload);
+        unit
+    }
+    /// An `hvcC` with these arrays, each a label and its units.
+    fn hvcc_arrays(arrays: &[(u8, Vec<Vec<u8>>)]) -> Vec<u8> {
+        let mut out = hvcc_with(&[])[..22].to_vec();
+        out.push(arrays.len() as u8);
+        for (label, units) in arrays {
+            out.push(0x80 | label);
+            out.extend_from_slice(&(units.len() as u16).to_be_bytes());
+            for unit in units {
+                out.extend_from_slice(&(unit.len() as u16).to_be_bytes());
+                out.extend_from_slice(unit);
+            }
+        }
+        out
+    }
+    /// The `hvcC` an encoder writes for a picture shown at `size`: coded in blocks of 8, cropped back
+    /// (4:2:0 when both sides are even, monochrome otherwise).
+    fn hvcc_for(size: (u32, u32)) -> Vec<u8> {
+        let coded = (size.0.div_ceil(8) * 8, size.1.div_ceil(8) * 8);
+        let even = size.0.is_multiple_of(2) && size.1.is_multiple_of(2);
+        let (chroma, unit) = if even { (1, 2) } else { (0, 1) };
+        let crop = [0, (coded.0 - size.0) / unit, 0, (coded.1 - size.1) / unit];
+        hvcc_with(&sps_payload(coded, crop, chroma, 0))
+    }
+    /// An item: its number, its type and its size, if it has one.
+    type HeicItem = (u16, &'static [u8; 4], Option<(u32, u32)>);
+    /// A HEIC's own boxes, as Apple writes them: a file type with `major`, then a `meta` box for
+    /// pictures (`handler`) naming the primary item; each item's type, its size (`ispe`) and, for an
+    /// HEVC picture, its `hvcC` (each property shared by every item with the same one, as Apple
+    /// does); the primary's tiles (one `dimg`, or two with `second_dimg`) and its description
+    /// (`layout`), other grids (`more_grids`) and other references (`more_refs`); the descriptions
+    /// located by `iloc`; and an `mdat`. `hvcc` replaces every HEVC picture's `hvcC` (None: none at
+    /// all). `wide_ipma` uses version 1 (four-byte item numbers) and two-byte property numbers.
+    #[derive(Clone)]
+    struct Heic {
+        major: &'static [u8; 4],
+        handler: &'static [u8; 4],
+        primary: u16,
+        items: Vec<HeicItem>,
+        tiles: Vec<u16>,
+        second_dimg: bool,
+        layout: Option<Layout>,
+        more_grids: Vec<(u16, Vec<u16>, Layout)>,
+        more_refs: Vec<(&'static [u8; 4], u16, Vec<u16>)>,
+        hvcc: Option<Option<Vec<u8>>>,
+        item_hvcc: Vec<(u16, Option<Vec<u8>>)>,
+        /// More properties (whole boxes) for an item, after its own.
+        extra_properties: Vec<(u16, Vec<u8>)>,
+        wide_ipma: bool,
+    }
+    impl Heic {
+        fn one(kind: &'static [u8; 4], width: u32, height: u32) -> Self {
+            Heic {
+                major: b"heic",
+                handler: b"pict",
+                primary: 1,
+                items: vec![(1, kind, Some((width, height)))],
+                tiles: Vec::new(),
+                second_dimg: false,
+                layout: None,
+                more_grids: Vec::new(),
+                more_refs: Vec::new(),
+                hvcc: None,
+                item_hvcc: Vec::new(),
+                extra_properties: Vec::new(),
+                wide_ipma: false,
+            }
+        }
+        fn bytes(&self) -> Vec<u8> {
+            fn bx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+                let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+                out.extend_from_slice(kind);
+                out.extend_from_slice(body);
+                out
+            }
+            let full =
+                |version: u8, flags: u8, body: &[u8]| [&[version, 0, 0, flags][..], body].concat();
+            let mut ftyp = self.major.to_vec();
+            ftyp.extend_from_slice(&[0; 4]);
+            ftyp.extend_from_slice(b"mif1heic");
+            let hdlr = full(0, 0, &[&[0; 4][..], self.handler, &[0; 13]].concat());
+            let pitm = full(0, 0, &self.primary.to_be_bytes());
+            let mut iinf = (self.items.len() as u16).to_be_bytes().to_vec();
+            let mut properties: Vec<Vec<u8>> = Vec::new();
+            let mut index_of = |property: Vec<u8>| -> u16 {
+                (match properties.iter().position(|p| *p == property) {
+                    Some(at) => at + 1,
+                    None => {
+                        properties.push(property);
+                        properties.len()
+                    }
+                }) as u16
+            };
+            let mut ipma_entries = Vec::new();
+            let mut associated = 0u32;
+            for (id, kind, size) in &self.items {
+                iinf.extend(bx(
+                    b"infe",
+                    &full(
+                        2,
+                        0,
+                        &[&id.to_be_bytes()[..], &[0, 0], &kind[..], &[0]].concat(),
+                    ),
+                ));
+                let Some((w, h)) = size else { continue };
+                let mut indexes = vec![index_of(bx(
+                    b"ispe",
+                    &full(0, 0, &[w.to_be_bytes(), h.to_be_bytes()].concat()),
+                ))];
+                if *kind == b"hvc1" {
+                    let own = self.item_hvcc.iter().find(|(i, _)| i == id);
+                    let hvcc = match (own, &self.hvcc) {
+                        (Some((_, chosen)), _) | (None, Some(chosen)) => chosen.clone(),
+                        (None, None) => Some(hvcc_for((*w, *h))),
+                    };
+                    if let Some(hvcc) = hvcc {
+                        indexes.push(index_of(bx(b"hvcC", &hvcc)));
+                    }
+                }
+                for (_, property) in self.extra_properties.iter().filter(|(i, _)| i == id) {
+                    indexes.push(index_of(property.clone()));
+                }
+                associated += 1;
+                if self.wide_ipma {
+                    ipma_entries.extend_from_slice(&u32::from(*id).to_be_bytes());
+                } else {
+                    ipma_entries.extend_from_slice(&id.to_be_bytes());
+                }
+                ipma_entries.push(indexes.len() as u8);
+                for index in indexes {
+                    if self.wide_ipma {
+                        ipma_entries.extend_from_slice(&(0x8000 | index).to_be_bytes());
+                    } else {
+                        ipma_entries.push(0x80 | index as u8);
+                    }
+                }
+            }
+            let ipco = properties.concat();
+            let ipma = [&associated.to_be_bytes()[..], &ipma_entries].concat();
+            let ipma = if self.wide_ipma {
+                full(1, 1, &ipma)
+            } else {
+                full(0, 0, &ipma)
+            };
+            let iprp = [bx(b"ipco", &ipco), bx(b"ipma", &ipma)].concat();
+            let reference = |kind: &[u8; 4], from: u16, to: &[u16]| {
+                let mut body = from.to_be_bytes().to_vec();
+                body.extend_from_slice(&(to.len() as u16).to_be_bytes());
+                for id in to {
+                    body.extend_from_slice(&id.to_be_bytes());
+                }
+                bx(kind, &body)
+            };
+            let mut refs = Vec::new();
+            if !self.tiles.is_empty() {
+                refs.extend(reference(b"dimg", self.primary, &self.tiles));
+                if self.second_dimg {
+                    refs.extend(reference(b"dimg", self.primary, &self.tiles));
+                }
+            }
+            for (id, tiles, _) in &self.more_grids {
+                refs.extend(reference(b"dimg", *id, tiles));
+            }
+            for (kind, from, to) in &self.more_refs {
+                refs.extend(reference(kind, *from, to));
+            }
+            let iref = if refs.is_empty() {
+                Vec::new()
+            } else {
+                bx(b"iref", &full(0, 0, &refs))
+            };
+            // Each grid's description, and an `iloc` (version 1, four-byte offsets and lengths)
+            // with an entry for the first item too, as a real file has one for every item.
+            let describe = |l: &Layout| {
+                let mut d = vec![
+                    l.version,
+                    u8::from(l.wide),
+                    l.rows_less_one,
+                    l.columns_less_one,
+                ];
+                if l.wide {
+                    d.extend_from_slice(&l.output.0.to_be_bytes());
+                    d.extend_from_slice(&l.output.1.to_be_bytes());
+                } else {
+                    d.extend_from_slice(&(l.output.0 as u16).to_be_bytes());
+                    d.extend_from_slice(&(l.output.1 as u16).to_be_bytes());
+                }
+                d
+            };
+            let described: Vec<(u16, Layout, Vec<u8>)> = self
+                .layout
+                .map(|l| (self.primary, l))
+                .into_iter()
+                .chain(self.more_grids.iter().map(|(id, _, l)| (*id, *l)))
+                .map(|(id, l)| (id, l, describe(&l)))
+                .collect();
+            let meta = |mdat_at: u32| {
+                if described.is_empty() {
+                    return bx(
+                        b"meta",
+                        &full(
+                            0,
+                            0,
+                            &[
+                                bx(b"hdlr", &hdlr),
+                                bx(b"pitm", &pitm),
+                                bx(b"iinf", &full(0, 0, &iinf)),
+                                iref.clone(),
+                                bx(b"iprp", &iprp),
+                            ]
+                            .concat(),
+                        ),
+                    );
+                }
+                let mut iloc = vec![0x44, 0x00];
+                iloc.extend_from_slice(&(described.len() as u16 + 1).to_be_bytes());
+                iloc.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+                let (mut idat, mut mdat) = (Vec::new(), Vec::new());
+                for (id, l, d) in &described {
+                    let offset = if l.method == 0 {
+                        mdat_at + mdat.len() as u32
+                    } else {
+                        idat.len() as u32
+                    } + l.shift;
+                    if l.method == 0 {
+                        mdat.extend_from_slice(d);
+                    } else {
+                        idat.extend_from_slice(d);
+                    }
+                    iloc.extend_from_slice(&id.to_be_bytes());
+                    iloc.extend_from_slice(&l.method.to_be_bytes());
+                    iloc.extend_from_slice(&[0, 0, 0, 1]);
+                    iloc.extend_from_slice(&offset.to_be_bytes());
+                    iloc.extend_from_slice(&(d.len() as u32).to_be_bytes());
+                }
+                let idat = if idat.is_empty() {
+                    Vec::new()
+                } else {
+                    bx(b"idat", &idat)
+                };
+                bx(
+                    b"meta",
+                    &full(
+                        0,
+                        0,
+                        &[
+                            bx(b"hdlr", &hdlr),
+                            bx(b"pitm", &pitm),
+                            bx(b"iloc", &full(1, 0, &iloc)),
+                            bx(b"iinf", &full(0, 0, &iinf)),
+                            iref.clone(),
+                            bx(b"iprp", &iprp),
+                            idat,
+                        ]
+                        .concat(),
+                    ),
+                )
+            };
+            let ftyp = bx(b"ftyp", &ftyp);
+            let mdat_at = (ftyp.len() + meta(0).len() + 8) as u32;
+            let mdat: Vec<u8> = described
+                .iter()
+                .filter(|(_, l, _)| l.method == 0)
+                .flat_map(|(_, _, d)| d.clone())
+                .collect();
+            [ftyp, meta(mdat_at), bx(b"mdat", &mdat)].concat()
+        }
+    }
+    /// A grid as an iPhone writes it: `rows` by `columns` HEVC tiles of `tile` size, each named once,
+    /// covering an `output` picture, described in `idat`.
+    fn grid_of(rows: u16, columns: u16, tile: (u32, u32), output: (u32, u32)) -> Heic {
+        let count = rows * columns;
+        Heic {
+            primary: count + 1,
+            items: (1..=count)
+                .map(|id| (id, b"hvc1", Some(tile)))
+                .chain([(count + 1, b"grid", Some(output))])
+                .collect(),
+            tiles: (1..=count).collect(),
+            layout: Some(Layout {
+                version: 0,
+                rows_less_one: (rows - 1) as u8,
+                columns_less_one: (columns - 1) as u8,
+                output,
+                wide: output.0 > 0xFFFF || output.1 > 0xFFFF,
+                method: 1,
+                shift: 0,
+            }),
+            wide_ipma: true,
+            ..Heic::one(b"hvc1", 1, 1)
+        }
+    }
+
+    /// A HEIC declaring one HEVC picture of `width` x `height`.
+    pub(crate) fn heic(width: u32, height: u32) -> Vec<u8> {
+        Heic::one(b"hvc1", width, height).bytes()
+    }
+
+    #[test]
+    fn a_heic_is_told_by_its_own_boxes_and_its_primary_pictures_size() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        assert_eq!(
+            kind(&Heic::one(b"hvc1", 1200, 800)),
+            Some(CardImageKind::Heic)
+        );
+        for major in [b"heix", b"heim", b"heis", b"mif1"] {
+            let heic = Heic {
+                major,
+                ..Heic::one(b"hvc1", 1200, 800)
+            };
+            assert_eq!(kind(&heic), Some(CardImageKind::Heic), "{major:?}");
+        }
+        // An iPhone photo: a grid of 512 by 512 tiles, the grid itself the primary picture; its size
+        // is the grid's, not its tiles'.
+        assert_eq!(
+            kind(&grid_of(6, 8, (512, 512), (4032, 3024))),
+            Some(CardImageKind::Heic)
+        );
+        assert_eq!(
+            kind(&grid_of(10, 16, (512, 512), (8000, 5000))),
+            Some(CardImageKind::Heic)
+        );
+        assert_eq!(kind(&grid_of(10, 16, (512, 512), (8000, 5001))), None);
+        // Several pictures: only the primary one is read, so only its size counts.
+        let second = |big: bool| Heic {
+            primary: 2,
+            items: vec![
+                (
+                    1,
+                    b"hvc1",
+                    Some(if big { (640, 160) } else { (9000, 9000) }),
+                ),
+                (
+                    2,
+                    b"hvc1",
+                    Some(if big { (9000, 9000) } else { (1400, 900) }),
+                ),
+            ],
+            ..Heic::one(b"hvc1", 1, 1)
+        };
+        assert_eq!(kind(&second(false)), Some(CardImageKind::Heic));
+        assert_eq!(kind(&second(true)), None);
+    }
+
+    /// Review Z, L2: a small HEIC naming tens of thousands of items (a 255 by 255 grid of one shared
+    /// tile cost half a minute and 650 MB) is refused before anything is decoded. A 48-megapixel
+    /// iPhone photo has about 200 items; up to 1,024 are read.
+    #[test]
+    fn a_heic_of_more_than_1024_items_is_refused_before_decoding() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let bomb = grid_of(255, 255, (16, 16), (4080, 4080)).bytes();
+        assert!(bomb.len() < MAX_IMAGE_BYTES);
+        assert_eq!(card_image_check(&bomb), Err(CardImageProblem::NotAPhoto));
+        // An iPhone-style grid of 192 tiles (16 by 12) is read; 1,023 tiles and the grid are 1,024 items.
+        assert_eq!(
+            kind(&grid_of(12, 16, (400, 400), (6200, 4600))),
+            Some(CardImageKind::Heic)
+        );
+        assert_eq!(
+            kind(&grid_of(33, 31, (200, 200), (6100, 6500))),
+            Some(CardImageKind::Heic)
+        );
+        assert_eq!(kind(&grid_of(32, 32, (192, 192), (6000, 6000))), None);
+        // A count that says more than are there is refused too.
+        let mut declared = grid_of(6, 8, (512, 512), (4032, 3024)).bytes();
+        let at = declared.windows(4).position(|w| w == b"iinf").unwrap() + 8;
+        declared[at..at + 2].copy_from_slice(&1025u16.to_be_bytes());
+        assert_eq!(card_image_kind(&declared), None);
+    }
+
+    /// Review Z, I2: every tile of a grid must be HEVC; a grid of AV1 tiles under a HEIC brand, one
+    /// tile of another kind, a tile that isn't there, or a grid naming no tiles is no photo.
+    #[test]
+    fn a_grid_is_read_only_when_every_tile_is_hevc() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let iphone = grid_of(6, 8, (512, 512), (4032, 3024));
+        assert_eq!(kind(&iphone), Some(CardImageKind::Heic));
+        let mut av1 = iphone.clone();
+        for item in av1.items.iter_mut().filter(|i| i.1 == b"hvc1") {
+            item.1 = b"av01";
+        }
+        assert_eq!(kind(&av1), None);
+        let mut mixed = iphone.clone();
+        mixed.items[20].1 = b"av01";
+        assert_eq!(kind(&mixed), None);
+        let mut absent = iphone.clone();
+        absent.tiles[47] = 400;
+        assert_eq!(kind(&absent), None);
+        let mut untiled = iphone.clone();
+        untiled.tiles.clear();
+        assert_eq!(kind(&untiled), None);
+        // A grid as a tile of itself is not HEVC either.
+        let mut itself = iphone;
+        itself.tiles[47] = 49;
+        assert_eq!(kind(&itself), None);
+    }
+
+    /// One tile named 65,025 times in a two-item file was the same half-minute decode as 65,025
+    /// items: a grid's one `dimg` reference names at most 1,024 tiles, each once.
+    #[test]
+    fn a_grid_names_each_tile_once_in_one_reference_and_at_most_1024() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let mut repeated = grid_of(255, 255, (16, 16), (4080, 4080));
+        repeated.items = vec![
+            (1, b"hvc1", Some((16, 16))),
+            (65026, b"grid", Some((4080, 4080))),
+        ];
+        repeated.tiles = vec![1; 65025];
+        let bytes = repeated.bytes();
+        assert!(bytes.len() < 200_000);
+        assert_eq!(card_image_check(&bytes), Err(CardImageProblem::NotAPhoto));
+        // Within the count, a tile named twice, or a second `dimg` for the grid, is no photo.
+        let iphone = grid_of(6, 8, (512, 512), (4032, 3024));
+        let mut twice = iphone.clone();
+        twice.tiles[47] = 47;
+        assert_eq!(kind(&twice), None);
+        let mut two_lists = iphone.clone();
+        two_lists.second_dimg = true;
+        assert_eq!(kind(&two_lists), None);
+    }
+
+    /// The grid's own description must match its tiles and its size, and the tiles must cover the
+    /// output with less than one tile to spare each way, never decoding more than twice the pixel
+    /// limit: tiles far larger than the output, a strip of huge tiles, or tiles of mixed sizes are
+    /// no photo. Apple writes the description in `idat`; one in `mdat` and one with 32-bit sizes are
+    /// read too.
+    #[test]
+    fn a_grids_tiles_must_cover_its_output_and_not_much_more() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let iphone = grid_of(6, 8, (512, 512), (4032, 3024));
+        assert_eq!(kind(&iphone), Some(CardImageKind::Heic));
+        let edit = |change: &dyn Fn(&mut Heic)| {
+            let mut heic = iphone.clone();
+            change(&mut heic);
+            kind(&heic)
+        };
+        let layout =
+            |change: &dyn Fn(&mut Layout)| edit(&|h: &mut Heic| change(h.layout.as_mut().unwrap()));
+        // Where the description is.
+        assert_eq!(layout(&|l| l.method = 0), Some(CardImageKind::Heic));
+        assert_eq!(layout(&|l| l.wide = true), Some(CardImageKind::Heic));
+        assert_eq!(layout(&|l| l.method = 2), None);
+        assert_eq!(layout(&|l| l.shift = 1_000_000), None);
+        assert_eq!(layout(&|l| l.version = 1), None);
+        assert_eq!(edit(&|h| h.layout = None), None);
+        // What it says: rows and columns for the tiles named, the grid's own size.
+        assert_eq!(layout(&|l| l.rows_less_one = 6), None);
+        assert_eq!(layout(&|l| l.columns_less_one = 5), None);
+        assert_eq!(layout(&|l| l.output = (4032, 3025)), None);
+        // Tiles: each with its own size, all the same, none empty.
+        assert_eq!(edit(&|h| h.items[3].2 = None), None);
+        assert_eq!(edit(&|h| h.items[3].2 = Some((512, 513))), None);
+        let empty = grid_of(6, 8, (0, 512), (4032, 3024));
+        assert_eq!(kind(&empty), None);
+        // Covering the output, with less than a tile to spare: not too small, no unused column or row.
+        assert_eq!(kind(&grid_of(6, 8, (500, 512), (4032, 3024))), None);
+        assert_eq!(kind(&grid_of(6, 9, (512, 512), (4032, 3024))), None);
+        assert_eq!(kind(&grid_of(7, 8, (512, 512), (4032, 3024))), None);
+        assert_eq!(
+            kind(&grid_of(6, 8, (504, 504), (4032, 3024))),
+            Some(CardImageKind::Heic)
+        );
+        // Tiles far larger than the output, one or several.
+        assert_eq!(kind(&grid_of(1, 1, (60_000, 60_000), (100, 100))), None);
+        assert_eq!(kind(&grid_of(2, 2, (9_000, 9_000), (10_000, 10_000))), None);
+        // A strip of very wide tiles over a picture within the limit.
+        assert_eq!(kind(&grid_of(100, 1, (4_000_000, 1), (40_000, 100))), None);
+        // A small picture in one tile, as an encoder may store it, is read.
+        assert_eq!(
+            kind(&grid_of(1, 1, (512, 512), (300, 200))),
+            Some(CardImageKind::Heic)
+        );
+    }
+
+    /// Review Z, I3: more than 40 million pixels, of any kind, is its own refusal (a 48-megapixel
+    /// iPhone photo), not "not a photo"; the reader returns it as `too-many-pixels`.
+    #[test]
+    fn a_picture_over_40_megapixels_is_too_many_pixels_for_every_kind() {
+        for image in [
+            png(8000, 5001),
+            png(u32::MAX, u32::MAX),
+            jpeg(0xC0, 65_535, 65_535),
+            heic(8064, 6048),
+            grid_of(12, 16, (512, 512), (8064, 6048)).bytes(),
+        ] {
+            assert_eq!(
+                card_image_check(&image),
+                Err(CardImageProblem::TooManyPixels)
+            );
+            assert_eq!(
+                Cards::default().read(image),
+                Err(LocalToolError::TooManyPixels)
+            );
+        }
+        for image in [png(8000, 5000), jpeg(0xC0, 8000, 5000), heic(8000, 5000)] {
+            assert!(card_image_check(&image).is_ok());
+        }
+        // No size, or none at all, is still no photo.
+        for image in [png(0, 800), heic(0, 800), b"GIF89a".to_vec()] {
+            assert_eq!(card_image_check(&image), Err(CardImageProblem::NotAPhoto));
+        }
+        assert_eq!(
+            serde_json::to_string(&LocalToolError::TooManyPixels).unwrap(),
+            "\"too-many-pixels\""
+        );
+    }
+
+    /// The coded and shown sizes come out of an `hvcC`'s sequence parameters as an encoder writes
+    /// them, with sub-layers, every chroma format, a conformance window and emulation-prevention
+    /// bytes; anything else is no size at all.
+    #[test]
+    fn an_hevc_pictures_size_is_read_from_its_sequence_parameters() {
+        let size = |coded: (u32, u32), crop: [u32; 4], chroma: u32, sub_layers: u8| {
+            hevc_size(&hvcc_with(&sps_payload(coded, crop, chroma, sub_layers)))
+        };
+        let both = |w: u64, h: u64, cw: u64, ch: u64| {
+            Some(HevcSize {
+                coded: (w, h),
+                cropped: (cw, ch),
+            })
+        };
+        assert_eq!(
+            size((4032, 3024), [0; 4], 1, 0),
+            both(4032, 3024, 4032, 3024)
+        );
+        assert_eq!(hevc_size(&hvcc_for((196, 196))), both(200, 200, 196, 196));
+        assert_eq!(hevc_size(&hvcc_for((601, 401))), both(608, 408, 601, 401));
+        for sub_layers in 0..=7 {
+            assert_eq!(
+                size((512, 512), [0, 4, 0, 2], 1, sub_layers),
+                both(512, 512, 504, 508)
+            );
+        }
+        // Chroma: 4:2:2 crops rows one by one, 4:4:4 and monochrome both ways one by one.
+        assert_eq!(
+            size((512, 512), [1, 1, 1, 1], 2, 0),
+            both(512, 512, 508, 510)
+        );
+        assert_eq!(
+            size((512, 512), [1, 1, 1, 1], 3, 0),
+            both(512, 512, 510, 510)
+        );
+        assert_eq!(
+            size((512, 512), [1, 1, 1, 1], 0, 0),
+            both(512, 512, 510, 510)
+        );
+        // The payload has runs of zero bytes, so its NAL unit carries emulation-prevention bytes.
+        assert!(
+            hvcc_with(&sps_payload((8192, 8192), [0; 4], 1, 0))
+                .windows(3)
+                .any(|w| w == [0, 0, 3])
+        );
+        assert_eq!(
+            size((8192, 8192), [0; 4], 1, 0),
+            both(8192, 8192, 8192, 8192)
+        );
+        // No size: no SPS, two, another configuration version, chroma 4, nothing coded, cropped away.
+        let good = hvcc_for((512, 512));
+        let mut none = good[..23].to_vec();
+        none[22] = 0;
+        assert_eq!(hevc_size(&none), None);
+        let mut two = good.clone();
+        two[24..26].copy_from_slice(&2u16.to_be_bytes());
+        two.extend_from_slice(&good[26..]);
+        assert_eq!(hevc_size(&two), None);
+        let mut version = good.clone();
+        version[0] = 2;
+        assert_eq!(hevc_size(&version), None);
+        assert_eq!(size((512, 512), [0; 4], 4, 0), None);
+        assert_eq!(size((0, 512), [0; 4], 1, 0), None);
+        assert_eq!(size((512, 512), [128, 128, 0, 0], 1, 0), None);
+        // Cut short anywhere, it is no size; a number of more than 32 leading zeros is none either.
+        for cut in 0..good.len() - 4 {
+            assert_eq!(hevc_size(&good[..cut]), None, "{cut}");
+        }
+        let mut zeros = sps_payload((512, 512), [0; 4], 1, 0);
+        zeros.truncate(13);
+        zeros.extend_from_slice(&[0x80, 0, 0, 0, 0, 0x01, 0xFF]);
+        assert_eq!(hevc_size(&hvcc_with(&zeros)), None);
+    }
+
+    /// Review G, L-1: Apple's decoder reads every parameter set in an `hvcC` by the unit's own header,
+    /// so a big SPS hidden in the PPS or SEI array, first or last, or in the VPS array, is no
+    /// photo; so is any unit not of its array's type, of another layer, with a wrong temporal id,
+    /// any other kind of array, two SPS or VPS, nine PPS or SEI, or a unit over 1,024 bytes. What
+    /// Apple writes (one VPS, SPS and PPS) is read, and SEI beside them.
+    #[test]
+    fn an_hevc_configuration_holds_only_what_its_labels_say() {
+        let small = &hvcc_for((196, 196))[28..];
+        let small_sps = small.to_vec();
+        let big_sps = nal(33, 0, 1, &sps_payload((8192, 8192), [0; 4], 1, 0));
+        let vps = nal(32, 0, 1, &[0x0C, 0x01, 0xFF, 0xFF]);
+        let pps = nal(34, 0, 1, &[0xC1, 0x72]);
+        let sei = nal(39, 0, 1, &[0x05, 0x02, 0xAA, 0xBB, 0x80]);
+        let size = |arrays: &[(u8, Vec<Vec<u8>>)]| hevc_size(&hvcc_arrays(arrays));
+        let shown = Some(HevcSize {
+            coded: (200, 200),
+            cropped: (196, 196),
+        });
+        let honest = vec![
+            (32, vec![vps.clone()]),
+            (33, vec![small_sps.clone()]),
+            (34, vec![pps.clone()]),
+        ];
+        assert_eq!(size(&honest), shown);
+        let with = |extra: (u8, Vec<Vec<u8>>)| {
+            let mut arrays = honest.clone();
+            arrays.push(extra);
+            size(&arrays)
+        };
+        assert_eq!(with((39, vec![sei.clone()])), shown);
+        assert_eq!(with((40, vec![nal(40, 0, 3, &[1, 2])])), shown);
+        // The reviewer's: the big SPS (and its PPS) in the PPS array, in an SEI array, in the VPS array.
+        assert_eq!(with((34, vec![big_sps.clone(), pps.clone()])), None);
+        assert_eq!(with((39, vec![big_sps.clone()])), None);
+        assert_eq!(with((32, vec![big_sps.clone()])), None);
+        // The big SPS labelled PPS and placed first.
+        let mut first = vec![(34, vec![big_sps.clone()])];
+        first.extend(honest.clone());
+        assert_eq!(size(&first), None);
+        // Headers: another layer, temporal id 0 or a parameter set's of more than 0, the forbidden bit.
+        assert_eq!(with((34, vec![nal(34, 1, 1, &[0xC1])])), None);
+        assert_eq!(with((34, vec![nal(34, 0, 0, &[0xC1])])), None);
+        assert_eq!(with((34, vec![nal(34, 0, 2, &[0xC1])])), None);
+        let mut forbidden = pps.clone();
+        forbidden[0] |= 0x80;
+        assert_eq!(with((34, vec![forbidden])), None);
+        // Other kinds of array: an access unit delimiter, a slice, end of sequence.
+        for kind in [35, 1, 19, 36] {
+            assert_eq!(with((kind, vec![nal(kind, 0, 1, &[0x50])])), None, "{kind}");
+        }
+        // How many: no SPS, two, two VPS, nine PPS, nine SEI, a unit over 1,024 bytes.
+        assert_eq!(
+            size(&[(32, vec![vps.clone()]), (34, vec![pps.clone()])]),
+            None
+        );
+        assert_eq!(with((33, vec![small_sps.clone()])), None);
+        assert_eq!(with((32, vec![vps])), None);
+        assert_eq!(with((34, vec![pps.clone(); 8])), None);
+        assert_eq!(with((39, vec![sei.clone(); 8])), shown);
+        assert_eq!(with((39, vec![sei; 9])), None);
+        assert_eq!(with((39, vec![nal(39, 0, 1, &[0x05; 1023])])), None);
+        assert_eq!(with((39, vec![nal(39, 0, 1, &[0x05; 1022])])), shown);
+    }
+
+    /// Review G, L-1: one `hvcC` and one `ispe` an item: ImageIO took a tile's second (big) `hvcC`,
+    /// this check its first.
+    #[test]
+    fn a_picture_with_two_configurations_or_sizes_is_no_photo() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let big = hvcc_with(&sps_payload((8192, 8192), [0; 4], 1, 0));
+        let boxed = |kind: &[u8; 4], body: &[u8]| {
+            let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+            b.extend_from_slice(kind);
+            b.extend_from_slice(body);
+            b
+        };
+        let mut two = grid_of(6, 8, (512, 512), (4032, 3024));
+        assert_eq!(kind(&two), Some(CardImageKind::Heic));
+        two.extra_properties = (1..=48).map(|id| (id, boxed(b"hvcC", &big))).collect();
+        assert_eq!(kind(&two), None);
+        let mut single = Heic::one(b"hvc1", 1200, 800);
+        single.extra_properties = vec![(1, boxed(b"hvcC", &hvcc_for((1200, 800))))];
+        assert_eq!(kind(&single), None);
+        let mut sizes = Heic::one(b"hvc1", 1200, 800);
+        sizes.extra_properties = vec![(
+            1,
+            boxed(b"ispe", &[0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0, 0x20, 0]),
+        )];
+        assert_eq!(kind(&sizes), None);
+    }
+
+    /// Review G, L-2: references are read once and bounded: more than 4,096 in all, or one item
+    /// making the same kind of reference twice, is no photo, and so are more than four tone maps.
+    /// The reviewer's file of 1,020 tone maps and 600,000 filler references took seconds a check.
+    #[test]
+    fn references_are_bounded_and_tone_maps_few() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let base = grid_of(6, 8, (512, 512), (4032, 3024));
+        // 4,096 references in all: the grid's 48 and 4,048 from Exif (cdsc) items.
+        let filler = |references: usize| {
+            let mut heic = base.clone();
+            let mut left = references - 48;
+            let mut id = 50;
+            while left > 0 {
+                let n = left.min(1024);
+                heic.items.push((id, b"Exif", None));
+                heic.more_refs.push((b"cdsc", id, vec![49; n]));
+                left -= n;
+                id += 1;
+            }
+            heic
+        };
+        assert_eq!(kind(&filler(4096)), Some(CardImageKind::Heic));
+        assert_eq!(kind(&filler(4097)), None);
+        let mut twice = base.clone();
+        twice.items.push((50, b"Exif", None));
+        twice.more_refs = vec![(b"cdsc", 50, vec![49]), (b"cdsc", 50, vec![49])];
+        assert_eq!(kind(&twice), None);
+        let mut many = base.clone();
+        many.items.push((50, b"Exif", None));
+        many.more_refs = vec![(b"cdsc", 50, vec![49; 1025])];
+        assert_eq!(kind(&many), None);
+        // Four tone maps of the photo and another picture are read; five are not.
+        let tone_maps = |n: u16| {
+            let mut heic = base.clone();
+            heic.items.push((50, b"hvc1", Some((1008, 756))));
+            for id in 51..51 + n {
+                heic.items.push((id, b"tmap", Some((4032, 3024))));
+                heic.more_refs.push((b"dimg", id, vec![49, 50]));
+            }
+            kind(&heic)
+        };
+        assert_eq!(tone_maps(4), Some(CardImageKind::Heic));
+        assert_eq!(tone_maps(5), None);
+    }
+
+    /// Review G, L-3: a photo over 40 megapixels is refused as too many pixels even when everything
+    /// in the file together is also over the total, as a 48-megapixel Portrait photo with its mattes
+    /// is (about 138 megapixels in all).
+    #[test]
+    fn a_portrait_photo_over_the_limit_is_too_many_pixels() {
+        let mut portrait = grid_of(6, 9, (896, 1024), (8064, 6048));
+        portrait.items.extend([
+            (56, b"hvc1", Some((4032, 3024))),
+            (57, b"hvc1", Some((4032, 3024))),
+            (58, b"hvc1", Some((4032, 3024))),
+            (59, b"hvc1", Some((4032, 3024))),
+            (60, b"hvc1", Some((4032, 3024))),
+            (61, b"hvc1", Some((4032, 3024))),
+            (62, b"hvc1", Some((4032, 3024))),
+        ]);
+        portrait.more_refs = (56..=62).map(|id| (b"auxl", id, vec![55])).collect();
+        assert_eq!(
+            card_image_check(&portrait.bytes()),
+            Err(CardImageProblem::TooManyPixels)
+        );
+        // Within the limit, too much in all is still no photo.
+        let mut small = grid_of(6, 8, (512, 512), (4032, 3024));
+        small
+            .items
+            .extend((50..=59).map(|id| (id, b"hvc1", Some((4032, 3024)))));
+        small.more_refs = (50..=59).map(|id| (b"auxl", id, vec![49])).collect();
+        assert_eq!(
+            card_image_check(&small.bytes()),
+            Err(CardImageProblem::NotAPhoto)
+        );
+    }
+
+    /// Review G, L-4: a long, thin strip, such as one row of 512 tiles under a 16,000 by 100
+    /// picture, may spare a row and a column of tiles of at most 512; tiles larger than the picture
+    /// still may not.
+    #[test]
+    fn a_long_thin_strip_is_read() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        assert_eq!(
+            kind(&grid_of(1, 32, (512, 512), (16000, 100))),
+            Some(CardImageKind::Heic)
+        );
+        assert_eq!(
+            kind(&grid_of(32, 1, (512, 512), (100, 16000))),
+            Some(CardImageKind::Heic)
+        );
+        assert_eq!(kind(&grid_of(1, 2, (8192, 4320), (8193, 4320))), None);
+        assert_eq!(kind(&grid_of(1, 1, (60_000, 60_000), (100, 100))), None);
+    }
+
+    /// Review F, L-1: a picture's coded size must be the one it says, cropped to exactly that and
+    /// padded by less than 64 each way. 1,023 tiles said 196 by 196 but were each an 8192 by 8192
+    /// picture; a single picture said 100 by 100 and was 8192 by 8192.
+    #[test]
+    fn a_picture_coded_larger_than_it_says_is_no_photo() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        let tiles = grid_of(33, 31, (196, 196), (6076, 6468));
+        assert_eq!(kind(&tiles), Some(CardImageKind::Heic));
+        let huge = hvcc_with(&sps_payload((8192, 8192), [0; 4], 1, 0));
+        let huge_cropped = hvcc_with(&sps_payload((8192, 8192), [0, 3998, 0, 3998], 1, 0));
+        for hvcc in [huge.clone(), huge_cropped] {
+            let mut bomb = tiles.clone();
+            bomb.hvcc = Some(Some(hvcc.clone()));
+            assert_eq!(kind(&bomb), None);
+            let single = Heic {
+                hvcc: Some(Some(hvcc)),
+                ..Heic::one(b"hvc1", 196, 196)
+            };
+            assert_eq!(kind(&single), None);
+        }
+        // Padding of up to 63 is how encoders code; 64 is not.
+        let padded = |pad: u32| Heic {
+            hvcc: Some(Some(hvcc_with(&sps_payload(
+                (1200 + pad, 800),
+                [0, pad, 0, 0],
+                0,
+                0,
+            )))),
+            ..Heic::one(b"hvc1", 1200, 800)
+        };
+        assert_eq!(kind(&padded(63)), Some(CardImageKind::Heic));
+        assert_eq!(kind(&padded(64)), None);
+        // Cropped to anything but its stated size, no `hvcC`, or an `hvcC` without a size.
+        let other = Heic {
+            hvcc: Some(Some(hvcc_for((1200, 798)))),
+            ..Heic::one(b"hvc1", 1200, 800)
+        };
+        assert_eq!(kind(&other), None);
+        let without = Heic {
+            hvcc: Some(None),
+            ..Heic::one(b"hvc1", 1200, 800)
+        };
+        assert_eq!(kind(&without), None);
+        let broken = Heic {
+            hvcc: Some(Some(vec![1; 23])),
+            ..Heic::one(b"hvc1", 1200, 800)
+        };
+        assert_eq!(kind(&broken), None);
+        // A small picture coded at Apple's least (160 by 64 for 24 by 24) is read; a tile so coded is not.
+        let small = hvcc_with(&sps_payload((160, 64), [0, 68, 0, 20], 1, 0));
+        let one = Heic {
+            hvcc: Some(Some(small.clone())),
+            ..Heic::one(b"hvc1", 24, 24)
+        };
+        assert_eq!(kind(&one), Some(CardImageKind::Heic));
+        let past = Heic {
+            hvcc: Some(Some(hvcc_with(&sps_payload(
+                (256, 64),
+                [0, 116, 0, 20],
+                1,
+                0,
+            )))),
+            ..Heic::one(b"hvc1", 24, 24)
+        };
+        assert_eq!(kind(&past), None);
+        let mut small_tiles = grid_of(2, 2, (24, 24), (48, 48));
+        small_tiles.hvcc = Some(Some(small));
+        assert_eq!(kind(&small_tiles), None);
+        // Every tile of a grid coded alike: one tile coded 512 by 520 among 512 by 512 is no photo.
+        let mut mixed = grid_of(6, 8, (512, 512), (4032, 3024));
+        mixed.item_hvcc = vec![(
+            7,
+            Some(hvcc_with(&sps_payload((512, 520), [0, 0, 0, 4], 1, 0))),
+        )];
+        assert_eq!(kind(&mixed), None);
+    }
+
+    /// A file that says what it holds twice could show ImageIO one thing and this check another: a
+    /// second `meta`, or a second item list, reference list or property list inside it, is no photo
+    /// (review F's crafted files put an honest meta box before a bomb).
+    #[test]
+    fn a_heic_that_lists_its_contents_twice_is_no_photo() {
+        let honest = grid_of(6, 8, (512, 512), (4032, 3024)).bytes();
+        assert_eq!(card_image_kind(&honest), Some(CardImageKind::Heic));
+        let at = |name: &[u8; 4]| honest.windows(4).position(|w| w == name).unwrap() - 4;
+        let length = |start: usize| {
+            u32::from_be_bytes(honest[start..start + 4].try_into().unwrap()) as usize
+        };
+        let meta = at(b"meta");
+        let mut twice = honest.clone();
+        twice.extend_from_slice(&honest[meta..meta + length(meta)]);
+        assert_eq!(card_image_kind(&twice), None);
+        for name in [b"iinf", b"iref", b"iloc", b"iprp", b"pitm"] {
+            let start = at(name);
+            let copy = honest[start..start + length(start)].to_vec();
+            let mut doubled = honest.clone();
+            doubled.splice(start..start, copy.iter().copied());
+            let grown = (length(meta) + copy.len()) as u32;
+            doubled[meta..meta + 4].copy_from_slice(&grown.to_be_bytes());
+            assert_eq!(card_image_kind(&doubled), None, "{name:?}");
+        }
+    }
+
+    /// What a grid's tiles decode to stays close to its picture: a quarter more and 4 megapixels
+    /// besides. Two 8192 by 4320 tiles over a picture one pixel wider than one of them took the
+    /// reader 2.9 s; a small picture in two 512 tiles is read.
+    #[test]
+    fn a_grid_decodes_to_little_more_than_its_picture() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        assert_eq!(kind(&grid_of(1, 2, (8192, 4320), (8193, 4320))), None);
+        assert_eq!(kind(&grid_of(1, 1, (8192, 4320), (1, 1))), None);
+        assert_eq!(
+            kind(&grid_of(1, 2, (512, 512), (600, 400))),
+            Some(CardImageKind::Heic)
+        );
+        // Apple's own: 896 by 1,024 tiles over 8,064 by 6,048 (too many pixels, but a grid that fits).
+        assert_eq!(
+            card_image_check(&grid_of(6, 9, (896, 1024), (8064, 6048)).bytes()),
+            Err(CardImageProblem::TooManyPixels)
+        );
+    }
+
+    /// Review F, L-2: every item in the file is held to the rules, not only the photo. An honest
+    /// picture with an alpha grid naming one tile 65,025 times held the reader for 30 s. The pictures
+    /// an iPhone or ImageIO adds are read: a thumbnail, an alpha or depth picture, portrait mattes, an
+    /// HDR gain map as a hidden grid with its tone map (`tmap`), Exif and XMP. Any other kind of item,
+    /// or more than three times the pixel limit in all, is no photo.
+    #[test]
+    fn every_picture_in_the_file_is_held_to_the_rules() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        // The photo (49) and, as ImageIO writes an ISO gain map: a hidden 2016 by 1512 grid of 12
+        // tiles (50 to 61, grid 62) and a tone map (63) of the two; then Exif, XMP, a thumbnail
+        // (64), an alpha or depth picture (65) and a matte (66).
+        let mut iphone = grid_of(6, 8, (512, 512), (4032, 3024));
+        iphone
+            .items
+            .extend((50..=61).map(|id| (id, b"hvc1", Some((504, 504)))));
+        iphone.items.extend([
+            (62, b"grid", Some((2016, 1512))),
+            (63, b"tmap", Some((4032, 3024))),
+            (64, b"hvc1", Some((320, 240))),
+            (65, b"hvc1", Some((768, 576))),
+            (66, b"hvc1", Some((2016, 1512))),
+            (67, b"Exif", None),
+            (68, b"mime", None),
+        ]);
+        let gain_map = Layout {
+            rows_less_one: 2,
+            columns_less_one: 3,
+            output: (2016, 1512),
+            ..iphone.layout.unwrap()
+        };
+        iphone.more_grids = vec![(62, (50..=61).collect(), gain_map)];
+        iphone.more_refs = vec![
+            (b"dimg", 63, vec![49, 62]),
+            (b"thmb", 64, vec![49]),
+            (b"auxl", 65, vec![49]),
+            (b"auxl", 66, vec![49]),
+            (b"cdsc", 67, vec![49]),
+        ];
+        assert_eq!(kind(&iphone), Some(CardImageKind::Heic));
+        // The alpha picture a grid naming one tile 65,025 times, beside an honest photo.
+        let mut alpha = Heic::one(b"hvc1", 1200, 800);
+        alpha.items.extend([
+            (2, b"hvc1", Some((16, 16))),
+            (3, b"grid", Some((4080, 4080))),
+        ]);
+        let mut repeated = grid_of(255, 255, (16, 16), (4080, 4080)).layout.unwrap();
+        repeated.rows_less_one = 254;
+        alpha.more_grids = vec![(3, vec![2; 65025], repeated)];
+        alpha.more_refs = vec![(b"auxl", 3, vec![1])];
+        assert_eq!(kind(&alpha), None);
+        // Any grid is held to the grid rules: a gain map grid whose tiles don't cover it is no photo.
+        let mut short = iphone.clone();
+        short.more_grids[0].2.output = (2100, 1512);
+        short.items.iter_mut().find(|i| i.0 == 62).unwrap().2 = Some((2100, 1512));
+        assert_eq!(kind(&short), None);
+        // A tone map of two pictures of the file, not itself, not twice the same, not Exif.
+        for inputs in [
+            vec![49],
+            vec![49, 49],
+            vec![49, 63],
+            vec![49, 67],
+            vec![49, 99],
+            vec![49, 62, 64],
+        ] {
+            let mut tone = iphone.clone();
+            tone.more_refs[0].2 = inputs.clone();
+            assert_eq!(kind(&tone), None, "{inputs:?}");
+        }
+        let mut lost = iphone.clone();
+        lost.more_refs.remove(0);
+        assert_eq!(kind(&lost), None);
+        // Kinds of item no iPhone or Mac writes: an overlay, an identity, AV1, JPEG, a URI, raw pictures.
+        for other in [
+            b"iovl", b"iden", b"av01", b"jpeg", b"uri ", b"unci", b"hvt1", b"lhv1",
+        ] {
+            let mut odd = iphone.clone();
+            odd.items.push((70, other, None));
+            assert_eq!(kind(&odd), None, "{other:?}");
+        }
+        // Every picture, all told, within three times the limit: a 9,000 by 9,000 depth picture
+        // beside a 40-megapixel photo is too much, 6,000 by 6,000 isn't.
+        let all = |side: u32| {
+            let mut big = Heic::one(b"hvc1", 8000, 5000);
+            big.items.push((2, b"hvc1", Some((side, side))));
+            big.more_refs = vec![(b"auxl", 2, vec![1])];
+            kind(&big)
+        };
+        assert_eq!(all(6000), Some(CardImageKind::Heic));
+        assert_eq!(all(9000), None);
+        // A tone map can't be the photo.
+        let mut tone_first = iphone;
+        tone_first.primary = 63;
+        assert_eq!(kind(&tone_first), None);
+    }
+
+    #[test]
+    fn video_avif_sequences_and_broken_heics_are_refused() {
+        let kind = |h: &Heic| card_image_kind(&h.bytes());
+        // Sequences, AVIF and video, by their file type.
+        for major in [
+            b"msf1", b"hevc", b"hevx", b"avif", b"avis", b"isom", b"mp42", b"qt  ", b"M4V ",
+        ] {
+            let heic = Heic {
+                major,
+                ..Heic::one(b"hvc1", 1200, 800)
+            };
+            assert_eq!(kind(&heic), None, "{major:?}");
+        }
+        // A HEIF whose primary picture isn't HEVC (AVIF's av01, JPEG inside HEIF, an overlay, Exif).
+        for item in [b"av01", b"jpeg", b"iovl", b"iden", b"Exif", b"mime"] {
+            assert_eq!(kind(&Heic::one(item, 1200, 800)), None, "{item:?}");
+        }
+        // Not for pictures, no size, a zero size, a primary item that isn't there.
+        assert_eq!(
+            kind(&Heic {
+                handler: b"vide",
+                ..Heic::one(b"hvc1", 1200, 800)
+            }),
+            None
+        );
+        assert_eq!(
+            kind(&Heic {
+                items: vec![(1, b"hvc1", None)],
+                ..Heic::one(b"hvc1", 1, 1)
+            }),
+            None
+        );
+        assert_eq!(kind(&Heic::one(b"hvc1", 0, 800)), None);
+        assert_eq!(
+            kind(&Heic {
+                primary: 7,
+                ..Heic::one(b"hvc1", 1200, 800)
+            }),
+            None
+        );
+        // Cut short anywhere, or with its file type box not first.
+        let whole = Heic::one(b"hvc1", 1200, 800).bytes();
+        for cut in [
+            4,
+            12,
+            24,
+            40,
+            whole.len() / 2,
+            whole.len() - 9,
+            whole.len() - 1,
+        ] {
+            assert_eq!(card_image_kind(&whole[..cut]), None, "{cut}");
+        }
+        let mut free_first = 8u32.to_be_bytes().to_vec();
+        free_first.extend_from_slice(b"free");
+        free_first.extend_from_slice(&whole);
+        assert_eq!(card_image_kind(&free_first), None);
+        // A box declaring more than the file holds, or a 64-bit size running past the end.
+        let mut long = whole.clone();
+        long[3] = 0xFF;
+        assert_eq!(card_image_kind(&long), None);
+        let mut huge = 1u32.to_be_bytes().to_vec();
+        huge.extend_from_slice(b"ftyp");
+        huge.extend_from_slice(&u64::MAX.to_be_bytes());
+        huge.extend_from_slice(b"heic");
+        assert_eq!(card_image_kind(&huge), None);
+        // By its bytes, never its name: a JPEG is a JPEG whatever it is called, and never read as a HEIC.
+        assert_eq!(
+            card_image_kind(&jpeg(0xC0, 4032, 3024)),
+            Some(CardImageKind::Jpeg)
+        );
+        let mut over = Heic::one(b"hvc1", 1200, 800).bytes();
+        over.resize(MAX_IMAGE_BYTES + 1, 0);
+        assert_eq!(card_image_kind(&over), None);
+    }
+
+    /// The fictional labeled card, made a HEIC on this Mac by `sips` (as an iPhone stores a photo:
+    /// a grid of HEVC tiles), into a folder removed afterwards.
+    #[cfg(target_os = "macos")]
+    fn labeled_card_as_heic(name: &str) -> Vec<u8> {
+        labeled_card_as_heic_at(name, None)
+    }
+    /// The same, resized by `sips` to `size` (width, height) first.
+    #[cfg(target_os = "macos")]
+    fn labeled_card_as_heic_at(name: &str, size: Option<(u32, u32)>) -> Vec<u8> {
+        let dir = std::env::temp_dir().join(format!("ozzie-heic-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("card.heic");
+        let mut sips = Command::new("/usr/bin/sips");
+        if let Some((w, h)) = size {
+            sips.args(["-z", &h.to_string(), &w.to_string()]);
+        }
+        let made = sips
+            .args(["-s", "format", "heic"])
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("helpers/fixtures/fictional-labeled-card.png"),
+            )
+            .arg("--out")
+            .arg(&out)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let bytes = std::fs::read(&out).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        bytes
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_heic_written_by_this_mac_is_a_heic_and_cut_short_is_not() {
+        let heic = labeled_card_as_heic("kind");
+        assert_eq!(&heic[4..12], b"ftypheic");
+        assert_eq!(card_image_kind(&heic), Some(CardImageKind::Heic));
+        assert_eq!(heic_size(&heic), Some((1400, 900)));
+        for cut in [heic.len() / 3, heic.len() - 1] {
+            assert_eq!(card_image_kind(&heic[..cut]), None, "{cut}");
+        }
+    }
+
+    /// What this Mac writes at every size is read: a small picture coded larger than it shows (24 by
+    /// 24 is coded 160 by 64), grids of 512, 640 by 896 and 896 by 1,024 tiles, a long thin strip;
+    /// 8,064 by 6,048 is too many pixels, not no photo.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn heics_this_mac_writes_at_every_size_are_read() {
+        for size in [
+            (24, 24),
+            (64, 64),
+            (100, 100),
+            (300, 200),
+            (1024, 1024),
+            (4032, 3024),
+            (5712, 4284),
+            (16000, 100),
+        ] {
+            let heic = labeled_card_as_heic_at("sizes", Some(size));
+            assert_eq!(
+                heic_size(&heic),
+                Some((u64::from(size.0), u64::from(size.1))),
+                "{size:?}"
+            );
+        }
+        let max = labeled_card_as_heic_at("sizes", Some((8064, 6048)));
+        assert_eq!(card_image_check(&max), Err(CardImageProblem::TooManyPixels));
+    }
+
+    /// A one-colour PNG, `side` pixels square: signature, IHDR, one stored (uncompressed) deflate
+    /// block of white RGB rows, IEND.
+    fn flat_png(side: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        fn chunk(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut out = (body.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+            out.extend_from_slice(&crc32(&[&kind[..], body].concat()).to_be_bytes());
+            out
+        }
+        let row = [&[0u8][..], &vec![0xFF; side as usize * 3]].concat();
+        let raw = row.repeat(side as usize);
+        let (mut a, mut b) = (1u32, 0u32);
+        for &x in &raw {
+            a = (a + u32::from(x)) % 65521;
+            b = (b + a) % 65521;
+        }
+        let len = raw.len() as u16;
+        let mut zlib = vec![0x78, 0x01, 1];
+        zlib.extend_from_slice(&len.to_le_bytes());
+        zlib.extend_from_slice(&(!len).to_le_bytes());
+        zlib.extend_from_slice(&raw);
+        zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+        let ihdr = [
+            &side.to_be_bytes()[..],
+            &side.to_be_bytes(),
+            &[8, 2, 0, 0, 0],
+        ]
+        .concat();
+        [
+            vec![137, 80, 78, 71, 13, 10, 26, 10],
+            chunk(b"IHDR", &ihdr),
+            chunk(b"IDAT", &zlib),
+            chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// The trap a HEIC once fell into: without Apple's video decoder service it decodes to an empty
+    /// picture with no error, which would read as a card with no text. The reader refuses any
+    /// picture that decodes to one flat colour as unreadable, so a card is never shown as read when it
+    /// wasn't. Runs Ozzie's built reader on a HEIC under the plain reading policy (the HEIC one without
+    /// that rule), and on a flat PNG; neither gets as far as Apple's recognizer.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_picture_that_decodes_to_nothing_is_unreadable_not_a_blank_card() {
+        let reader = CardReader::at(
+            built_helper(CARD_READER),
+            home().unwrap(),
+            &darwin_user_cache_dir().unwrap(),
+        )
+        .unwrap();
+        let heic = labeled_card_as_heic("unreadable");
+        let run = |policy: &str, image: Vec<u8>| {
+            run_bounded(
+                reader.command(policy),
+                image,
+                RECOGNITION_TIMEOUT,
+                MAX_PIECES_BYTES,
+                &never,
+            )
+        };
+        assert_eq!(
+            run(CARD_READER_POLICY, heic),
+            Err(LocalToolError::Unreadable)
+        );
+        let flat = flat_png(64);
+        assert_eq!(card_image_kind(&flat), Some(CardImageKind::Png));
+        assert_eq!(
+            run(CARD_READER_POLICY, flat),
+            Err(LocalToolError::Unreadable)
+        );
+    }
+
+    /// The reader's source asks ImageIO for a photo's type, width, height and orientation, and its
+    /// primary picture: never a dictionary of location, camera or other EXIF details.
+    #[test]
+    fn the_card_reader_reads_no_location_or_exif_details() {
+        let reader = include_str!("../helpers/card-reader.swift");
+        for asked in [
+            "kCGImagePropertyGPS",
+            "kCGImagePropertyExif",
+            "kCGImagePropertyTIFF",
+            "kCGImagePropertyIPTC",
+            "kCGImagePropertyMakerApple",
+            "kCGImagePropertyHEIF",
+            "CGImageSourceCopyMetadata",
+            "CGImageMetadata",
+            "kCGImageSourceCreateThumbnail",
+        ] {
+            assert!(!reader.contains(asked), "{asked}");
+        }
+        let properties: Vec<&str> = reader
+            .match_indices("kCGImageProperty")
+            .map(|(at, _)| {
+                reader[at..]
+                    .split(|c: char| !c.is_alphanumeric())
+                    .next()
+                    .unwrap()
+            })
+            .collect();
+        for p in &properties {
+            assert!(
+                [
+                    "kCGImagePropertyPixelWidth",
+                    "kCGImagePropertyPixelHeight",
+                    "kCGImagePropertyOrientation"
+                ]
+                .contains(p),
+                "{p}"
+            );
+        }
+        assert!(reader.contains("CGImageSourceGetPrimaryImageIndex(source)"));
+        assert!(!reader.contains("AtIndex(source, 0"));
     }
 
     #[test]
@@ -1938,6 +4113,7 @@ pub(crate) mod tests {
 
     #[test]
     fn helper_exit_codes_say_why_without_any_content() {
+        assert_eq!(exit_error(Some(66)), LocalToolError::Unreadable);
         assert_eq!(exit_error(Some(69)), LocalToolError::Unavailable);
         assert_eq!(exit_error(Some(74)), LocalToolError::TooMuchText);
         assert_eq!(exit_error(Some(70)), LocalToolError::Failed);
@@ -2138,12 +4314,17 @@ pub(crate) mod tests {
         .unwrap();
         let cards = Cards::default();
         cards.prepare_reader(&reader).unwrap();
-        let read = |path: &Path| {
-            let image = std::fs::read(path).unwrap();
-            assert!(card_image_ok(&image));
+        // Each card under the policy its kind calls for, as `Cards::read` chooses: PNG and JPEG
+        // without Apple's video decoder service, HEIC with it.
+        let read_bytes = |image: Vec<u8>| {
+            let kind = card_image_kind(&image).unwrap();
+            assert_eq!(
+                reading_policy(kind) == CARD_HEIC_READER_POLICY,
+                kind == CardImageKind::Heic
+            );
             let out = cards
                 .read_with(
-                    reader.command(CARD_READER_POLICY),
+                    reader.command(reading_policy(kind)),
                     image,
                     RECOGNITION_TIMEOUT,
                     MAX_PIECES_BYTES,
@@ -2152,22 +4333,73 @@ pub(crate) mod tests {
                 .unwrap();
             card_lines(&out).unwrap()
         };
+        let read = |path: &Path| read_bytes(std::fs::read(path).unwrap());
+        let png_card = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("helpers/fixtures/fictional-labeled-card.png");
         let CardLines {
             text: labeled,
             unclear,
-        } = read(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("helpers/fixtures/fictional-labeled-card.png"),
-        );
+        } = read(&png_card);
         // Clean print reads clearly: nothing on it is flagged.
         assert_eq!(unclear, Vec::<usize>::new());
-        for line in [
+        let fields = [
             "Name: Alex Harbor",
             "Phone: 202-555-0142",
             "Email: alex.harbor@example.org",
             "Prayer request: Please call me about the orientation.",
-        ] {
+        ];
+        for line in fields {
             assert!(labeled.lines().any(|l| l == line), "{line}");
+        }
+        // The labeled lines in the order read, letter case aside: the JPEG's compression once made
+        // Vision read the handwritten "Please" as "please" (2026-11-16), a difference a person checks.
+        let in_order = |text: &str| -> Vec<String> {
+            text.lines()
+                .map(str::to_lowercase)
+                .filter(|l| fields.iter().any(|f| f.to_lowercase() == *l))
+                .collect()
+        };
+        // The same card as a JPEG, made by this Mac's sips, under the plain policy too.
+        let dir = std::env::temp_dir().join(format!("ozzie-jpeg-card-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let jpeg_card = dir.join("card.jpg");
+        let made = Command::new("/usr/bin/sips")
+            .args(["-s", "format", "jpeg"])
+            .arg(&png_card)
+            .arg("--out")
+            .arg(&jpeg_card)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let jpeg = std::fs::read(&jpeg_card).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(card_image_kind(&jpeg), Some(CardImageKind::Jpeg));
+        assert_eq!(
+            in_order(&read_bytes(jpeg).text),
+            in_order(&fields.join("\n"))
+        );
+        // The same card as HEIC photos, under the HEIC policy: as stored, stored sideways with an
+        // orientation to turn it upright (as a phone does), and as the primary (second) of two
+        // pictures whose first is Ozzie's practice picture. Each gives the PNG's labeled lines, in
+        // the same order, and nothing from the other picture. The public copy of Ozzie doesn't carry
+        // these three files; they are skipped with a note where they aren't.
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("helpers/fixtures");
+        for heic in [
+            "fictional-labeled-card.heic",
+            "fictional-labeled-card-sideways.heic",
+            "fictional-labeled-card-second.heic",
+        ] {
+            let Ok(image) = std::fs::read(fixtures.join(heic)) else {
+                println!("helpers/fixtures/{heic} isn't here: skipped");
+                continue;
+            };
+            assert_eq!(card_image_kind(&image), Some(CardImageKind::Heic));
+            let CardLines { text, unclear } = read_bytes(image);
+            assert_eq!(in_order(&text), in_order(&fields.join("\n")), "{heic}");
+            assert_eq!(unclear, Vec::<usize>::new(), "{heic}");
+            assert!(!text.contains("getting ready"), "{heic}");
         }
         // Two more fictional sample cards, read only when OZZIE_CARD_SAMPLES names their folder.
         let Some(samples) = std::env::var_os("OZZIE_CARD_SAMPLES").map(PathBuf::from) else {

@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use ozzie_native_auth::agent::{self, AgentError, AgentStepReply};
+use ozzie_native_auth::contact::CheckedPeople;
 use ozzie_native_auth::hosted::{self, Account, HostedConfig, ManagedError};
 use ozzie_native_auth::ledger::{LedgerError, TaskLedger, TaskRow};
 use ozzie_native_auth::model::{
-    self as model_route, AskRequest, DraftRequest, KeychainKeys, ModelError, ModelStatus, Route,
+    self as model_route, DraftRequest, KeychainKeys, ModelError, ModelStatus, Route,
 };
 use ozzie_native_auth::name_guard::NameGuard;
 use ozzie_native_auth::shared_check::{self, ShareError};
@@ -14,20 +15,21 @@ use ozzie_native_auth::{
     in_use::UseFile,
     oauth::{AuthController, AuthError, ConnectionState, ConnectionStatus, Provider, Scopes},
     provider::{NativeHttp, PcoProvider},
-    source::SourceError,
-    sunday_check::{self, ReadNames, RecordingEntry, RecordingError, SundayCapture},
+    sunday_check::{self, ReadNames, Reader, RecordingEntry, RecordingError, SundayCapture, Turn},
     sunday_picker::{self, Choices, PlanChoice, ServiceTypeChoice},
 };
 use std::sync::{
-    Arc, Condvar, Mutex,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::Manager;
 
 use ozzie_native_auth::lifetime;
 // H6: keeps running with the window closed (menu bar, timer, App Nap, open at login, responsibilities).
 mod always_on;
+// The macOS app menu: the default one, with a "Quit Ozzie" (Command-Q) that asks first (review P, M1).
+mod app_menu;
 // The leader's own calendars on Today, read-only: Apple Calendar on this Mac and private calendar links.
 mod calendars;
 // Visitor cards: Ozzie's own images-only photo panel (no path ever comes from the page).
@@ -41,6 +43,8 @@ mod share_bundle;
 mod share_helper;
 // "A notice on your phone": the Mac's fixed notices, also to the leader's phone through ntfy.sh.
 mod phone_notice;
+// "Open in Planning Center" on the Sunday page (audit item 25): a fixed Planning Center address and a digits-only id.
+mod planning_center_pages;
 // Siri and Shortcuts: the switch, the copy their helper answers from (helpers/shortcuts.swift), and
 // the pages an ozzie:// link opens.
 mod shortcuts;
@@ -164,56 +168,18 @@ impl SessionNames {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
-/// The Sunday check and setup's picker share one Planning Center connection, so they take turns:
-/// one check or one picker read at a time. A second check is refused rather than interleaved. A
-/// check waits out a picker read (one page, bounded by `CHECK_WAITS_FOR_PICKER`) so it never
-/// records `busy` gaps because setup was listing plans; a picker read waits for a running check up
-/// to `sunday_picker::WAIT_FOR_CONTROLLER`, then answers `busy`.
-#[derive(Clone, Default)]
-struct SundayChecks(Arc<(Mutex<Option<Reader>>, Condvar)>);
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reader {
-    Check,
-    Picker,
-}
-/// Longer than a picker read can take: its own wait for the connection plus the identity check
-/// and one page, each under the native five-second timeout.
+/// The Sunday check, setup's picker and a note opened with its person in To take turns on the one
+/// Planning Center connection; core `sunday_check::Turns` holds the rule. A second check is refused
+/// rather than interleaved. A check waits out a picker read or a note (each bounded, under
+/// `CHECK_WAITS_FOR_PICKER`) so it never records `busy` gaps because of them; a picker read waits
+/// for the others up to `sunday_picker::WAIT_FOR_CONTROLLER`, then answers `busy`; a note never
+/// waits (draft_apps::open_draft_to).
+type SundayChecks = sunday_check::Turns;
+/// How long a check waits for the turn. A note's read holds it about 23 s at the very worst (its 8 s
+/// deadline, then an identity check already under way, which the sign-in client limits to 15 s; a
+/// page read is limited to 5 s), so a check outlasts it. A picker read (up to 10 s waiting for the
+/// connection, then the identity check and one page) can take about this long at the very worst.
 const CHECK_WAITS_FOR_PICKER: Duration = Duration::from_secs(30);
-/// A held turn; dropping it lets the next reader in.
-struct Turn(SundayChecks);
-impl Drop for Turn {
-    fn drop(&mut self) {
-        let (held, freed) = &*(self.0).0;
-        *held.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        freed.notify_all();
-    }
-}
-impl SundayChecks {
-    fn take(&self, reader: Reader, wait: Duration) -> Result<Turn, SourceError> {
-        let (held, freed) = &*self.0;
-        let deadline = Instant::now() + wait;
-        let mut current = held.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            match *current {
-                None => {
-                    *current = Some(reader);
-                    return Ok(Turn(self.clone()));
-                }
-                Some(Reader::Check) if reader == Reader::Check => return Err(SourceError::Busy),
-                Some(_) => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        return Err(SourceError::Busy);
-                    }
-                    current = freed
-                        .wait_timeout(current, left)
-                        .unwrap_or_else(|e| e.into_inner())
-                        .0;
-                }
-            }
-        }
-    }
-}
 struct Running(Arc<AtomicBool>);
 impl Drop for Running {
     fn drop(&mut self) {
@@ -477,6 +443,7 @@ async fn check_sunday(
     consumer: tauri::State<'_, Consumer>,
     checks: tauri::State<'_, SundayChecks>,
     names: tauri::State<'_, SessionNames>,
+    people: tauri::State<'_, CheckedPeople>,
     app: tauri::AppHandle,
     service_type_id: String,
     plan_id: String,
@@ -492,6 +459,7 @@ async fn check_sunday(
     let consumer = consumer.inner().clone();
     let checks = checks.inner().clone();
     let names = names.inner().clone();
+    let people = people.inner().clone();
     let kids_team_ids = kids_team_ids.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let _turn = checks
@@ -512,6 +480,8 @@ async fn check_sunday(
         )
         .map_err(|error| ConsumerError::SundayCheck(error.reason()))?;
         names.remember(&capture);
+        // Who "Open in Mail" or "Open in Messages" may put in To (draft_apps::open_draft_to).
+        people.remember(&capture);
         // The guard also learns names the capture pruned; `read` itself is dropped here.
         names.remember_read(&read);
         drop(read);
@@ -602,15 +572,18 @@ async fn list_sunday_recordings(
 #[tauri::command]
 async fn load_sunday_recording(
     names: tauri::State<'_, SessionNames>,
+    people: tauri::State<'_, CheckedPeople>,
     app: tauri::AppHandle,
     organization: String,
     path_id: String,
 ) -> Result<SundayCapture, ConsumerError> {
     let names = names.inner().clone();
+    let people = people.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let capture = sunday_check::load_recording(&recordings(&app)?, &organization, &path_id)
             .map_err(ConsumerError::Recording)?;
         names.remember(&capture);
+        people.remember(&capture);
         Ok(capture)
     })
     .await
@@ -744,33 +717,6 @@ async fn reword_draft(
         let dir = model_dir(&app)?;
         let config = model_route::load_config(&dir).ok_or(ModelError::NotConfigured)?;
         model_route::reword(
-            &config,
-            &dir.join(model_route::LEDGER_FILE),
-            &request,
-            &KeychainKeys,
-            &names,
-        )
-        .map(|reply| reply.text)
-    })
-    .await
-    .map_err(|_| ModelError::ProviderFailure)?
-}
-/// Answers one Ask Ozzie question from a placeholder-only fact sheet (core/src/ask.ts). The
-/// webview already replaced every name it knows; `ask` checks the whole request again against
-/// every name this session has shown, before any key, budget or network. Never goes to Planning
-/// Center. Returns the model's raw reply, which the webview checks before showing anything.
-#[tauri::command]
-async fn ask_ozzie(
-    names: tauri::State<'_, SessionNames>,
-    app: tauri::AppHandle,
-    request: AskRequest,
-) -> Result<String, ModelError> {
-    // A copy, so a long model call never holds the lock a Sunday check needs.
-    let names = names.inner().snapshot();
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = model_dir(&app)?;
-        let config = model_route::load_config(&dir).ok_or(ModelError::NotConfigured)?;
-        model_route::ask(
             &config,
             &dir.join(model_route::LEDGER_FILE),
             &request,
@@ -1121,6 +1067,7 @@ fn main() {
         .manage(consumer)
         .manage(SundayChecks::default())
         .manage(SessionNames::default())
+        .manage(CheckedPeople::default())
         .manage(Ledger::default())
         .manage(ManagedConnect::default())
         .manage(local_tools::LocalTools::default())
@@ -1177,7 +1124,6 @@ fn main() {
             managed_connect_cancel,
             managed_disconnect,
             reword_draft,
-            ask_ozzie,
             agent_step,
             ledger_admit,
             ledger_transition,
@@ -1197,6 +1143,8 @@ fn main() {
             local_tools::cancel_card_reading,
             card_picker::choose_card_photos,
             draft_apps::open_draft,
+            draft_apps::open_draft_to,
+            planning_center_pages::open_in_planning_center,
             local_tools::voice_status_check,
             local_tools::listen_for_question,
             local_tools::stop_listening,
@@ -1238,6 +1186,9 @@ fn main() {
             always_on::background_next_due,
             always_on::autostart_get,
             always_on::autostart_set,
+            always_on::quit_guard_set,
+            always_on::quit_now,
+            always_on::quit_kept,
             always_on::notify_ozzie,
             phone_notice::phone_notice_status,
             phone_notice::phone_notice_on,
@@ -1287,6 +1238,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozzie_native_auth::source::SourceError;
+    use std::time::Instant;
 
     #[test]
     fn sunday_notice_is_fixed_and_discreet() {

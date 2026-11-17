@@ -23,7 +23,8 @@ function responsibility(plan: Plan, over: Partial<Responsibility> = {}): Respons
     created_at: SAT, confirmed_at: SAT, runs: [], open_run: null, ...over,
   };
 }
-const sundayPlan = () => defaultPlan("keep-sunday-covered", SAT, ZONE);
+/** Keep Sunday covered with "Only until this Sunday" chosen (its default is every week until stopped: audit item 23). */
+const sundayPlan = () => ({ ...defaultPlan("keep-sunday-covered", SAT, ZONE), lifetime: untilLifetime("2026-11-15", ZONE)! });
 const worse = (id = "need-opened:x"): SundayChange => ({ id, kind: "need-opened", effect: "worse", urgency: "attention", position: "Greeter", from: 0, to: 1 });
 const better: SundayChange = { id: "need-filled:x", kind: "need-filled", effect: "better", urgency: "none", position: "Greeter", from: 1, to: 0 };
 
@@ -55,15 +56,17 @@ describe("templates", () => {
     expect([MIN_GAP_MS, FAST_MIN_GAP_MS, RUN_TIMEOUT_MS]).toEqual([5 * 60_000, 20_000, 10 * 60_000]);
   });
 
-  it("Keep Sunday covered: daily at 7:00, sooner on change, ending after this Sunday", () => {
-    const plan = sundayPlan();
-    expect(plan).toEqual({
+  it("Keep Sunday covered: daily at 7:00, sooner on change, every week until stopped by default (audit item 23)", () => {
+    expect(defaultPlan("keep-sunday-covered", SAT, ZONE)).toEqual({
       template: "keep-sunday-covered", schedule: { time: "07:00", weekdays: [], on_change: true }, report: "decisions-only",
-      lifetime: { kind: "until", until: "2026-11-15", ends_at: "2026-11-16T05:00:00.000Z" },
-      limits: { checks_per_day: 6, ai_steps_per_day: 12 }, zone: ZONE,
+      lifetime: { kind: "until-stopped" }, limits: { checks_per_day: 6, ai_steps_per_day: 12 }, zone: ZONE,
     });
-    // On a Monday the Sunday is six days away.
-    expect(defaultPlan("keep-sunday-covered", "2026-11-16T15:00:00.000Z", ZONE).lifetime).toEqual({ kind: "until", until: "2026-11-22", ends_at: "2026-11-23T05:00:00.000Z" });
+    // Whatever the day or the Sunday chosen in Settings.
+    expect(defaultPlan("keep-sunday-covered", "2026-11-16T15:00:00.000Z", ZONE).lifetime).toEqual({ kind: "until-stopped" });
+    expect(defaultPlan("keep-sunday-covered", SAT, ZONE, { sunday: "2026-11-22" }).lifetime).toEqual({ kind: "until-stopped" });
+    // "Only until this Sunday" is still a plan it can run.
+    expect(validPlan(sundayPlan(), SAT)).toBe(true);
+    expect(sundayPlan().lifetime).toEqual({ kind: "until", until: "2026-11-15", ends_at: "2026-11-16T05:00:00.000Z" });
     expect(defaultPlan("watch-room-bookings", SAT, ZONE)).toMatchObject({ schedule: { weekdays: [4], on_change: false }, lifetime: { kind: "until-stopped" } });
     for (const id of TEMPLATE_IDS) expect(validPlan(defaultPlan(id, SAT, ZONE), SAT)).toBe(true);
   });
@@ -333,22 +336,22 @@ describe("turning a request into a plan (no model)", () => {
     if (p.kind !== "plan") throw new Error(`${text}: ${p.kind}`);
     return p;
   };
-  it("without a date, follows the Sunday chosen in Settings when a check has read it", () => {
-    // Saturday the 14th, with the plan for Sunday the 22nd chosen: "Keep an eye on Sunday" means the 22nd.
+  it("without a date, keeps going every week, and \"until Sunday\" follows the Sunday chosen in Settings", () => {
+    // Saturday the 14th, with the plan for Sunday the 22nd chosen: "Keep an eye on Sunday" keeps going until stopped.
     const p = parseRequest("Keep an eye on Sunday for me", SAT, ZONE, { sunday: "2026-11-22" });
-    expect(p).toMatchObject({ kind: "plan", plan: { lifetime: { until: "2026-11-22" } }, assumed: ["lifetime", "time"] });
-    expect(defaultPlan("keep-sunday-covered", SAT, ZONE, { sunday: "2026-11-22" }).lifetime).toEqual(untilLifetime("2026-11-22", ZONE));
-    // A chosen Sunday already past, or no check yet: the coming Sunday.
-    expect(defaultPlan("keep-sunday-covered", SAT, ZONE, { sunday: "2026-11-08" }).lifetime).toMatchObject({ until: "2026-11-15" });
-    expect(defaultPlan("keep-sunday-covered", SAT, ZONE, { sunday: null }).lifetime).toMatchObject({ until: "2026-11-15" });
+    expect(p).toMatchObject({ kind: "plan", plan: { lifetime: { kind: "until-stopped" } }, assumed: ["lifetime", "time"] });
+    // "Until Sunday" means the one chosen while it's ahead; a chosen Sunday already past, or no check yet: the coming Sunday.
+    expect(parseRequest("Keep an eye on Sunday until Sunday", SAT, ZONE, { sunday: "2026-11-22" })).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-22", ZONE) } });
+    expect(parseRequest("Keep an eye on Sunday until Sunday", SAT, ZONE, { sunday: "2026-11-08" })).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
+    expect(parseRequest("Keep an eye on Sunday until Sunday", SAT, ZONE, { sunday: null })).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
     // Said in words, "this Sunday" still means the coming one.
     expect(parseRequest("Keep an eye on this Sunday", SAT, ZONE, { sunday: "2026-11-22" })).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
   });
 
-  it("keep an eye on Sunday: this Sunday, assumed and said so", () => {
+  it("keep an eye on Sunday: every week until stopped, assumed and said so", () => {
     const p = plan("Keep an eye on Sunday for me");
     expect(p.plan.template).toBe("keep-sunday-covered");
-    expect(p.plan.lifetime).toEqual({ kind: "until", until: "2026-11-15", ends_at: "2026-11-16T05:00:00.000Z" });
+    expect(p.plan.lifetime).toEqual({ kind: "until-stopped" });
     expect(p.assumed).toContain("lifetime");
   });
 
@@ -385,7 +388,10 @@ describe("turning a request into a plan (no model)", () => {
     });
     expect(parseRequest("Keep an eye on things for me", SAT, ZONE)).toEqual({ kind: "ask", need: "what", choices: [...TEMPLATE_IDS] });
     expect(parseRequest("Watch the rooms and the group nights", SAT, ZONE)).toEqual({ kind: "ask", need: "what", choices: ["watch-room-bookings", "group-night-clashes"] });
-    expect(parseRequest("Keep an eye on Sunday until February 30", SAT, ZONE)).toMatchObject({ kind: "ask", need: "when", template: "keep-sunday-covered" });
+    // An "until" it can't read asks between two different answers: until the Sunday being watched, or until stopped.
+    expect(parseRequest("Keep an eye on Sunday until February 30", SAT, ZONE)).toEqual({ kind: "ask", need: "when", template: "keep-sunday-covered",
+      choices: [untilLifetime("2026-11-15", ZONE), { kind: "until-stopped" }] });
+    expect(parseRequest("Watch room bookings until February 30", SAT, ZONE)).toMatchObject({ kind: "ask", choices: [untilLifetime("2026-11-15", ZONE), { kind: "until-stopped" }] });
   });
 
   it("leaves ordinary questions and requests to Ask", () => {
@@ -415,9 +421,7 @@ describe("turning a request into a plan (no model)", () => {
       expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SUN, ZONE)).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-22", ZONE) } });
       expect(parseRequest("Keep an eye on Sunday coverage until Sunday", SUN, ZONE, { sunday: "2026-11-15" })).toMatchObject({ plan: { lifetime: { until: "2026-11-22" } } });
       expect(parseRequest("Let me know if anyone declines this Sunday", SUN, ZONE)).toMatchObject({ plan: { lifetime: { until: "2026-11-22" } } });
-      expect(defaultPlan("keep-sunday-covered", SUN, ZONE).lifetime).toMatchObject({ until: "2026-11-22" });
-      expect(defaultPlan("keep-sunday-covered", SUN, ZONE, { sunday: "2026-11-15" }).lifetime).toMatchObject({ until: "2026-11-22" });
-      expect(defaultPlan("keep-sunday-covered", SUN, ZONE, { sunday: "2026-11-29" }).lifetime).toMatchObject({ until: "2026-11-29" });
+      expect(defaultPlan("keep-sunday-covered", SUN, ZONE).lifetime).toEqual({ kind: "until-stopped" });
       // "Next Sunday" asks between the two Sundays after today.
       expect(parseRequest("Keep an eye on next Sunday", SUN, ZONE)).toEqual({
         kind: "ask", need: "when", template: "keep-sunday-covered", choices: [untilLifetime("2026-11-22", ZONE), untilLifetime("2026-11-29", ZONE)],
@@ -430,7 +434,7 @@ describe("turning a request into a plan (no model)", () => {
       for (let hour = 0; hour < 24; hour++) {
         // 00:30 to 23:30 on Sunday the 15th in New York (UTC-5).
         const now = new Date(Date.parse("2026-11-15T05:30:00.000Z") + hour * 3_600_000).toISOString();
-        for (const text of ["Keep an eye on Sunday coverage until Sunday", "Keep an eye on Sunday for me", "Let me know if anyone declines this Sunday"]) {
+        for (const text of ["Keep an eye on Sunday coverage until Sunday", "Let me know if anyone declines this Sunday"]) {
           const p = parseRequest(text, now, ZONE);
           if (p.kind !== "plan" || p.plan.lifetime.kind !== "until") throw new Error(`${text} at ${now}: ${p.kind}`);
           expect(Date.parse(p.plan.lifetime.ends_at) - Date.parse(now), `${text} at ${now}`).toBeGreaterThan(DAY_MS);

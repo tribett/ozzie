@@ -349,7 +349,7 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     h.failWith({ sunday_check: "provider" });
     await h.launch();
     const view = h.p.view();
-    expect(view.schedule.last_run).toMatchObject({ outcome: "failed", problem: "Planning Center couldn't be checked just now. You can use the last saved recording instead." });
+    expect(view.schedule.last_run).toMatchObject({ outcome: "failed", problem: "Planning Center couldn't be checked just now. You can show the last saved check instead." });
     expect(view.schedule.next_run_at).toBe("2026-11-20T15:05:00.000Z");
     h.set("2026-11-20T15:05:00Z");
     await h.p.tick();

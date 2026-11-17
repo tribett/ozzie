@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 import {
   AUTOMATIC_HELP, AUTOMATIC_LABEL, canInstall, CHECK_BUTTON, LATER_BUTTON, laterMemory, lastCheckedText, PLACE_TEXT, PROBLEM_TEXT, REOPEN_NOTE,
-  statusLine, UPDATE_BUTTON, UPDATE_HOW, updates, working, type UpdatesState, type UpdateView,
+  statusLine, UPDATE_BUTTON, UPDATE_CARDS_ASK, UPDATE_DISCARD, UPDATE_HOW, UPDATE_KEEP_CARDS, updates, working, type UpdatesState, type UpdateView,
 } from "../src/updates.js";
 import { AUTOMATIC_OFF, UpdateLine, UpdatesSection } from "../src/updates-view.js";
 import { ConnectionPage } from "../src/connection-page.js";
@@ -31,9 +31,9 @@ const state = (v: UpdateView | null, over: Partial<UpdatesState> = {}): UpdatesS
 const memoryStore = () => { const m = new Map<string, string>(); return { get: (k: string) => m.get(k) ?? null, set: (k: string, v: string) => { m.set(k, v); } }; };
 /** Whether the markup has a button with exactly this label (the words also appear in "See how this works"). */
 const hasButton = (html: string, label: string) => html.includes(`>${label}</button>`);
-const section = (v: UpdateView | null) => renderToStaticMarkup(React.createElement(UpdatesSection, { state: state(v), nowMs: NOW }));
+const section = (v: UpdateView | null) => renderToStaticMarkup(React.createElement(UpdatesSection, { state: state(v), nowMs: NOW, cards: 0 }));
 const line = (v: UpdateView | null, memory = laterMemory(memoryStore())) =>
-  renderToStaticMarkup(React.createElement(UpdateLine, { state: state(v), nowMs: NOW, memory }));
+  renderToStaticMarkup(React.createElement(UpdateLine, { state: state(v), nowMs: NOW, memory, cards: 0 }));
 
 describe("updates: fixed words", () => {
   it("says when Ozzie last checked, in this Mac's time", () => {
@@ -107,6 +107,33 @@ describe("updates: Settings section", () => {
     expect(t).toContain(REOPEN_NOTE);
   });
 
+  it("with visitor cards open, asks before updating, since reopening discards them (review P, L3)", () => {
+    // No cards: the button updates at once, with no question.
+    const plain = section(ready());
+    expect(plain).not.toContain("visitor card");
+    expect(plain).not.toContain("aria-expanded");
+    // Cards open: the same button opens a question first, naming what updating does to them.
+    const closed = renderToStaticMarkup(React.createElement(UpdatesSection, { state: state(ready()), nowMs: NOW, cards: 2 }));
+    expect(closed).toContain('aria-expanded="false"');
+    expect(text(closed)).not.toContain("visitor card");
+    const asked = renderToStaticMarkup(React.createElement(UpdatesSection, { state: state(ready()), nowMs: NOW, cards: 2, asking: true }));
+    expect(text(asked)).toContain(UPDATE_CARDS_ASK(2));
+    expect(UPDATE_CARDS_ASK(2)).toBe("You have 2 visitor cards open. Updating closes Ozzie for a moment, which discards them.");
+    expect(UPDATE_CARDS_ASK(1)).toBe("You have 1 visitor card open. Updating closes Ozzie for a moment, which discards it.");
+    expect(hasButton(asked, UPDATE_DISCARD(2))).toBe(true);
+    expect(UPDATE_DISCARD(2)).toBe("Update and discard the cards");
+    expect(UPDATE_DISCARD(1)).toBe("Update and discard the card");
+    expect(hasButton(asked, UPDATE_KEEP_CARDS)).toBe(true);
+    expect(UPDATE_KEEP_CARDS).toBe("Keep the cards and update later");
+    expect(asked).toContain('role="group"');
+    // The line above Today asks the same way.
+    const today = renderToStaticMarkup(React.createElement(UpdateLine, { state: state(ready()), nowMs: NOW, memory: laterMemory(memoryStore()), cards: 1, asking: true }));
+    expect(text(today)).toContain(UPDATE_CARDS_ASK(1));
+    expect(hasButton(today, UPDATE_DISCARD(1))).toBe(true);
+    // Neither answer is the bare word the product language rules forbid.
+    for (const label of [UPDATE_DISCARD(1), UPDATE_DISCARD(2), UPDATE_KEEP_CARDS]) expect(label).not.toMatch(/^(approve|confirm|ok|cancel|yes|no)$/iu);
+  });
+
   it("turned off: says checks happen only on request, and the check button stays", () => {
     const html = section(view({ automatic: false }));
     expect(text(html)).toContain(AUTOMATIC_OFF);
@@ -132,11 +159,13 @@ describe("updates: Settings section", () => {
     const settings = text(renderToStaticMarkup(React.createElement(ConnectionPage, {
       status: null, settings: { clientId: "", organization: "", serviceTypeId: "", planId: "" }, onSettings() {}, onStatus() {}, oneClick: false,
       autostart: { get: () => new Promise<boolean>(() => {}), set: () => new Promise<boolean>(() => {}) },
-      updates: React.createElement(UpdatesSection, { state: state(view()), nowMs: NOW }),
+      updates: React.createElement(UpdatesSection, { state: state(view()), nowMs: NOW, cards: 0 }),
     })));
-    expect(settings.indexOf("When the window is closed")).toBeGreaterThan(-1);
-    expect(settings.indexOf("Updates")).toBeGreaterThan(settings.indexOf("When the window is closed"));
-    expect(settings.indexOf("Saved recordings")).toBeGreaterThan(settings.indexOf("Updates"));
+    // The sections themselves, after Settings' index (audit item 27), which names them too.
+    const sections = settings.slice(settings.indexOf("Planning Center and which Sunday Reads only."));
+    expect(sections.indexOf("When the window is closed")).toBeGreaterThan(-1);
+    expect(sections.indexOf("Updates")).toBeGreaterThan(sections.indexOf("When the window is closed"));
+    expect(sections.indexOf("Saved checks")).toBeGreaterThan(sections.indexOf("Updates"));
   });
 });
 

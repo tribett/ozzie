@@ -4,6 +4,8 @@ import { CardReviewController, type BrowserImages } from "../../src/card-review/
 // Generated inert header fixture: browser decoding is a separately simulated system seam.
 const png = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0];
 const file = () => new File([new Uint8Array(png)], "PRIVATE_FILENAME_CANARY.png", { type: "image/png" });
+/** A HEIF file type box's first twelve bytes: its size, `ftyp` and the major brand. */
+const ftyp = (brand: string) => [0, 0, 0, 24, ...[..."ftyp", ...brand].map(c => c.charCodeAt(0))];
 const setup = (overrides: Partial<BrowserImages> = {}) => {
   let serial = 0;
   const revoked: string[] = [];
@@ -115,6 +117,16 @@ it.each([
   {type: "image/gif", bytes: png, decode: true},
   {type: "image/png", bytes: [], decode: true},
   {type: "image/png", bytes: png, decode: false},
+  // HEIC: the file type box with a HEIC brand, or nothing: a video, a sequence, AVIF, a JPEG called HEIC, cut short.
+  {type: "image/heic", bytes: ftyp("isom"), decode: true},
+  {type: "image/heic", bytes: ftyp("msf1"), decode: true},
+  {type: "image/heic", bytes: ftyp("hevc"), decode: true},
+  {type: "image/heic", bytes: ftyp("avif"), decode: true},
+  {type: "image/heic", bytes: [255,216,255,224], decode: true},
+  {type: "image/heic", bytes: ftyp("heic").slice(0, 11), decode: true},
+  {type: "image/heic", bytes: [0,0,0,24,...[..."free"].map(c => c.charCodeAt(0)),...[..."heic"].map(c => c.charCodeAt(0))], decode: true},
+  {type: "image/png", bytes: ftyp("heic"), decode: true},
+  {type: "image/heic", bytes: ftyp("heic"), decode: false},
 ])("rejects mismatch, unsupported, truncated or corrupt image ($#)", async fixture => {
   const {controller, reset, revoked} = setup({decode: async () => fixture.decode});
   const result = await controller.select(controller.choose(reset)!, [new File([new Uint8Array(fixture.bytes)], "INERT_CANARY", {type: fixture.type})]);
@@ -122,6 +134,12 @@ it.each([
   expect(controller.status).toBe("error");
   controller.render(view => expect(view.cards).toEqual([]));
   expect(revoked.length).toBe(fixture.decode ? 0 : 1);
+});
+it.each(["heic", "heix", "heim", "heis", "mif1"])("admits a HEIC (iPhone photo) by its file type box: %s", async brand => {
+  const {controller, reset} = setup();
+  const ticket = controller.choose(reset)!;
+  expect(await controller.select(ticket, [new File([new Uint8Array([...ftyp(brand), 0, 0, 0, 0])], "INERT.heic", {type: "image/heic"})])).toBe("ok");
+  expect(controller.status).toBe("active");
 });
 it("admits JPEG signatures, finishes reviewed blank fields and clears the input and source", async () => {
   const {controller, reset, revoked} = setup();

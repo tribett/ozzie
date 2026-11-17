@@ -10,7 +10,7 @@ body { background: #FAF6EE; }
 .oz .col { width: 100%; margin: 0 auto; }
 .oz .logo { width: 132px; }
 .oz .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-.oz .banner { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 10px; background: var(--accent-tint); color: var(--accent-ink); font-size: 14.5px; }
+.oz .banner { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 10px; background: var(--accent-tint); color: var(--accent-ink); font-size: var(--t-sm); }
 .oz .banner.dashed { background: transparent; border: 1.5px dashed var(--control); color: var(--ink-2); }
 .oz .problem { color: var(--danger); background: var(--danger-tint); padding: 12px 14px; border-radius: 10px; }
 .oz .find-src { flex-wrap: wrap; }
@@ -22,7 +22,7 @@ body { background: #FAF6EE; }
 .oz .draft-edit { width: 100%; font: 400 17px/1.6 var(--f-display); color: var(--ink); background: var(--paper); border: 1px solid var(--control); border-radius: 10px; padding: 14px; }
 .oz .notchecked { margin-top: 8px; padding: 18px 22px; border: 1.5px dashed var(--line-strong); border-radius: 14px; display: flex; flex-direction: column; gap: 10px; }
 .oz .form { display: flex; flex-direction: column; gap: 8px; }
-.oz .form label { font-weight: 600; font-size: 14.5px; margin-top: 6px; }
+.oz .form label { font-weight: 600; font-size: var(--t-sm); margin-top: 6px; }
 .oz input:not([type=checkbox]) { font: inherit; padding: 10px 12px; border: 1px solid var(--control); border-radius: 10px; color: var(--ink); background: var(--surface); }
 .oz input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 .oz .confirmation { display: flex; gap: 10px; align-items: center; min-height: 44px; font-weight: 400 !important; }
@@ -33,7 +33,7 @@ body { background: #FAF6EE; }
 .oz .rule-row input[type=number] { width: 90px; }
 .oz .rule-row input:not([type=number]) { flex: 1; min-width: 220px; }
 .oz .log { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.oz .log li { display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14.5px; }
+.oz .log li { display: grid; grid-template-columns: 110px 1fr auto; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: var(--t-sm); }
 .oz .log li:first-child { border-top: 0; }
 .oz .log li.is-problem { background: var(--attn-tint); }
 .oz .log-t { color: var(--ink-3); font-variant-numeric: tabular-nums; }
@@ -53,7 +53,7 @@ body { background: #FAF6EE; }
 .oz .reopen { margin-top: 14px; }
 .oz .reopen .list { color: var(--ink); }
 .oz .stack-tight { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.oz .earlier { font-size: 14px; }
+.oz .earlier { font-size: var(--t-sm); }
 .oz .earlier li span { overflow-wrap: anywhere; }
 .oz .unread { margin-top: 10px; }
 .oz .unread .ic { color: var(--look); }
@@ -77,35 +77,36 @@ body { background: #FAF6EE; }
 .oz .runs-list .list li { align-items: baseline; }
 .oz .runs-prefs select.input, .oz .runs-prefs .rule-row input[type=time] { width: auto; flex: 0 0 auto; min-width: 170px; }
 .oz .rule-rooms select.input { width: auto; flex: 0 0 auto; min-width: 170px; }
-/* Ask Ozzie: a drawer opened on request; docked as a third column when the window has room. */
-.oz .shell.shell-ask { grid-template-columns: 248px minmax(0,1fr); }
+/* Ask Ozzie: a drawer opened on request, over the page; docked as a third column only when the window has room for the
+   page beside it at a comfortable width (about 650px with the sidebar's 272px and the panel's 380px; audit item 22c). */
+.oz .shell.shell-ask { grid-template-columns: var(--w-side) minmax(0,1fr); }
 .oz .ask-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(400px, calc(100vw - 24px)); z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
 .oz .ask-panel[hidden] { display: none; }
-@media (min-width: 1180px) {
-  .oz .shell.shell-ask { grid-template-columns: 248px minmax(0,1fr) 360px; }
+@media (min-width: 1300px) {
+  .oz .shell.shell-ask { grid-template-columns: var(--w-side) minmax(0,1fr) 380px; }
   .oz .ask-panel { position: sticky; top: 0; height: 100vh; width: auto; box-shadow: none; z-index: auto; }
 }
-.oz .ask-entry { justify-content: flex-start; margin: -8px 0 0; }
+.oz .ask-entry { justify-content: flex-start; margin: -8px 0 0; flex: none; }
 .oz .ask-entry .ic, .oz .ask-panel .convo-head .ic { color: var(--accent); }
 .oz .ask-thread { overflow-y: auto; }
 .oz .ask-thread > .stack { gap: 10px; }
 .oz .ask-answer { min-width: 0; }
 .oz .ask-answer p { white-space: pre-line; overflow-wrap: anywhere; }
-.oz .ask-based { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; color: var(--ink-3); }
+.oz .ask-based { display: flex; gap: 8px; align-items: flex-start; font-size: var(--t-sm); color: var(--ink-3); }
 .oz .ask-based .ic { flex: none; margin-top: 2px; }
 .oz .ask-quick.is-compact { flex-wrap: nowrap; overflow-x: auto; }
 .oz .ask-quick.is-compact .chip { flex: none; white-space: nowrap; }
 .oz .ask-links { gap: 6px; }
 .oz .ask-links { margin: 5px 0; }
-.oz .ask-links .src { cursor: pointer; font: inherit; font-size: 13px; position: relative; }
-.oz .ask-links .src::after { content: ""; position: absolute; inset: -10px -1px; }
+.oz .ask-links .src { cursor: pointer; font: inherit; font-size: var(--t-sm); position: relative; min-height: 32px; }
+.oz .ask-links .src::after { content: ""; position: absolute; inset: -7px -4px; }
 .oz .ask-how { align-self: flex-start; }
 .oz .ask-draft { padding: 14px 16px; box-shadow: none; display: flex; flex-direction: column; gap: 10px; border-radius: 12px; }
 .oz .ask-draft .draft-body { font-size: 16px; }
 .oz .ask-draft .badge { align-self: flex-start; }
 .oz .ask-quick { padding: 0 16px 12px; }
 .oz .ask-quick .chip { height: auto; min-height: 36px; padding: 8px 14px; text-align: left; line-height: 1.3; }
-.oz .ask-input { display: block; width: 100%; border: 0; background: transparent; resize: none; font: 400 15.5px/1.45 var(--f-ui); color: var(--ink); padding: 0; }
+.oz .ask-input { display: block; width: 100%; border: 0; background: transparent; resize: none; font: 400 var(--t-md)/1.45 var(--f-ui); color: var(--ink); padding: 0; }
 .oz .ask-input:focus { outline: none; }
 .oz .ask-input:disabled { color: var(--ink-3); }
 .oz .composer:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
@@ -125,8 +126,8 @@ body { background: #FAF6EE; }
 /* Spoken briefing (Today) */
 .oz .listen-names { align-items: center; margin-left: 4px; }
 .oz .listen-script { margin-top: 14px; padding: 14px 18px; border-radius: 12px; background: var(--sunken); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
-.oz .listen-part p { font-size: 15px; color: var(--ink); text-wrap: pretty; overflow-wrap: anywhere; }
-.oz .listen-part p.listen-h { font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.oz .listen-part p { font-size: var(--t-md); color: var(--ink); text-wrap: pretty; overflow-wrap: anywhere; }
+.oz .listen-part p.listen-h { font-size: var(--t-xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 /* Visitor cards: a temporary review, each card beside its photo */
 .oz .cards-item { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: start; }
 .oz .cards-item.is-large { grid-template-columns: minmax(0, 1fr); }
@@ -139,27 +140,27 @@ body { background: #FAF6EE; }
 .oz .cards-field { display: flex; flex-direction: column; gap: 6px; }
 .oz .cards-field-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .oz .cards-field-top .field-l { margin: 0; }
-.oz .cards-tag { font-size: 12.5px; font-weight: 600; color: var(--look); }
+.oz .cards-tag { font-size: var(--t-xs); font-weight: 600; color: var(--look); }
 .oz .cards-tag.is-ok { color: var(--accent-ink); }
 .oz .cards-field textarea.input { resize: vertical; white-space: pre-wrap; }
-.oz .cards-field .confirmation { font-size: 13.5px; color: var(--ink-2); }
+.oz .cards-field .confirmation { font-size: var(--t-sm); color: var(--ink-2); }
 .oz .cards-field .input-help { margin-top: 0; }
 .oz .cards-end { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 14px; border-top: 1px solid var(--line); }
 .oz .cards-first a { color: var(--ink); }
 @media (max-width: 760px) { .oz .cards-item { grid-template-columns: minmax(0, 1fr); } .oz .cards-photo { position: static; } }
 /* Guided setup */
 .oz .setup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.oz .setup-steps { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13.5px; color: var(--ink-3); }
+.oz .setup-steps { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: var(--t-sm); color: var(--ink-3); }
 .oz .setup-steps li { display: flex; align-items: center; gap: 6px; }
 .oz .setup-steps li[aria-current=step] { color: var(--ink); font-weight: 600; }
-.oz .setup-dot { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--control); display: grid; place-items: center; font-size: 12px; font-weight: 700; flex: none; }
+.oz .setup-dot { width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--control); display: grid; place-items: center; font-size: var(--t-xs); font-weight: 700; flex: none; }
 .oz .setup-steps li[aria-current=step] .setup-dot { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .oz .setup-steps li.is-done .setup-dot { background: var(--accent-tint); color: var(--accent-ink); border-color: var(--accent-tint); }
-.oz .setup-promises { gap: 12px; font-size: 15.5px; color: var(--ink); }
+.oz .setup-promises { gap: 12px; font-size: var(--t-md); color: var(--ink); }
 .oz .setup-promises .ic { color: var(--accent); }
 .oz .setup-two { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .oz .setup-nav { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
-.oz .cards-first h2, .oz .cards-fields h2 { font-size: 16.5px; line-height: 1.3; }
+.oz .cards-first h2, .oz .cards-fields h2 { font-size: 17px; line-height: 1.3; }
 .oz .cards-first .list { color: var(--ink); }
 /* Appearance: Hearth's dark tokens (.oz.dark) follow this Mac's setting; native controls follow too. */
 .oz.app { color-scheme: light; }
@@ -175,9 +176,8 @@ body { background: #FAF6EE; }
 .oz .field-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 16px; }
 .oz .form-actions { margin-top: 4px; }
 .oz .panel-ok > span, .oz .panel-info > p { min-width: 0; }
-/* A quiet button that starts a row lines its label up with the text above it. */
-.oz .btn-flush, .oz .find-src > .btn-quiet:first-child, .oz .find-next > .btn-quiet:first-child { margin-left: -14px; }
-.oz .people > .btn-quiet { align-self: flex-start; margin-left: -14px; }
+/* A quiet button has a visible outline (audit item 22e), so it lines its edge, not its words, up with the text above. */
+.oz .people > .btn-quiet { align-self: flex-start; }
 .oz .rule-row .small { flex: 1 1 160px; }
 /* Settings: one section per heading, in a fixed order */
 .oz .settings { gap: 12px; }
@@ -192,10 +192,10 @@ body { background: #FAF6EE; }
 .oz .route.is-sel .badge { background: var(--surface); }
 .oz .route-main { display: flex; align-items: center; gap: 16px; min-height: 44px; }
 .oz .route-text { flex: 1; min-width: 0; }
-.oz .route-t { font-weight: 600; font-size: 15.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.oz .route-d { font-size: 14px; color: var(--ink-2); margin-top: 2px; text-wrap: pretty; }
+.oz .route-t { font-weight: 600; font-size: var(--t-md); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.oz .route-d { font-size: var(--t-sm); color: var(--ink-2); margin-top: 2px; text-wrap: pretty; }
 .oz .route-fields { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
-.oz .route-fields label { font-weight: 600; font-size: 14.5px; }
+.oz .route-fields label { font-weight: 600; font-size: var(--t-sm); }
 /* Spoken briefing: a compact bar; the written script is folded until asked for */
 .oz .listen { padding: 14px 20px; }
 .oz .listen-bar { display: flex; align-items: center; gap: 10px 20px; flex-wrap: wrap; }
@@ -205,7 +205,7 @@ body { background: #FAF6EE; }
 .oz .listen-names { margin-left: 0; }
 .oz .listen > p.small { margin-top: 6px; }
 .oz .listen-more { margin-top: 4px; }
-.oz .listen-more > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 14px; color: var(--accent); list-style: none; border-radius: 6px; }
+.oz .listen-more > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: var(--t-sm); color: var(--accent); list-style: none; border-radius: 6px; }
 .oz .listen-more > summary::-webkit-details-marker { display: none; }
 .oz .listen-more > summary:hover { text-decoration: underline; text-underline-offset: 3px; }
 .oz .listen-more > summary .ic { transition: transform .12s ease-out; }
@@ -230,26 +230,23 @@ body { background: #FAF6EE; }
 .oz .granted { margin: 10px 0 4px; }
 .oz .find-body + p.small { margin-top: 8px; }
 .oz .col > section.stack > h2.h3 { margin-top: 12px; }
-.oz .setup-nav > .btn-quiet:first-child { margin-left: -10px; }
-.oz .cards-photo > .btn-quiet { margin-left: -14px; }
 .oz .ask-quick.is-compact { padding-top: 4px; margin-top: -4px; padding-right: 16px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
 .oz .listen-more > summary { padding-right: 4px; }
-/* How Ozzie checks (Church rules), "See how this works" in Ask, and recent work in What happened */
-.oz .procedure-body { white-space: pre-line; overflow-wrap: anywhere; font-size: 14.5px; color: var(--ink-2); margin-top: 6px; padding: 12px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); }
+/* What the AI is asked to do (Church rules), "See how this works" in Ask, and recent work in What happened */
+.oz .procedure-body { white-space: pre-line; overflow-wrap: anywhere; font-size: var(--t-sm); color: var(--ink-2); margin-top: 6px; padding: 12px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); }
 .oz .how-checks { display: flex; flex-direction: column; gap: 10px; }
 .oz .how-checks .procedure { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; border-top: 1px solid var(--line); }
 .oz .how-checks .procedure .listen-more { margin-top: 2px; }
 .oz .why-how { flex-basis: 100%; }
-.oz .why-how > .btn-quiet { margin-left: -14px; }
 .oz .ask-how-body { margin-top: 4px; }
-.oz .ask-how-body .procedure-body { font-size: 13.5px; }
-.oz .ask-steps { padding-left: 20px; font-size: 13.5px; color: var(--ink-2); list-style: decimal; }
+.oz .ask-how-body .procedure-body { font-size: var(--t-sm); }
+.oz .ask-steps { padding-left: 20px; font-size: var(--t-sm); color: var(--ink-2); list-style: decimal; }
 .oz .ask-steps li { display: list-item; }
 .oz .log.recent > li { display: block; padding: 0; }
 .oz .log.recent .recent-steps li { display: flex; gap: 8px; align-items: flex-start; border-top: 0; padding: 3px 0; }
-.oz .recent-task > summary { min-height: 44px; padding: 10px 16px; cursor: pointer; font-size: 14.5px; list-style-position: inside; }
+.oz .recent-task > summary { min-height: 44px; padding: 10px 16px; cursor: pointer; font-size: var(--t-sm); list-style-position: inside; }
 .oz .recent-task[open] > summary { border-bottom: 1px solid var(--line); }
-.oz .recent-steps { padding: 10px 16px 12px; font-size: 14px; color: var(--ink-2); }
+.oz .recent-steps { padding: 10px 16px 12px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .recent-quiet { display: flex; gap: 8px; align-items: flex-start; }
 /* What Ozzie keeps an eye on: the plan to confirm, What runs automatically, and Today */
 .oz .plan-card { display: flex; flex-direction: column; gap: 8px; }
@@ -259,48 +256,47 @@ body { background: #FAF6EE; }
 .oz .plan-edit { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .oz .plan-report { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .oz .resp-head { align-items: center; }
-.oz .resp-problems { margin-top: 8px; font-size: 14px; color: var(--ink-2); }
+.oz .resp-problems { margin-top: 8px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .responsibility .find-next .small { color: var(--ink-2); }
 .oz .template-list li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
-.oz .resp-ended > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: 14px; color: var(--ink-2); }
+.oz .resp-ended > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: var(--t-sm); color: var(--ink-2); }
 /* What runs automatically: the regular Sunday check and Keep Sunday covered, grouped as one Sunday item */
 .oz .sunday-watch { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; background: var(--sunken); border: 1px solid var(--line); }
 .oz .sunday-watch-h { font: 500 20px/1.25 var(--f-display); color: var(--ink); }
 .oz .sunday-watch > .small { margin-top: -6px; color: var(--ink-2); text-wrap: pretty; }
 .oz .sunday-watch .find-title { font-size: 21px; }
 .oz .noticed .find-title { font-size: 16px; }
-.oz .noticed-summary { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); font-size: 14.5px; }
+.oz .noticed-summary { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); font-size: var(--t-sm); }
 /* In the narrow Ask panel a plan's rows stack: label over value. */
 .oz .ask-panel .plan-card .sp-row.sp-2 { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 8px 0; }
 .oz .ask-panel .plan-card .find-title { font-size: 20px; }
 .oz .ask-panel .plan-card .find-next { gap: 8px; }
 /* Finding feedback (finding-feedback.tsx): quiet controls under Why I flagged this; a chosen per-kind setting reads as on. */
 .oz .find-feedback { margin-top: 2px; }
-/* Rows 8px apart, so the small buttons' 44px click areas never overlap. */
-.oz .find-feedback > .find-next { flex-wrap: wrap; gap: 8px 4px; }
+/* Buttons 8px apart each way, so the small buttons' 44px click areas never overlap or touch. */
+.oz .find-feedback > .find-next { flex-wrap: wrap; gap: 8px; }
 .oz .find-feedback .btn-quiet[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-ink); }
 .oz .find-feedback > .small { margin-top: 4px; color: var(--ink-2); }
 .oz .feedback-note { align-items: center; flex-wrap: wrap; }
 .oz .feedback-note > span:not(.spacer) { min-width: 0; flex: 1 1 18rem; }
 .oz .set-aside .list li, .oz .from-cards .rule-entry { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
 .oz .set-aside .list li > span, .oz .from-cards .rule-entry > .stack-tight { flex: 1 1 16rem; min-width: 0; }
-.oz .from-cards h3.bold { margin-top: 12px; font-size: 15px; }
+.oz .from-cards h3.bold { margin-top: 12px; font-size: var(--t-md); }
 .oz .sunday-ready { margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); }
 .oz .sunday-ready > .bold + .small { margin-top: 2px; }
 .oz .sunday-ready .small.bold { margin-top: 8px; color: var(--ink); }
 /* Today: three groups (heading and item count), each card's age, and setting an item aside */
 .oz .today-group { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .oz .today-group-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: 6px; }
-.oz .today-count { font: 600 13px/1 var(--f-ui); color: var(--ink-2); background: var(--sunken); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; white-space: nowrap; }
+.oz .today-count { font: 600 var(--t-xs)/1 var(--f-ui); color: var(--ink-2); background: var(--sunken); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; white-space: nowrap; }
 .oz .today .find-title { font-size: 20px; }
-.oz .find-age { margin-left: auto; flex: none; white-space: nowrap; font-size: 13.5px; font-weight: 500; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.oz .today-empty { padding: 14px 18px; border: 1.5px dashed var(--line-strong); border-radius: 14px; color: var(--ink-2); font-size: 15px; text-wrap: pretty; }
-.oz .today-calm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14.5px; color: var(--ink-2); }
+.oz .find-age { margin-left: auto; flex: none; white-space: nowrap; font-size: var(--t-sm); font-weight: 500; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.oz .today-empty { padding: 14px 18px; border: 1.5px dashed var(--line-strong); border-radius: 14px; color: var(--ink-2); font-size: var(--t-md); text-wrap: pretty; }
+.oz .today-calm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .today-calm .ic { color: var(--accent); }
 .oz .today-later { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-.oz .today-later > .btn-quiet:first-child, .oz .today-more > .btn-quiet { margin-left: -10px; }
-.oz .today-watch .find-body { margin-top: 4px; font-size: 14.5px; }
-.oz .today-notes { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; margin-top: 10px; font-size: 14.5px; color: var(--ink-2); }
+.oz .today-watch .find-body { margin-top: 4px; font-size: var(--t-sm); }
+.oz .today-notes { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; margin-top: 10px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .today-notes > span:last-child { flex: 1 1 16rem; min-width: 0; }
 .oz .today-writeup > summary .ic { transition: transform .12s ease-out; }
 .oz .today-writeup[open] > summary .ic { transform: rotate(90deg); }
@@ -309,7 +305,7 @@ body { background: #FAF6EE; }
 .oz .fictional-note .ic { margin-top: 2px; }
 .oz .copy-draft { margin-top: 14px; }
 .oz .today-aside { padding: 4px 18px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--sunken); }
-.oz .today-aside > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 15px; color: var(--ink-2); list-style: none; border-radius: 6px; }
+.oz .today-aside > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: var(--t-md); color: var(--ink-2); list-style: none; border-radius: 6px; }
 .oz .today-aside > summary::-webkit-details-marker { display: none; }
 .oz .today-aside > summary .ic { transition: transform .12s ease-out; }
 .oz .today-aside[open] > summary .ic { transform: rotate(90deg); }
@@ -318,7 +314,7 @@ body { background: #FAF6EE; }
 @media (prefers-reduced-motion: reduce) { .oz .today-aside > summary .ic { transition: none; } }
 /* Setup: choosing the Sunday from the upcoming plans, with typing the ids by hand folded below */
 .oz .picker { display: flex; flex-direction: column; gap: 14px; }
-.oz .picker-status { display: flex; align-items: center; gap: 8px; font-size: 14.5px; color: var(--ink-2); }
+.oz .picker-status { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .picker-type { display: flex; flex-direction: column; gap: 6px; }
 .oz .picker-type .field-l { margin-bottom: 0; }
 .oz .picker-type select.input { max-width: 420px; }
@@ -330,39 +326,56 @@ body { background: #FAF6EE; }
 .oz .picker-plans .choice-d { overflow-wrap: anywhere; }
 .oz .picker-problem { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .oz .picker-hand { padding-top: 4px; border-top: 1px solid var(--line); }
-.oz .picker-hand > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 14.5px; color: var(--accent); list-style: none; border-radius: 6px; }
+.oz .picker-hand > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: var(--t-sm); color: var(--accent); list-style: none; border-radius: 6px; }
 .oz .picker-hand > summary::-webkit-details-marker { display: none; }
 .oz .picker-hand > summary .ic { transition: transform .12s ease-out; }
 .oz .picker-hand[open] > summary .ic { transform: rotate(90deg); }
 .oz .picker-hand-body { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
 @media (prefers-reduced-motion: reduce) { .oz .picker-hand > summary .ic { transition: none; } }
-/* Narrow windows and large text (200% zoom of a laptop window): the sidebar becomes a rail of icons. Each label stays
-   for VoiceOver (visually hidden) and shows beside its icon on hover or keyboard focus; counts sit on their icons. */
+/* The sidebar keeps its words at every width and zoom (audit item 22c): icons alone are no help to a leader who can't
+   tell a sun from a clock. Nothing in it shrinks; when the window is short it tightens its spacing, so every page
+   and Ask Ozzie stay in view without scrolling. */
+.oz .side > * { flex-shrink: 0; }
+.oz .side-menu, .oz .side-bar-org { display: none; }
+/* The pages and the sidebar's two lines are one box for Menu (below); in the sidebar the box steps aside, and the two
+   lines go back under Ask Ozzie at the foot. */
+.oz .side-pages { display: contents; }
+.oz .side-foot { order: 2; }
+@media (max-height: 640px) and (min-width: 761px) {
+  .oz .side { padding: 12px 14px; gap: 10px; }
+  .oz .logo { width: 104px; }
+  .oz .nav { gap: 0; }
+}
+/* Narrow windows and large text (200% zoom of a laptop window): the sidebar becomes a bar across the top with Menu, the
+   church in use (as much as fits) and Ask Ozzie. Menu opens the pages as a named list over the page, two columns when
+   they fit, with the sidebar's two lines under them: that Ozzie only reads and names stay on this Mac, and the church
+   in use. Escape, a click outside or choosing a page closes it. */
 @media (max-width: 760px) {
-  .oz .shell, .oz .shell.shell-2, .oz .shell.shell-ask { grid-template-columns: 72px minmax(0, 1fr); }
-  .oz .side { padding: 16px 10px; gap: 16px; z-index: 5; }
-  .oz .brand { padding: 0; display: flex; justify-content: center; }
-  .oz .logo { width: 44px; height: 44px; object-fit: cover; object-position: 0 50%; }
-  .oz .nav-i, .oz .ask-entry { justify-content: center; padding: 0; gap: 0; position: relative; margin: 0; }
-  .oz .nav-label, .oz .side-org { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-  .oz .nav-i .count { position: absolute; top: 2px; right: 0; min-width: 20px; height: 20px; padding: 0 5px; font-size: 12px; margin: 0; }
-  .oz .nav-i:is(:hover, :focus-visible)::after {
-    /* Fixed at its own place (no offsets), so the rail's scrolling never clips it; then moved to the icon's right. */
-    content: attr(data-label); position: fixed; transform: translateX(calc(50% + 36px)); z-index: 30;
-    padding: 6px 10px; border-radius: 8px; background: var(--ink); color: var(--paper); font: 600 14px/1.2 var(--f-ui); white-space: nowrap; pointer-events: none; box-shadow: var(--shadow);
-  }
-  .oz .side-foot { padding: 0; align-items: center; }
-  .oz .quiet-note { justify-content: center; }
+  .oz .shell, .oz .shell.shell-2, .oz .shell.shell-ask { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .oz .side { position: relative; height: auto; overflow: visible; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 8px 16px; border-right: 0; border-bottom: 1px solid var(--line); z-index: 25; }
+  .oz .brand { padding: 0; }
+  .oz .logo { width: 88px; }
+  .oz .side-menu { display: inline-flex; }
+  .oz .side .ask-entry { margin: 0 0 0 auto; }
+  .oz .side-bar-org { display: block; flex: 1 1 0; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+  .oz .side-pages { display: none; }
+  .oz .side.is-menu .side-pages { display: flex; flex-direction: column; gap: 12px; position: absolute; top: 100%; left: 0; right: 0;
+    max-height: calc(100vh - 64px); overflow-y: auto; padding: 10px 16px 14px; background: var(--sunken); border-bottom: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+  .oz .side.is-menu .nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 8px; }
+  .oz .side.is-menu .side-foot { margin-top: 0; padding: 10px 6px 0; border-top: 1px solid var(--line); }
+  .oz .main { padding: 20px 16px 64px; }
+  /* Ask Ozzie takes the whole window, over the bar, with its own close button. */
+  .oz .ask-panel { left: 0; width: 100vw; z-index: 30; }
   /* A long button label ("Looks right — keep the unclear parts marked") wraps instead of running out of its card. */
-  .oz .btn { height: auto; min-height: 44px; white-space: normal; text-align: center; line-height: 1.25; padding-top: 8px; padding-bottom: 8px; }
-  .oz .btn-sm { min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
+  .oz .btn { height: auto; min-height: var(--h-btn); white-space: normal; text-align: center; line-height: 1.25; padding-top: 8px; padding-bottom: 8px; }
+  .oz .btn-sm { min-height: var(--h-btn-sm); padding-top: 6px; padding-bottom: 6px; }
 }
 /* Spacing and alignment */
 /* A finding's top row keeps its age on the same line: where it is wraps inside its own space first. */
 .oz .find-top > .find-where { flex: 1 1 10rem; min-width: 0; }
-/* The controls under Why I flagged this: every wrapped row lines its words up with the card's text, close to the row above. */
-.oz .find-feedback > .find-next { margin-top: 10px; margin-left: -14px; }
-.oz .find-feedback > .find-next > .btn-quiet:first-child { margin-left: 0; }
+/* The controls under Why I flagged this: every wrapped row starts at the card's text, close to the row above. */
+.oz .find-feedback > .find-next { margin-top: 10px; }
 /* A sentence, then the checkbox it explains. */
 .oz .find-body + .stack-tight { margin-top: 12px; }
 .oz .draft > p.small:last-child { margin-top: 12px; }
@@ -375,11 +388,11 @@ body { background: #FAF6EE; }
 .oz .briefing-preview .sunday-ready { margin-top: 8px; }
 /* Church rules → Rooms: the rule and its setup minutes sit together beside the room; the minutes and their words wrap as one. */
 .oz .rule-room-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; flex: 1 1 260px; min-width: 0; }
-.oz .rule-setup { display: inline-flex; align-items: center; gap: 8px; flex: none; font-size: 13.5px; color: var(--ink-3); }
+.oz .rule-setup { display: inline-flex; align-items: center; gap: 8px; flex: none; font-size: var(--t-sm); color: var(--ink-3); }
 /* What happened → Recent work, by day */
 .oz .recent-days { display: flex; flex-direction: column; gap: 14px; }
 .oz .recent-day { display: flex; flex-direction: column; gap: 6px; }
-.oz .recent-day-h { font: 700 12.5px/1.3 var(--f-ui); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.oz .recent-day-h { font: 700 var(--t-xs)/1.3 var(--f-ui); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 /* Settings → Your name on notes */
 .oz .your-name .input { max-width: 360px; }
 /* Visitor cards → Look at these first: each link a full-height row. */
@@ -390,17 +403,17 @@ body { background: #FAF6EE; }
 /* ── Visitor cards (cards-page.tsx): what this Mac read, and prepared follow-ups ── */
 .oz .cards-photo.has-read { position: static; }
 .oz .cards-read { display: flex; flex-direction: column; gap: 6px; width: 100%; margin-top: 6px; }
-.oz .cards-read h3 { font-size: 14.5px; line-height: 1.3; margin: 0; }
+.oz .cards-read h3 { font-size: var(--t-sm); line-height: 1.3; margin: 0; }
 .oz .cards-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .oz .cards-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 6px 0; border-top: 1px solid var(--line); }
-.oz .cards-line-t { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.oz .cards-line-t { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; font-size: var(--t-sm); }
 .oz .cards-line select.input { width: auto; flex: 0 0 auto; min-height: 44px; min-width: 44px; padding-top: 6px; padding-bottom: 6px; }
 .oz .cards-followup { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px; border-left: 3px solid var(--accent); background: var(--accent-tint); color: var(--ink); }
-.oz .cards-followup h3 { font-size: 15px; line-height: 1.3; margin: 0; }
+.oz .cards-followup h3 { font-size: var(--t-md); line-height: 1.3; margin: 0; }
 .oz .cards-quote { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-style: italic; }
 /* A newer version of Ozzie is ready (updates-view.tsx): one calm line above Today, the width of its column. */
 .oz .update-line { width: 100%; max-width: 716px; margin: 0 auto; }
-.oz .update-line .update-line-t { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600; color: var(--accent-ink); }
+.oz .update-line .update-line-t { margin: 0; font-size: var(--t-md); line-height: 1.4; font-weight: 600; color: var(--accent-ink); }
 .oz .update-line .small { color: var(--ink-2); }
 .oz .update-line .find-next { flex-wrap: wrap; gap: 8px; }
 /* Settings › Forms, check-ins and signups: each choice is its own block, separated like the route fields. */
@@ -409,3 +422,83 @@ body { background: #FAF6EE; }
 /* Last Sunday's counts: a time heading sits a little apart from the time before it. */
 .oz .checkins-time { margin-top: 10px; }
 .oz .checkins-time:first-of-type { margin-top: 4px; }
+/* A heading Ozzie moves focus to (a new setup step, a Today group after setting something aside) is where VoiceOver and
+   the keyboard carry on from. It isn't a control, so it shows no focus box: the box read as a glitch (audit item 4). */
+.oz :is(h1, h2, h3, h4)[tabindex="-1"]:focus { outline: none; }
+/* The fictional example's band (App.tsx ExampleBand, audit item 2): across the top of every page while the example is
+   on, in large type, with its way out. Dashed, as the app marks what isn't the church's own. */
+.oz .example-band { width: 100%; max-width: 716px; margin: 0 auto 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px;
+  border: 2px dashed var(--attn); border-radius: 12px; background: var(--attn-tint); color: var(--ink); }
+.oz .example-band p { flex: 1 1 18rem; margin: 0; font-size: 17px; line-height: 1.4; }
+.oz .example-band .ic { color: var(--attn); flex: none; }
+/* "Looks good — I'll send it" (audit item 18): the leader's own mark, quiet, with Undo beside it. */
+.oz .asked-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 4px 0 0; color: var(--ink-2); }
+.oz .asked-line .ic { color: var(--accent); margin-top: 0; }
+.oz .asked-offer { flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.oz .draft-unsigned { margin-top: 4px; }
+.oz .draft-unsigned .row { flex-wrap: wrap; gap: 8px; align-items: center; }
+/* Today names Sunday's decisions (audit item 17): each line, then its way to the card, kept together. */
+.oz .today-decisions { gap: 6px; }
+.oz .today-decisions li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.oz .today-decisions li > span { flex: 1 1 20rem; min-width: 0; }
+.oz .today-looks { color: var(--ink-2); }
+/* "Open in Planning Center" (audit item 25): quiet, beside where the facts came from and under a person's row. */
+.oz .person-pc { margin-top: 2px; }
+.oz .pc-failed { color: var(--attn); }
+/* Asked before quitting (quit-question.tsx, audit items 20 and 23): over the whole window, the safe answer focused. */
+.oz .quit-scrim { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(20, 18, 14, .45); }
+.oz .quit-question { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 12px; padding: 22px 24px; border-radius: 14px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); box-shadow: 0 18px 50px rgba(0, 0, 0, .25); }
+.oz .quit-question h2 { display: flex; align-items: center; gap: 8px; }
+.oz .quit-question .find-next { flex-wrap: wrap; gap: 8px 12px; }
+/* Drop-down menus (audit item 22b): WebKit draws a native select about 22px tall whatever its height says, so the page
+   draws them instead: 44px tall, with their own arrow in the text colour. */
+.oz select { -webkit-appearance: none; appearance: none; min-height: 44px; padding: 8px 40px 8px 14px; border: 1px solid var(--control); border-radius: 10px;
+  background-color: var(--surface); color: var(--ink); font: 400 var(--t-md)/1.3 var(--f-ui); cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 21px) 50%, calc(100% - 15px) 50%; background-size: 6px 6px; background-repeat: no-repeat; }
+.oz select:disabled { opacity: .6; cursor: default; }
+/* Running text keeps a comfortable line length, about 70 characters (34em of Figtree), however wide the page is. */
+.oz .lede, .oz .find-body, .oz .col p.small, .oz .input-help { max-width: 34em; }
+/* The Mac's "Increase contrast" (audit item 22d): secondary words in the text colour, stronger borders on cards, fields
+   and buttons, quiet buttons underlined, a thicker focus ring. Light and dark. */
+@media (prefers-contrast: more) {
+  .oz { --ink-2:#3A3226; --ink-3:#3A3226; --line:#8A7C66; --line-strong:#6B5F4D; --control:#4F4537;
+    --accent:#24493F; --accent-hover:#1C3A32; --accent-ink:#163329; --attn:#7A3510; --look:#24476A; --danger:#7F1F1F; --focus:#1F4A87; }
+  .oz.dark, .oz .dark { --ink-2:#EDE5D6; --ink-3:#E4DAC7; --line:#8B7D68; --line-strong:#A39580; --control:#C2B49C;
+    --accent:#A8D6C4; --accent-hover:#BDE2D3; --accent-ink:#CBEADD; --attn:#F7C29F; --look:#BCD4EE; --danger:#F7BAB5; --focus:#B3D0F7; }
+  .oz :is(.find, .panel, .panel-sunken, .person, .choice, .route, .sp, .draft, .decide, .limits, .today-aside, .sunday-watch, .listen-script, .sunday-ready) { border-width: 2px; }
+  .oz :is(.panel-info, .panel-warn, .panel-ok, .panel-danger, .banner, .problem) { border: 2px solid var(--line); }
+  .oz :is(.btn-secondary, .btn-quiet, .btn-forget, .chip, .input, select, textarea, input:not([type=checkbox]):not([type=radio])) { border-width: 2px; }
+  .oz :is(.btn-quiet, .back, .listen-more > summary, .picker-hand > summary, .settings-index a) { text-decoration: underline; text-underline-offset: 3px; }
+  .oz :focus-visible, .oz .is-focus, .oz .composer:focus-within, .oz .picker-plans .choice:has(input:focus-visible) { outline-width: 4px; }
+}
+/* The Mac's "Reduce motion": nothing on any page moves, turns or fades (audit item 22d). */
+@media (prefers-reduced-motion: reduce) {
+  .oz *, .oz *::before, .oz *::after { transition-duration: 0s !important; animation-duration: 0s !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+/* The Mac's "Reduce transparency": the shade behind the quit question is solid enough not to show the page through. */
+@media (prefers-reduced-transparency: reduce) {
+  .oz .quit-scrim { background: rgba(20, 18, 14, .88); }
+}
+/* A Sunday card's actions (audit item 29): its main one or two as buttons, then More choices, which opens a quiet box
+   on its own line under them. The wrapper takes no box of its own, so the button sits in the row with the others. */
+.oz .more-choices { display: contents; }
+.oz .more-body { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 4px 14px 12px; border-radius: 12px; background: var(--sunken); border: 1px solid var(--line); }
+.oz .more-body[hidden] { display: none; }
+.oz .more-body > .find-feedback > .find-next:first-child, .oz .more-body > .find-next:first-child { margin-top: 10px; }
+.oz .more-toggle .ic { transition: transform .12s ease-out; }
+.oz .more-toggle[aria-expanded="true"] .ic { transform: rotate(90deg); }
+.oz .reword-note { margin-top: 10px; }
+.oz .reword-note > p { margin: 0; min-width: 0; }
+/* Settings → On this page (audit item 27): a short index of the sections, two columns when they fit, each a 44px row. */
+.oz .settings-index { display: flex; flex-direction: column; gap: 6px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--sunken); }
+.oz .settings-index ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 4px 16px; }
+.oz .settings-index a { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 8px; border-radius: 8px; color: var(--accent-ink); font-weight: 600; text-decoration: none; }
+.oz .settings-index a:hover { background: var(--accent-tint); text-decoration: underline; text-underline-offset: 3px; }
+.oz .settings-index a .ic { color: var(--ink-3); }
+/* Sunday's "Live read from Planning Center…" line wraps its words beside its tick, not under it, at large text sizes. */
+.oz .checkline.evidence { flex-wrap: nowrap; align-items: flex-start; }
+.oz .checkline.evidence > .ic { flex: none; margin-top: 3px; }
+/* Calendars and Updates are sections of their own; the box around each is where Settings' index moves to. */
+.oz .settings-slot { display: flex; flex-direction: column; }
+.oz .settings-slot:focus { outline: none; }

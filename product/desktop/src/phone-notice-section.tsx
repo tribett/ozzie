@@ -54,9 +54,9 @@ export function PhoneNoticeSection({ invoke = phoneInvoke, initial, now = Date.n
   const [control] = useState(() => new PhoneControl(invoke, setState, initial));
   useEffect(() => { if (!initial) void control.load(); }, [control, initial]);
   const shown = state ?? control.state;
-  return <section className="settings-sec" aria-labelledby="phone-title">
-    <h2 id="phone-title" className="h3">{PHONE_TITLE}</h2>
-    <div className="find">
+  // A card under "What Ozzie runs and notices" in Settings (audit item 27).
+  return <section className="find" aria-labelledby="phone-title">
+    <h3 id="phone-title" className="settings-t">{PHONE_TITLE}</h3>
       <p className="find-body">{PHONE_BODY}</p>
       <div className="stack-tight">
         <label className="confirmation"><input type="checkbox" checked={shown.on} disabled={shown.busy} onChange={e => { void control.change(e.target.checked); }} />
@@ -72,6 +72,5 @@ export function PhoneNoticeSection({ invoke = phoneInvoke, initial, now = Date.n
         <summary>See how this works</summary>
         <ul className="small">{PHONE_HOW.map(line => <li key={line}>{line}</li>)}</ul>
       </details>
-    </div>
   </section>;
 }

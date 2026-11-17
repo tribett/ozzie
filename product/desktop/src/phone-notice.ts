@@ -81,7 +81,7 @@ export const PHONE_HOW = [
   "It goes straight to ntfy.sh over an encrypted connection, once. If ntfy.sh doesn't answer within 10 seconds, Ozzie lets it go; the notice on this Mac is sent either way.",
   PHONE_BACKGROUND,
   "Phone notices: at most 12 an hour while Ozzie is running, test notices included.",
-  "The channel name is kept in this Mac's Keychain. It isn't in the recordings Ozzie saves of its checks or in Ozzie's record of what happened.",
+  "The channel name is kept in this Mac's Keychain. It isn't in the copies Ozzie saves of its checks or in Ozzie's record of what happened.",
   "The channel name is shown on this screen and put on the clipboard when you copy it. If either was shared, in a screen recording or a screenshot for example, make a new one.",
   "Making a new channel or turning this off means the old channel gets nothing more from Ozzie, except a notice that was already on its way at that moment.",
 ] as const;

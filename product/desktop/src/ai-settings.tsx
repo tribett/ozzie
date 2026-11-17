@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { keychainCommand, managedNotice, managedProblem, model, offlineLine, planName, routeProblem, usageLine, type ModelStatus } from "./model.js";
+import { keychainCommand, managedNotice, managedProblem, model, noPlan, offlineLine, planName, routeBadge, routeProblem, routeStatusLine, usageLine, type ModelStatus } from "./model.js";
 import { Icon } from "./icons.js";
 
 type Route = "managed" | "own" | "local";
@@ -41,7 +41,8 @@ export function ManagedDetails({ status }: { status: ModelStatus | null }) {
   if (!account) return <div className="route-fields"><p className="route-d">This Mac is connected. Ozzie couldn't check this month's usage just now.</p></div>;
   const notice = managedNotice(account);
   return <div className="route-fields">
-    <p className="route-d"><strong>{planName(account.plan)} plan.</strong> {usageLine(account)}</p>
+    {/* With no plan the usage line says so itself ("No plan right now…"), so no plan name before it. */}
+    <p className="route-d">{!noPlan(account) && <><strong>{planName(account.plan)} plan.</strong> </>}{usageLine(account)}</p>
     {account.offline && <p className="route-d">{offlineLine(account)}</p>}
     {notice && <div className={account.warning === "paused" ? "panel-warn" : "panel-info"} role="status"><Icon name="info" small /><p>{notice}</p></div>}
   </div>;
@@ -83,18 +84,20 @@ export function AiSettings({ onChange, labelledBy, preview = false }: { onChange
   const managed = status?.managed;
   const soon = preview && managed !== "connected";
   return <div className="find ai-settings" role="group" aria-labelledby={labelledBy}>
-    <p className="find-body">Ozzie can reword a draft note and answer questions about the Sunday it checked. The AI sees placeholders like [Volunteer A] instead of the names Ozzie read from Planning Center, and it never sends anything. Ozzie can't recognise names it never read, so don't type other people's details into a question.</p>
-    <p className="bold" role="status">{status?.configured ? `Using: ${status.label}` : status && status.route !== "none" ? `Chosen: ${status.label}. Not ready yet.` : "Not set up. Drafts still work; only rewording and questions are off."}</p>
+    <p className="find-body">Ozzie can reword a draft note, answer questions about the Sunday it checked, look at who could help with a role from a Sunday card, and write a short summary of what a job you set up found, as often as its plan allows. The AI sees placeholders like [Volunteer A] instead of the names Ozzie read from Planning Center, and it never sends anything. Ozzie can't recognise names it never read, so don't type other people's details into a question.</p>
+    <p className="bold" role="status">{routeStatusLine(status)}</p>
     <SetupNeeds status={status} />
     <ul className="routes">{routes.map(r => {
       const selected = status?.route === r.id;
+      const badge = routeBadge(status, r.id);
       const editing = r.id === "own" && ownOpen;
       const title = r.id === "managed" && soon ? "Ozzie managed (coming soon)" : r.title;
       const body = r.id !== "managed" ? r.body : soon ? COMING_SOON : managed === "connected" ? r.body : `${r.body} ${NEEDS_ACCOUNT}`;
       return <li key={r.id} className={`route${selected ? " is-sel" : ""}`}>
         <div className="route-main">
           <div className="route-text">
-            <p className="route-t" id={`${id}-${r.id}`}>{title}{selected && <span className="badge b-ok"><Icon name="check" small />In use</span>}</p>
+            <p className="route-t" id={`${id}-${r.id}`}>{title}{badge && <span className={`badge ${badge.tone === "ok" ? "b-ok" : badge.tone === "look" ? "b-look" : "b-muted"}`}>
+              {badge.tone === "ok" && <Icon name="check" small />}{badge.text}</span>}</p>
             <p className="route-d">{body}</p>
           </div>
           {r.id === "own"

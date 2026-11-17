@@ -33,6 +33,10 @@ it"), never a bare "Approve".
 
 ## Before you open a pull request
 
+To add a read-only tool, a procedure or another AI model, start with
+[core/docs/extending.md](core/docs/extending.md): it names every file each
+change touches and what is closed on purpose.
+
 1. Open an issue first for anything larger than a small fix, so the approach
    can be agreed before you spend time on it.
 2. Write a test with fixed, fictional data for any finding or rule you add or

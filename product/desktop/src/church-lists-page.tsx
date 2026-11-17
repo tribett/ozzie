@@ -21,7 +21,9 @@ import { Icon } from "./icons.js";
 import "./church-lists.css";
 
 export const LISTS_TITLE = "Lists & notes";
-export const LISTS_BODY = "Add a spreadsheet your church keeps, such as who holds which keys, from this Mac or from a private link, and Ozzie shows its rows beside the Sunday cards you match it to.";
+/** The one sentence before the first button (audit item 26); how to save a list is folded under HOW_LISTS. */
+export const LISTS_BODY = "Add a list your church keeps, such as who holds which keys, and Ozzie shows its rows beside the Sunday cards you match it to.";
+export const HOW_LISTS = "How to save a list";
 export const LISTS_STAYS = "Your lists and notes stay on this Mac. Ozzie reads each one from its file or link when you add it, when you open Sunday or this page (the first time after Ozzie starts, then at most once an hour), and when you ask, never with the window closed or hidden, and never changes it. They aren't sent to AI help, shared with other AI apps or Siri, or put in any notice.";
 export const LIST_FRAME = "This is your church's own list. Ozzie shows it as written and doesn't check it.";
 export const ADD_LIST = "Add a list from this Mac";
@@ -320,14 +322,15 @@ export function ChurchListsPage({ sources, positions }: {
   const list = state.sources ?? [];
   return <div className="col church-lists">
     <h1 className="h1">{LISTS_TITLE}</h1>
+    {/* One sentence, then the buttons; the file-format detail is folded away and what stays on this Mac follows. */}
     <p className="lede">{LISTS_BODY}</p>
-    <p className="banner"><Icon name="lock" small /><span>{LISTS_STAYS}</span></p>
     <div className="row">
       <button type="button" className="btn btn-primary" disabled={choosing} onClick={choose}>
         {choosing ? <><Icon name="spinner" small spin />Choosing a file…</> : ADD_LIST}</button>
       {!linking && <button type="button" className="btn btn-secondary" onClick={() => { setLinking(true); setProblem(null); }}>{ADD_LINK}</button>}
     </div>
-    <p className="small">{ADD_HELP}</p>
+    <details className="listen-more"><summary><Icon name="chev" small />{HOW_LISTS}</summary><p className="small">{ADD_HELP}</p></details>
+    <p className="banner"><Icon name="lock" small /><span>{LISTS_STAYS}</span></p>
     {problem && <p role="alert" className="problem">{problem}</p>}
     {linking && <LinkForm sources={sources} onDone={() => setLinking(false)} />}
     {state.linksUnreadable && <ForgetLinks sources={sources} />}

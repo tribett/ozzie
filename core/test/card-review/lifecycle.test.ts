@@ -107,6 +107,8 @@ describe("fixed boundary cases", () => {
   it.each([
     { images: Array(8).fill({size: 1, type: "image/png"}) },
     { images: Array(3).fill({size: 8 * 1024 * 1024, type: "image/jpeg"}) },
+    // An iPhone photo (HEIC), beside the other two kinds.
+    { images: [{size: 1, type: "image/heic"}, {size: 1, type: "image/png"}, {size: 1, type: "image/jpeg"}] },
   ])("admits exact count/size limits ($#)", ({images}) => {
     const review = new CardReview("a"), ticket = review.choose()!;
     expect(review.attach(ticket, images)).toBe("ok");
@@ -117,6 +119,9 @@ describe("fixed boundary cases", () => {
     for (const images of [
       [{size: 8*1024*1024, type: "image/png"}, {size: 8*1024*1024, type: "image/png"}, {size: 8*1024*1024, type: "image/png"}, {size: 1, type: "image/png"}],
       ...[-1, 0, Infinity, -Infinity, 0.1].map(size => [{size, type: "image/png"}]),
+      // Only the three kinds the Mac's reader opens: not HEIF sequences, AVIF, TIFF, GIF or a HEIC spelled otherwise.
+      ...["image/heic-sequence", "image/heif-sequence", "image/avif", "image/tiff", "image/gif", "image/HEIC", "image/heif", ""]
+        .map(type => [{size: 1, type}]),
     ]) {
       const review = new CardReview("a"), ticket = review.choose()!;
       expect(review.attach(ticket, images)).toBe("invalid");

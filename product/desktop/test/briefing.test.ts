@@ -12,7 +12,8 @@ const capture = nov22Capture();
 const brief = buildSundayBrief(capture, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, capture.completed_at, true);
 
 describe("Listen to today's briefing", () => {
-  const html = renderToStaticMarkup(React.createElement(TodayPage, { brief, names: capture.names, onSunday: () => {} }));
+  // The fictional example, once the person chose it: its email import is in the briefing too.
+  const html = renderToStaticMarkup(React.createElement(TodayPage, { brief, names: capture.names, onSunday: () => {}, example: true }));
 
   it("sits on Today with Play, an Include names choice that starts off, and the written script below", () => {
     expect(html).toContain("Listen to today&#x27;s briefing");

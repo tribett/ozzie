@@ -24,7 +24,7 @@ import * as linkForm from "../src/church-link-form.js";
 import * as notesPage from "../src/church-notes.js";
 import { NOTE_KIND_WORDS, NOTES_FRAME, NOTES_WORDS, notesBeside } from "../../../core/src/sources/words.js";
 import { NOTE_FINDING_KINDS } from "../../../core/src/sources/types.js";
-import { MAX_NOTE_LINE, MAX_NOTE_LINES, MAX_NOTES_BYTES, MAX_TITLE } from "../../../core/src/sources/notes.js";
+import { MAX_NOTE_LINE, MAX_NOTE_LINES, MAX_NOTES_BYTES, MAX_TITLE, parseNotes } from "../../../core/src/sources/notes.js";
 import { noteLine } from "../../../core/src/sources/text.js";
 import { ChurchListsPage, matchText, teamNames } from "../src/church-lists-page.js";
 import { ChurchOwnWords, moreRows, openLabel, ROWS_BESIDE } from "../src/church-own-words.js";
@@ -387,6 +387,25 @@ describe("the Lists & notes page", () => {
     return renderToStaticMarkup(React.createElement(ChurchListsPage, { sources: c, positions }));
   };
 
+  it("says one sentence before its first button, with how to save a list and notes folded away (audit item 26)", async () => {
+    const html = await renderPage({});
+    const words = text(html);
+    // Before the first button: the title and one sentence, nothing else.
+    const before = words.slice(0, words.indexOf(page.ADD_LIST));
+    expect(before.trim()).toBe(`${page.LISTS_TITLE} ${page.LISTS_BODY}`);
+    expect(page.LISTS_BODY.match(/[.!?](?:\s|$)/gu)).toHaveLength(1);
+    expect(html).toMatch(new RegExp(`<details class="listen-more"><summary>.*?${page.HOW_LISTS}</summary><p class="small">${page.ADD_HELP}</p></details>`, "u"));
+    // What stays on this Mac is still said in full, after the buttons.
+    expect(words.indexOf(page.LISTS_STAYS)).toBeGreaterThan(words.indexOf(page.ADD_LIST));
+    // Notes: one sentence before their button, the rest under "How to save notes".
+    expect(notesPage.NOTES_BODY.match(/[.!?](?:\s|$)/gu)).toHaveLength(1);
+    const notes = words.slice(words.indexOf(notesPage.NOTES_TITLE));
+    expect(notes.slice(0, notes.indexOf(notesPage.ADD_NOTES)).trim()).toBe(`${notesPage.NOTES_TITLE} ${notesPage.NOTES_BODY}`);
+    for (const line of [notesPage.ADD_NOTES_HELP, notesPage.NOTES_SECTIONS, notesPage.AS_WRITTEN]) expect(notes, line).toContain(line);
+    expect(html).toContain(`${notesPage.HOW_NOTES}</summary>`);
+    expect(html).not.toMatch(/<details[^>]*open/u);
+  });
+
   it("frames the list as the church's own, says when and where it was read, and shows it in file order with a find box", async () => {
     clock = "2026-11-16T15:06:00.000Z";
     const html = await renderPage({});
@@ -645,6 +664,9 @@ describe("a list from a private link", () => {
     }
     expect(html).toMatch(/<input[^>]*type="password"[^>]*autocomplete="off"/iu);
     expect(html).not.toMatch(/<a[\s>]|<img/u);
+    // Who can read a published sheet, said before the link is pasted, with the safer way for names (audit item 26).
+    expect(linkForm.LINK_WHO_READS).toBe("A published sheet can be read by anyone who has the link. For a list with people's names, use a file on this Mac instead.");
+    expect(words.indexOf(linkForm.LINK_WHO_READS)).toBeLessThan(words.indexOf(linkForm.LINK_ADDRESS));
     // The page offers it beside "Add a list from this Mac".
     expect(text(renderOf(c))).toContain(`${page.ADD_LIST} ${page.ADD_LINK}`);
   });
@@ -842,6 +864,11 @@ describe("the church's own notes", () => {
     expect(url).toContain("See https://<mark>example.org</mark>/policy");
     expect(url).not.toMatch(/<a[\s>]/u);
     expect(text(renderToStaticMarkup(React.createElement(notesPage.NotesFound, { notes: notesOf(c)!, query: "nothing like this" }))).trim()).toBe(notesPage.NOTHING_IN_NOTES);
+    // A heading longer than a title is searched and shown whole, as written (audit item 31).
+    const long = parseNotes(`# ${"Keys ".repeat(30)}and the alarm code\nbody\n`);
+    if (!long.ok) throw new Error("expected notes");
+    expect(renderToStaticMarkup(React.createElement(notesPage.NotesFound, { notes: long.notes, query: "alarm" })))
+      .toContain(`${"Keys ".repeat(30)}and the <mark>alarm</mark> code</h3>`);
     // The attach choice, in an opened section: nowhere, a team in this check, or one of the closed kinds, in plain words.
     expect(html).not.toContain(notesPage.ATTACH_LABEL);
     c.focus({ id: "notes1", section: 0 });
@@ -858,7 +885,13 @@ describe("the church's own notes", () => {
     const opened: unknown[] = [];
     const box = (card: Record<string, unknown>) => renderToStaticMarkup(React.createElement(ChurchOwnWords, { state: c.state(), card: card as never, onOpen: t => { opened.push(t); } }));
     const nursery = box({ kind: "needs-people", team_id: "7593352", name: "Nursery" });
-    expect(text(nursery)).toContain(`${notesBeside("Child safety policy")} · Open`);
+    expect(text(nursery)).toContain(`${notesBeside("Child safety policy")} Open`);
+    // The words in their own box and Open a real button beside them, with no "·" to dangle on a narrow card (audit item 34).
+    expect(nursery).toContain(`<span class="own-frame-t">${notesBeside("Child safety policy").replace("'", "&#x27;")}</span><button type="button" class="btn btn-quiet btn-sm own-open"`);
+    expect(nursery).not.toContain(" · ");
+    const css = readFileSync(new URL("../src/church-lists.css", import.meta.url), "utf8");
+    expect(css).toContain(".oz .own-notes .own-frame { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 10px; }");
+    expect(css).toContain(".oz .own-notes .own-open { flex: none; }");
     expect(nursery).toMatch(/^<section class="church-own-words/u);
     expect(text(nursery)).not.toMatch(/Two adults|Snow days/u);
     expect(text(box({ kind: "pending", team_id: "7593354", name: "Lyrics" }))).toContain(notesBeside("Snow days"));
@@ -935,6 +968,38 @@ describe("the church's own notes", () => {
     const box = renderToStaticMarkup(React.createElement(ChurchOwnWords, { state: c.state(), card: { kind: "needs-people", team_id: "7593352", name: "Nursery" }, onOpen: t => { asked.push(t); } }));
     expect(text(box)).toContain(notesBeside("Who to call (2)"));
     expect(box).toContain(`aria-label="${openLabel("Who to call (2)").replaceAll("&", "&amp;")}"`);
+  });
+
+  it("keeps how many sections shared a title when chosen, and says the notes changed rather than follow a different section (audit item 30)", async () => {
+    // Chosen while TWICE had two "Who to call" sections: the pointer keeps 2.
+    expect(notesPage.choosePointer([], "Who to call", 2, "team:7593352", 2)).toEqual([{ section: "Who to call", team_id: "7593352", occurrence: 2, of: 2 }]);
+    expect(notesPage.choosePointer([], "Keys", 1, "kind:pending", 1)).toEqual([{ section: "Keys", finding_kind: "pending", of: 1 }]);
+    // A third "Who to call" was added earlier in the file: the pointer names none of them, on Sunday or here.
+    const three = `# Who to call\nOffice\n${TWICE}`;
+    const c = withText(three, { attachments: [{ section: "Who to call", team_id: "7593352", occurrence: 2, of: 2 }] });
+    await c.load();
+    const box = renderToStaticMarkup(React.createElement(ChurchOwnWords, { state: c.state(), card: { kind: "needs-people", team_id: "7593352", name: "Nursery" }, onOpen: () => {} }));
+    expect(box).toBe("");
+    const words = text(pageOf(c));
+    expect(words).toContain(notesPage.changedNotice("Who to call", 3));
+    expect(notesPage.changedNotice("Who to call", 3)).toBe("These notes changed: there are now 3 sections called “Who to call”. Choose again, so Sunday shows the one you mean.");
+    expect(notesPage.changedNotice("Keys", 1)).toBe("These notes changed: there is now 1 section called “Keys”. Choose again, so Sunday shows the one you mean.");
+    expect(words).toContain(notesPage.FORGET_POINTER);
+    // No section's choice shows it as chosen.
+    for (const section of [0, 2, 4]) {
+      c.focus({ id: "notes1", section });
+      expect(opened(pageOf(c))).not.toMatch(/<option value="team:7593352" selected="">/u);
+    }
+    // A pointer chosen before the count was kept is read as before: it still follows its title and occurrence.
+    const old = withText(three, { attachments: [{ section: "Who to call", team_id: "7593352", occurrence: 2 }] });
+    await old.load();
+    expect(text(renderToStaticMarkup(React.createElement(ChurchOwnWords, { state: old.state(), card: { kind: "needs-people", team_id: "7593352", name: "Nursery" } }))))
+      .toContain(notesBeside("Who to call (2)"));
+    // The count unchanged: shown as chosen.
+    const same = withText(TWICE, { attachments: [{ section: "Who to call", team_id: "7593352", occurrence: 2, of: 2 }] });
+    await same.load();
+    expect(text(renderToStaticMarkup(React.createElement(ChurchOwnWords, { state: same.state(), card: { kind: "needs-people", team_id: "7593352", name: "Nursery" } }))))
+      .toContain(notesBeside("Who to call (2)"));
   });
 
   it("frames a section on Sunday as the church's own and not checked (review V, L1)", () => {

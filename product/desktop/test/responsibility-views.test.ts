@@ -32,7 +32,8 @@ const context = (over: Partial<PlanContext> = {}): PlanContext => ({
 });
 const actions: PlanActions = { start: async () => ({}), onSettings: () => {}, onAutomatic: () => {} };
 const render = (el: React.ReactElement) => text(renderToStaticMarkup(el));
-const sunday = (): Plan => defaultPlan("keep-sunday-covered", FRI, ET);
+/** Keep Sunday covered with "Only until this Sunday" chosen (its default is every week until stopped: audit item 23). */
+const sunday = (): Plan => ({ ...defaultPlan("keep-sunday-covered", FRI, ET), lifetime: untilLifetime("2026-11-22", ET)! });
 const at_ = (iso: string, minutes: number) => new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 const NEVER = /\b(?:approve|block|all clear|at risk|drifting|score|rank)\b/iu;
 
@@ -44,13 +45,13 @@ const run = (over: Partial<RunRow> = {}): RunRow => ({
   run_id: "00000000-0000-4000-8000-0000000000aa", trigger: "start", started_at: FRI, ended_at: FRI, outcome: "ok", code: null, noticed: 4, drafts: 1, ai_steps: 2, ...over,
 });
 const view = (over: Partial<RunnerView> = {}): RunnerView => ({
-  available: true, paused_all: false, items: [], noticed: [], prepared: {}, next: {}, running: null, unseen: 0, open_today: false, ...over,
+  available: true, paused_all: false, items: [], noticed: [], writeups: {}, next: {}, running: null, unseen: 0, open_today: false, ...over,
 });
 const fakeRunner = (v: RunnerView): Runner => ({
   start() {}, refresh: async () => {}, tick: async () => {}, wake() {}, takes: () => false, changes: async () => false, captured() {}, pausedElsewhere: async () => {},
   create: async () => v.items[0]!, edit: async () => v.items[0]!,
   pause: async () => {}, resume: async () => {}, stop: async () => {}, pauseAll: async () => {}, runNow: async () => ({ status: "skipped" }),
-  markSeen() {}, clearOpenToday() {}, view: () => v, subscribe: () => () => {},
+  markSeen() {}, clearOpenToday() {}, keepWriteupsFor() {}, forgetAllWriteups() {}, view: () => v, subscribe: () => () => {},
 });
 
 describe("the plan Ozzie shows before taking something on", () => {
@@ -71,6 +72,18 @@ describe("the plan Ozzie shows before taking something on", () => {
     ]) expect(page).toContain(line);
     expect(page).not.toMatch(HIDDEN_WORDS);
     expect(page).not.toMatch(NEVER);
+  });
+
+  it("Keep Sunday covered keeps going every week by default, and Only until this Sunday is a choice (audit item 23)", () => {
+    const plan = defaultPlan("keep-sunday-covered", FRI, ET, { sunday: "2026-11-22" });
+    const page = render(React.createElement(PlanCard, { plan, context: context(), actions, assumed: ["lifetime"] }));
+    expect(page).toContain("Until Every day until you stop it.");
+    expect(page).toContain("You didn't say how long, so this runs until you stop it.");
+    expect(page).not.toContain("This ends before");
+    const editor = render(React.createElement(PlanEditor, { plan, context: context(), onDone: () => {}, onCancel: () => {} }));
+    expect(editor).toContain("Until the end of Sunday, November 22");
+    expect(renderToStaticMarkup(React.createElement(PlanEditor, { plan, context: context(), onDone: () => {}, onCancel: () => {} })))
+      .toMatch(/<option value="until-stopped" selected="">Until you stop it<\/option>/u);
   });
 
   it("works without an AI model, and before Planning Center is connected says the first check waits", () => {
@@ -94,10 +107,10 @@ describe("the plan Ozzie shows before taking something on", () => {
 
   it("says when a plan would end before the Sunday chosen in Settings", () => {
     const sat = "2026-11-14T15:00:00.000Z";
-    const early = defaultPlan("keep-sunday-covered", sat, ET);
+    const early = { ...defaultPlan("keep-sunday-covered", sat, ET), lifetime: untilLifetime("2026-11-15", ET)! };
     const page = render(React.createElement(PlanCard, { plan: early, context: context({ now: () => sat, sunday: "2026-11-22" }), actions }));
     expect(page).toContain("This ends before Sunday, November 22, the Sunday chosen in Settings. Change it if you meant that Sunday.");
-    const matched = defaultPlan("keep-sunday-covered", sat, ET, { sunday: "2026-11-22" });
+    const matched = { ...defaultPlan("keep-sunday-covered", sat, ET), lifetime: untilLifetime("2026-11-22", ET)! };
     expect(render(React.createElement(PlanCard, { plan: matched, context: context({ now: () => sat, sunday: "2026-11-22" }), actions }))).not.toContain("This ends before");
   });
 
@@ -130,7 +143,7 @@ describe("the plan Ozzie shows before taking something on", () => {
 
   it("“Set up something new” lists the fixed templates with what each does", () => {
     const page = render(React.createElement(TemplatePicker, { context: context(), actions, onCancel: () => {} }));
-    expect(page).toContain("Keep Sunday covered Checks every day until Sunday and tells you when a role needs a decision.");
+    expect(page).toContain("Keep Sunday covered Checks every day, more often as Sunday gets close, and tells you when a role needs a decision.");
     expect(page).toContain("Morning briefing Prepares Today's briefing each weekday at 7:00 AM, or the time you choose, if this Mac is awake and Ozzie is running. Thursday's includes the full Sunday Ready brief.");
   });
 
@@ -356,7 +369,12 @@ describe("Today: what comes to the person", () => {
     item({ id: "d", kind: "couldnt-check", code: "provider-failure", retry_at: "2026-11-20T16:00:00.000Z", scheduled_for: FRI }),
     item({ id: "e", kind: "clear" }),
   ];
-  const v = view({ items: [keep, morning], noticed, prepared: { a: { summary: "Greeter still needs one person.", draft: null } } });
+  const v = view({ items: [keep, morning], noticed, writeups: {
+    a: { item: "a", responsibility_id: keep.id, run_id: run().run_id, organization: "fictional", at: FRI, kind: "written",
+      lines: ["Greeter still needs one person.", "{{person:501}} hasn't accepted Greeter yet."], based_on: "Based on: Planning Center Services, checked Fri, Nov 20, 10:00 AM",
+      gaps: [], steps: ["Looked at the open roles for Sunday — all of it"], ai_steps: 2 },
+    c: { item: "c", responsibility_id: morning.id, run_id: "00000000-0000-4000-8000-0000000000bb", organization: "fictional", at: FRI, kind: "none", why: "spent" },
+  } });
   const memoryStore = () => { const m = new Map<string, string>(); return { get: (k: string) => m.get(k) ?? null, set: (k: string, x: string) => { m.set(k, x); } }; };
   const today = (over: Partial<RunnerView> = {}, n: Readonly<Record<string, string>> = names) => render(React.createElement(TodayPage, {
     brief: null, onSunday: () => {}, names: { ...n }, now: FRI, zone: ET, store: memoryStore(),
@@ -368,9 +386,10 @@ describe("Today: what comes to the person", () => {
     expect(page).toContain("Ozzie noticed · Keep Sunday covered");
     expect(page).toContain("Keep Sunday covered: 2 things need a decision.");
     expect(page).toContain("Avery Brightwater declined Greeter after confirming.");
-    expect(page).toContain("Greeter still needs one person.");
-    // The write-up restates the findings, so it's folded under "Read Ozzie's write-up".
-    expect(page).toMatch(/Read Ozzie's write-up\s+Greeter still needs one person\./u);
+    // The run's write-up leads its card (audit item 6), with names filled in on this Mac; the briefing says why it has none.
+    expect(page).toMatch(/Keep Sunday covered: 2 things need a decision\.\s+Ozzie checked Sunday at .+: Greeter still needs one person\. Avery Brightwater hasn't accepted Greeter yet\. Based on: Planning Center Services, checked Fri, Nov 20, 10:00 AM See how this works/u);
+    expect(page).not.toContain("Read Ozzie's write-up");
+    expect(page).toMatch(/Your morning briefing is ready\.\s+No write-up this time: AI help has reached its limit for now\./u);
     expect(page).toContain("1 note is ready for you to review and send yourself.");
     expect(page).toMatch(/Your Mac was asleep at .+, so Ozzie checked at .+ instead\./u);
     expect(page).toContain("Your morning briefing is ready.");
@@ -381,6 +400,7 @@ describe("Today: what comes to the person", () => {
     const nameless = today({}, {});
     expect(nameless).toContain("Someone declined Greeter after confirming.");
     for (const name of Object.values(names)) expect(nameless).not.toContain(name);
+    expect(nameless).toContain("a team member hasn't accepted Greeter yet.");
     expect(page).not.toMatch(HIDDEN_WORDS);
   });
 
@@ -423,7 +443,8 @@ describe("Today: what comes to the person", () => {
     expect(progress).toMatch(/Your Mac was asleep at .+, so Ozzie checked at .+ instead\./u);
     expect(progress).toContain("Change what Ozzie keeps an eye on");
     const none = today({ items: [], noticed: [] });
-    expect(none).toContain("Nothing is under way. Ask Ozzie something like “Keep an eye on Sunday”, and it will keep checking without being asked again.");
+    // What would start something, never a pointer to Ask while the regular check may be running (audit item 4).
+    expect(none).toContain("Nothing is running. Keep Sunday covered and other jobs start when you set them up in What runs automatically.");
     expect(none).toContain("See what Ozzie can keep an eye on");
   });
 });
@@ -489,15 +510,19 @@ describe("drafted notes and your name", () => {
     const settings = render(React.createElement(ConnectionPage, { status: null, settings: { clientId: "", organization: "", serviceTypeId: "", planId: "" }, onSettings: () => {}, onStatus: () => {},
       nameStore: { get: () => "", set: () => {} } }));
     expect(settings).toContain("Your name on notes");
-    expect(settings.indexOf("Your name on notes")).toBeGreaterThan(settings.indexOf("AI help"));
+    // Near the top of Settings (audit item 18): second, right after Planning Center and which Sunday, in the order a
+    // leader meets them (audit item 27), and in the index at the very top.
+    const sections = settings.slice(settings.indexOf("Planning Center and which Sunday Reads only."));
+    expect(sections.indexOf("Your name on notes")).toBeGreaterThan(0);
+    expect(sections.indexOf("Your name on notes")).toBeLessThan(sections.indexOf("AI help"));
+    expect(settings.indexOf("On this page Planning Center and which Sunday Your name on notes")).toBeGreaterThan(-1);
   });
 });
 
 describe("a plan changed on a Sunday", () => {
   it("never offers a lifetime that ends today", () => {
     const SUN = "2026-11-15T14:00:00.000Z"; // Sunday 9:00 AM in New York
-    const plan = defaultPlan("keep-sunday-covered", SUN, ET);
-    expect(plan.lifetime).toMatchObject({ until: "2026-11-22" });
+    const plan = { ...defaultPlan("keep-sunday-covered", SUN, ET), lifetime: untilLifetime("2026-11-22", ET)! };
     const editor = render(React.createElement(PlanEditor, { plan, context: context({ now: () => SUN }), onDone: () => {}, onCancel: () => {} }));
     expect(editor).toContain("Until the end of Sunday, November 22");
     expect(editor).toContain("Until the end of Sunday, November 29");
@@ -506,17 +531,22 @@ describe("a plan changed on a Sunday", () => {
 });
 
 describe("open at login and the closed window", () => {
-  const off = { get: () => new Promise<boolean>(() => {}), set: async (v: boolean) => v };
-  it("is offered in setup, unticked until the person chooses", () => {
+  const off = { get: () => new Promise<boolean>(() => {}), set: vi.fn(async (v: boolean) => v) };
+  it("is asked in setup with Yes chosen to begin with, applied only when the leader finishes setup (audit item 23)", () => {
     const html = renderToStaticMarkup(React.createElement(SetupFlow, {
       status: null, settings: { clientId: "", organization: "", serviceTypeId: "", planId: "" }, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS,
       onModel() {}, onClose() {}, onExample() {}, onAutomatic() {}, initial: "automatic", autostart: off,
     }));
-    expect(text(html)).toContain("Open Ozzie when I log in");
-    expect(text(html)).toContain("When you close its window, it keeps running in the menu bar.");
-    expect(text(html)).toContain("Nothing runs after you quit Ozzie.");
-    expect(html).not.toMatch(/type="checkbox" checked=""[^>]*>\s*<span>Open Ozzie when I log in/u);
-    expect(render(React.createElement(AutostartToggle, { autostart: off }))).toContain("Off unless you turn it on.");
+    const t = text(html);
+    expect(t).toContain("Start Ozzie when you turn on this Mac? Ozzie can only check Planning Center while it is running. When this Mac restarts, Ozzie then opens quietly in the menu bar.");
+    expect(html).toMatch(/<input type="radio" name="start-with-mac" checked=""\/><span>Yes, start Ozzie with this Mac \(recommended\)<\/span>/u);
+    expect(html).toMatch(/<input type="radio" name="start-with-mac"\/><span>No, I&#x27;ll open it myself<\/span>/u);
+    expect(t).toContain("When you close Ozzie's window, it keeps running in the menu bar.");
+    expect(t).toContain("Nothing runs after you quit Ozzie.");
+    // Rendering asks nothing of the Mac: the switch changes only when the leader finishes setup.
+    expect(off.set).not.toHaveBeenCalled();
+    expect(render(React.createElement(AutostartToggle, { autostart: off }))).toContain("On if you chose it in setup; you can change it here.");
+    expect(render(React.createElement(AutostartToggle, { autostart: off }))).not.toContain("Off unless you turn it on.");
   });
   it("Settings explains the menu bar and how to quit", () => {
     const page = (autostart?: typeof off) => render(React.createElement(ConnectionPage, {

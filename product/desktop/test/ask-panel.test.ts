@@ -8,7 +8,7 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import { Answer, ASK_NOTE, AskPanel, HowItWorks, isCardsRequest, isHelpRequest, routeQuestion, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
+import { Answer, ASK_ABOUT, ASK_INTRO, ASK_NOTE, AskPanel, EARLIER_SHOWN, HowItWorks, isCardsRequest, isHelpRequest, routeQuestion, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import { App } from "../src/App.js";
 import { askOzzie, createAppHarness, type AskTurn, type ShownAnswer } from "../src/harness-bridge.js";
@@ -95,9 +95,11 @@ describe("Ask Ozzie panel", () => {
     const t = text(html);
     expect(t).toContain("Ozzie followed this procedure: Answer from what was read");
     expect(html).toContain(skills.get("answer-from-what-was-read")!.body.split("\n")[0]!.replaceAll("'", "&#x27;").replaceAll("\"", "&quot;"));
-    expect(t).toContain("Looked at who on the team could help — complete");
-    expect(t).toContain("Checked the facts it chose against what was read");
-    expect(t).toContain("Ozzie asked the AI 2 times.");
+    // The same short account What happened gives (audit items 7 and 8).
+    expect(t).toContain("You asked a question.");
+    expect(t).toContain("What Ozzie looked at Looked at who is on the team for an open role — all of it");
+    expect(t).toContain("Ozzie asked the AI twice. The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything.");
+    expect(t).toContain("Answered.");
     expect(t).toContain("The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels");
     expect(t).toContain("Ozzie put them back on this Mac");
     expect(t).toContain("nothing in Planning Center changed");
@@ -143,13 +145,94 @@ describe("Ask Ozzie panel", () => {
     expect(source).not.toMatch(/prepareAsk|acceptAskReply|buildAskContext|restoreAnswer|model\.ask|ask_ozzie/u);
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
     expect(app).not.toMatch(/AskSession|model\.ask/u);
+    // One harness path (audit item 11): the native command is gone, and nothing in the app or its debug autopilot asks for it.
+    for (const file of ["../src/model.ts", "../src/autopilot.ts", "../src-tauri/src/main.rs"]) {
+      expect(readFileSync(new URL(file, import.meta.url), "utf8"), file).not.toMatch(/ask_ozzie|AskRequest|AskModelRequest|acceptAskReply/u);
+    }
   });
 
-  it("is reachable from every screen through the sidebar, closed by default on a narrow window", () => {
+  it("is reachable from every screen through the sidebar, and closed until the leader opens it, at any width (audit item 8)", () => {
     const html = renderToStaticMarkup(React.createElement(App));
     expect(html).toMatch(/<button[^>]*aria-controls="ask-panel"[^>]*>.*Ask Ozzie<\/span><\/button>/);
     expect(html).toMatch(/<aside id="ask-panel"[^>]*hidden=""/);
     expect(html).toContain("shell shell-2");
+    // Never docked open by a wide window: it opens only on the leader's click, and stays as they left it.
+    const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    expect(app).toMatch(/const \[askOpen, setAskOpen\] = useState\(false\);/u);
+    expect(app).not.toMatch(/min-width: 1440px/u);
+  });
+
+  it("shows an answer as a card like a finding, not a chat thread: the question, Ozzie's sentences, sources, See how this works", async () => {
+    const answer = await shown();
+    const html = panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
+    expect(html).toMatch(/<article class="find ask-card" aria-labelledby="ask-q-1"><div class="find-top"><span class="badge b-ok">Answered<\/span><span class="find-where">Ask Ozzie<\/span><\/div><h3 id="ask-q-1" class="find-title ask-q">Who could cover Greeter\?<\/h3>/u);
+    expect(text(html)).toMatch(/Riley Thornbury has no overlap found for Greeter\. .*Based on: fictional example data as of .* Open Sunday See how this works/u);
+    expect(html).not.toMatch(/msg-me|msg-oz|class="thread/u);
+    // Suggested questions wrap rather than scroll off the panel's edge.
+    expect(html).not.toContain("is-compact");
+  });
+
+  it("folds the two notes about Ask away once there is an answer, so the answer stays in view", async () => {
+    const before = panel();
+    expect(text(before)).toContain(ASK_INTRO);
+    expect(before).toContain(note);
+    expect(before).not.toContain(ASK_ABOUT);
+    const answer = await shown();
+    const after = panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
+    const folded = /<details class="listen-more ask-about">([\s\S]*?)<\/details>/u.exec(after)?.[1] ?? "";
+    expect(folded).toContain(ASK_ABOUT);
+    expect(folded).toContain(note);
+    expect(text(folded)).toContain(ASK_INTRO);
+    // Nowhere else: the answer comes first.
+    expect(after.replace(/<details class="listen-more ask-about">[\s\S]*?<\/details>/u, "")).not.toContain(note);
+    expect(after.indexOf("ask-card")).toBeLessThan(after.indexOf("ask-about"));
+  });
+
+  it("folds what speaking does away with the notes once there is an answer; listening still shows on the line", async () => {
+    const hint = "Speak instead of typing (⌘⇧L). Your words become text on this Mac. No audio is kept or sent.";
+    const line = (html: string) => /<p class="small ask-voice" id="ask-voice-line"[^>]*>([^<]*)<\/p>/u.exec(html)?.[1] ?? "";
+    expect(line(panel({ initialVoice: { status: "ready" } }))).toBe(hint);
+    const answer = await shown();
+    const after = panel({ initialVoice: { status: "ready" }, initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
+    expect(line(after)).toBe("");
+    expect(/<details class="listen-more ask-about">[\s\S]*?<\/details>/u.exec(after)?.[0]).toContain(hint);
+    // Why speaking is off folds the same way.
+    const off = panel({ initialVoice: { status: "not-available" }, initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
+    expect(line(off)).toBe("");
+    expect(text(off)).toContain("This Mac can't turn speech into text on its own");
+  });
+
+  it("uses the app's type scale: nothing in Ask below 14px, its secondary lines at the small size", () => {
+    const css = readFileSync(new URL("../src/ask-panel.css", import.meta.url), "utf8") + readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    const askRules = css.split("\n").filter(l => /\.ask-|\.ai-look|\.writeup|\.task-account|procedure-body/u.test(l));
+    expect(askRules.length).toBeGreaterThan(20);
+    for (const rule of askRules) for (const m of rule.matchAll(/font(?:-size)?:[^;]*?(\d+(?:\.\d+)?)px/gu)) expect(Number(m[1]), rule).toBeGreaterThanOrEqual(14);
+    expect(css).toMatch(/\.oz \.ask-based \{[^}]*font-size: var\(--t-sm\)/u);
+    expect(css).toMatch(/\.oz \.ask-links \.src \{[^}]*font-size: var\(--t-sm\)/u);
+  });
+
+  it("keeps earlier questions this session as a short list to reopen, newest first, with the newest card on show", async () => {
+    const answer = await shown();
+    const turns: Turn[] = [
+      { id: 1, question: "Who could cover Greeter?", state: "answered", answer },
+      { id: 2, question: "What can you do?", state: "help", checked: true },
+      { id: 3, question: "Read these visitor cards", state: "cards" },
+    ];
+    const html = panel({ initialTurns: turns });
+    expect(html.match(/<article class="find ask-card"/gu)).toHaveLength(1);
+    expect(html).toContain('<h3 id="ask-q-3" class="find-title ask-q">Read these visitor cards</h3>');
+    const earlier = /<section class="ask-earlier"[\s\S]*?<\/section>/u.exec(html)?.[0] ?? "";
+    expect(text(earlier)).toBe(" Earlier questions What can you do? Who could cover Greeter? ");
+    expect(earlier.match(/<button type="button" class="btn btn-quiet btn-sm ask-reopen">/gu)).toHaveLength(2);
+    // A long session lists only the newest few.
+    const many = Array.from({ length: EARLIER_SHOWN + 4 }, (_, i): Turn => ({ id: i + 1, question: `Question ${i + 1}`, state: "help", checked: true }));
+    expect(panel({ initialTurns: many }).match(/ask-reopen/gu)).toHaveLength(EARLIER_SHOWN);
+  });
+
+  it("calls a saved copy of a check what it is, never a recording", () => {
+    const html = text(panel({ brief: { ...fictional, mode: "recording" } }));
+    expect(html).toMatch(/A saved copy of a check from .+\. Not a current check\./u);
+    expect(html).not.toMatch(/recording/iu);
   });
 
   it("uses none of the words people shouldn't see", async () => {

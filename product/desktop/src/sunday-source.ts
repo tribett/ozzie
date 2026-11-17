@@ -56,17 +56,39 @@ export function choicesProblem(error: unknown): string {
   if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Then your upcoming Sundays are listed here.";
   if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Try again in a minute, or enter the plan by hand.";
   if (known.includes("busy")) return "Ozzie is reading Planning Center for something else right now. Try again in a moment.";
-  if (known.includes("denied")) return "Planning Center didn't let this account list its plans. Enter the plan by hand instead.";
+  if (known.includes("denied")) return PICKER_REFUSED;
   if (known.includes("organization")) return "The connected organization couldn't be verified, so nothing was read.";
   return "Planning Center couldn't be read just now. Try again, or enter the plan by hand.";
 }
+
+/**
+ * Planning Center refused a read (native "denied": its 401 or 403, which native code doesn't tell apart). Ozzie always
+ * asks for Services at sign-in, so what is left is one of two causes it can't tell apart from here: the login signed in
+ * with can't see that service type, or that sign-in is no longer accepted (audit item 5). Said as "one of these", with
+ * who can give access and the next step.
+ */
+export const REFUSED = {
+  summary: "Planning Center didn't let Ozzie read this Sunday.",
+  either: "It's one of these, and Ozzie can't tell which from here:",
+  login: "The Planning Center login you signed in with can't see this service type's plans. A Planning Center administrator at your church can give that login access to it in Planning Center Services.",
+  signIn: "That sign-in is no longer accepted. Signing in again fixes this.",
+  next: "Then sign in again, or choose a Sunday this login can see.",
+  signInButton: "Open Settings to sign in again",
+  chooseButton: "Open Settings to choose another Sunday",
+} as const;
+export const PICKER_REFUSED = "Planning Center didn't let Ozzie list your church's plans. Either the login you signed in with can't see Planning Center Services, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access to Services; then sign in again. You can also enter a plan by hand.";
+/** Whether a failed check was a refused read (REFUSED), so the Sunday page can offer its next steps. */
+export const refusedRead = (error: unknown): boolean => {
+  const known = JSON.stringify(error) ?? "";
+  return known.includes("denied") && !known.includes("not-connected") && !known.includes("missing-credentials") && !known.includes("invalid-credentials");
+};
 
 /** Fixed local copy only. Native error text is never rendered. */
 export function sundayProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
   if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Ozzie only reads; it changes nothing there.";
-  if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Wait a minute, then check again, or use the saved recording.";
-  if (known.includes("denied")) return "Planning Center didn't allow this read. The signed-in account may not have access to this Sunday.";
+  if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Wait a minute, then check again, or show the last saved check.";
+  if (known.includes("denied")) return `${REFUSED.summary} Either the login you signed in with can't see this service type's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access; then sign in again under Settings, or choose another Sunday.`;
   if (known.includes("organization")) return "The connected organization couldn't be verified, so nothing was read.";
-  return "Planning Center couldn't be checked just now. You can use the last saved recording instead.";
+  return "Planning Center couldn't be checked just now. You can show the last saved check instead.";
 }

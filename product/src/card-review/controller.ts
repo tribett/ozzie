@@ -82,8 +82,11 @@ export class CardReviewController {
       const bytes = new Uint8Array(await job.file!.slice(0, 12).arrayBuffer());
       if (!this.valid(ticket) || !job.file) return false;
       const png = [137, 80, 78, 71, 13, 10, 26, 10];
+      // A HEIC (iPhone photo): a file type box first, with a HEIC still-picture brand (the Mac's reader checks the rest).
+      const brand = String.fromCharCode(...bytes.slice(4, 12));
       const supported = type === "image/png" ? png.every((byte, i) => bytes[i] === byte) :
-        type === "image/jpeg" && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+        type === "image/jpeg" ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 :
+        type === "image/heic" && ["ftypheic", "ftypheix", "ftypheim", "ftypheis", "ftypmif1"].includes(brand);
       if (!supported) { this.close("error"); return false; }
       job.url = this.#browser.createURL(job.file);
       job.file = null;

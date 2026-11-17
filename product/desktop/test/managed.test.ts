@@ -14,7 +14,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 import { AiSettings, ManagedActions, ManagedDetails } from "../src/ai-settings.js";
 import {
-  answersLeft, BACKGROUND_NOTE_TEXT, HIDDEN_NOTE_TEXT, managedNotice, managedProblem, model, modelProblem, offlineLine, PAUSED_TEXT, planName, resetDay, STEPS_PER_ANSWER, usageLine,
+  answersLeft, BACKGROUND_NOTE_TEXT, HIDDEN_NOTE_TEXT, managedNotice, managedProblem, model, modelProblem, offlineLine, PAUSED_TEXT, planName, resetDay, routeBadge, routeStatusLine,
+  STEPS_PER_ANSWER, usageLine,
   type ManagedAccount, type ModelStatus,
 } from "../src/model.js";
 import { REFUSALS } from "../../../core/src/ask.js";
@@ -146,6 +147,38 @@ describe("Ozzie managed: the Settings row", () => {
     expect(modelProblem("hidden-character")).toBe(HIDDEN_NOTE_TEXT);
     expect(HIDDEN_NOTE_TEXT).toBe("This note has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Your draft is unchanged.");
     expect(PAUSED_TEXT).toBe("Your church's AI help is paused until the allowance resets or your church changes plan. Checks, lists, Church rules and briefings keep working.");
+  });
+});
+
+describe("AI help at a glance (audit item 4)", () => {
+  it("marks a route In use only when AI help works through it now, and says what stands in the way otherwise", () => {
+    expect(routeBadge(status(), "managed")).toEqual({ text: "In use", tone: "ok" });
+    expect(routeBadge(status(), "own")).toBeNull();
+    // Chosen, but this Mac isn't connected to Ozzie managed (or a key isn't saved): never "In use".
+    const unconnected = status({ configured: false, managed: "not-connected", setup: "not-connected", account: null });
+    expect(routeBadge(unconnected, "managed")).toEqual({ text: "Chosen, not ready yet", tone: "look" });
+    expect(routeStatusLine(unconnected)).toBe("Chosen: Ozzie managed AI through ozzie.church, zero data retention. Not ready yet.");
+    expect(routeBadge(status({ route: "own", configured: false, setup: "no-key", managed: "not-connected", account: null }), "own")?.text).toBe("Chosen, not ready yet");
+    // Connected with no plan, or the allowance spent: AI help is off, and the row says so.
+    const none = status({ account: account({ plan: "none", allowance_steps: 0, used_steps: 0 }) });
+    expect(routeBadge(none, "managed")).toEqual({ text: "Off: no plan right now", tone: "muted" });
+    expect(routeStatusLine(none)).toBe("AI help is off: Ozzie managed has no plan right now. Drafts still work.");
+    const spent = status({ account: account({ used_steps: 300, warning: "paused" }) });
+    expect(routeBadge(spent, "managed")).toEqual({ text: "Paused this month", tone: "muted" });
+    expect(routeStatusLine(spent)).toBe("AI help is paused until this month's allowance resets. Drafts still work.");
+    expect(routeStatusLine(status())).toBe("Using: Ozzie managed AI through ozzie.church, zero data retention");
+    expect(routeStatusLine(null)).toBe("Not set up. Drafts still work; only rewording and questions are off.");
+    expect(routeStatusLine(status({ route: "none", configured: false }))).toBe("Not set up. Drafts still work; only rewording and questions are off.");
+    // Before the status is known (it loads after the first render), nothing is marked In use.
+    expect(text(renderToStaticMarkup(React.createElement(AiSettings, { onChange() {} })))).not.toContain("In use");
+  });
+
+  it("never says “No plan plan.”: with no plan the usage line alone says so", () => {
+    const none = status({ account: account({ plan: "none", allowance_steps: 0, used_steps: 0, warning: "paused" }) });
+    const said = details(none);
+    expect(said).not.toContain("No plan plan");
+    expect(said.startsWith("No plan right now, so AI help through ozzie.church is off.")).toBe(true);
+    expect(details(status())).toBe("Small church plan. About 60 AI answers left this month. It resets on December 1.");
   });
 });
 

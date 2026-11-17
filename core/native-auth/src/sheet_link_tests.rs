@@ -913,3 +913,86 @@ fn a_web_page_is_told_at_its_edges() {
         );
     }
 }
+
+/// Audit item 33: every character church-added text treats as hidden is skipped before deciding whether a body starts
+/// like a web page, not only the byte-order mark, the zero-width space, the joiners and the word joiner. A sheet that
+/// starts with one of them and then its header is still a sheet.
+#[test]
+fn every_hidden_character_before_a_web_page_is_skipped() {
+    let read = |body: &[u8]| {
+        sheet(Fetched {
+            content_type: None,
+            body: body.to_vec(),
+        })
+    };
+    // The soft hyphen, the Mongolian vowel separator, an invisible operator, the two direction marks, and a run of them
+    // mixed with white space and tag characters.
+    let mixed = "\u{ad}\u{200e} \u{180e}\u{2061}\u{200f}\u{202e}\u{2066}\u{fff9}\u{e0001}\u{e0041}\u{61c}\u{a0}";
+    for skip in [
+        "\u{ad}",
+        "\u{180e}",
+        "\u{2061}",
+        "\u{200e}",
+        "\u{200f}",
+        "\u{2064}",
+        "\u{206f}",
+        "\u{fffb}",
+        "\u{e007f}",
+        mixed,
+    ] {
+        for page in ["<html><body>Sign in</body></html>", "<!doctype html><p>x"] {
+            let text = format!("{skip}{page}");
+            for body in [
+                text.as_bytes().to_vec(),
+                utf16(&text, false),
+                utf16(&text, true),
+            ] {
+                assert_eq!(
+                    read(&body),
+                    Err(LinkError::WebPage),
+                    "{}",
+                    text.escape_unicode()
+                );
+            }
+        }
+        let sheet_text = format!("{skip}Team,Name\nGreeter,Avery Brightwater\n");
+        assert_eq!(
+            read(sheet_text.as_bytes()),
+            Ok(sheet_text.as_bytes().to_vec()),
+            "{}",
+            sheet_text.escape_unicode()
+        );
+    }
+    // A lone soft-hyphen byte (windows-1252 or Latin-1, not UTF-8) before a page is read one byte a character and skipped.
+    assert_eq!(
+        read(&[b"\xad\xad".as_slice(), b"<html>"].concat()),
+        Err(LinkError::WebPage)
+    );
+}
+
+/// The hidden characters are core/src/sources/text.ts `hidden`'s, exactly: that file's rule is written out as ranges to
+/// core/test/fixtures/sources/hidden.json (core/test/sources/hidden.test.ts), and every character is checked against
+/// them here, so a change to either copy shows up as a failure on one side.
+#[test]
+fn the_hidden_characters_are_the_pages_own() {
+    let ranges: Vec<(u32, u32)> =
+        serde_json::from_str(include_str!("../../test/fixtures/sources/hidden.json")).unwrap();
+    assert!(ranges.len() >= 10);
+    let listed = |c: char| {
+        ranges
+            .iter()
+            .any(|&(from, to)| (from..=to).contains(&u32::from(c)))
+    };
+    let differ: Vec<String> = (0..=u32::from(char::MAX))
+        .filter_map(char::from_u32)
+        .filter(|&c| hidden(c) != listed(c))
+        .map(|c| c.escape_unicode().to_string())
+        .collect();
+    assert!(differ.is_empty(), "{differ:?}");
+    for c in [
+        '\u{feff}', '\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{ad}', '\u{200e}',
+    ] {
+        assert!(before_text(c), "{}", c.escape_unicode());
+    }
+    assert!(before_text(' ') && before_text('\u{a0}') && !before_text('<') && !before_text('N'));
+}

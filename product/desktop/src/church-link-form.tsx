@@ -10,6 +10,8 @@ import { Icon } from "./icons.js";
 
 export const LINK_TITLE = "Add a list from a private link";
 export const LINK_HELP = "In Google Sheets choose File › Share › Publish to web, pick the sheet and Comma-separated values, choose Publish, and copy the link. Anyone with that link can read the sheet, so Ozzie keeps it in this Mac's Keychain and shows only where it points.";
+/** Beside the link form, before anything is pasted (audit item 26): who can read a published sheet, and the safer way for names. */
+export const LINK_WHO_READS = "A published sheet can be read by anyone who has the link. For a list with people's names, use a file on this Mac instead.";
 export const LINK_NAME = "Name this list";
 export const LINK_ADDRESS = "The sheet's published link";
 export const LINK_ADDRESS_HELP = "Ozzie reads it once now to see that it gives back a sheet, then keeps it in this Mac's Keychain. Each time Ozzie reads the list, it asks that address for the sheet and sends nothing about your church. The site in the link, and any site it sends Ozzie on to, sees when it is read, this Mac's internet address and that the request comes from Ozzie.";
@@ -35,6 +37,7 @@ export function LinkForm({ sources, onDone }: { sources: ChurchSources; onDone: 
   };
   return <form className="find church-link-form" aria-labelledby={`${id}-t`} onSubmit={e => { e.preventDefault(); void add(); }}>
     <h2 id={`${id}-t`} className="settings-t">{LINK_TITLE}</h2>
+    <p className="panel-info link-who"><Icon name="info" small /><span>{LINK_WHO_READS}</span></p>
     <p className="find-body">{LINK_HELP}</p>
     <div className="own-field">
       <label className="field-l" htmlFor={`${id}-name`}>{LINK_NAME}</label>

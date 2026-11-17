@@ -2536,24 +2536,6 @@ fn names_pruned_from_the_capture_are_still_refused_by_the_model_guard() {
         );
     }
     assert_eq!(check_draft(&note("the team"), &guard), Ok(()));
-    // The Ask route checks the same session guard (whole words).
-    let question = |text: &str| crate::model::AskRequest {
-        system: crate::model::ASK_SYSTEM.into(),
-        user: format!(
-            "S | X | 2026-11-20 10:00 | 26 | 0\nD | 2026-11-22{}{text}",
-            crate::model::QUESTION_PREFIX
-        ),
-        max_tokens: 600,
-    };
-    let ask = |text: &str, names: &NameGuard| crate::model::check_ask(&question(text), names);
-    assert_eq!(ask("Can Casey cover the greeters?", &shown), Ok(()));
-    for text in [
-        "Can Casey cover the greeters?",
-        "Is Pruned60 Fictional free?",
-    ] {
-        assert_eq!(ask(text, &guard), Err(ModelError::NamePresent), "{text}");
-    }
-    assert_eq!(ask("Who is still needed?", &guard), Ok(()));
     let read: BTreeSet<&str> = read.iter().map(String::as_str).collect();
     assert!(read.contains("Casey Fictional") && read.contains("Pruned60 Fictional"));
     // Operations reads add no names, to the capture or to the guard.
@@ -2935,3 +2917,241 @@ fn recordings_keep_background_reads_only_for_people_on_the_kids_teams_the_check_
 
 #[path = "sunday_church_tests.rs"]
 mod church;
+
+// ---- One turn on the connection: the check, the picker and a note's To line (review Y, M1) --------
+
+/// A note's contact read that takes `0` ms at Planning Center, then fails; counts its calls.
+struct SlowNote(u64, AtomicUsize);
+impl SourceHttp for SlowNote {
+    fn read(&self, _: &SourceRequest, _: &str) -> Result<SourcePage, SourceError> {
+        self.1.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(self.0));
+        Err(SourceError::ProviderFailure)
+    }
+}
+/// "Open in Mail" for person 50 of a check, as the draft command makes it.
+fn open_note(
+    auth: &Arc<AuthController>,
+    people: &crate::contact::CheckedPeople,
+    turns: &Turns,
+    note: &Arc<SlowNote>,
+) -> Result<crate::contact::Recipient, crate::contact::NoRecipient> {
+    let auth = auth.clone();
+    let note = note.clone();
+    crate::contact::read_recipient_with(
+        people,
+        turns,
+        "50",
+        crate::contact::ContactKind::Email,
+        move || Some(auth),
+        Box::new(move || Ok(note as Arc<dyn SourceHttp + Send + Sync>)),
+        Duration::from_secs(5),
+    )
+}
+/// Every read of a check as it was recorded, its check time aside.
+fn as_recorded(capture: &SundayCapture) -> Vec<String> {
+    capture
+        .reads
+        .iter()
+        .map(|r| {
+            format!(
+                "{} {} {:?} {:?} {} {}",
+                r.collection,
+                r.outcome,
+                r.team_id,
+                r.person_id,
+                r.offset,
+                r.body.as_ref().map(Value::to_string).unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_turn_lets_one_reader_in_at_a_time_and_a_note_never_waits() {
+    let turns = Turns::default();
+    // Nobody reading: every reader's turn at once.
+    for reader in [Reader::Check, Reader::Picker, Reader::Note] {
+        let started = Instant::now();
+        let turn = turns.take(reader, Duration::from_secs(30)).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(20), "{reader:?}");
+        drop(turn);
+    }
+    // A note holds it: a second note is refused at once; a check and a picker wait for it, then run.
+    let note = turns.take_now(Reader::Note).unwrap();
+    assert_eq!(turns.take_now(Reader::Note).err(), Some(Reader::Note));
+    let started = Instant::now();
+    assert_eq!(
+        turns.take(Reader::Note, Duration::from_secs(5)).err(),
+        Some(SourceError::Busy)
+    );
+    assert!(started.elapsed() < Duration::from_millis(50));
+    std::thread::scope(|scope| {
+        let check = scope.spawn(|| turns.take(Reader::Check, Duration::from_secs(5)));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!check.is_finished(), "the check waits for the note");
+        drop(note);
+        let running = check.join().unwrap().expect("the check runs, not busy");
+        // While the check reads, a note is refused at once and hears that a check holds it.
+        let started = Instant::now();
+        assert_eq!(turns.take_now(Reader::Note).err(), Some(Reader::Check));
+        assert!(started.elapsed() < Duration::from_millis(50));
+        drop(running);
+    });
+    let note = turns.take_now(Reader::Note).unwrap();
+    std::thread::scope(|scope| {
+        let picker = scope.spawn(|| turns.take(Reader::Picker, Duration::from_secs(5)));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!picker.is_finished(), "the picker waits for the note");
+        drop(note);
+        let listing = picker.join().unwrap().expect("the picker reads");
+        assert_eq!(turns.take_now(Reader::Note).err(), Some(Reader::Picker));
+        drop(listing);
+    });
+    assert!(turns.take_now(Reader::Note).is_ok());
+}
+
+/// Review Y, D1, ported: a check that starts while a note is being addressed waits for it (as the
+/// app takes the turn), then completes with every read exactly as it is without the note.
+#[test]
+fn a_check_started_during_an_open_waits_for_it_then_runs_normally() {
+    let auth = granted();
+    let alone = run_with(&auth, &sunday(), &FakeClock::new()).unwrap();
+    let people = crate::contact::CheckedPeople::default();
+    people.remember(&alone);
+    assert!(people.holds("1001", "50"));
+    let turns = Turns::default();
+    let note = Arc::new(SlowNote(800, AtomicUsize::new(0)));
+    std::thread::scope(|scope| {
+        let open = scope.spawn(|| open_note(&auth, &people, &turns, &note));
+        std::thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        let turn = turns
+            .take(Reader::Check, Duration::from_secs(30))
+            .expect("the check waits for the note, then runs");
+        assert!(
+            started.elapsed() >= Duration::from_millis(400),
+            "{:?}",
+            started.elapsed()
+        );
+        let during = run_with(&auth, &sunday(), &FakeClock::new());
+        drop(turn);
+        let during = during.expect("the check completes, not busy");
+        assert_eq!(as_recorded(&during), as_recorded(&alone));
+        assert!(during.reads.iter().all(|r| r.outcome != "busy"));
+        assert_eq!(
+            open.join().unwrap().err(),
+            Some(crate::contact::NoRecipient::CouldNotRead)
+        );
+        assert_eq!(note.1.load(Ordering::SeqCst), 1);
+    });
+}
+
+/// Opens a note the first time the check is told to wait (a 429), while the check pauses.
+struct Interleave {
+    inner: Script,
+    auth: Arc<AuthController>,
+    people: crate::contact::CheckedPeople,
+    turns: Turns,
+    note: Arc<SlowNote>,
+    opened: Mutex<
+        Option<
+            std::thread::JoinHandle<Result<crate::contact::Recipient, crate::contact::NoRecipient>>,
+        >,
+    >,
+}
+impl SourceHttp for Interleave {
+    fn read(&self, request: &SourceRequest, access: &str) -> Result<SourcePage, SourceError> {
+        let result = self.inner.read(request, access);
+        let mut opened = self.opened.lock().unwrap();
+        if matches!(result, Err(SourceError::RateLimited(_))) && opened.is_none() {
+            let (auth, people, turns, note) = (
+                self.auth.clone(),
+                self.people.clone(),
+                self.turns.clone(),
+                self.note.clone(),
+            );
+            *opened = Some(std::thread::spawn(move || {
+                open_note(&auth, &people, &turns, &note)
+            }));
+        }
+        result
+    }
+}
+
+/// Review Y, D2, ported: a note opened while a check runs reads nothing (`busy-with-a-check`), and
+/// every read of the check is recorded exactly as without it; the check's timing is the same too.
+#[test]
+fn an_open_during_a_check_reads_nothing_and_leaves_the_check_as_it_was() {
+    let auth = granted();
+    let script = || {
+        sunday().queue(
+            format!("{PLAN}/plan_times?per_page=100&offset=0"),
+            vec![Err(SourceError::RateLimited(Some(1)))],
+        )
+    };
+    let alone_clock = FakeClock::new();
+    let alone = run_with(&auth, &script(), &alone_clock).unwrap();
+    let people = crate::contact::CheckedPeople::default();
+    people.remember(&alone);
+    let turns = Turns::default();
+    let note = Arc::new(SlowNote(1500, AtomicUsize::new(0)));
+    let http = Interleave {
+        inner: script(),
+        auth: auth.clone(),
+        people,
+        turns: turns.clone(),
+        note: note.clone(),
+        opened: Mutex::new(None),
+    };
+    // The check holds its turn as the app does (main.rs `check_sunday`); nobody else held it.
+    let started = Instant::now();
+    let turn = turns.take(Reader::Check, Duration::from_secs(30)).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(20));
+    let clock = FakeClock::new();
+    let during = run_with(&auth, &http, &clock).unwrap();
+    drop(turn);
+    let opened = http
+        .opened
+        .lock()
+        .unwrap()
+        .take()
+        .expect("a note was opened during the check")
+        .join()
+        .unwrap();
+    assert_eq!(
+        opened.err(),
+        Some(crate::contact::NoRecipient::BusyWithACheck)
+    );
+    assert_eq!(note.1.load(Ordering::SeqCst), 0, "the note read nothing");
+    assert_eq!(as_recorded(&during), as_recorded(&alone));
+    assert_eq!(
+        during.reads.iter().filter(|r| r.outcome == "busy").count(),
+        0
+    );
+    assert_eq!(clock.sleeps(), alone_clock.sleeps());
+    assert_eq!(clock.sleeps(), [1000]);
+}
+
+/// Review G, L-e, against a real check: the fixture's team 70 lists Casey (52) only as its leader.
+/// The check keeps no name for Casey, yet the Sunday page offers a note to the team's leader, so
+/// Casey is someone this check showed and can be addressed; Blair (51), assigned but not on the
+/// plan, and Avery (50), on the plan, are too.
+#[test]
+fn a_leader_the_check_shows_only_as_leader_is_one_it_showed() {
+    let auth = granted();
+    let capture = run_with(&auth, &sunday(), &FakeClock::new()).unwrap();
+    assert!(!capture.names.contains_key("52"));
+    assert!(
+        capture
+            .reads
+            .iter()
+            .any(|r| r.collection == "team_leaders" && r.outcome == "ok")
+    );
+    let people = crate::contact::CheckedPeople::default();
+    people.remember(&capture);
+    for person in ["50", "51", "52"] {
+        assert!(people.holds("1001", person), "{person}");
+    }
+    assert!(!people.holds("1001", "53"));
+}

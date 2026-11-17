@@ -1,8 +1,9 @@
 // Running what Ozzie keeps an eye on, with a fake native store, a fake clock and the fictional Sunday.
 // Nothing native runs; no model and no Planning Center.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
-import { defaultPlan, MIN_GAP_MS, RETRY_MS, RUN_TIMEOUT_MS, TEMPLATES, type Plan, type Responsibility, type RunRow } from "../../../core/src/harness/responsibilities.js";
+import { defaultPlan, MIN_GAP_MS, RETRY_MS, RUN_TIMEOUT_MS, TEMPLATES, type Plan, type Responsibility, type RunRow, untilLifetime } from "../../../core/src/harness/responsibilities.js";
 import { DEFAULT_QUIET_HOURS } from "../../../core/src/schedule.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { FICTIONAL_ROOM, withFictionalOperations } from "../../../core/src/fictional-operations.js";
@@ -10,10 +11,10 @@ import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayChange } from "../../../core/src/sunday-changes.js";
 import type { FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import {
-  createRunner, handChanges, nativeResponsibilities, refusalOf, responsibilityStep, type Prepared, type ResponsibilityNative, type RunnerContext,
+  allowanceSpent, createRunner, handChanges, nativeResponsibilities, refusalOf, responsibilityStep, WRITEUPS_KEPT_PER_JOB, type Prepared, type ResponsibilityNative, type RunnerContext,
 } from "../src/responsibility-runner.js";
 import { keptLines, noticedBadge, noticedChanges, noticedTitle } from "../src/responsibility-words.js";
-import { StepFailure } from "../src/harness-bridge.js";
+import { StepFailure, StepNotes } from "../src/harness-bridge.js";
 import { createProactive } from "../src/proactive.js";
 import { sundayProblem } from "../src/sunday-source.js";
 import { fakeNative as fakeInvoke } from "./harness-fakes.js";
@@ -137,6 +138,8 @@ function setup(over: Partial<RunnerContext> = {}) {
   const lines: string[] = [];
   const runner = createRunner({ native: fake.native, store, now: clock, notify, nextDue, log: l => lines.push(l) });
   runner.start({ context: () => context, check, prepare });
+  // App names the church in use as soon as it knows it; until then no write-up is shown (review H, L9).
+  runner.keepWriteupsFor(nov22Capture().organization);
   return {
     runner, fake, notify, nextDue, check, prepare, context, store, lines,
     now: () => now,
@@ -147,7 +150,17 @@ function setup(over: Partial<RunnerContext> = {}) {
     start: async (plan: Plan) => { const r = await runner.create(plan); await runner.tick(); return r; },
   };
 }
-const sunday = () => defaultPlan("keep-sunday-covered", FRI, ET);
+/** A write-up as App's prepare hook returns it: Ozzie's sentences with people as id tokens (core session.ts keep). */
+const WRITTEN: Prepared = {
+  status: "verified", code: null, ai_steps: 2,
+  writeup: {
+    lines: ["For Sunday 2026-11-22, this check found 2 items that need a decision and 2 worth a look.", "{{person:501}} has no overlap found for Greeter."],
+    based_on: "Based on: Planning Center Services, checked Fri, Nov 20, 10:00 AM", gaps: [],
+    steps: ["Looked at this Sunday's overview — complete", "Checked the facts it chose against what was read"],
+  },
+};
+/** Keep Sunday covered with "Only until this Sunday" chosen (its default is every week until stopped: audit item 23). */
+const sunday = () => ({ ...defaultPlan("keep-sunday-covered", FRI, ET), lifetime: untilLifetime("2026-11-22", ET)! });
 const at = (iso: string, minutes: number) => new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 
 describe("a check of a church Ozzie no longer uses (review S2, L1)", () => {
@@ -180,7 +193,9 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     // Which run and which check it came from (ids and a time only), so Today can tell it is about the Sunday on screen.
     expect(item.run_id).toBe(h.runner.view().items[0]!.runs[0]!.run_id);
     expect(item.check).toEqual({ plan_id: nov22Capture().plan_id, completed_at: FRI });
-    expect(item.drafted).toBe(false);
+    // A write-up is kept apart from the item (writeups), so the item never says whether one was written.
+    expect(item).not.toHaveProperty("drafted");
+    expect(item).not.toHaveProperty("summarized");
     expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 2 things need a decision.");
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.check).toHaveBeenCalledTimes(1);
@@ -358,16 +373,187 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(h.fake.calls.filter(c => c.startsWith("begin"))).toEqual(["begin start", "begin change"]);
   });
 
-  it("with an AI model, keeps the prepared summary in memory only; storage stays name-free", async () => {
+  it("with an AI model, keeps the write-up with its run on this Mac, name-free, and shows it again after a restart", async () => {
     const h = setup({ modelReady: true });
-    h.prepare.mockResolvedValue({ status: "verified", code: null, summary: "Avery Brightwater declined Greeter.", draft: "Hi Avery, could you help?", ai_steps: 2 });
+    h.prepare.mockResolvedValue(WRITTEN);
     await h.start(sunday());
     const item = h.runner.view().noticed[0]!;
-    expect(item).toMatchObject({ summarized: true, drafted: true, drafts: 2 });
-    expect(h.runner.view().prepared[item.id]).toEqual({ summary: "Avery Brightwater declined Greeter.", draft: "Hi Avery, could you help?" });
+    const run = h.runner.view().items[0]!.runs[0]!;
+    expect(h.runner.view().writeups[item.id]).toEqual({
+      item: item.id, responsibility_id: item.responsibility_id, run_id: run.run_id, organization: nov22Capture().organization, at: item.at, kind: "written", ...WRITTEN.writeup, ai_steps: 2,
+    });
     expect(h.prepare).toHaveBeenCalledTimes(1);
     const stored = h.store.dump();
     for (const name of Object.values(names)) for (const part of name.split(" ")) expect(stored).not.toContain(part);
+    expect(stored).toContain("{{person:501}}");
+    // Quit and open again: the write-up is still with its run.
+    const again = createRunner({ native: h.fake.native, store: h.store, now: h.now, notify: h.notify });
+    // Nothing shows until the church in use is known (review H, L9); then its write-ups do.
+    expect(again.view().writeups).toEqual({});
+    again.keepWriteupsFor(nov22Capture().organization);
+    expect(again.view().writeups[item.id]?.lines).toEqual(WRITTEN.writeup!.lines);
+    // Deleting saved checks or disconnecting Planning Center forgets them all (review H, M4).
+    again.forgetAllWriteups();
+    expect(again.view().writeups).toEqual({});
+    expect(h.store.get("ozzie.responsibilities.writeups.v1")).toBe(JSON.stringify({ version: 1, items: [] }));
+  });
+
+  it("says why there is no write-up when AI help is set up, never a blank; with no AI route, keeps nothing (review H, L15)", async () => {
+    const off = setup();
+    await off.start(sunday());
+    expect(Object.values(off.runner.view().writeups)).toEqual([]);
+    expect(off.prepare).not.toHaveBeenCalled();
+    const spent = setup({ modelReady: true });
+    spent.fake.native.begin = (b => async (rid, trigger) => ({ ...await b(rid, trigger), ai_steps: 0 }))(spent.fake.native.begin);
+    await spent.start(sunday());
+    expect(Object.values(spent.runner.view().writeups)).toEqual([expect.objectContaining({ kind: "none", why: "spent" })]);
+    expect(spent.prepare).not.toHaveBeenCalled();
+    // A "limit" is the allowance only when native said so; otherwise it is the run's own (review G).
+    for (const [code, why, allowance] of [["fidelity", "unverified", false], ["limit", "run-limit", false], ["limit", "spent", true], ["transport", "unavailable", false],
+      ["egress", "unavailable", false]] as const) {
+      const h = setup({ modelReady: true });
+      h.prepare.mockResolvedValue({ status: "failed", code, writeup: null, ai_steps: 1, ...(allowance ? { allowance } : {}) });
+      await h.start(sunday());
+      expect(Object.values(h.runner.view().writeups), code).toEqual([expect.objectContaining({ kind: "none", why })]);
+      expect(Object.values(h.runner.view().writeups)[0]!.lines).toBeUndefined();
+    }
+    // A write-up that came back without passing its checks is never kept as written (review H, M18).
+    const unchecked = setup({ modelReady: true });
+    unchecked.prepare.mockResolvedValue({ ...WRITTEN, status: "failed", code: "fidelity" });
+    await unchecked.start(sunday());
+    expect(Object.values(unchecked.runner.view().writeups)).toEqual([expect.objectContaining({ kind: "none", why: "unverified" })]);
+    const thrown = setup({ modelReady: true });
+    thrown.prepare.mockRejectedValue(new Error("boom"));
+    await thrown.start(sunday());
+    expect(Object.values(thrown.runner.view().writeups)).toEqual([expect.objectContaining({ kind: "none", why: "unavailable" })]);
+  });
+
+  it("decides nothing: the run's findings, notices and stored run rows are byte-identical with and without a write-up", async () => {
+    // The same day three ways: no AI, a write-up, and a write-up that didn't check out.
+    const day = async (h: ReturnType<typeof setup>) => {
+      await h.start(sunday());
+      h.set("2026-11-20T17:00:00.000Z");
+      h.changeTo(decline);
+      await h.runner.tick();
+      h.set("2026-11-21T04:00:00.000Z");
+      await h.runner.tick();
+      h.set("2026-11-21T12:01:00.000Z");
+      await h.runner.tick();
+      const view = h.runner.view();
+      return JSON.stringify({
+        calls: h.fake.calls, notified: h.notify.mock.calls, noticed: view.noticed, runs: view.items.map(r => r.runs),
+        stored: ["ozzie.responsibilities.state.v1", "ozzie.responsibilities.noticed.v1", "ozzie.responsibilities.held.v1"].map(k => h.store.get(k)),
+      });
+    };
+    const plain = setup();
+    const written = setup({ modelReady: true });
+    written.prepare.mockResolvedValue(WRITTEN);
+    const failed = setup({ modelReady: true });
+    failed.prepare.mockResolvedValue({ status: "failed", code: "fidelity", writeup: null, ai_steps: 2 });
+    const [a, b, c] = [await day(plain), await day(written), await day(failed)];
+    const runs = written.fake.calls.filter(x => x.startsWith("end ok")).length;
+    expect(runs).toBeGreaterThanOrEqual(3);
+    expect(written.prepare).toHaveBeenCalledTimes(runs);
+    expect(Object.values(written.runner.view().writeups).filter(w => w.kind === "written")).toHaveLength(runs);
+    expect(Object.values(failed.runner.view().writeups).every(w => w.kind === "none" && w.why === "unverified")).toBe(true);
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+  });
+
+  it("forgets a write-up still being prepared when every write-up is forgotten, Ozzie switches church, or its job is stopped (review G, N2)", async () => {
+    for (const how of ["forget", "switch", "stop", "neither"] as const) {
+      const h = setup({ modelReady: true });
+      let release: (p: Prepared) => void = () => {};
+      const r = await h.start(sunday());
+      h.prepare.mockImplementation(() => new Promise<Prepared>(resolve => { release = resolve; }));
+      h.set(at(FRI, 31));
+      const running = h.runner.runNow(r.id);
+      // The start run asked first; this run's write-up is the second.
+      await vi.waitFor(() => expect(h.prepare).toHaveBeenCalledTimes(2));
+      // Saved checks deleted or Planning Center disconnected (or the job stopped) while the AI is still writing.
+      if (how === "forget") h.runner.forgetAllWriteups();
+      if (how === "switch") h.runner.keepWriteupsFor("fictional-other-church");
+      // Stopping waits for the run it stops, so it is let go of here and awaited once the write-up has come back.
+      const stopping = how === "stop" ? h.runner.stop(r.id) : null;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      release(WRITTEN);
+      await running;
+      await stopping;
+      const kept = Object.values(h.runner.view().writeups);
+      expect(kept.filter(w => w.kind === "written"), how).toHaveLength(how === "neither" ? 1 : 0);
+      expect(h.store.get("ozzie.responsibilities.writeups.v1")!.includes("{{person:501}}"), how).toBe(how === "neither");
+    }
+    // One started after the forget is kept as usual.
+    const h = setup({ modelReady: true });
+    h.prepare.mockResolvedValue(WRITTEN);
+    const r = await h.start(sunday());
+    h.runner.forgetAllWriteups();
+    h.set(at(FRI, 31));
+    await h.runner.runNow(r.id);
+    expect(Object.values(h.runner.view().writeups).filter(w => w.kind === "written")).toHaveLength(1);
+  });
+
+  it("notes the native code a job's AI step was refused with, so a spent allowance is told apart from the run's own limit (review G)", async () => {
+    const notes = new StepNotes();
+    const step = responsibilityStep("run-1", async () => { throw "daily-limit"; }, notes);
+    await expect(step({ task_id: "task-1" } as never, new AbortController().signal)).rejects.toMatchObject({ code: "limit" });
+    expect(notes.take("task-1")).toBe("daily-limit");
+    // App's prepare hook passes this on: the allowance codes, and only those.
+    expect(["budget", "daily-limit", "allowance-paused"].every(allowanceSpent)).toBe(true);
+    expect(["limit", "egress", "provider-failure", undefined].some(allowanceSpent)).toBe(false);
+    expect(readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8")).toMatch(/const native = stepNotes\.take\([^)]*\);[^]*?allowance: allowanceSpent\(native\)/u);
+  });
+
+  it("decides and sends the notice before the write-up is asked for, and a pause during the write-up leaves the check and its notice standing (review H, L14)", async () => {
+    const h = setup({ modelReady: true });
+    let release: (p: Prepared) => void = () => {};
+    // App's hook is called with the run's signal (fourth): a pause aborts the pending write-up.
+    h.prepare.mockImplementation(((...args: unknown[]) => new Promise<Prepared>((resolve, reject) => {
+      release = resolve; (args[3] as AbortSignal | undefined)?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    })) as () => Promise<Prepared>);
+    // The first run (start) is told in Ozzie; let its write-up finish.
+    const first = h.runner.create(sunday());
+    await vi.waitFor(() => expect(h.prepare).toHaveBeenCalledTimes(1));
+    release(WRITTEN);
+    await first; await h.runner.tick();
+    // A scheduled run with something new to decide: the notice goes out while the model step is still waiting.
+    h.set("2026-11-20T17:00:00.000Z");
+    h.changeTo(decline);
+    const run = h.runner.tick();
+    await vi.waitFor(() => expect(h.prepare).toHaveBeenCalledTimes(2));
+    // The start run is told in Ozzie, so this is the scheduled run's notice, sent before its write-up came back.
+    expect(h.notify.mock.calls).toEqual([["needs-decision"]]);
+    // Paused while the write-up is pending: the write-up stops; the run ends ok with its counts, and the notice stands.
+    const r = h.runner.view().items[0]!;
+    await h.runner.pause(r.id);
+    await run;
+    expect(h.fake.calls.filter(c => c.startsWith("end"))).toEqual(["end ok - 4 1", "end ok - 3 1"]);
+    expect(h.runner.view().noticed.find(i => i.trigger === "scheduled")).toMatchObject({ notice: "sent" });
+    expect(Object.values(h.runner.view().writeups)).toHaveLength(1);
+  });
+
+  it("keeps the last few write-ups of each job, and forgets a job's when it is stopped or the church changes", async () => {
+    const h = setup({ modelReady: true });
+    h.prepare.mockResolvedValue(WRITTEN);
+    const r = await h.start(sunday());
+    for (let i = 1; i <= 7; i++) { h.set(at(FRI, 31 * i)); await h.runner.runNow(r.id); }
+    const kept = Object.values(h.runner.view().writeups);
+    expect(kept).toHaveLength(WRITEUPS_KEPT_PER_JOB);
+    // The newest are kept.
+    expect(kept.map(w => w.at).sort().at(-1)).toBe(at(FRI, 31 * 7));
+    // Once Ozzie says which church it uses, only that church's write-ups are shown, even one written later by a check of
+    // another church that was still running, so an id is never filled in with another church's names.
+    h.runner.keepWriteupsFor("fictional-other-church");
+    expect(h.runner.view().writeups).toEqual({});
+    expect(h.store.get("ozzie.responsibilities.writeups.v1")).not.toContain(nov22Capture().organization);
+    h.set(at(FRI, 31 * 8));
+    await h.runner.runNow(r.id);
+    expect(Object.keys(h.runner.view().writeups)).toHaveLength(0);
+    h.runner.keepWriteupsFor(nov22Capture().organization);
+    expect(Object.keys(h.runner.view().writeups)).toHaveLength(1);
+    await h.runner.stop(r.id);
+    expect(h.runner.view().writeups).toEqual({});
+    expect(h.store.get("ozzie.responsibilities.writeups.v1")).not.toContain(r.id);
   });
 
   it("says once when a dated responsibility ends as planned", async () => {

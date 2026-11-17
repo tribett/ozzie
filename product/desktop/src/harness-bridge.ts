@@ -17,19 +17,20 @@ import { REFUSALS } from "../../../core/src/ask.js";
 import {
   asksAboutChecksOrKids, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_TO_DECIDE, openDecisions, type KidsQuestion, type LocalAnswer,
 } from "../../../core/src/harness/compose.js";
+import { answerText, parseAnswer } from "../../../core/src/harness/fixed.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { ASK_SKILL, composeAnswer, Harness, type HarnessData } from "../../../core/src/harness/index.js";
 import { PiLoop } from "../../../core/src/harness/pi-loop.js";
 import type { HarnessSession } from "../../../core/src/harness/session.js";
 import { TsLoop } from "../../../core/src/harness/ts-loop.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
-import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { operationsGranted, type ConnectionStatus } from "./connection.js";
 import {
-  askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, ledgerDetail, localSteps, modelSteps, outcomeSteps, type CheckTrigger,
-  type TaskRow,
+  askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
+  type CheckTrigger, type TaskEnd, type TaskRow, type TaskStart,
 } from "./harness-words.js";
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -391,20 +392,30 @@ export class LedgerRecorder {
   track(recording: Recording): void { if (recording.id) this.#active.set(recording.id, recording); }
   untrack(recording: Recording): void { if (recording.id && this.#active.get(recording.id) === recording) this.#active.delete(recording.id); }
 
-  /** An observer for one harness task: pass `onEvent` to harness.ask / runSkill. */
-  task(kind: "ask" | "skill" | "check", skillId: string): { onEvent: (event: TaskEvent) => void; done: () => Promise<void> } {
+  /**
+   * An observer for one harness task: pass `onEvent` to harness.ask / runSkill. `start`: how it started (a job's run, or
+   * who could help from a Sunday card), kept on this Mac beside the ledger for What happened.
+   */
+  task(kind: "ask" | "skill" | "check", skillId: string, start?: TaskStart): { onEvent: (event: TaskEvent) => void; done: () => Promise<void> } {
     const recording = new Recording(kind, skillId, this.#hashFor(skillId).catch(() => undefined), this);
     // Counted from the first event: a refused question never starts a task and is never waited for.
     let settled: (() => void) | null = null;
     let finished: Promise<void> | null = null;
     const onEvent = (event: TaskEvent) => {
-      if (!finished) { finished = new Promise<void>(resolve => { settled = resolve; }); this.#pending.add(finished); }
+      if (!finished) {
+        finished = new Promise<void>(resolve => { settled = resolve; }); this.#pending.add(finished);
+        if (start) this.started(event.task_id, start);
+      }
       recording.onEvent(event);
       const mine = finished;
       if (TERMINAL.has(event.type)) void recording.done().then(() => { this.#pending.delete(mine); settled?.(); });
     };
     return { onEvent, done: () => recording.done() };
   }
+  /** How a task started, kept on this Mac by its id (closed words; never fails the task). */
+  started(taskId: string, start: TaskStart): void { try { this.#triggers?.set(taskId, start); } catch { /* per-device convenience only */ } }
+  /** Which closed form a verified answer took, kept the same way. */
+  ended(taskId: string, end: TaskEnd): void { try { if ((TASK_ENDS as readonly string[]).includes(end)) this.#triggers?.setEnd(taskId, end); } catch { /* per-device convenience only */ } }
 
   /**
    * The ModelStep, after this task is admitted and running in the ledger (native agent_step requires it),
@@ -435,7 +446,7 @@ export class LedgerRecorder {
     const observer = this.task("check", "sunday-ready");
     let sequence = 0;
     const emit = (type: TaskEvent["type"], detail = "") => observer.onEvent({ task_id: id, sequence: ++sequence, at: new Date().toISOString(), type, detail });
-    try { this.#triggers?.set(id, trigger); } catch { /* per-device convenience only */ }
+    this.started(id, trigger);
     emit("admitted");
     emit("running");
     try {
@@ -460,7 +471,7 @@ export class LedgerRecorder {
     const observer = this.task("ask", ASK_SKILL);
     let sequence = 0;
     const emit = (type: TaskEvent["type"], detail = "") => observer.onEvent({ task_id: id, sequence: ++sequence, at: new Date().toISOString(), type, detail });
-    try { this.#triggers?.set(id, "on-this-mac"); } catch { /* per-device convenience only */ }
+    this.started(id, "on-this-mac");
     emit("admitted");
     emit("running");
     for (const e of evidence) emit("tool", `${e.tool}:${e.completeness}`);
@@ -488,20 +499,40 @@ export function checkFailure(error: unknown): FailureCode {
   return "provider-failure";
 }
 
-/** "automatic" or "manual" by check task id, kept on this Mac only (the ledger has no field for it). */
-export interface TriggerStore { get(id: string): CheckTrigger | undefined; set(id: string, trigger: CheckTrigger): void }
+/**
+ * How each task started ("automatic", "manual", a job's run …) and which closed form a verified answer took, by task id,
+ * kept on this Mac only (the ledger has no field for either). Closed words only: never a question, answer or name.
+ */
+export interface TriggerStore {
+  get(id: string): TaskStart | undefined;
+  set(id: string, trigger: TaskStart): void;
+  end(id: string): TaskEnd | undefined;
+  setEnd(id: string, end: TaskEnd): void;
+}
 const TRIGGERS_KEY = "ozzie.ledger.checks.v1";
 const TRIGGERS_KEPT = 200;
+type Kept = [string, TaskStart | null, TaskEnd?];
 export function localTriggers(store: { getItem(k: string): string | null; setItem(k: string, v: string): void } | null = typeof localStorage === "undefined" ? null : localStorage): TriggerStore {
-  const read = (): [string, CheckTrigger][] => {
+  const read = (): Kept[] => {
     try {
       const raw = JSON.parse(store?.getItem(TRIGGERS_KEY) ?? "[]") as unknown;
-      return Array.isArray(raw) ? raw.filter((e): e is [string, CheckTrigger] => Array.isArray(e) && typeof e[0] === "string" && (e[1] === "automatic" || e[1] === "manual" || e[1] === "on-this-mac")) : [];
+      return Array.isArray(raw) ? raw.filter((e): e is Kept => Array.isArray(e) && typeof e[0] === "string" && (e[1] === null || isTaskStart(e[1]))
+        && (e[2] === undefined || (TASK_ENDS as readonly unknown[]).includes(e[2]))) : [];
     } catch { return []; }
   };
+  const write = (id: string, change: (e: Kept) => Kept) => {
+    try {
+      const all = read();
+      const next = change(all.find(([k]) => k === id) ?? [id, null]);
+      store?.setItem(TRIGGERS_KEY, JSON.stringify([next, ...all.filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT)));
+    } catch { /* per-device convenience only */ }
+  };
   return {
-    get: id => read().find(([k]) => k === id)?.[1],
-    set: (id, trigger) => { try { store?.setItem(TRIGGERS_KEY, JSON.stringify([[id, trigger], ...read().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ } },
+    get: id => read().find(([k]) => k === id)?.[1] ?? undefined,
+    // Closed words only, on write as on read (review H, L10).
+    set: (id, trigger) => { if (isTaskStart(trigger)) write(id, e => e[2] ? [id, trigger, e[2]] : [id, trigger]); },
+    end: id => read().find(([k]) => k === id)?.[2],
+    setEnd: (id, end) => { if ((TASK_ENDS as readonly unknown[]).includes(end)) write(id, e => [id, e[1], end]); },
   };
 }
 
@@ -530,16 +561,20 @@ export interface ShownAnswer {
   gaps: string[];
   /** The procedure Ozzie followed, verbatim. */
   procedure: { title: string; body: string } | null;
-  /** The steps it took, in plain words. */
+  /** What it looked at, in plain words: one line per read, with how much of it could be read. */
   steps: string[];
   /** How many times the AI was asked. */
   aiSteps: number;
+  /** Which closed form the verified answer took (absent for one written on this Mac). */
+  end?: TaskEnd;
   /** Where to look next. */
   page: "sunday" | "today";
   /** Written on this Mac without the AI (kids teams and background checks): nothing was sent. */
   local?: boolean;
   /** Open decisions the AI's answer left out were added on this Mac, under "Also on the Sunday page". */
   added?: boolean;
+  /** Who could help, from a Sunday card: what the AI's look adds to the fixed list (the people are always the finding's own). */
+  look?: Look;
 }
 export type AskTurn =
   | { state: "refused"; text: string }
@@ -563,11 +598,111 @@ export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: S
     basedOn: basedOnEvidence(outcome.evidence, mode),
     gaps: evidenceGaps(outcome.evidence, mode),
     procedure: procedure ? { title: procedure.title, body: procedure.body } : null,
-    steps: outcomeSteps(outcome.events),
+    steps: outcomeSteps(outcome.events, outcome.evidence, mode),
     aiSteps: modelSteps(outcome.events),
+    end: composed.kind,
     page: outcome.evidence.some((e: ToolEnvelope) => e.tool === "today.attention") ? "today" : "sunday",
   };
 }
+
+/**
+ * A job's verified run as its write-up is kept on this Mac (responsibility-runner.ts WriteUp): Ozzie's own sentence for
+ * each fact the AI chose, in Ozzie's order, with each person kept as their id token rather than their name
+ * (Harness.keep), where the facts came from and when, what wasn't complete, and what it looked at.
+ */
+export function keptWriteup(harness: Harness, outcome: TaskOutcome): { lines: string[]; based_on: string; gaps: string[]; steps: string[] } {
+  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence);
+  const mode = harness.data.mode;
+  return {
+    lines: composed.paragraphs.map(p => harness.keep(p)), based_on: basedOnEvidence(outcome.evidence, mode),
+    gaps: evidenceGaps(outcome.evidence, mode), steps: outcomeSteps(outcome.events, outcome.evidence, mode),
+  };
+}
+
+// ---- "Ask Ozzie to look at who could help" (audit item 9) -----------------------------------------------------------
+
+/** The procedure a Sunday card's "Ask Ozzie to look at who could help" runs. */
+export const WHO_COULD_HELP = "who-could-help";
+/** The closed labels of the Sunday card's own list (sunday-page.tsx PeopleList), in its order, by the tools' status words. */
+export const PEOPLE_LABELS = Object.freeze({
+  "no overlap found": "No overlap found", "possible conflict": "Possible conflict", "availability needs confirmation": "Availability needs confirmation", "left out": "Left out",
+} as const);
+export type PeopleLabel = (typeof PEOPLE_LABELS)[keyof typeof PEOPLE_LABELS];
+/**
+ * What the AI's look at who could help adds to the fixed list (review G, M-1, N3, N4): Ozzie's lines for facts it chose
+ * about the role, nothing, that it couldn't tell, or that it asked for a note. `looked`: it asked for the list of people
+ * (the tool answered with them). `shortened`: how many people its copy of the list left out to fit what the AI may read.
+ * The people the card shows are never from here: they are the finding's own, as the fixed list shows them.
+ */
+export type LookKind = "lines" | "nothing" | "not-covered" | "draft";
+export interface Look { kind: LookKind; looked: boolean; shortened: number }
+/** Said under the people on the AI's card (review H, M3: never a pick, never a ranking). */
+export const LOOK_NOTE = "Everyone the check listed is shown, alphabetically. Being listed first or last says nothing about anyone, and whether someone is willing is theirs to say.";
+export const LOOK_NOTHING = "The AI looked at the same list and had nothing to add.";
+export const LOOK_NOT_LOOKED = "The AI didn't look at the list of people and had nothing to add.";
+export const LOOK_NOT_COVERED = "The AI couldn't tell more than the list above shows.";
+export const LOOK_DRAFT = "The AI asked for a note, which isn't prepared here. Use Prepare a note on a person's row above.";
+/** The AI's copy of a big team's list is cut to fit what it may read (core tools.ts fit); the card's list never is. */
+export const lookShortened = (n: number) => `The AI looked at a shortened list: it wasn't given ${n === 1 ? "1 of the people" : `${n} of the people`} Ozzie's check listed.`;
+
+/**
+ * What the procedure reads for one open role: the check as it is, with only the card's own finding in the brief (review
+ * H, M2: the same role at another service time is another card), so the procedure (which looks at "the roles that still
+ * need people") looks at that role at that time and no other. Deterministic code chooses what is read; the AI only
+ * chooses among it. Nothing else changes.
+ */
+export function oneRole(data: HarnessData, finding: Finding): HarnessData {
+  return { ...data, brief: data.brief ? { ...data.brief, findings: data.brief.findings.filter(f => f.id === finding.id) } : null };
+}
+
+/**
+ * The who-could-help procedure, run through the harness for one open role at one time (`make` builds the app's harness
+ * over the data it is given). The card never presents some people as the AI's pick (review H, M3): it lists everyone the
+ * check listed for that finding, as the fixed list shows them (alphabetical within the same closed labels), and marks
+ * no one; what the AI adds is Ozzie's own lines for the facts it chose about the role. An answer that isn't a list of
+ * facts says one plain line (L4). No draft is ever shown here: the procedure drafts only when asked, and nobody asks
+ * from this card, so a draft the AI asked for is dropped (the pinned procedure is unchanged). Failures are this card's
+ * own words (L11).
+ */
+export async function lookAtWhoCouldHelp(make: (data: HarnessData) => Harness, data: HarnessData, finding: Finding, options: {
+  signal?: AbortSignal; recorder?: LedgerRecorder | null; skills: ReadonlyMap<string, Skill>; sender?: string; notes?: StepNotes;
+}): Promise<AskTurn> {
+  const h = make(oneRole(data, finding));
+  const observer = options.recorder?.task("skill", WHO_COULD_HELP, "who-could-help");
+  const outcome = await h.runSkill(WHO_COULD_HELP, { ...(options.signal ? { signal: options.signal } : {}), ...(observer ? { onEvent: observer.onEvent } : {}) });
+  const task = outcome.events[0]?.task_id ?? "";
+  (options.notes ?? stepNotes).take(task);
+  if (outcome.status === "cancelled") return { state: "cancelled", text: LOOK_STOPPED };
+  const parsed = outcome.status === "verified" && outcome.answer ? parseAnswer(outcome.answer) : null;
+  if (!parsed) return outcome.code === "no-model" ? { state: "no-model" } : { state: "problem", code: outcome.code, text: LOOK_FAILED };
+  const shown = shownAnswer(h, outcome, options.skills.get(WHO_COULD_HELP), options.sender ?? "");
+  if (shown.end) options.recorder?.ended(task, shown.end);
+  // The tool's answers: whether the AI asked for the list of people, and the newest one that listed them (review G,
+  // M3g) for how much its copy was cut. The people the card shows come from the finding, never from these (M-1).
+  type Listed = { fact?: string }[];
+  const peopleIn = (e: ToolEnvelope) => (((e.payload as { people?: unknown } | null)?.people ?? []) as Listed);
+  const cutIn = (e: ToolEnvelope) => Number((e.payload as { left_out_for_length?: unknown } | null)?.left_out_for_length) || 0;
+  const results = outcome.evidence.filter(e => e.tool === "sunday.who_could_help");
+  const listed = [...results].reverse().find(e => peopleIn(e).length > 0);
+  const look: Look = { kind: "nothing", looked: Boolean(listed), shortened: listed ? cutIn(listed) : 0 };
+  // What the AI adds: Ozzie's lines for the facts it chose about the role, never about one person.
+  const personFacts = new Set(results.flatMap(e => peopleIn(e).flatMap(p => p.fact ? [p.fact] : [])));
+  const roleFacts = parsed.facts.filter(id => !personFacts.has(id));
+  const lines = parsed.answer === "facts" && roleFacts.length
+    ? composeAnswer(answerText({ ...parsed, facts: roleFacts }), outcome.evidence).paragraphs.map(p => h.restore(p)) : [];
+  look.kind = parsed.answer === "draft" ? "draft" : parsed.answer === "not-covered" ? "not-covered" : lines.length ? "lines" : "nothing";
+  // A list cut to fit isn't a read that couldn't be finished: the card says it was shortened instead (review G, M-1).
+  const cut = results.filter(e => cutIn(e) > 0 && e.completeness === "partial").length;
+  const whole = outcome.evidence.map(e => e.tool === "sunday.who_could_help" && cutIn(e) > 0 && e.completeness === "partial" ? { ...e, completeness: "complete" as const } : e);
+  const partialSteps = outcome.events.filter(e => e.type === "tool" && e.detail === "sunday.who_could_help:partial").length;
+  const steps = shown.steps
+    // A note the AI asked for is said once, in the card's own line (N4); the drafting step isn't repeated.
+    .filter(t => !/draft note/u.test(t))
+    .map(t => cut > 0 && cut === partialSteps && t === `${TOOL_PHRASES["sunday.who_could_help"]} — ${STATUS_WORDS.partial}` ? `${TOOL_PHRASES["sunday.who_could_help"]} — a shortened list` : t);
+  return { state: "answered", answer: { ...shown, draft: null, steps, gaps: evidenceGaps(whole, h.data.mode), body: lines.join("\n\n"), look } };
+}
+export const LOOK_FAILED = "Ozzie couldn't finish looking at who could help. The list above is unchanged.";
+export const LOOK_STOPPED = "You stopped Ozzie looking at who could help. The list above is unchanged.";
 
 /** Background checks on every kids team: for a note about one, which is never drafted with AI help (review Q H2). */
 const backgroundOnly = (data: HarnessData): KidsQuestion => {
@@ -646,6 +781,7 @@ export async function askOzzie(harness: Harness, typed: string, options: {
   const native = (options.notes ?? stepNotes).take(result.task.id);
   if (outcome.status === "verified" && outcome.answer) {
     const shown = shownAnswer(harness, outcome, options.skills.get(ASK_SKILL), options.sender ?? "");
+    if (shown.end) options.recorder?.ended(result.task.id, shown.end);
     // No silent omission: the open decisions the answer left out, in fixed words, with their sources.
     const left = isDecisionQuestion(typed) && !signal.aborted ? await decisionsLeftOut(harness.tools, outcome.answer, outcome.evidence, signal) : null;
     const added = left !== null && left.paragraphs.length > 0;

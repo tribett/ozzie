@@ -42,17 +42,18 @@ export const WATCHES: Readonly<Record<TemplateId, string>> = Object.freeze({
 });
 /** The template picker's one line for each. */
 export const PURPOSE: Readonly<Record<TemplateId, string>> = Object.freeze({
-  "keep-sunday-covered": "Checks every day until Sunday and tells you when a role needs a decision.",
+  "keep-sunday-covered": "Checks every day, more often as Sunday gets close, and tells you when a role needs a decision.",
   "watch-room-bookings": "Checks each week for room bookings that overlap.",
   "follow-ups-without-owner": "Checks each week for overdue follow-ups that no one owns.",
   "group-night-clashes": "Checks each week for group meetings that clash with serving.",
   "morning-briefing": "Prepares Today's briefing each weekday at 7:00 AM, or the time you choose, if this Mac is awake and Ozzie is running. Thursday's includes the full Sunday Ready brief.",
 });
 /**
- * How the two things that check Sunday fit together, on What runs automatically. The regular Sunday check
- * (proactive.ts) is the steady baseline; Keep Sunday covered (on_change, near_deadline) builds on it.
+ * How the two things that check Sunday differ, on What runs automatically, in two sentences under the same two names
+ * used everywhere (audit item 28). The regular Sunday check (proactive.ts) is the steady look; Keep Sunday covered
+ * (on_change, near_deadline) is a job the leader starts, with its own plan, limits and end.
  */
-export const SUNDAY_TOGETHER = "The regular Sunday check reads Planning Center on a schedule and tells you when something changes. Keep Sunday covered builds on it as Sunday gets close: it checks more often, checks sooner when the regular check finds a change, tells you when something needs a decision, and prepares notes.";
+export const SUNDAY_TOGETHER = "The regular Sunday check is always on while Ozzie is open: it looks at the chosen Sunday on its schedule and sends a private notice when something gets worse. Keep Sunday covered is a job you start, with a plan, limits and an end you choose: it checks more often as Sunday gets close, checks sooner when the regular check finds a change, prepares notes, and tells you when something needs a decision.";
 /** Offered in the Sunday item when Keep Sunday covered isn't on. */
 export const SUNDAY_OFFER = "It checks more often as Sunday gets close, tells you when something needs a decision, and prepares notes. You confirm a short plan before anything starts.";
 /** Every automatic check depends on this; said wherever a plan says when it checks. */
@@ -180,6 +181,39 @@ export function runText(run: RunRow, now?: string, report?: NoticedItem | null):
   const found = labeled || (!own && run.noticed ? count(run.noticed, "finding", "findings") : "nothing new needs a decision");
   return `${at}, ${RUN_WHY[run.trigger]}. Finished: ${found}${run.drafts ? `; ${count(run.drafts, "note", "notes")} ready to review` : ""}.`;
 }
+// ---- A job's write-up (audit item 6) -------------------------------------------------------------------
+
+/** What a job's run checked, finishing "Ozzie checked … at 9:06 AM:". */
+const CHECKED: Readonly<Record<TemplateId, string>> = Object.freeze({
+  "keep-sunday-covered": "Sunday", "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups",
+  "group-night-clashes": "group nights", "morning-briefing": "Sunday for your briefing",
+});
+/** "at 9:06 AM" today on this Mac's clock, otherwise "on Sat at 7:02 AM". */
+export function atText(iso: string, now?: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "at an unknown time";
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === (now ? new Date(now) : new Date()).toDateString() ? `at ${time}` : `on ${d.toLocaleDateString("en-US", { weekday: "short" })} at ${time}`;
+}
+/** The first line of a job's write-up: "Ozzie checked Sunday at 9:06 AM:". */
+export const writeupHead = (item: Pick<NoticedItem, "template" | "at">, now?: string) => `Ozzie checked ${CHECKED[item.template]} ${atText(item.at, now)}:`;
+/**
+ * Said quietly on a job's card when AI help is set up and its run has no write-up, so the card is never blank about it.
+ * A run paused during its write-up says nothing (none is kept), and "off" is shown nowhere (review H, L15).
+ */
+export const NO_WRITEUP: Readonly<Record<"off" | "spent" | "run-limit" | "unverified" | "unavailable", string>> = Object.freeze({
+  off: "No write-up this time: AI help is off. This card shows what Ozzie's own check of Planning Center found.",
+  spent: "No write-up this time: AI help has reached its limit for now. This card shows what Ozzie's own check of Planning Center found.",
+  // One run's own step or size limit, not the allowance (review G).
+  "run-limit": "No write-up this time: the AI's answer ran past what one run may use. This card shows what Ozzie's own check of Planning Center found.",
+  unverified: "No write-up this time: the AI's answer didn't check out against what Ozzie read, so it isn't shown. This card shows what Ozzie's own check of Planning Center found.",
+  unavailable: "No write-up this time: it couldn't be prepared. This card shows what Ozzie's own check of Planning Center found.",
+});
+/** "See how this works" under a write-up, after its steps. */
+export const WRITEUP_HOW = "The AI saw labels such as [Person 1] and [Role 1], never the names Ozzie read; Ozzie put the names back on this Mac. The AI only chose which facts to show, and Ozzie wrote every sentence here. What this card counts, and any notice, came from Ozzie's own check, not from the AI. Nothing was sent to anyone, and nothing in Planning Center changed.";
+/** The first step of a write-up's account: Ozzie's own check came first, with no AI. */
+export const WRITEUP_CHECK = "Ozzie read Planning Center and worked out what it found itself, with no AI.";
+
 /** The title of what the AI wrote for a report whose decisions are on the Sunday card: what was written, never the decisions again. */
 export function preparedTitle(ready: { summary: string | null; draft: string | null }): string {
   return ready.summary && ready.draft ? "Ozzie wrote up where Sunday stands and drafted a note."

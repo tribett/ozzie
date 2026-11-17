@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { configDefaults, defineConfig } from "vitest/config";
 
-// The TypeScript tests run on the Node pinned in .node-version (and .nvmrc). Before Node 22.19 the agent runtime
-// refuses to start by design and about fifty runtime tests fail, which once read as flaky tests; other versions are
-// not what the suite was verified on (older ICU data changes some date formatting).
+// The TypeScript tests run on the Node pinned in .node-version (and .nvmrc). The pinned Pi packages the agent loop
+// uses (@earendil-works/pi-agent-core and pi-ai) declare Node 22.19 or later, so older versions are refused here
+// rather than failing in confusing ways; other versions are not what the suite was verified on (older ICU data
+// changes some date formatting).
 const pinned = readFileSync(new URL(".node-version", import.meta.url), "utf8").trim();
 const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
 if (major < 22 || (major === 22 && minor < 19)) {

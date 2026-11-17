@@ -1,13 +1,14 @@
 //! "Choose card photos" on the Visitor cards page: Ozzie's own Mac open panel, offering only the
-//! picture types the card reader opens (helpers/card-reader.swift: PNG and JPEG). The page asks
+//! picture types the card reader opens (helpers/card-reader.swift: PNG, JPEG and HEIC, the format
+//! an iPhone saves photos in). The page asks
 //! for the panel and gets back photos, never a path, and it cannot name a file for this Mac to
 //! read: the command takes no arguments. The panel's filter is a convenience; what keeps anything
 //! else out is the check here on every chosen file before its bytes go anywhere: a regular file
 //! (not a link, folder, package or device), opened without following links, within the review's
-//! limits, and a PNG or JPEG by its own bytes with a sensible picture size. The reader checks the
+//! limits, and a PNG, JPEG or HEIC by its own bytes with a sensible picture size. The reader checks the
 //! bytes again before it runs. Photos live only in memory for this one call: nothing is saved,
 //! logged or kept here after they are handed to the page.
-use crate::local_tools::{CardImageKind, MAX_IMAGE_BYTES, card_image_kind};
+use crate::local_tools::{CardImageKind, CardImageProblem, MAX_IMAGE_BYTES, card_image_check};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,8 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// time, 8 MB each and 24 MB together.
 pub const MAX_CARDS: usize = 8;
 pub const MAX_BATCH_BYTES: usize = 24 * 1024 * 1024;
-/// What the panel offers, as Uniform Type Identifiers: the reader's own two types.
-pub const CARD_PHOTO_TYPES: [&str; 2] = ["public.png", "public.jpeg"];
+/// What the panel offers, as Uniform Type Identifiers: the reader's own types (public.heif is a
+/// HEIC whose file names only the general picture brand).
+pub const CARD_PHOTO_TYPES: [&str; 4] = ["public.png", "public.jpeg", "public.heic", "public.heif"];
 
 /// Closed codes only; never a file name, path or anything from a photo.
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
@@ -32,14 +34,16 @@ pub enum CardPickError {
     TooLarge,
     /// The photos are over 24 MB together.
     TooMuchTogether,
-    /// Not a PNG or JPEG by its bytes (or not a plain file at all).
+    /// Not a PNG, JPEG or HEIC by its bytes (or not a plain file at all).
     NotAPhoto,
+    /// A picture of more than 40 million pixels (a 48-megapixel iPhone photo, say).
+    TooManyPixels,
     /// It couldn't be opened or changed while being read.
     Unreadable,
 }
 
-/// One chosen photo: a plain file, not followed through a link, read within the limit, and a PNG
-/// or JPEG by its bytes. A file swapped for another between the check and the read is refused.
+/// One chosen photo: a plain file, not followed through a link, read within the limit, and a PNG,
+/// JPEG or HEIC by its bytes. A file swapped for another between the check and the read is refused.
 pub fn read_card_photo(path: &Path) -> Result<(CardImageKind, Vec<u8>), CardPickError> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let before = std::fs::symlink_metadata(path).map_err(|_| CardPickError::Unreadable)?;
@@ -71,7 +75,10 @@ pub fn read_card_photo(path: &Path) -> Result<(CardImageKind, Vec<u8>), CardPick
     if bytes.len() > MAX_IMAGE_BYTES {
         return Err(CardPickError::TooLarge);
     }
-    let kind = card_image_kind(&bytes).ok_or(CardPickError::NotAPhoto)?;
+    let kind = card_image_check(&bytes).map_err(|problem| match problem {
+        CardImageProblem::NotAPhoto => CardPickError::NotAPhoto,
+        CardImageProblem::TooManyPixels => CardPickError::TooManyPixels,
+    })?;
     Ok((kind, bytes))
 }
 
@@ -94,7 +101,7 @@ pub fn read_card_photos(paths: &[PathBuf]) -> Result<Vec<(CardImageKind, Vec<u8>
     Ok(photos)
 }
 
-/// The photos as one binary reply, in the order chosen: per photo one kind byte (1 PNG, 2 JPEG)
+/// The photos as one binary reply, in the order chosen: per photo one kind byte (1 PNG, 2 JPEG, 3 HEIC)
 /// and its length as 4 big-endian bytes, then its bytes. No file names. Nothing chosen is empty.
 /// The page reads it with `cardPhotoFiles` (src/cards-page.tsx).
 pub fn frame(photos: &[(CardImageKind, Vec<u8>)]) -> Vec<u8> {
@@ -103,6 +110,7 @@ pub fn frame(photos: &[(CardImageKind, Vec<u8>)]) -> Vec<u8> {
         out.push(match kind {
             CardImageKind::Png => 1,
             CardImageKind::Jpeg => 2,
+            CardImageKind::Heic => 3,
         });
         // At most MAX_IMAGE_BYTES, so it always fits.
         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
@@ -133,8 +141,8 @@ fn card_photo_types()
     Ok(NSArray::from_retained_slice(&types))
 }
 
-/// The open panel, on the main thread (AppKit requires it): files only, several at once, PNG and
-/// JPEG offered. `Ok(vec![])` when the person cancels.
+/// The open panel, on the main thread (AppKit requires it): files only, several at once, PNG, JPEG
+/// and HEIC offered. `Ok(vec![])` when the person cancels.
 #[cfg(target_os = "macos")]
 fn run_panel() -> Result<Vec<PathBuf>, CardPickError> {
     use objc2::msg_send;
@@ -154,7 +162,7 @@ fn run_panel() -> Result<Vec<PathBuf>, CardPickError> {
     let _: () = unsafe { msg_send![&*panel, setAllowedContentTypes: &*types] };
     panel.setTitle(Some(&NSString::from_str("Choose card photos")));
     panel.setMessage(Some(&NSString::from_str(
-        "Choose PNG or JPEG photos of visitor cards: up to 8 at a time, 8 MB each.",
+        "Choose PNG, JPEG or HEIC (iPhone) photos of visitor cards: up to 8 at a time, 8 MB each.",
     )));
     panel.setPrompt(Some(&NSString::from_str("Choose")));
     if panel.runModal() != NSModalResponseOK {
@@ -220,7 +228,7 @@ pub async fn choose_card_photos(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_tools::tests::{jpeg, png};
+    use crate::local_tools::tests::{heic, jpeg, png};
 
     /// A folder of fictional test files, removed afterwards.
     struct Scratch(PathBuf);
@@ -245,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn a_png_or_jpeg_is_read_by_its_bytes_whatever_its_name() {
+    fn a_png_jpeg_or_heic_is_read_by_its_bytes_whatever_its_name() {
         let dir = Scratch::new("kinds");
         let card = png(1200, 800);
         assert_eq!(
@@ -262,10 +270,28 @@ mod tests {
             read_card_photo(&dir.file("IMG_0001", &photo)).map(|(k, _)| k),
             Ok(CardImageKind::Jpeg)
         );
+        // An iPhone photo is a HEIC by its bytes, under any name; a JPEG named like a HEIC is a JPEG.
+        let iphone = heic(4032, 3024);
+        for name in ["IMG_0002.HEIC", "card.heif", "card.jpg"] {
+            assert_eq!(
+                read_card_photo(&dir.file(name, &iphone)),
+                Ok((CardImageKind::Heic, iphone.clone())),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            read_card_photo(&dir.file("IMG_0003.HEIC", &photo)).map(|(k, _)| k),
+            Ok(CardImageKind::Jpeg)
+        );
+        // Cut short, a HEIC is no photo.
+        assert_eq!(
+            read_card_photo(&dir.file("cut.heic", &iphone[..iphone.len() - 1])),
+            Err(CardPickError::NotAPhoto)
+        );
     }
 
     #[test]
-    fn anything_that_is_not_a_png_or_jpeg_is_refused_even_named_like_one() {
+    fn anything_that_is_not_a_png_jpeg_or_heic_is_refused_even_named_like_one() {
         let dir = Scratch::new("refused");
         for (name, bytes) in [
             (
@@ -274,13 +300,25 @@ mod tests {
             ),
             ("card.jpg", b"GIF89a\x01\x00\x01\x00".to_vec()),
             ("card.jpeg", b"%PDF-1.7\n".to_vec()),
-            // HEIC and TIFF are pictures, but not ones the card reader opens.
+            // A HEIC file type with nothing after it, a video and an AVIF named like HEIC, and TIFF:
+            // none is a picture the card reader opens.
             ("card.heic", b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec()),
+            (
+                "clip.heic",
+                b"\0\0\0\x18ftypisom\0\0\x02\0isommp41\0\0\0\x08mdat".to_vec(),
+            ),
+            (
+                "movie.heic",
+                b"\0\0\0\x14ftypqt  \0\0\0\0qt  \0\0\0\x08mdat".to_vec(),
+            ),
+            (
+                "photo.heic",
+                b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf".to_vec(),
+            ),
             ("card.tiff", b"II*\0\x08\0\0\0".to_vec()),
             ("empty.png", Vec::new()),
-            // A signature alone, or a picture far too big to decode.
+            // A signature alone.
             ("header.png", vec![137, 80, 78, 71, 13, 10, 26, 10]),
-            ("huge.png", png(8000, 5001)),
         ] {
             assert_eq!(
                 read_card_photo(&dir.file(name, &bytes)),
@@ -288,6 +326,32 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// Review Z, I3: a picture over 40 million pixels, of any kind (a 48-megapixel iPhone photo), is
+    /// refused with its own code, not as no photo at all; 40 million exactly is read.
+    #[test]
+    fn a_picture_over_40_megapixels_is_refused_as_too_many_pixels() {
+        let dir = Scratch::new("pixels");
+        for (name, bytes) in [
+            ("huge.png", png(8000, 5001)),
+            ("huge.jpg", jpeg(0xC0, 65_535, 65_535)),
+            ("IMG_0004.HEIC", heic(8064, 6048)),
+        ] {
+            assert_eq!(
+                read_card_photo(&dir.file(name, &bytes)),
+                Err(CardPickError::TooManyPixels),
+                "{name}"
+            );
+        }
+        assert!(read_card_photo(&dir.file("limit.heic", &heic(8000, 5000))).is_ok());
+        assert_eq!(
+            read_card_photos(&[
+                dir.file("card.png", &png(1200, 800)),
+                dir.file("big.heic", &heic(8064, 6048))
+            ]),
+            Err(CardPickError::TooManyPixels)
+        );
     }
 
     #[test]
@@ -365,9 +429,11 @@ mod tests {
     fn photos_go_back_as_kind_length_and_bytes_with_no_file_names() {
         let a = png(1200, 800);
         let b = jpeg(0xC0, 640, 480);
+        let c = heic(4032, 3024);
         let out = frame(&[
             (CardImageKind::Png, a.clone()),
             (CardImageKind::Jpeg, b.clone()),
+            (CardImageKind::Heic, c.clone()),
         ]);
         let mut expected = vec![1];
         expected.extend_from_slice(&(a.len() as u32).to_be_bytes());
@@ -375,19 +441,28 @@ mod tests {
         expected.push(2);
         expected.extend_from_slice(&(b.len() as u32).to_be_bytes());
         expected.extend_from_slice(&b);
+        expected.push(3);
+        expected.extend_from_slice(&(c.len() as u32).to_be_bytes());
+        expected.extend_from_slice(&c);
         assert_eq!(out, expected);
         assert!(frame(&[]).is_empty());
     }
 
     #[test]
     fn the_panel_offers_only_what_the_reader_opens() {
-        assert_eq!(CARD_PHOTO_TYPES, ["public.png", "public.jpeg"]);
+        assert_eq!(
+            CARD_PHOTO_TYPES,
+            ["public.png", "public.jpeg", "public.heic", "public.heif"]
+        );
         let reader = include_str!("../helpers/card-reader.swift");
-        assert!(reader.contains(r#"type == "public.png" || type == "public.jpeg""#));
+        assert!(reader.contains(
+            r#"let readerTypes: Set<String> = ["public.png", "public.jpeg", "public.heic", "public.heif"]"#
+        ));
+        assert!(reader.contains("readerTypes.contains(type)"));
     }
 
-    /// On this Mac, without showing anything: both types exist as UTType, describe the PNG and
-    /// JPEG types, and the open panel takes `setAllowedContentTypes:`.
+    /// On this Mac, without showing anything: every type exists as UTType, describes the PNG, JPEG,
+    /// HEIC and HEIF types, and the open panel takes `setAllowedContentTypes:`.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_panel_types_resolve_on_this_mac() {
@@ -395,7 +470,7 @@ mod tests {
         use objc2::{msg_send, sel};
         use objc2_foundation::NSString;
         let types = card_photo_types().unwrap();
-        assert_eq!(types.count(), 2);
+        assert_eq!(types.count(), 4);
         let identifiers: Vec<String> = types
             .iter()
             .map(|t: objc2::rc::Retained<AnyObject>| {
@@ -430,6 +505,7 @@ mod tests {
             CardPickError::TooLarge,
             CardPickError::TooMuchTogether,
             CardPickError::NotAPhoto,
+            CardPickError::TooManyPixels,
             CardPickError::Unreadable,
         ]
         .map(|e| serde_json::to_string(&e).unwrap());
@@ -442,6 +518,7 @@ mod tests {
                 "\"too-large\"",
                 "\"too-much-together\"",
                 "\"not-a-photo\"",
+                "\"too-many-pixels\"",
                 "\"unreadable\"",
             ]
         );

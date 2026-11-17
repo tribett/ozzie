@@ -3,17 +3,21 @@
 // noticed" card and each responsibility's line, grouped by today-groups.ts). Every word is fixed local copy (responsibility-words.ts);
 // names appear only on this Mac, resolved from the current check.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import "./ask-panel.css";
 import {
   BRIEFING_WEEKDAYS, checksFreeAt, defaultPlan, sundayAhead, TEMPLATE_IDS, TEMPLATES, untilLifetime, validPlan, addDays, templateLimitsLeft,
   type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type RunRow, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { Autostart } from "./background.js";
-import type { NoticedItem, Runner, RunnerView } from "./responsibility-runner.js";
+import type { NoticedItem, Runner, RunnerView, WriteUp } from "./responsibility-runner.js";
 import {
-  accountsText, assumedText, daysText, foundText, isWeekdays, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT, NOTICE_WORDS, noticedBadge, noticedChanges,
-  noticedTitle, ONLY_WHILE, preparedTitle, PURPOSE, refusalText, REPORT_CHOICES, reportText, runText, scheduleText, statusText, STOP_TEXT, SUNDAY_OFFER,
-  SUNDAY_TOGETHER, WATCHES, whenText,
+  accountsText, assumedText, atText, daysText, foundText, isWeekdays, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT, NO_WRITEUP, NOTICE_WORDS, noticedBadge,
+  noticedChanges, noticedTitle, ONLY_WHILE, preparedTitle, PURPOSE, refusalText, REPORT_CHOICES, reportText, runText, scheduleText, statusText, STOP_TEXT, SUNDAY_OFFER,
+  SUNDAY_TOGETHER, WATCHES, whenText, WRITEUP_CHECK, WRITEUP_HOW, writeupHead,
 } from "./responsibility-words.js";
+import { fillPeople } from "../../../core/src/harness/session.js";
+import { aiText, jobStarted } from "./harness-words.js";
+import { TaskAccount } from "./activity-page.js";
 import { Icon } from "./icons.js";
 import { zoneLabel } from "./proactive-page.js";
 import { dateText, weekRollup } from "./responsibility-words.js";
@@ -284,10 +288,12 @@ export function checksBack(r: Responsibility, view: RunnerView, now: string): st
   return free && (!next || Date.parse(free) > Date.parse(next)) ? free : null;
 }
 
-function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
+function ResponsibilityCard({ r, view, context, runner, level = 3, names = {} }: {
   r: Responsibility; view: RunnerView; context: PlanContext; runner: Runner;
   /** Its title's heading level: 4 inside the Sunday item. */
   level?: 3 | 4;
+  /** Names from the check on screen, for its write-up (on this Mac only). */
+  names?: Readonly<Record<string, string>>;
 }) {
   const Title = level === 4 ? "h4" : "h3";
   const [editing, setEditing] = useState(false);
@@ -305,6 +311,9 @@ function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
   const running = view.running === r.id;
   const plan = asPlan(r, context);
   const items = view.noticed.filter(i => i.responsibility_id === r.id && (i.kind === "missed" || i.kind === "couldnt-check" || i.kind === "limit")).slice(0, 3);
+  // The last check's write-up, kept with its run: folded here, where the job is managed.
+  const lastItem = reportFor(r.runs[0], view);
+  const lastWriteup = lastItem ? view.writeups[lastItem.id] ?? null : null;
   const act = (work: () => Promise<unknown>) => { setProblem(null); void work().catch(e => setProblem(refusalText(errorCode(e)))); };
   return <section className="find responsibility" aria-label={r.title}>
     <div className="find-top"><span className={`badge ${TONE[status.tone]}`}>{status.label}</span><span className="find-where">{accountsText(r.template, context.organization).replace(/\. Reads only\.$/u, "")}</span></div>
@@ -323,6 +332,10 @@ function ResponsibilityCard({ r, view, context, runner, level = 3 }: {
             : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Today</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} checks used in the last 24 hours.</span></div>
       </div>}
+    {!editing && lastItem && lastWriteup?.kind === "written" && <details className="listen-more today-writeup resp-writeup">
+      <summary><Icon name="chev" small />Ozzie's write-up of the last check</summary>
+      <WriteUpBlock item={lastItem} writeup={lastWriteup} names={names} now={now} /></details>}
+    {!editing && lastItem && lastWriteup && lastWriteup.kind !== "written" && <WriteUpBlock item={lastItem} writeup={lastWriteup} names={names} now={now} />}
     {items.length > 0 && <ul className="list resp-problems">{items.map(i => <li key={i.id}><Icon name="clock" small />{noticedTitle(i, now)}</li>)}</ul>}
     {problem && <p className="problem" role="alert">{problem}</p>}
     {!editing && <div className="find-next">
@@ -358,8 +371,10 @@ function KeepSundayOffer({ context, actions }: { context: PlanContext; actions: 
  * (proactive-page.tsx), shown first as one Sunday item with Keep Sunday covered (or an offer to set it
  * up), so the two things that check Sunday read as one; the rest follow.
  */
-export function ResponsibilityList({ view, context, runner, actions, sunday }: {
+export function ResponsibilityList({ view, context, runner, actions, sunday, names = {} }: {
   view: RunnerView; context: PlanContext; runner: Runner; actions: PlanActions; sunday?: ReactNode;
+  /** Names from the check on screen, for each job's write-up (on this Mac only). */
+  names?: Readonly<Record<string, string>>;
 }) {
   const [picking, setPicking] = useState(false);
   const active = view.items.filter(r => r.status !== "ended");
@@ -386,17 +401,51 @@ export function ResponsibilityList({ view, context, runner, actions, sunday }: {
       <h3 id="sunday-watch-title" className="sunday-watch-h">Keeping an eye on Sunday</h3>
       <p className="small">{SUNDAY_TOGETHER}</p>
       {sunday}
-      {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} />
+      {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} names={names} />
         : view.available && <KeepSundayOffer context={context} actions={actions} />}
     </section>}
     {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “Keep an eye on Sunday”, or set one up here.</p>}
-    {others.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} />)}
+    {others.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} names={names} />)}
     {picking
       ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
     {ended.length > 0 && <details className="resp-ended"><summary>Ended recently</summary>
       <ul className="list">{ended.map(r => <li key={r.id}><Icon name="dot" small />{r.title} · {lifetimeText(r.lifetime, r.template).replace(/ Then it stops on its own\.$/u, "")}</li>)}</ul>
     </details>}
+  </section>;
+}
+
+// ---- A job's write-up (audit item 6) --------------------------------------------------------------------
+
+/**
+ * A job's run, as the AI wrote it up: "Ozzie checked Sunday at 9:06 AM:", Ozzie's own sentence for each fact the AI
+ * chose (people filled in from the check on screen, on this Mac), where those facts came from and when, and "See how
+ * this works" with the run's steps. Without a write-up, one quiet line says why, never a blank. It decides nothing: the
+ * card's counts, findings and notice come from Ozzie's own check.
+ */
+export function WriteUpBlock({ item, writeup, names, now }: {
+  item: Pick<NoticedItem, "template" | "at" | "trigger">; writeup: WriteUp | null | undefined; names: Readonly<Record<string, string>>; now: string;
+}) {
+  const [how, setHow] = useState(false);
+  if (!writeup) return null;
+  // With no AI route set up the card simply shows the check (review H, L15); "stopped" was a pause during the write-up.
+  if (writeup.kind !== "written") return writeup.why === "off" || writeup.why === "stopped" ? null
+    : <p className="small writeup-none"><Icon name="info" small />{NO_WRITEUP[writeup.why ?? "unavailable"]}</p>;
+  const started = item.trigger ? jobStarted(item.template, item.trigger, atText(item.at, now).replace(/^(?:at|on) /u, "")) : null;
+  return <section className="writeup" aria-label="Ozzie's write-up">
+    <p className="writeup-head">{writeupHead(item, now)}</p>
+    {(writeup.gaps?.length ?? 0) > 0 && <div className="stack-tight"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
+      <ul className="list">{writeup.gaps!.map(g => <li key={g}><Icon name="dot" small />{g}</li>)}</ul></div>}
+    <div className="writeup-lines">{(writeup.lines ?? []).map((l, i) => <p key={i}>{fillPeople(l, names)}</p>)}</div>
+    {writeup.based_on && <p className="ask-based"><Icon name="check" small />{writeup.based_on}</p>}
+    <button type="button" className="btn btn-quiet btn-sm ask-how" aria-expanded={how} onClick={() => setHow(!how)}><Icon name="info" small />See how this works</button>
+    {how && <div className="ask-how-body stack-tight">
+      <TaskAccount account={{
+        started: [started, WRITEUP_CHECK].filter(Boolean).join(" "), looked: writeup.steps ?? [],
+        ai: aiText("skill", undefined, writeup.ai_steps ?? 0, true), ended: "Ozzie wrote the lines above from the facts the AI chose.",
+      }} />
+      <p className="small">{WRITEUP_HOW}</p>
+    </div>}
   </section>;
 }
 
@@ -477,9 +526,10 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
   const own = written !== null;
   const badge = prepared || own ? { label: "Ready", tone: "ok" as const } : noticedBadge(item);
   const changes = own ? [] : noticedChanges(item, names);
-  const kept = written ?? view.prepared[item.id];
-  // "Your name for notes" goes in here, on this Mac, after the AI wrote the note; [Your name] stays when none is set.
-  const ready = kept?.draft ? { ...kept, draft: signNote(kept.draft, yourName.get()) } : kept;
+  // "Your name for notes" goes in here, on this Mac, after the note was drafted; [Your name] stays when none is set.
+  const ready = written?.draft ? { ...written, draft: signNote(written.draft, yourName.get()) } : written;
+  // A report's write-up (or why there is none) leads its card.
+  const writeup = !own && (item.kind === "found" || item.kind === "briefing") ? view.writeups[item.id] ?? null : null;
   const notice = !own && item.notice ? NOTICE_WORDS[item.notice] : null;
   const page = item.kind === "couldnt-check" && item.access ? "connection" : item.kind === "missed" || item.kind === "limit" || item.kind === "couldnt-check" ? "automatic" : "sunday";
   return <article className="find noticed" aria-labelledby={titleId}>
@@ -488,15 +538,12 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
       <span className="find-where">{own ? "Ozzie prepared" : "Ozzie noticed"} · {TEMPLATES[item.template].title}{age ? "" : ` · ${whenText(item.at, now)}`}</span>
       {age && <span className="find-age">{age}</span>}</div>
     <h3 id={titleId} className="find-title">{written ? preparedTitle(written) : noticedTitle(item, now)}</h3>
+    <WriteUpBlock item={item} writeup={writeup} names={names} now={now} />
     {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
     {item.kind === "briefing" && item.sunday_ready && sundayReady}
     {item.kind === "briefing" && !own && <KeptForBriefing item={item} />}
     {item.kind === "briefing" && !own && <WeekLine view={view} now={now} />}
-    {/* A report's write-up restates its findings, so it stays folded; on its own card it's the content itself. */}
-    {ready?.summary && (own
-      ? <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>
-      : <details className="listen-more today-writeup"><summary><Icon name="chev" small />Read Ozzie's write-up</summary>
-        <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div></details>)}
+    {ready?.summary && <div className="noticed-summary">{ready.summary.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>}
     {ready?.draft && <div className="draft" role="region" aria-label="Draft note">
       <span className="badge b-draft">Draft only. Nothing has been sent.</span>
       <div className="draft-body">{ready.draft.split(/\n{2,}/u).map((p, i) => <p key={i}>{p}</p>)}</div>
@@ -513,7 +560,7 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
 
 // ---- Open at login -----------------------------------------------------------------------------------
 
-/** "Open Ozzie when I log in": off unless the person turns it on. */
+/** "Open Ozzie when I log in": as chosen in setup (Yes is chosen there to start), and changed only here or in setup. */
 export function AutostartToggle({ autostart }: { autostart: Autostart }) {
   const [state, setState] = useState<boolean | null>(null);
   const [problem, setProblem] = useState(false);
@@ -522,7 +569,7 @@ export function AutostartToggle({ autostart }: { autostart: Autostart }) {
     <label className="confirmation"><input type="checkbox" checked={state === true} disabled={state === null && !problem}
       onChange={e => { const want = e.target.checked; autostart.set(want).then(setState).catch(() => setProblem(true)); }} />
       <span>Open Ozzie when I log in</span></label>
-    <p className="small">Off unless you turn it on. Ozzie then starts quietly in the menu bar, so it keeps an eye on things after a restart.</p>
+    <p className="small">On if you chose it in setup; you can change it here. When it's on, Ozzie starts quietly in the menu bar, so it keeps an eye on things after a restart.</p>
     {problem && <p className="small">This Mac didn't let Ozzie change that setting.</p>}
   </div>;
 }

@@ -65,12 +65,16 @@ describe("Settings", () => {
   }));
   it("is titled Settings, with its sections in a fixed order", () => {
     expect(html).toContain("<h1 class=\"h1\">Settings</h1>");
-    const order = ["Planning Center</h2>", "Sign in</h3>", "Which Sunday</h3>", "Rooms, follow-ups and group events</h3>",
-      "AI help</h2>", "Your name on notes</h2>", "Automatic checks</h2>", "Saved recordings</h2>", "Guided setup</h2>"].map(s => html.indexOf(s));
+    // In the order a leader meets them (audit item 27); Your name on notes second, near the top (audit item 18).
+    const order = ["Planning Center and which Sunday</h2>", "Sign in</h3>", "Which Sunday</h3>", "Rooms, follow-ups and group events</h3>",
+      "Your name on notes</h2>", "AI help</h2>", "What Ozzie runs and notices</h2>", "Automatic checks</h3>", "A notice on your phone</h3>",
+      "Lists and notes</h2>", "Saved checks</h2>", "Guided setup</h2>"].map(s => html.indexOf(s));
     expect(order.every(i => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(text(html)).not.toMatch(/wording help/iu);
-    expect(text(html)).toContain("Every hour, and when Ozzie opens.");
+    // Named as everywhere else (audit item 28).
+    expect(text(html)).toContain("The regular Sunday check: every hour, and when Ozzie opens.");
+    expect(text(html)).toContain("Keep Sunday covered and other jobs are set up in What runs automatically.");
     expect(text(html)).toContain("Change these in What runs automatically");
   });
   it("uses the same sign-in form and Sunday fields as guided setup", () => {
@@ -90,19 +94,19 @@ describe("Settings", () => {
     expect(html).toContain("class=\"picker\"");
     expect(html).toMatch(/<details class="picker-hand"[^>]*><summary>.*Enter the plan by hand<\/summary>/u);
   });
-  it("asks once before deleting saved recordings, and says what deleting does", () => {
+  it("asks once before deleting saved checks, and says what deleting does", () => {
     const closed = renderToStaticMarkup(React.createElement(SavedRecordings, { count: 3, onDelete: () => {}, sharing: false }));
-    expect(closed).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-controls="delete-recordings"[^>]*>Delete saved recordings<\/button>/u);
+    expect(closed).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-controls="delete-recordings"[^>]*>Delete saved checks<\/button>/u);
     expect(closed).not.toContain("Yes, delete");
     const open = text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 3, onDelete: () => {}, sharing: true, confirming: true })));
-    expect(open).toContain("Delete all 3 saved recordings from this Mac? Sunday can't be shown from them afterwards. The copy for other AI apps is removed too.");
+    expect(open).toContain("Delete all 3 saved checks from this Mac? Sunday can't be shown from them afterwards. The copy for other AI apps is removed too.");
     expect(open).toContain("Yes, delete them");
     expect(open).toContain("Keep them");
     const one = text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 1, onDelete: () => {}, sharing: false, confirming: true })));
-    expect(one).toContain("Delete the saved recording from this Mac? Sunday can't be shown from it afterwards. Planning Center doesn't change.");
+    expect(one).toContain("Delete the saved check from this Mac? Sunday can't be shown from it afterwards. Planning Center doesn't change.");
     expect(one).toContain("Keep it");
     expect(text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 0, onDelete: () => {}, sharing: false, confirming: true }))))
-      .toBe(" No saved recordings for this organization. ");
+      .toBe(" No saved checks for this organization. ");
   });
   it("shows each AI help route as one row with one action, and the own-provider fields only when asked for", () => {
     const ai = renderToStaticMarkup(React.createElement(AiSettings, { onChange: () => {} }));
@@ -128,17 +132,25 @@ describe("click targets: at least 44 by 44 CSS pixels (ui-build-handoff)", () =>
     return height + 2 * Math.max(0, Number(after?.[1] ?? 0) - 1);
   };
 
-  it("small buttons, chips and the microphone look the same but take clicks over 44px", () => {
-    expect(px(decls(".btn-sm"), "height")).toBe(36);
+  /** A size Hearth keeps as a token on `.oz` (hearth.css), in px. */
+  const token = (name: string) => Number(new RegExp(`${name}:(\\d+)px`, "u").exec(css)?.[1] ?? Number.NaN);
+
+  it("small buttons, chips and the microphone look compact but take clicks over 44px; full buttons are 44px (audit item 22b)", () => {
+    expect(token("--h-btn")).toBeGreaterThanOrEqual(44);
+    expect(decls(".btn")).toMatch(/height:var\(--h-btn\)/u);
+    // Small buttons and chips are 40px to look at, sized by the same token.
+    expect(token("--h-btn-sm")).toBe(40);
+    for (const s of [".btn-sm", ".chip"]) expect(decls(s)).toMatch(/height:var\(--h-btn-sm\)/u);
     expect(px(decls(".btn-sm"), "min-width")).toBeGreaterThanOrEqual(44);
-    expect(reach(".btn-sm", 36)).toBeGreaterThanOrEqual(44);
-    expect(reach(".chip", 36)).toBeGreaterThanOrEqual(44);
+    expect(reach(".btn-sm", token("--h-btn-sm"))).toBeGreaterThanOrEqual(44);
+    expect(reach(".chip", token("--h-btn-sm"))).toBeGreaterThanOrEqual(44);
     expect(reach(".ask-mic", px(decls(".ask-mic"), "height")!)).toBeGreaterThanOrEqual(44);
     // The round microphone reaches as far left and right as up and down.
     expect(decls(".ask-mic::after")).toMatch(/inset:\s*-5px\s*(?:;|$)/u);
     for (const s of [".btn-sm", ".chip", ".ask-mic"]) expect(decls(s)).toMatch(/position:\s*relative/u);
-    // The source link in an answer: 26px tall, reaching 44.
-    expect(reach(".ask-links .src", 26)).toBeGreaterThanOrEqual(44);
+    // The source link in an answer: at least 32px tall to look at (it was 26), reaching 44.
+    expect(px(decls(".ask-links .src"), "min-height")).toBeGreaterThanOrEqual(32);
+    expect(reach(".ask-links .src", px(decls(".ask-links .src"), "min-height")!)).toBeGreaterThanOrEqual(44);
   });
 
   it("disclosures and checkbox labels are at least 44px tall", () => {
@@ -148,7 +160,8 @@ describe("click targets: at least 44 by 44 CSS pixels (ui-build-handoff)", () =>
   });
 
   it("rows of small buttons sit far enough apart that their click areas never overlap", () => {
-    expect(decls(".find-feedback > .find-next")).toMatch(/gap:\s*8px 4px/u);
+    // 8px both ways (it was 8px between rows and 4px between buttons in a row: the click areas touched; audit item 22b).
+    expect(decls(".find-feedback > .find-next")).toMatch(/gap:\s*8px\s*(?:;|$)/u);
     expect(px(decls(".find-feedback > .find-next"), "margin-top")).toBeGreaterThanOrEqual(8);
     expect(decls(".today-later")).toMatch(/gap:\s*8px/u);
   });
@@ -173,6 +186,20 @@ describe("the window: only the page pane scrolls (the coordinator's 0.1.8 click-
   it("the page pane places what it positions, so a hidden label scrolls and clips with the page", () => {
     expect(last(".oz .main", "position")).toBe("relative");
     expect(last(".oz .main", "overflow-y")).toBe("auto");
+  });
+});
+
+describe("a heading focus moves to (audit item 4)", () => {
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  it("keeps the focus for VoiceOver and the keyboard, with no focus box that reads as a glitch", () => {
+    expect(css).toMatch(/\.oz :is\(h1, h2, h3, h4\)\[tabindex="-1"\]:focus \{ outline: none; \}/u);
+    // Setup's step title still takes focus.
+    const html = renderToStaticMarkup(React.createElement(SetupFlow, {
+      status: null, settings, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS, onModel() {}, onClose() {}, onExample() {}, onAutomatic() {},
+    }));
+    expect(html).toMatch(/<h1 id="setup-title" class="h1" tabindex="-1">/u);
+    // Every control keeps its ring.
+    expect(readFileSync(new URL("../src/hearth.css", import.meta.url), "utf8")).toContain(".oz :focus-visible,.oz .is-focus{outline:3px solid var(--focus);outline-offset:2px}");
   });
 });
 

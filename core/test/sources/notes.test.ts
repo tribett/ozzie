@@ -4,7 +4,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  MAX_HITS, MAX_NOTE_LINE, MAX_NOTE_LINES, MAX_NOTES_BYTES, NOTES_PROBLEMS, occurrenceOf, parseNotes, readNotes, searchNotes, sectionFor, sectionName, type Notes,
+  MAX_HITS, MAX_NOTE_LINE, MAX_NOTE_LINES, MAX_NOTES_BYTES, NOTES_PROBLEMS, occurrenceOf, parseNotes, pointerState, readNotes, searchNotes, sectionFor, sectionName, titleCount,
+  type Notes,
   type NotesResult,
 } from "../../src/sources/notes.js";
 
@@ -142,6 +143,35 @@ describe("a heading as written (review V, H1)", () => {
       [`${"A".repeat(119)}…`, long], ["Snow days", "Snow   days"], ["Child safety policy", undefined], ["", undefined],
     ]);
     expect(notes.sections[2]).toEqual({ title: "Child safety policy", heading: true, lines: ["Two adults."] });
+  });
+
+  it("is what Find searches: words past a cut title are found, with ranges in the heading as written (audit item 31)", () => {
+    const long = `${"Keys ".repeat(30)}and the alarm code`;
+    const notes = notesOf(parseNotes(`# ${long}\nbody\n#  Snow   days \nwe text\n`));
+    const alarm = searchNotes(notes, "alarm code");
+    expect(alarm.hits).toEqual([{ section: 0, line: "title", ranges: [{ start: long.indexOf("alarm"), end: long.length }] }]);
+    expect(marked(notes.sections[0]!.written!, alarm.hits[0]!.ranges)).toEqual(["alarm code"]);
+    // The spacing as written is what is searched and marked, too.
+    const snow = searchNotes(notes, "snow");
+    expect(snow.hits).toEqual([{ section: 1, line: "title", ranges: [{ start: 0, end: 4 }] }]);
+    expect(marked(notes.sections[1]!.written!, snow.hits[0]!.ranges)).toEqual(["Snow"]);
+  });
+});
+
+describe("a pointer whose title is now shared by a different number of sections (audit item 30)", () => {
+  it("names none of them rather than a different one, and says which happened", () => {
+    const notes = notesOf(parseNotes("# Who to call\nOffice\n# Nursery\n## Who to call\nNursery lead\n# Kids\n## Who to call\nKids lead\n"));
+    expect(titleCount(notes, "Who to call")).toBe(3);
+    // Chosen when there were two: which one it meant can't be told now.
+    const kept = { section: "Who to call", team_id: "1", occurrence: 2, of: 2 };
+    expect(pointerState(notes, kept)).toBe("changed");
+    expect(sectionFor(notes, kept)).toBeNull();
+    expect(pointerState(notes, { ...kept, of: 3 })).toBe("ok");
+    expect(sectionFor(notes, { ...kept, of: 3 })?.section.lines).toEqual(["Nursery lead"]);
+    // Chosen before the count was kept: unknown, so it follows its occurrence as it always did.
+    expect(pointerState(notes, { section: "Who to call", team_id: "1", occurrence: 2 })).toBe("ok");
+    expect(pointerState(notes, { section: "Gone", team_id: "1", of: 1 })).toBe("gone");
+    expect(pointerState(notes, { section: "Who to call", team_id: "1", occurrence: 4 })).toBe("gone");
   });
 });
 
