@@ -1959,10 +1959,16 @@ fn only_this_module_names_the_contact_read() {
         "name_guard.rs",
         "responsibilities.rs",
         "background.rs",
-        "bin/ozzie-dev.rs",
     ] {
         assert!(files.iter().any(|(n, _)| n == name), "{name}");
     }
+    // The developer tool isn't in every copy of this crate; where it is on disk, it is among them.
+    let dev = "bin/ozzie-dev.rs";
+    let on_disk = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join(dev)
+        .exists();
+    assert_eq!(files.iter().any(|(n, _)| n == dev), on_disk, "{dev}");
     // The one test file allowed is compiled only for tests.
     assert!(
         include_str!("sunday_check.rs")
