@@ -9,6 +9,8 @@ import {
   stopScopes, stopText, urgencyEntry, urgencyFor, withEntry, withoutEntry, type CorrectionWhat, type FeedbackEntry, type FeedbackScope, type FeedbackTarget, type UrgencyEntry,
 } from "../../../core/src/finding-feedback.js";
 import { Icon } from "./icons.js";
+import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
+import { dayName, pageRef } from "./day-phrases.js";
 
 type Names = Readonly<Record<string, string>>;
 /** What a page gives its cards: the entries, how to change them, and names (resolved on this Mac only). */
@@ -53,10 +55,10 @@ const URGENCY_SAID: Record<UrgencyEntry["level"], (kind: string) => string> = {
   "right-away": kind => `I'll tell you right away about ${kindWords(kind)}.`,
   briefing: kind => `I'll keep ${kindWords(kind)} for your briefing instead of sending a notice.`,
 };
-/** What a per-kind choice means, said on the card while it's on. */
-export const URGENCY_NOW: Record<UrgencyEntry["level"], (kind: string) => string> = {
+/** What a per-kind choice means, said on the card while it's on; the watched service named by its real day (`d`). */
+export const URGENCY_NOW: Record<UrgencyEntry["level"], (kind: string, d?: DayWords) => string> = {
   "right-away": kind => `Ozzie tells you right away about ${kindWords(kind)}: a private notice as soon as a check finds a new one or one gets worse. Quiet hours still hold it unless you let urgent notices through.`,
-  briefing: kind => `Ozzie keeps ${kindWords(kind)} for your briefing: no notice, even close to Sunday. They still show here.`,
+  briefing: (kind, d = SUNDAY_WORDS) => `Ozzie keeps ${kindWords(kind)} for your briefing: no notice, even close to ${dayName(d)}. They still show here.`,
 };
 
 /**
@@ -88,18 +90,19 @@ export const correctionSaid = (what: CorrectionWhat, occasion: string) => what =
  * even while More choices is closed (review F, L-5).
  */
 export function FeedbackState({ target, feedback, urgency = true }: { target: FeedbackTarget; feedback: FeedbackControls | null | undefined; urgency?: boolean }) {
+  const d = useDay();
   if (!feedback) return null;
   const always = target.action ? alwaysFor(feedback.entries, target) : null;
   const level = urgencyFor(feedback.entries, target.kind);
   const said = urgency && level && (level === "right-away" ? canPromote(target) : canDemote(target));
   if (!said && !always) return null;
   return <div className="feedback-state">
-    {said && <p className="small">{URGENCY_NOW[level](target.kind)}</p>}
+    {said && <p className="small">{URGENCY_NOW[level](target.kind, d)}</p>}
     {always && <p className="small"><Icon name="rules" small /> Prepared because of your Church rule: “{sentence(alwaysText(always, nameOf(feedback.names)))}.”</p>}
   </div>;
 }
 
-export function FindingFeedback({ target, feedback, urgency = true, occasion = "for this Sunday", source = "Planning Center", startOpen = null, startWhat = null, state = true }: {
+export function FindingFeedback({ target, feedback, urgency = true, occasion: occasionProp, source = "Planning Center", startOpen = null, startWhat = null, state = true }: {
   target: FeedbackTarget; feedback: FeedbackControls | null | undefined; urgency?: boolean; occasion?: string; source?: string;
   /** False where the card shows FeedbackState itself, outside a fold. */
   state?: boolean;
@@ -107,6 +110,9 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion = "
   startOpen?: "correct" | "stop" | "always" | null; startWhat?: CorrectionWhat | null;
 }) {
   const id = useId();
+  // One occurrence of a Services finding is the watched service, by its real day: "for this Wednesday".
+  const words = useDay();
+  const occasion = occasionProp ?? `for ${words.thisOne}`;
   const [stage, setStage] = useState<null | "correct" | "stop" | "always">(startOpen);
   const [note, setNote] = useState("");
   const [what, setWhat] = useState<CorrectionWhat | null>(startWhat);
@@ -209,6 +215,7 @@ const day = (iso: string) => {
  * here (owner decision, November 4: no hidden learned preference). Deleting one says so, with Undo.
  */
 export function FromYourCards({ feedback }: { feedback: FeedbackControls | null | undefined }) {
+  const d = useDay();
   if (!feedback) return null;
   const who = nameOf(feedback.names);
   const of = <T extends FeedbackEntry["type"]>(type: T) => feedback.entries.filter((e): e is Extract<FeedbackEntry, { type: T }> => e.type === type).slice().reverse();
@@ -221,7 +228,7 @@ export function FromYourCards({ feedback }: { feedback: FeedbackControls | null 
   </li>;
   return <section className="find from-cards" aria-labelledby="from-cards-title">
     <h2 id="from-cards-title" className="h3">What you've told Ozzie</h2>
-    <p className="find-body">What you said on findings on the Sunday and Today pages. Each applies right away, using what was already read, and to every later check; delete one here any time. Nothing here changes Planning Center.</p>
+    <p className="find-body">What you said on findings on {pageRef(d)} and Today. Each applies right away, using what was already read, and to every later check; delete one here any time. Nothing here changes Planning Center.</p>
     {!feedback.entries.length && <p className="small">Nothing yet. On a finding, choose “This isn't right”, “Stop flagging this”, “Always do this”, “Always tell me right away” or “Put this in the briefing”, and it shows here.</p>}
     {stops.length > 0 && <><h3 className="bold">Don't flag</h3>
       <ul className="list">{stops.map(e => row(e, stopText(e, who), "Start flagging this again", "Ozzie flags this again, starting now."))}</ul></>}
@@ -229,12 +236,12 @@ export function FromYourCards({ feedback }: { feedback: FeedbackControls | null 
       <ul className="list">{always.map(e => row(e, alwaysText(e, who), "Stop doing this", "Ozzie won't prepare that on its own any more."))}</ul></>}
     {urgency.length > 0 && <><h3 className="bold">How Ozzie tells you</h3>
       <ul className="list">{urgency.map(e => row(e, entryText(e, who), "Go back to the usual", `Back to the usual for ${kindWords(e.kind)}.`,
-        <span className="small">{URGENCY_NOW[e.level](e.kind)}</span>))}</ul></>}
+        <span className="small">{URGENCY_NOW[e.level](e.kind, d)}</span>))}</ul></>}
     {corrections.length > 0 && <><h3 className="bold">Corrections you've made</h3>
       <ul className="list">{corrections.map(e => row(e, `${correctionSubject(e, who)}${e.labels.occurrence ? `, ${e.labels.occurrence}` : ""}`, "Delete my correction",
-        hidesFinding(e) ? "Your correction is deleted. If Planning Center still shows it, it's back on the Sunday page." : "Your note is deleted.",
+        hidesFinding(e) ? `Your correction is deleted. If Planning Center still shows it, it's back on ${pageRef(d)}.` : "Your note is deleted.",
         <span className="small">{e.note ? `You said: “${e.note}”` : e.what === "person" ? "You said a person's details were wrong." : e.what === "other" ? "You said something else wasn't right." : "You said this wasn't right."} {
-          !hidesFinding(e) ? "It still shows." : e.kind === "attention" ? "Hidden for that import only." : "Hidden for that Sunday only, while Planning Center shows the same."}</span>))}</ul></>}
+          !hidesFinding(e) ? "It still shows." : e.kind === "attention" ? "Hidden for that import only." : "Hidden for that service only, while Planning Center shows the same."}</span>))}</ul></>}
   </section>;
 }
 

@@ -3,15 +3,19 @@ import type { Skill } from "../../../core/src/harness/contract.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { taskAccount, taskLine, type Account, type TaskEnd, type TaskRow, type TaskStart } from "./harness-words.js";
 import { Icon } from "./icons.js";
+import { useDay } from "./day-words.js";
+import { dayName, pageRef } from "./day-phrases.js";
+import { promise } from "./promises.js";
 
+// What each read was, said without the day: an older check may have been of another week's service.
 const what: Record<string, string> = {
-  plan: "Read this Sunday's plan", plan_times: "Read the service times", needed_positions: "Read the open roles",
+  plan: "Read the service's plan", plan_times: "Read the service times", needed_positions: "Read the open roles",
   team_members: "Read who is scheduled", team_position_assignments: "Read who is on a team",
   team_leaders: "Read a team's leaders", person_schedules: "Read one person's other schedules", person_blockouts: "Read one person's blockouts",
-  calendar_rooms: "Read the list of rooms", calendar_resource_bookings: "Read room bookings for this Sunday",
+  calendar_rooms: "Read the list of rooms", calendar_resource_bookings: "Read room bookings for the service's day",
   people_workflows: "Read the follow-up workflows", people_workflow_steps: "Read one workflow's steps",
   people_workflow_ready_cards: "Read one workflow's ready follow-ups", people_workflow_snoozed_cards: "Read one workflow's snoozed follow-ups",
-  groups_person_memberships: "Read one person's groups", groups_group_events: "Read one group's events this Sunday",
+  groups_person_memberships: "Read one person's groups", groups_group_events: "Read one group's events on the service's day",
   calendar_conflicts: "Read one event's room conflicts",
   organization: "Read the church's time zone",
   people_background_checks: "Read whether one person has a current background check",
@@ -83,15 +87,16 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
 }) {
   const [all, setAll] = useState(false);
   const id = useId();
+  const day = useDay();
   if (tasks === undefined) return null;
   if (tasks === null) return <p className="small recent-quiet"><Icon name="info" small />{LEDGER_UNAVAILABLE}</p>;
-  if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each Sunday check appear here.</p>;
+  if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each check of Planning Center appear here.</p>;
   const sorted = [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const earlier = sorted.length - RECENT_SHOWN;
   const item = (row: TaskRow) => {
     const start = trigger(row.task_id);
-    const line = taskLine(row, { procedures, ...(start ? { trigger: start } : {}), ...(now ? { now } : {}) });
-    const account = taskAccount(row, { start, end: end(row.task_id), procedures, ...(now ? { now } : {}) });
+    const line = taskLine(row, { procedures, day, ...(start ? { trigger: start } : {}), ...(now ? { now } : {}) });
+    const account = taskAccount(row, { start, end: end(row.task_id), procedures, day, ...(now ? { now } : {}) });
     return <li key={row.task_id} className={row.state === "failed" ? "is-problem" : ""}>
       <details className="recent-task">
         <summary>{line}</summary>
@@ -117,17 +122,18 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
   tasks?: TaskRow[] | null | undefined; procedures?: ReadonlyMap<string, Skill> | null;
   trigger?: (taskId: string) => TaskStart | undefined; end?: (taskId: string) => TaskEnd | undefined; now?: Date;
 }) {
+  const d = useDay();
   return <div className="col">
     <p className="eyebrow">What happened</p>
     <h1 className="h1">What Ozzie did</h1>
-    <p className="lede">Ozzie only reads from Planning Center. It has no way to change records, send messages or mark anything.</p>
+    <p className="lede">{promise("reads")} {promise("sends")}</p>
     <section className="stack" aria-labelledby="recent-title">
       <h2 id="recent-title" className="h3">Recent work</h2>
       <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(now ? { now } : {})} />
     </section>
     <section className="stack" aria-labelledby="reads-title">
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
-      {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once Sunday is checked, or when you open the fictional example on the Sunday page.</p>}
+      {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {dayName(d)} is checked, or when you open the fictional example on {pageRef(d)}.</p>}
       {capture && <>
         <p className="checkline">{capture.kind === "recording" ? "Saved copy of a check" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
         <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>

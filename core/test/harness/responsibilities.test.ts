@@ -348,6 +348,23 @@ describe("turning a request into a plan (no model)", () => {
     expect(parseRequest("Keep an eye on this Sunday", SAT, ZONE, { sunday: "2026-11-22" })).toMatchObject({ plan: { lifetime: { until: "2026-11-15" } } });
   });
 
+  // Onboarding spec §5.2 (C3, decision 18): the watched service may be on any day; its name, or "the service", names it.
+  it("takes the watched service by its own day, \"this weekend\" or \"the service\", never needing the word Sunday", () => {
+    for (const text of ["Keep an eye on Wednesday", "Keep an eye on Saturday for me", "Keep an eye on this weekend", "Keep an eye on the service",
+      "Keep watch on our services", "Keep an eye on Wednesday until I say stop"]) {
+      expect(parseRequest(text, SAT, ZONE), text).toMatchObject({ kind: "plan", plan: { template: "keep-sunday-covered" } });
+    }
+    // "Until Wednesday" follows the Wednesday chosen in Settings while it's ahead; otherwise the coming Wednesday.
+    expect(parseRequest("Keep an eye on Wednesday until Wednesday", SAT, ZONE, { sunday: "2026-11-25" })).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-25", ZONE) } });
+    expect(parseRequest("Keep an eye on Wednesday until Wednesday", SAT, ZONE, { sunday: null })).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-18", ZONE) } });
+    expect(parseRequest("Keep an eye on this Wednesday", SAT, ZONE, { sunday: "2026-11-25" })).toMatchObject({ plan: { lifetime: untilLifetime("2026-11-18", ZONE) } });
+  });
+
+  it("a weekday in a schedule says when to look, not what: on its own it still asks what to keep an eye on", () => {
+    expect(parseRequest("Remind me every Wednesday", SAT, ZONE)).toEqual({ kind: "ask", need: "what", choices: [...TEMPLATE_IDS] });
+    expect(parseRequest("Keep an eye on room bookings every Wednesday", SAT, ZONE)).toMatchObject({ kind: "plan", plan: { template: "watch-room-bookings", schedule: { weekdays: [3] } } });
+  });
+
   it("keep an eye on Sunday: every week until stopped, assumed and said so", () => {
     const p = plan("Keep an eye on Sunday for me");
     expect(p.plan.template).toBe("keep-sunday-covered");

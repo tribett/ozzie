@@ -108,6 +108,7 @@ Planning Center path exist only in native code, where the requests are made.
 | Only allow-listed tools, only the procedure's tools | `host.ts` `admitted` | `agent.rs` `tools_ok` |
 | Each tool spec exactly as written in `tool-specs.json` | `tools.ts` `TOOL_SPECS` | `agent.rs`, against `fixed.rs` |
 | The system message is the pinned policy and procedure, byte for byte | `instructions.ts` | `agent.rs`, against `fixed.rs`; the ledger admits a task only under the bundled file's hash |
+| An Ask to a model on this Mac carries the pinned local policy (`policy-local.txt`) in its place, swapped in after every check has passed, because a small model copied the policy's example ids before looking anything up | | `agent.rs` `step_body`, `fixed.rs` `local_ask_system` |
 | Tool results fit the closed grammar and hold only this session's labels | `tools.ts` (sealed with `fixed.ts` `envelopeProblems`) | `fixed.rs` `tool_message` |
 | No name Ozzie has shown, no contact detail, no hidden character | `harness/index.ts` `check`, `names.ts`, `ask.ts` | `name_guard.rs`, `agent.rs` `check_step` |
 | No background-check wording in anything that varies | `background-wording.ts` | `background.rs` |

@@ -2,8 +2,9 @@ import { OtherAiAppsSetup } from "./other-ai-apps-setup.js";
 import { PhoneNoticeSection } from "./phone-notice-section.js";
 import { SiriShortcutsSection } from "./siri-shortcuts-section.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { moreOf, operationsGranted, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
+import { onboarding } from "./onboarding-bridge.js";
 import { MoreFromPlanningCenter } from "./planning-center-more.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
@@ -14,10 +15,29 @@ import { quietLine, scheduleLine } from "./proactive-page.js";
 import { Icon } from "./icons.js";
 import type { Autostart } from "./background.js";
 import { AutostartToggle } from "./responsibility-views.js";
+import { useDay } from "./day-words.js";
+import { dayName, eyeLine, keepTitle } from "./day-phrases.js";
+import { promise } from "./promises.js";
 
-/** The access the saved connection was granted, known only once it's been checked this session. */
-export function grantedCopy(status: ConnectionStatus | null): string {
-  if (operationsGranted(status)) return "Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.";
+/** How Planning Center words a connection at sign-in (spec §6), said beside the promise. */
+export const CONNECTION_WORDING = "Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection.";
+/** Where the connection is kept, only inside "See how this works" (spec §6: "Keychain" nowhere else). */
+export const CONNECTION_HOW = "The connection is kept in this Mac's Keychain, where macOS keeps passwords. Ozzie uses it only to read your church's Planning Center, and disconnecting removes it.";
+/** "When the window is closed": the menu bar named for someone who has never heard the words (spec §6), then by name. */
+export const CLOSED_WINDOW = "Ozzie keeps running when you close its window, as the small Ozzie picture at the top of your screen, so it can keep an eye on what you asked. To stop it completely, click that picture in the menu bar and choose Quit Ozzie.";
+/** Check my setup (spec §4.3), in place of Guided setup. */
+export const CHECK_SETUP_BODY = "See at a glance whether Planning Center, the service Ozzie watches, AI, notices and starting with this Mac are working, with one button to fix anything that isn't.";
+
+/**
+ * The access the saved connection was granted, known only once it's been checked this session, and whether rooms,
+ * follow-ups and group events are read: native's own switch (`readsOn`), never the granted access alone.
+ */
+export function grantedCopy(status: ConnectionStatus | null, readsOn: boolean | null = null): string {
+  if (operationsGranted(status)) {
+    return readsOn === true ? "Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events."
+      : readsOn === false ? "Granted: Services, Calendar, People and Groups. Rooms, follow-ups and group events are off until you turn them on here."
+        : "Granted: Services, Calendar, People and Groups.";
+  }
   if (status?.scopes) return "Granted: Services only. Rooms, follow-ups and group events aren't checked.";
   return "What's granted shows here once the connection has been checked.";
 }
@@ -39,15 +59,16 @@ export function SavedRecordings({ count, onDelete, sharing, siri = false, confir
   count: number; onDelete?: (() => void) | undefined; sharing: boolean; siri?: boolean; confirming?: boolean;
 }) {
   const [confirm, setConfirm] = useState(confirming);
+  const d = useDay();
   const it = count === 1 ? "it" : "them";
   return <>
     <div className="find-next">
-      <span className="bold">{count === 0 ? "No saved checks for this organization." : `${count} saved for this organization.`}</span>
+      <span className="bold">{count === 0 ? "No saved checks for this church." : `${count} saved for this church.`}</span>
       {count > 0 && onDelete && <button type="button" className="btn btn-forget btn-sm" aria-expanded={confirm} aria-controls="delete-recordings"
         onClick={() => setConfirm(!confirm)}>Delete saved checks</button>}
     </div>
     {count > 0 && onDelete && confirm && <div id="delete-recordings" className="decide" role="group" aria-labelledby="delete-recordings-q">
-      <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved check" : `all ${count} saved checks`} from this Mac? Sunday can't be shown
+      <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved check" : `all ${count} saved checks`} from this Mac? {dayName(d).replace(/^./u, c => c.toUpperCase())} can't be shown
         from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""}{siri ? " The copy Siri and Shortcuts answer from is removed too." : ""} Planning Center doesn't change.</p>
       <div className="find-next">
         <button type="button" className="btn btn-forget btn-sm" onClick={() => { setConfirm(false); onDelete(); }}>Yes, delete {it}</button>
@@ -75,17 +96,24 @@ export function YourNameField({ store = yourName, optional = false }: { store?: 
  * Settings' sections in the order a leader meets them (audit item 27), each by its heading's id: the short index at the
  * top lists those on the page and moves within the page pane to one.
  */
+/**
+ * After Settings opens at a section, when it is put back in place if the sections above it grew as they finished
+ * reading (review L6): on the next frame, then at these times, and never after the last. Bounded, and it stops as soon
+ * as the person scrolls the page themselves.
+ */
+export const OPEN_AT_SETTLE_MS = [100, 300, 700, 1_500] as const;
+
 export const SETTINGS_SECTIONS = [
-  { id: "pco-title", label: "Planning Center and which Sunday" },
+  { id: "pco-title", label: "Planning Center and which service Ozzie watches" },
   { id: "your-name-title", label: "Your name on notes" },
   { id: "ai-title", label: "AI help" },
   { id: "runs-title", label: "What Ozzie runs and notices" },
   { id: "calendars-title", label: "Calendars" },
-  { id: "lists-title", label: "Lists and notes" },
+  { id: "lists-title", label: "Church lists" },
   { id: "other-ai-title", label: "Other AI apps, Spotlight and Shortcuts" },
   { id: "updates-title", label: "Updates" },
   { id: "saved-title", label: "Saved checks" },
-  { id: "setup-again", label: "Guided setup" },
+  { id: "check-setup", label: "Check my setup" },
 ] as const;
 
 /** "On this page": a link to each section shown; `onGo` moves to it. */
@@ -96,15 +124,34 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
   </nav>;
 }
 
-/** Settings: an index, then Planning Center and which Sunday, your name on notes, AI help, what Ozzie runs and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and guided setup, in that order. */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, prefs, onAutomatic, onSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards }: {
+/**
+ * Settings: an index, then Planning Center and which service Ozzie watches, your name on notes, AI help, what Ozzie runs
+ * and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and Check my setup, in
+ * that order.
+ */
+/**
+ * Native's switch for rooms, follow-ups and group events, set once the connection holds the access: turning on before
+ * Planning Center granted it would let a later People grant for To start those reads. Null: not set (not granted yet).
+ */
+export async function setOperationsReadsAfter(status: ConnectionStatus | null, on: boolean, set: (on: boolean) => Promise<boolean> = onboarding.setOperationsReads): Promise<boolean | null> {
+  if (on && !operationsGranted(status)) return null;
+  return set(on);
+}
+
+export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
-  /** The automatic-check schedule, summarized here and changed under What runs automatically. */
-  prefs?: ProactivePrefs; onAutomatic?: () => void; onSetup?: () => void;
-  /** Opens Lists & notes, where the church's own lists are kept. */
+  /** A way chosen, or No AI for now, in AI help (ai-settings.tsx `onAnswer`): App keeps it as setup's AI answer. */
+  onAiAnswer?: ((how: "chosen" | "none") => void) | undefined;
+  /** Ozzie's hourly look at the watched service, summarized here and changed under Keeping watch. */
+  prefs?: ProactivePrefs; onAutomatic?: () => void;
+  /** "Walk through setup again": the guided setup, kept beside Check my setup (owner's choice). */
+  onSetup?: () => void;
+  /** "Check my setup" (spec §4.3): opens the checklist. The section shows when either this or `onSetup` is given. */
+  onCheckSetup?: () => void;
+  /** Opens Church lists, where the church's own lists are kept. */
   onLists?: () => void;
-  /** "Open Ozzie when I log in" on this Mac; the section is shown only when it's available. */
+  /** "Start Ozzie when this Mac starts"; the section is shown only when it's available. */
   autostart?: Autostart | undefined;
   /** Debug builds only: which answering loop Ask Ozzie uses, for comparison. Never shown in a release build. */
   developer?: { loop: "pi" | "ts"; onLoop: (loop: "pi" | "ts") => void } | undefined;
@@ -126,12 +173,29 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   cards?: number;
   /** Disconnect was chosen with cards open: App ends them. */
   onDiscardCards?: (() => void) | undefined;
+  /** Tests only: whether the rooms, follow-ups and group reads are on, instead of asking native. */
+  operationsReads?: boolean | null;
+  /** Opens at this section (its heading's id: AI help after the AI screens were open over Settings), then `onOpenAt`. */
+  openAt?: "ai-title" | null;
+  onOpenAt?: () => void;
 }) {
+  const d = useDay();
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
   // The opt-in signs in again with the same registration (Ozzie's own, or yours under Advanced) as the sign-in form.
   // Check-Ins and Registrations stay as they are when this choice changes.
-  const reconnect = (operations: boolean) => { void run(() => control.signIn(operations, moreOf(status)), "operations"); };
+  // Rooms, follow-ups and group events are read only while native's switch is on (first-run review H1).
+  const [readsOn, setReadsOn] = useState<boolean | null>(readsProp ?? null);
+  const [wantReads, setWantReads] = useState(false);
+  // Native keeps the switch per church: read it again whenever the church in use changes.
+  useEffect(() => { if (readsProp === undefined) void onboarding.operationsReads().then(setReadsOn); }, [readsProp, status?.organization]);
+  const switchReads = (on: boolean) => { void setOperationsReadsAfter(status, on).then(v => { if (v !== null) setReadsOn(v); }, () => undefined); };
+  // A sign-in asked for the access: the switch goes on once Planning Center granted it, not before.
+  useEffect(() => { if (wantReads && operationsGranted(status)) { setWantReads(false); switchReads(true); } }, [wantReads, status?.scopes]);
+  const reconnect = (operations: boolean) => {
+    if (operations) setWantReads(true); else switchReads(false);
+    void run(() => control.signIn(operations, moreOf(status)), "operations");
+  };
   // Each section's place, by its own element (never by looking anything up in the page): its heading, or for Calendars
   // and Updates (sections of their own) the box they sit in. The index lists every section this page can show; once
   // on screen, only those that are (Updates shows only when it has a version to say).
@@ -148,13 +212,35 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
    * Moves to a section: scrolls only the page pane this page sits in so the section is near the top (never
    * scrollIntoView, which scrolls the window too), then gives it keyboard focus without scrolling again.
    */
-  const go = (id: string) => {
+  const align = (id: string) => {
     const place = places.current.get(id), pane = page.current?.parentElement;
-    if (!place) return;
-    if (pane) pane.scrollTop += place.getBoundingClientRect().top - pane.getBoundingClientRect().top - 16;
-    place.focus({ preventScroll: true });
+    if (place && pane) pane.scrollTop += place.getBoundingClientRect().top - pane.getBoundingClientRect().top - 16;
+    return place;
   };
-  const candidates = SETTINGS_SECTIONS.filter(s => (s.id !== "other-ai-title" || others) && (s.id !== "setup-again" || onSetup)
+  const go = (id: string) => align(id)?.focus({ preventScroll: true });
+  // Opened at a section: the sections above it may still grow as they finish reading, so it is put back in place for a
+  // moment (OPEN_AT_SETTLE_MS), until the person scrolls the page themselves (review L6).
+  const settling = useRef<() => void>(() => {});
+  useEffect(() => () => settling.current(), []);
+  useLayoutEffect(() => {
+    if (!openAt) return;
+    go(openAt);
+    onOpenAt?.();
+    settling.current();
+    const pane = page.current?.parentElement;
+    if (!pane) return;
+    let last = pane.scrollTop;
+    const timers = OPEN_AT_SETTLE_MS.map(ms => setTimeout(() => again(), ms));
+    const frame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(() => again()) : null;
+    const stop = () => { timers.forEach(clearTimeout); if (frame !== null) cancelAnimationFrame(frame); };
+    const again = () => {
+      if (pane.scrollTop !== last) { stop(); return; }
+      align(openAt);
+      last = pane.scrollTop;
+    };
+    settling.current = stop;
+  }, [openAt]);
+  const candidates = SETTINGS_SECTIONS.filter(s => (s.id !== "other-ai-title" || others) && (s.id !== "check-setup" || onSetup || onCheckSetup)
     && (s.id !== "calendars-title" || calendars) && (s.id !== "updates-title" || updates));
   return <div className="col settings" ref={page}>
     <h1 className="h1">Settings</h1>
@@ -162,25 +248,38 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
     <SettingsIndex sections={shown ? candidates.filter(s => shown.includes(s.id)) : candidates} onGo={go} />
 
     <section className="settings-sec" aria-labelledby="pco-title">
-      <h2 id="pco-title" className="h3" tabIndex={-1} ref={at("pco-title")}>Planning Center and which Sunday</h2>
-      <p className="banner"><Icon name="lock" small /><span><strong>Reads only.</strong> Planning Center may grant broad access at sign-in, but Ozzie has no way to change records or send messages. The connection stays on this Mac, in its Keychain.</span></p>
+      <h2 id="pco-title" className="h3" tabIndex={-1} ref={at("pco-title")}>Planning Center and which service Ozzie watches</h2>
+      <div className="banner"><Icon name="lock" small /><div className="stack-tight">
+        <span><strong>{promise("readsShort")}</strong> {CONNECTION_WORDING} {promise("still")} The connection is kept safely on this Mac.</span>
+        <details className="listen-more">
+          <summary>See how this works</summary>
+          <p className="small">{CONNECTION_HOW}</p>
+        </details>
+      </div></div>
       <section className="find" aria-labelledby="signin-title">
         <h3 id="signin-title" className="settings-t">Sign in</h3>
         <ConnectForm status={status} settings={settings} onSettings={onSettings} control={control} cards={cards} onDiscardCards={onDiscardCards} />
       </section>
       <section className="find" aria-labelledby="sunday-title">
-        <h3 id="sunday-title" className="settings-t">Which Sunday</h3>
+        <h3 id="sunday-title" className="settings-t">Which service Ozzie watches</h3>
         {/* The same picker as guided setup: upcoming plans once connected, with typing the plan by hand folded below. */}
         <SundayPicker connected={status?.state === "connected"} settings={settings} onSettings={onSettings} />
       </section>
       <section className="find" aria-labelledby="operations-title">
         <h3 id="operations-title" className="settings-t">Rooms, follow-ups and group events</h3>
-        <p className="find-body">Ozzie can also check room bookings in Planning Center Calendar, follow-ups without an owner in People, and group events at the same time as serving in Groups. Turning this on signs in again and asks Planning Center for Calendar, People and Groups access. Planning Center grants each of those as read-and-write; Ozzie only reads, and has no way to change anything there. People access is also used when you open a note for one person in Mail or Messages: Ozzie then reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, and uses one only to fill in To.</p>
-        <p className="checkline granted">{grantedCopy(status)}</p>
+        <p className="find-body">Ozzie can also check room bookings in Planning Center Calendar, follow-ups without an owner in People, and group events at the same time as serving in Groups. {operationsGranted(status)
+          ? "Your connection already includes Calendar, People and Groups, so turning this on needs no new sign-in."
+          : "Turning this on signs in again and asks Planning Center for Calendar, People and Groups access."} Planning Center grants each of those as read-and-write; Ozzie only reads, and has no way to change anything there. People access is also used when you open a note for one person in Mail or Messages: Ozzie then reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, and uses one only to fill in To.</p>
+        <p className="checkline granted">{grantedCopy(status, readsOn)}</p>
         <div className="row form-actions">
           {!operationsGranted(status)
             ? <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(true)}>Also check rooms, follow-ups and group events</button>
-            : <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(false)}>Sign in again with Services only</button>}
+            : readsOn === false
+              ? <button className="btn btn-secondary" disabled={working} onClick={() => switchReads(true)}>Also check rooms, follow-ups and group events</button>
+              : <>
+                {readsOn === true && <button className="btn btn-secondary" disabled={working} onClick={() => switchReads(false)}>Turn off rooms, follow-ups and group events</button>}
+                <button className="btn btn-quiet" disabled={!canSignIn || working || pending} onClick={() => reconnect(false)}>Connect again with Services only</button>
+              </>}
         </div>
         {control.problem?.from === "operations" && <p role="alert" className="problem">{control.problem.text}</p>}
       </section>
@@ -194,21 +293,21 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
 
     <section className="settings-sec" aria-labelledby="ai-title">
       <h2 id="ai-title" className="h3" tabIndex={-1} ref={at("ai-title")}>AI help</h2>
-      <AiSettings onChange={c => onModel?.(c)} labelledBy="ai-title" />
+      <AiSettings onChange={c => onModel?.(c)} onAnswer={onAiAnswer} labelledBy="ai-title" />
     </section>
 
     <section className="settings-sec" aria-labelledby="runs-title">
       <h2 id="runs-title" className="h3" tabIndex={-1} ref={at("runs-title")}>What Ozzie runs and notices</h2>
       <section className="find" aria-labelledby="auto-title">
-        <h3 id="auto-title" className="settings-t">Automatic checks</h3>
-        {/* Named as everywhere else (audit item 28): the regular Sunday check, and Keep Sunday covered beside it. */}
-        <p className="find-body">{prefs ? `The regular Sunday check: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : "The regular Sunday check looks at the chosen Sunday on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse."}</p>
-        <p className="small">Keep Sunday covered and other jobs are set up in What runs automatically.</p>
-        {onAutomatic && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onAutomatic}>Change these in What runs automatically</button></div>}
+        <h3 id="auto-title" className="settings-t">Keeping watch</h3>
+        {/* Named as everywhere else (spec §6): Ozzie keeps an eye on the watched service by its real day, and the job beside it. */}
+        <p className="find-body">{prefs ? `${eyeLine(d)}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : `${eyeLine(d)} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
+        <p className="small">{keepTitle(d)} and other jobs are set up in Keeping watch.</p>
+        {onAutomatic && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onAutomatic}>Change these in Keeping watch</button></div>}
       </section>
       {autostart && <section className="find" aria-labelledby="background-title">
         <h3 id="background-title" className="settings-t">When the window is closed</h3>
-        <p className="find-body">Ozzie keeps running in the menu bar when you close its window, so it can keep an eye on what you asked. To stop it completely, choose Quit Ozzie from the menu bar icon.</p>
+        <p className="find-body">{CLOSED_WINDOW}</p>
         <AutostartToggle autostart={autostart} />
       </section>}
       {phone === undefined ? <PhoneNoticeSection /> : phone}
@@ -217,10 +316,10 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
     {calendars && <div className="settings-slot" tabIndex={-1} role="group" aria-labelledby="calendars-title" ref={at("calendars-title")}>{calendars}</div>}
 
     <section className="settings-sec" aria-labelledby="lists-title">
-      <h2 id="lists-title" className="h3" tabIndex={-1} ref={at("lists-title")}>Lists and notes</h2>
+      <h2 id="lists-title" className="h3" tabIndex={-1} ref={at("lists-title")}>Church lists</h2>
       <div className="find">
-        <p className="find-body">Your church's own lists and notes have their own page, Lists &amp; notes.</p>
-        {onLists && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onLists}>Open Lists &amp; notes</button></div>}
+        <p className="find-body">Your church's own lists and notes have their own page, Church lists.</p>
+        {onLists && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onLists}>Open Church lists</button></div>}
       </div>
     </section>
 
@@ -249,16 +348,19 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
     <section className="settings-sec" aria-labelledby="saved-title">
       <h2 id="saved-title" className="h3" tabIndex={-1} ref={at("saved-title")}>Saved checks</h2>
       <div className="find">
-        <p className="find-body">Each check saves a copy on this Mac, so Sunday can still be shown if Planning Center can't be reached. These saved checks include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each Sunday.</p>
+        <p className="find-body">Each check saves a copy on this Mac, so {dayName(d)} can still be shown if Planning Center can't be reached. These saved checks include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each service.</p>
         <SavedRecordings count={recordingCount} onDelete={onDeleteRecordings} sharing={Boolean(sharing?.on)} siri={Boolean(siri?.on)} />
       </div>
     </section>
 
-    {onSetup && <section className="settings-sec" aria-labelledby="setup-again">
-      <h2 id="setup-again" className="h3" tabIndex={-1} ref={at("setup-again")}>Guided setup</h2>
+    {(onCheckSetup || onSetup) && <section className="settings-sec" aria-labelledby="check-setup">
+      <h2 id="check-setup" className="h3" tabIndex={-1} ref={at("check-setup")}>Check my setup</h2>
       <div className="find">
-        <p className="find-body">Walk through connecting Planning Center, choosing the Sunday, AI help and automatic checks, one step at a time.</p>
-        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSetup}>Walk through setup again</button></div>
+        <p className="find-body">{CHECK_SETUP_BODY}</p>
+        <div className="find-next">
+          {onCheckSetup && <button type="button" className="btn btn-secondary btn-sm" onClick={onCheckSetup}>Check my setup</button>}
+          {onSetup && <button type="button" className="btn btn-quiet btn-sm" onClick={onSetup}>Walk through setup again</button>}
+        </div>
       </div>
     </section>}
 

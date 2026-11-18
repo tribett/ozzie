@@ -239,6 +239,11 @@ describe("Sunday's decisions show once", () => {
       watch: watchWith(writeup("keep-found", { none: true, why: "run-limit" })) })));
     expect(ranPast).toContain("No write-up this time: the AI's answer ran past what one run may use. This card shows what Ozzie's own check of Planning Center found.");
     expect(ranPast).not.toContain("reached its limit");
+    // The AI company's account out of credit (review F5): its own sentence, never "ran past".
+    const noCredit = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
+      watch: watchWith(writeup("keep-found", { none: true, why: "no-credit" })) })));
+    expect(noCredit).toContain("No write-up this time: the AI company says your account has no credit left, or has reached a spending limit. This card shows what Ozzie's own check of Planning Center found.");
+    expect(noCredit).not.toContain("ran past");
     // Paused during its write-up: none is kept, and nothing is said (review G).
     const paused = renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
       watch: watchWith(writeup("keep-found", { none: true, why: "stopped" })) }));
@@ -459,9 +464,10 @@ describe("the fictional example never looks real (audit item 2)", () => {
     // Not connected yet, and the example not chosen: what to do next, and nothing invented.
     const notConnected = today({ notConnected: { onConnect: () => {}, onExample: () => {} } });
     expect(notConnected).not.toMatch(invented);
+    // The spec's card (onboarding spec §2, after the failures table), its promise from promises.ts.
     expect(notConnected).toContain("Not connected yet Planning Center Connect Planning Center to see your Sunday");
-    expect(notConnected).toContain("Ozzie hasn't read anything from your church yet, so nothing on this page is about your church. Connecting is a sign-in in your browser, and Ozzie only reads: it changes nothing in Planning Center.");
-    expect(notConnected).toContain("Connect Planning Center See the fictional example");
+    expect(notConnected).toContain("Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and Ozzie only reads.");
+    expect(notConnected).toContain("Connect Planning Center See an example church first");
     // Nothing to brief before anything is read; no set-aside on a card asking to connect.
     expect(notConnected).not.toContain("Listen to today's briefing");
     expect(notConnected).not.toContain("Set aside");
@@ -481,10 +487,11 @@ describe("the fictional example never looks real (audit item 2)", () => {
   it("puts the example's band, with its way out, in large type across every page while it's on", async () => {
     const { readFileSync } = await import("node:fs");
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-    expect(app).toContain("{!showSetup && fictional && <ExampleBand onLeave={leaveExample} />}");
+    // With "Set up my church" beside the way out (onboarding spec §0.3).
+    expect(app).toContain("{!showSetup && fictional && <ExampleBand onLeave={leaveExample} onSetUp={() => { leaveExample(); openSetup(); }} />}");
     expect(app).toContain("example={fictional}");
     // True on every page it sits over, including the ones that show the leader's own rules, lists, settings and cards (review P, L9).
-    expect(app).toContain('export const EXAMPLE_BAND = { title: "Example church, not real.", body: "The Sunday, teams, people and email shown are made up. Your own Church rules, lists, settings and visitor cards are real.", leave: "Leave the example" } as const;');
+    expect(app).toContain('export const EXAMPLE_BAND = { title: "Example church, not real.", body: "The Sunday, teams, people and email shown are made up. Your own Church rules, lists, settings and visitor cards are real.",\n  setUp: "Set up my church", leave: "Leave the example" } as const;');
     expect(app).not.toContain("Nothing in it is from your church.");
     const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.oz \.example-band p \{[^}]*font-size: 17px/u);
@@ -496,10 +503,10 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
     ready: true, paused: false, running: false, intervalMinutes: 60, runOnLaunch: true,
     last: { at: "2026-11-20T14:06:00.000Z", ok: true }, next: "2026-11-20T15:06:00.000Z", missed: [], ...over,
   });
-  it("leads In progress with the regular Sunday check once it can run, with how often, when it last and next looks", () => {
+  it("leads In progress with Ozzie keeping an eye on Sunday once it can run, with how often, when it last and next looks", () => {
     expect(regularLine(regular(), FRI, ET)).toBe("Checks Planning Center every hour while Ozzie is open, and when it opens. Last checked 9:06 AM. Next check 10:06 AM.");
     expect(regularLine(regular({ runOnLaunch: false, intervalMinutes: 30, last: null }), FRI, ET)).toBe("Checks Planning Center every 30 minutes while Ozzie is open. Not checked yet. Next check 10:06 AM.");
-    expect(regularLine(regular({ paused: true }), FRI, ET)).toContain("Paused: nothing runs until you resume it in What runs automatically.");
+    expect(regularLine(regular({ paused: true }), FRI, ET)).toContain("Paused: nothing runs until you resume it in Keeping watch.");
     expect(regularLine(regular({ running: true }), FRI, ET)).toContain("Checking now.");
     expect(regularLine(regular({ last: { at: "2026-11-19T14:06:00.000Z", ok: false } }), FRI, ET)).toContain("Last checked Thu 9:06 AM, but that check couldn't finish.");
     const keeping = responsibility(KEEP, "keep-sunday-covered");
@@ -507,7 +514,7 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
     expect(items.filter(i => GROUP_OF[i.state] === "progress").map(i => i.id)).toEqual(["regular:sunday-check", `watching:${KEEP}`]);
     // Not until it can run: then In progress says what starts it.
     expect(todayItems(input({ regular: regular({ ready: false }) })).map(i => i.id)).toEqual(["sunday-unchecked"]);
-    expect(progressEmptyText(regular({ ready: false }), false)).toBe("Nothing runs yet. The regular Sunday check starts once Planning Center is connected and a Sunday is chosen; Keep Sunday covered and other jobs start when you set them up.");
+    expect(progressEmptyText(regular({ ready: false }), false)).toBe("Nothing runs yet. Ozzie keeps an eye on Sunday once Planning Center is connected and a service is chosen; Keep Sunday covered and other jobs start when you set them up.");
     expect(progressEmptyText(null, true)).toBe("Nothing runs in the fictional example.");
   });
 
@@ -524,7 +531,7 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
       brief: null, names: {}, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), regular: regular({ missed: ["2026-11-20T12:00:00.000Z"] }),
     })));
     const progress = page.slice(page.indexOf("In progress"));
-    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services The regular Sunday check Checks Planning Center every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
+    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services Ozzie keeps an eye on Sunday Checks Planning Center every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
     expect(page).not.toMatch(/under way/u);
     expect(page).not.toMatch(HIDDEN_WORDS);
   });

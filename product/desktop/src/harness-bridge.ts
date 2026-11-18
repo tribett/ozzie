@@ -29,7 +29,7 @@ import type { SundayCapture, SundayRules } from "../../../core/src/sunday-captur
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { operationsGranted, type ConnectionStatus } from "./connection.js";
 import {
-  askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
+  ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
   type CheckTrigger, type TaskEnd, type TaskRow, type TaskStart,
 } from "./harness-words.js";
 
@@ -41,7 +41,7 @@ const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 /** agent_step's closed error vocabulary (agent.rs AgentError), as Tauri rejects with it: a bare string. */
 export type AgentErrorCode = "egress" | "denied" | "limit" | "invalid-task" | "ledger-unavailable" | "not-configured" | "budget" | "daily-limit"
   | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail"
-  | "background-check";
+  | "background-check" | "month-limit" | "no-credit" | "thought-only";
 /** The FailureCodes a model step can end a task with (the loops keep exactly these from a step's error). */
 export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity";
 /**
@@ -58,11 +58,17 @@ const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   "invalid-answer": "fidelity",
   // Ozzie managed: the church's allowance on ozzie.church is spent, so AI help is paused (never retried).
   "allowance-paused": "limit",
+  // The church's own AI company says its account has no credit left (model.rs NoCredit): nothing more is sent.
+  "no-credit": "limit",
+  // Gemini spent the step's whole answer thinking and said nothing (contract 14): a failure of this answer, not a limit.
+  "thought-only": "transport",
   // Ozzie managed: ozzie.church refused the step as holding a phone number or email address; nothing went to the AI.
   "contact-detail": "egress",
   // Background-check wording in the step (owner decision 2026-11-14), found natively or by ozzie.church before anything
   // reached the AI. The ledger records only "egress"; the Ask panel shows the page's own refusal (askOzzie).
   "background-check": "egress",
+  // The church's own key reached its monthly limit (contract N5): AI help is paused until next month, never retried.
+  "month-limit": "limit",
 });
 const nativeCode = (error: unknown): AgentErrorCode | null => {
   const raw = typeof error === "string" ? error : typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -600,7 +606,8 @@ export type AskTurn =
  * first names. The same for Ask and for a responsibility's prepared summary.
  */
 export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: Skill | undefined, sender: string): ShownAnswer {
-  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence);
+  // The watched service's own day words, so an answer names Wednesday and "the Wednesday page" (review H4).
+  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
   const mode = harness.data.mode;
   return {
     body: composed.paragraphs.map(p => harness.restore(p, { sender })).join("\n\n"),
@@ -622,7 +629,7 @@ export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: S
  * (Harness.keep), where the facts came from and when, what wasn't complete, and what it looked at.
  */
 export function keptWriteup(harness: Harness, outcome: TaskOutcome): { lines: string[]; based_on: string; gaps: string[]; steps: string[] } {
-  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence);
+  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
   const mode = harness.data.mode;
   return {
     lines: composed.paragraphs.map(p => harness.keep(p)), based_on: basedOnEvidence(outcome.evidence, mode),
@@ -702,7 +709,7 @@ export async function lookAtWhoCouldHelp(make: (data: HarnessData) => Harness, d
   const personFacts = new Set(results.flatMap(e => peopleIn(e).flatMap(p => p.fact ? [p.fact] : [])));
   const roleFacts = parsed.facts.filter(id => !personFacts.has(id));
   const lines = parsed.answer === "facts" && roleFacts.length
-    ? composeAnswer(answerText({ ...parsed, facts: roleFacts }), outcome.evidence).paragraphs.map(p => h.restore(p)) : [];
+    ? composeAnswer(answerText({ ...parsed, facts: roleFacts }), outcome.evidence, h.data.brief?.day ?? null).paragraphs.map(p => h.restore(p)) : [];
   look.kind = parsed.answer === "draft" ? "draft" : parsed.answer === "not-covered" ? "not-covered" : lines.length ? "lines" : "nothing";
   // A list cut to fit isn't a read that couldn't be finished: the card says it was shortened instead (review G, M-1).
   const cut = results.filter(e => cutIn(e) > 0 && e.completeness === "partial").length;
@@ -746,6 +753,10 @@ export async function askOzzie(harness: Harness, typed: string, options: {
   signal?: AbortSignal; recorder?: LedgerRecorder | null; skills: ReadonlyMap<string, Skill>; sender?: string;
   /** Where agentStep kept the native code of a failed step. Defaults to the app's. */
   notes?: StepNotes;
+  /** When Ozzie's AI's pause ends, from its account (model.ts `pausedWhen`): said instead of "try again in a minute". */
+  pausedWhen?: string | null;
+  /** The AI is a model on this Mac (model status `route` "local"): an answer that couldn't be backed up says so plainly. */
+  local?: boolean;
 }): Promise<AskTurn> {
   const signal = options.signal ?? new AbortController().signal;
   const here = async (work: () => Promise<LocalAnswer>, first: string[] = []): Promise<AskTurn> => {
@@ -816,5 +827,7 @@ export async function askOzzie(harness: Harness, typed: string, options: {
   // The second (native) or third (ozzie.church) refusal of background-check wording: the page's own words, as a refusal.
   if (native === "background-check") return { state: "refused", text: askFailureText(outcome.code, native) };
   if (outcome.code === "no-model") return { state: "no-model" };
-  return { state: "problem", code: outcome.code, text: askFailureText(outcome.code, native) };
+  const text = askFailureText(outcome.code, native, options.pausedWhen ?? null);
+  // AI on this Mac misses more often than an AI company's (measured 2026-11-18): it says so, and what helps.
+  return { state: "problem", code: outcome.code, text: options.local && text === ASK_FAILURES.fidelity ? `${text} ${ASK_FAILURES.fidelityHere}` : text };
 }

@@ -7,6 +7,7 @@ import { backgroundCheckTeamIds, BACKGROUND_CHECKS, kidsTeams, withKidsBackgroun
 import type { SundayCapture, SundayRead, SundayRules } from "../src/sunday-capture.js";
 import { CHECKED, nov22Capture, PEOPLE, TEAMS, withFictionalBackgroundChecks } from "../src/fictional-sunday.js";
 import { buildSpokenBriefing } from "../src/spoken-briefing.js";
+import { wednesdayCapture } from "./fixtures/service-days/wednesday.js";
 import { envelopeProblems } from "../src/harness/fixed.js";
 import { HarnessSession } from "../src/harness/session.js";
 import { HarnessTools } from "../src/harness/tools.js";
@@ -515,5 +516,21 @@ describe("review fixes (2026-11-14)", () => {
     // A team marked earlier keeps its name for Church rules, even when it isn't on the Sunday checked last.
     expect(kidsTeams(withKidsTeam(base, TEAMS.nursery, 2, "Nursery"))).toEqual([{ team_id: TEAMS.nursery, min_confirmed: 2, name: "Nursery" }]);
     expect(kidsTeams(withKidsTeam(withKidsTeam(base, TEAMS.nursery, 2, "Nursery"), TEAMS.nursery, 3))).toEqual([{ team_id: TEAMS.nursery, min_confirmed: 3, name: "Nursery" }]);
+  });
+});
+
+// Onboarding spec §5 (decision 18): the kids rules' sentences name the service by its own day.
+describe("Church rules: kids teams on a Wednesday service", () => {
+  it("says this Wednesday's plan, confirmed for this Wednesday and expires before this Wednesday, never Sunday", () => {
+    const off = brief(wednesdayCapture(), { ...base, kidsTeams: [{ team_id: "7599999", min_confirmed: 2 }] });
+    expect(off.not_checked).toContain("1 kids team isn't on this Wednesday's plan, so it wasn't counted.");
+    const capture = wednesdayCapture();
+    // Moved to the Wednesday: the check runs out on the Tuesday before.
+    withChecks(capture, otherOnFile(capture), checks(PEOPLE.nurseryConfirmed, [check("901", { expires_on: "2026-11-24" }, PEOPLE.nurseryConfirmed)]));
+    const b = brief(capture, nursery(3));
+    const [f] = kinds(b.findings, "background-check");
+    expect(f).toMatchObject({ check: "expires-before-sunday", tone: "decision" });
+    expect(f!.why.join(" ")).toContain("expires before this Wednesday.");
+    expect([...b.findings.flatMap(x => x.why), ...b.not_checked].join(" ")).not.toMatch(/sunday/iu);
   });
 });

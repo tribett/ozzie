@@ -1,12 +1,12 @@
 // A note to the team's leader when nobody on the team qualifies, or when a Church rule asks for
-// a scheduled Sunday lead and none is scheduled. Same placeholder model as draft-request.ts:
+// a scheduled lead and none is scheduled. Same placeholder model as draft-request.ts:
 // Ozzie writes [Leader A] / [Role] / [Your name] text here and names are put back on this Mac only.
 // These notes are never offered for AI rewording (draft-request's boundary only accepts its own
 // volunteer-request drafts), and nothing is ever sent: the person copies the note and sends it.
 import type { Finding } from "./sunday-brief.js";
-import { serviceWhen } from "./draft-request.js";
+import { serviceOn } from "./draft-request.js";
 
-/** `sunday`: the church-local date (YYYY-MM-DD) of the Sunday checked, named when the service time wasn't read. */
+/** `sunday`: the church-local date (YYYY-MM-DD) of the service checked, on whatever day it is, named when the service time wasn't read. */
 export interface EscalationContext { finding: Finding; leader_id: string; sunday?: string | null }
 export interface EscalationDraft { readonly kind: "no-one-clear" | "lead-missing"; readonly text: string; readonly role: string }
 
@@ -21,14 +21,14 @@ export function canEscalate(finding: Finding): boolean {
 export function escalationDraft(ctx: EscalationContext): EscalationDraft {
   const { finding } = ctx;
   // The service's own date, never "this week" or "this Sunday": the note may go out weeks before it.
-  const when = serviceWhen(finding, ctx.sunday);
+  const on = serviceOn(finding, ctx.sunday);
   if (!canEscalate(finding) || !finding.leaders!.includes(ctx.leader_id)) throw new Error("Ozzie can only prepare this note for a leader Planning Center lists for this team.");
   const role = finding.position!.name;
   if (finding.kind === "lead-missing") return Object.freeze({
     kind: "lead-missing" as const, role,
     text: [
       "Hi [Leader A],",
-      `I don't see anyone scheduled to lead the [Role] team on ${when} in Planning Center. Is that expected, or should we find someone?`,
+      `I don't see anyone scheduled to lead the [Role] team ${on} in Planning Center. Is that expected, or should we find someone?`,
       "Thank you,\n[Your name]",
     ].join("\n\n"),
   });
@@ -37,7 +37,7 @@ export function escalationDraft(ctx: EscalationContext): EscalationDraft {
     kind: "no-one-clear" as const, role,
     text: [
       "Hi [Leader A],",
-      `[Role] on ${when} still needs ${n === 1 ? "one more person" : `${n} more people`}. I checked the team in Planning Center and couldn't find anyone else on the team who is clear for that time.`,
+      `[Role] ${on} still needs ${n === 1 ? "one more person" : `${n} more people`}. I checked the team in Planning Center and couldn't find anyone else on the team who is clear for that time.`,
       "Could you help me think of who to ask, or let me know if it's covered another way?",
       "Thank you,\n[Your name]",
     ].join("\n\n"),

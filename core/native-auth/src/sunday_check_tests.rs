@@ -3047,18 +3047,17 @@ fn a_check_started_during_an_open_waits_for_it_then_runs_normally() {
     });
 }
 
-/// Opens a note the first time the check is told to wait (a 429), while the check pauses.
+/// Opens a note the first time the check is told to wait (a 429), while the check pauses: on another thread, as the
+/// app's draft command does, and finished before the check goes on, so the note is opened during the check whatever
+/// the machine's load. (Joined later instead, the thread could start after the check had ended and freed its turn,
+/// which made the test fail about once in three runs under load: review L-6, 2026-11-18.)
 struct Interleave {
     inner: Script,
     auth: Arc<AuthController>,
     people: crate::contact::CheckedPeople,
     turns: Turns,
     note: Arc<SlowNote>,
-    opened: Mutex<
-        Option<
-            std::thread::JoinHandle<Result<crate::contact::Recipient, crate::contact::NoRecipient>>,
-        >,
-    >,
+    opened: Mutex<Option<Result<crate::contact::Recipient, crate::contact::NoRecipient>>>,
 }
 impl SourceHttp for Interleave {
     fn read(&self, request: &SourceRequest, access: &str) -> Result<SourcePage, SourceError> {
@@ -3071,9 +3070,8 @@ impl SourceHttp for Interleave {
                 self.turns.clone(),
                 self.note.clone(),
             );
-            *opened = Some(std::thread::spawn(move || {
-                open_note(&auth, &people, &turns, &note)
-            }));
+            let note = std::thread::spawn(move || open_note(&auth, &people, &turns, &note));
+            *opened = Some(note.join().unwrap());
         }
         result
     }
@@ -3116,9 +3114,7 @@ fn an_open_during_a_check_reads_nothing_and_leaves_the_check_as_it_was() {
         .lock()
         .unwrap()
         .take()
-        .expect("a note was opened during the check")
-        .join()
-        .unwrap();
+        .expect("a note was opened during the check");
     assert_eq!(
         opened.err(),
         Some(crate::contact::NoRecipient::BusyWithACheck)

@@ -163,7 +163,7 @@ export function connectionProblem(error: unknown): string {
   if (known.includes('"browser-unavailable"')) return "The sign-in browser could not open. Try again after checking the default browser.";
   if (known.includes('"expired"')) return "Sign-in expired. Start a new connection.";
   if (known.includes('"scope-mismatch"')) return "Planning Center granted different access than Ozzie asked for, so nothing was saved. Try connecting again.";
-  if (known.includes('"not-revoked"')) return "A Sunday check is still stopping, so access hasn't been revoked yet. Try disconnecting again in a moment.";
+  if (known.includes('"not-revoked"')) return "A check is still stopping, so access hasn't been revoked yet. Try disconnecting again in a moment.";
   if (known.includes('"busy"')) return "The previous connection check is still stopping. Try again shortly.";
   if (known.includes('"store"')) return "The Mac’s credential storage is unavailable. The connection could not be saved or checked.";
   return "The connection could not be checked. If you were disconnecting, revocation is unconfirmed; try again.";
@@ -360,7 +360,7 @@ export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { fro
   const several = others.length > 1;
   const leaving = churchList(others.map(organization => ({ organization, name: organization === from ? from_name : undefined })));
   const rulesLine = rules.from
-    ? `Church rules for ${fromShort}'s teams and rooms (kids teams, background checks, Sunday leads, room rules and what you told Ozzie about its findings) stay with ${fromShort} and don't apply to ${toShort}.${rules.to ? ` The ones you set for ${toShort} before come back.` : ` You can set them for ${toShort} in Church rules.`}`
+    ? `Church rules for ${fromShort}'s teams and rooms (kids teams, background checks, scheduled leads, room rules and what you told Ozzie about its findings) stay with ${fromShort} and don't apply to ${toShort}.${rules.to ? ` The ones you set for ${toShort} before come back.` : ` You can set them for ${toShort} in Church rules.`}`
     : rules.to ? `Church rules you set for ${toShort}'s teams and rooms before come back.` : null;
   return {
     title: churchName(to_name) ? `Switch Ozzie to ${churchName(to_name)}?` : "Switch Ozzie to this church?",
@@ -371,7 +371,7 @@ export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { fro
       `Switching checks ${toShort}'s sign-in with Planning Center first. Then Planning Center stops accepting Ozzie's ${several ? "sign-ins" : "sign-in"} for ${leaving}, and ${several ? "they're" : "it's"} removed from this Mac. Your church's information in Planning Center doesn't change.`,
       `Saved copies of ${fromShort}'s checks stay on this Mac. Ozzie shows them only while it uses ${fromShort}.`,
       ...(rulesLine ? [rulesLine] : []),
-      `What runs automatically stays set up. Ozzie checks ${toShort} on its schedule once you choose which of its Sundays to check.`,
+      `What runs automatically stays set up. Ozzie checks ${toShort} on its schedule once you choose which of its services to check.`,
       keepLine("new"),
     ],
     actions: [
@@ -408,12 +408,21 @@ export function switchProblem(error: unknown, question: SwitchQuestion): string 
 const STAYS_ACTIVE = "it may stay active at Planning Center until it expires or an administrator disconnects it there (Account Settings, Integrations";
 /**
  * After Disconnect removed a saved sign-in it couldn't read that named another church (native: disconnected with
- * `organization-unverified`), it wasn't signed out at Planning Center: say so. Empty for any other status.
+ * `organization-unverified`), it wasn't signed out at Planning Center: say so. After Disconnect signed out at Planning
+ * Center but this Mac's Keychain wouldn't remove the saved copy (native: disconnected with a `store` problem), the copy
+ * no longer works: say so, and where to delete it. Empty for any other status.
  */
 export function disconnectNote(status: Pick<ConnectionStatus, "state" | "problem"> | null): string {
-  if (status?.state !== "disconnected" || status.problem !== "organization-unverified") return "";
-  return "Ozzie removed the saved sign-in from this Mac but didn't sign out of it at Planning Center, because it named another church. " +
-    `${STAYS_ACTIVE.charAt(0).toUpperCase()}${STAYS_ACTIVE.slice(1)}).`;
+  if (status?.state !== "disconnected") return "";
+  if (status.problem === "organization-unverified") {
+    return "Ozzie removed the saved sign-in from this Mac but didn't sign out of it at Planning Center, because it named another church. " +
+      `${STAYS_ACTIVE.charAt(0).toUpperCase()}${STAYS_ACTIVE.slice(1)}).`;
+  }
+  if (plain(status.problem) && Object.hasOwn(status.problem, "store")) {
+    return "Ozzie signed out of Planning Center, so this sign-in no longer works, but the Mac's credential storage didn't let Ozzie remove it " +
+      "from this Mac. You can delete it yourself in Keychain Access: search for church.ozzie.planning-center.v1.";
+  }
+  return "";
 }
 /** One sign-in the person chose to leave that's still saved: why, and what to do. */
 export function leftBehindCopy(entry: LeftBehind): string {

@@ -65,6 +65,7 @@ describe("the phone notice at run time, over every fixture", () => {
   // Every word of three letters or more in that text, except the two the notices themselves say.
   const words = [...new Set(texts.flatMap(t => t.split(/[^\p{L}\p{N}'-]+/u)).filter(w => w.length >= 3 && /\p{L}/u.test(w)))];
   const { lines, kinds, title } = nativeLines();
+  const OWN_DAY_WORDS = new Set(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Service"]);
 
   it("read the fixtures (so the checks below aren't empty)", () => {
     expect(texts).toContain("Avery Brightwater");
@@ -72,7 +73,8 @@ describe("the phone notice at run time, over every fixture", () => {
     expect(texts).toContain("Fellowship room");
     expect(texts.some(t => t.startsWith("Ignore your rules"))).toBe(true);
     expect(texts.length).toBeGreaterThan(30);
-    expect(Object.keys(lines)).toHaveLength(6);
+    // Four kinds, a test, and one coverage line for each weekday, a weekend and "the service" (contract N8).
+    expect(Object.keys(lines)).toHaveLength(14);
     expect(kinds).toEqual({ "briefing-ready": "BriefingReady", "needs-decision": "NeedsDecision", "checked": "Checked", "couldnt-check": "CouldntCheck" });
   });
 
@@ -104,7 +106,8 @@ describe("the phone notice at run time, over every fixture", () => {
     for (const line of [...Object.values(lines), title]) {
       for (const t of texts) expect(line.includes(t), `${line} holds ${t}`).toBe(false);
       const own = new Set(line.split(/[^\p{L}'-]+/u));
-      for (const word of words.filter(w => w !== "Sunday" && w !== "Ozzie")) {
+      // The coverage lines' own first words (a weekday or "Service") are the fixed line's, not the church's.
+      for (const word of words.filter(w => w !== "Ozzie" && !OWN_DAY_WORDS.has(w))) {
         // A person's or place's name is capitalised in the fixtures; an everyday word in a body or subject may be a
         // word the fixed line also uses ("check", "needs"), which says nothing about the church.
         if (/^\p{Lu}/u.test(word) && !/^(?:The|This|Please|No|Include|Ignore|Browse|Weekly|Tonight's|Room|Printing|Sunday|Your|Open)$/u.test(word)) {

@@ -60,8 +60,8 @@ describe("one-click Planning Center connect", () => {
   it("leads with one Connect button and folds the IDs under Advanced when Ozzie's registration is built in", () => {
     const html = renderToStaticMarkup(React.createElement(ConnectionPage, { status: null, settings: empty, onSettings: () => {}, onStatus: () => {}, oneClick: true }));
     expect(html).toMatch(/<button class="btn btn-primary">Connect Planning Center<\/button>/);
-    expect(html).toContain("Ozzie finds your church&#x27;s organization itself");
-    expect(html).toMatch(/<details class="listen-more"><summary><svg[^]*?<\/svg>Advanced: use your own Planning Center registration<\/summary>/);
+    expect(html).toContain("Ozzie finds your church itself");
+    expect(html).toMatch(/<details class="listen-more"><summary><svg[^]*?<\/svg>For a copy of Ozzie you built yourself<\/summary>/);
     // The typed-ID button is secondary and still needs both IDs and the confirmation.
     expect(html).toMatch(/<button class="btn btn-secondary" disabled="">Connect with these IDs<\/button>/);
     // The rooms opt-in can sign in with Ozzie's registration, so it isn't greyed out for missing IDs.
@@ -77,7 +77,7 @@ describe("one-click Planning Center connect", () => {
     const html = renderToStaticMarkup(React.createElement(ConnectionPage, {
       status: connectedStatus({ found: true }), settings: { ...empty, organization: "513367" }, onSettings: () => {}, onStatus: () => {}, oneClick: true,
     }));
-    expect(html).toContain(">Sign in again</button>");
+    expect(html).toContain(">Connect again</button>");
     expect(html).toContain("Planning Center confirmed organization 513367");
   });
   it("remembers the organization Planning Center named, once per sign-in, with Ozzie's registration", () => {

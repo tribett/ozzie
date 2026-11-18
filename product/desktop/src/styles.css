@@ -248,7 +248,7 @@ body { background: #FAF6EE; }
 .oz .recent-task[open] > summary { border-bottom: 1px solid var(--line); }
 .oz .recent-steps { padding: 10px 16px 12px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .recent-quiet { display: flex; gap: 8px; align-items: flex-start; }
-/* What Ozzie keeps an eye on: the plan to confirm, What runs automatically, and Today */
+/* Keeping watch: the plan to confirm, What runs automatically, and Today */
 .oz .plan-card { display: flex; flex-direction: column; gap: 8px; }
 .oz .plan-card .find-title { margin: 0; }
 .oz .plan-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

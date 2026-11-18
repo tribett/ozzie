@@ -76,7 +76,7 @@ describe("The grant as the webview reads it", () => {
       expect(granted({ scopes: bad as NonNullable<ConnectionStatus["scopes"]> })).toBeNull();
     }
     // The operations line and its button read the operations part of any spelling.
-    expect(grantedCopy(status("services-and-operations+check-ins"))).toBe("Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.");
+    expect(grantedCopy(status("services-and-operations+check-ins"), true)).toBe("Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.");
     expect(grantedCopy(status("services+check-ins"))).toBe("Granted: Services only. Rooms, follow-ups and group events aren't checked.");
   });
 
@@ -123,6 +123,19 @@ describe("Settings: forms, check-ins and signups", () => {
     // An ordinary disconnect, or a failed sign-in, says nothing of the kind.
     expect(disconnectNote({ ...removed, problem: null })).toBe("");
     expect(disconnectNote({ ...removed, state: "failed" })).toBe("");
+  });
+
+  it("after Disconnect signed out but the Mac's credential storage kept the saved copy, says so and how to remove it", () => {
+    // Native: disconnected, with the Keychain's refusal of the delete as the problem (seen 2026-11-17).
+    const note = "Ozzie signed out of Planning Center, so this sign-in no longer works, but the Mac's credential storage didn't let " +
+      "Ozzie remove it from this Mac. You can delete it yourself in Keychain Access: search for church.ozzie.planning-center.v1.";
+    for (const store of ["unavailable", "locked", "denied"]) {
+      const kept: ConnectionStatus = { state: "disconnected", organization: "1001", checked_at_ms: null, source: "native", problem: { store } };
+      expect(disconnectNote(kept), store).toBe(note);
+      expect(settingsPage(kept)).toContain(note);
+      // A failed check with the same problem is no disconnect.
+      expect(disconnectNote({ ...kept, state: "failed" })).toBe("");
+    }
   });
 
   it("asks Planning Center for Check-Ins or Registrations only when chosen; the default calls are unchanged", async () => {

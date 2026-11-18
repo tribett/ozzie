@@ -43,6 +43,8 @@ fn no_keys() -> FakeKeys {
 struct Sent {
     url: String,
     key: Option<String>,
+    /// The header the key travels in.
+    header: Option<KeyHeader>,
     headers: Vec<(String, String)>,
     body: Value,
 }
@@ -66,13 +68,14 @@ impl ModelHttp for FakeHttp {
     fn post(
         &self,
         url: &str,
-        key: Option<&str>,
+        key: Option<(&str, KeyHeader)>,
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
         self.sent.lock().unwrap().push(Sent {
             url: url.into(),
-            key: key.map(Into::into),
+            key: key.map(|(key, _)| key.into()),
+            header: key.map(|(_, header)| header),
             headers: headers
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -648,8 +651,48 @@ fn route_settings_round_trip_privately_and_keep_the_owner_cap() {
     }
     let keys_used = keys();
     let local = status(&dir.0, &keys_used);
-    assert_eq!((local.configured, local.route), (true, "local"));
+    // Chosen, but never "in use" before "Check that it answers" passed (onboarding spec S9).
+    assert_eq!(
+        (local.configured, local.route, local.setup),
+        (false, "local", "not-checked")
+    );
+    save_local_checked(
+        &dir.0,
+        LOCAL_BASE,
+        LOCAL_MODEL,
+        1_763_400_000_000,
+        route_generation(&dir.0),
+    )
+    .unwrap();
+    let local = status(&dir.0, &keys_used);
+    assert_eq!(
+        (local.configured, local.route, local.setup),
+        (true, "local", "ready")
+    );
+    assert_eq!(local.checked_at_ms, Some(1_763_400_000_000));
+    // Choosing the same model again keeps its check; another model on this Mac isn't checked yet.
+    save_config(&dir.0, Route::Local, None, None).unwrap();
+    assert_eq!(status(&dir.0, &keys_used).setup, "ready");
+    save_config(&dir.0, Route::Local, None, Some("qwen3:8b")).unwrap();
+    assert_eq!(status(&dir.0, &keys_used).setup, "not-checked");
+    save_config(&dir.0, Route::Local, None, None).unwrap();
+    assert_eq!(status(&dir.0, &keys_used).setup, "not-checked");
     assert_eq!(keys_used.lookups.load(Ordering::SeqCst), 0);
+    // Review L-4: AI on this Mac set to a model Ozzie no longer offers (the small model, or Ozzie's copy of it, set up
+    // before it was withdrawn) keeps working, and its status says so, so the page can tell the person; every other
+    // model, and every other route, says nothing.
+    for (model, not_offered) in [
+        ("qwen3:4b", true),
+        ("ozzie-qwen3:4b", true),
+        ("qwen3:8b", false),
+        ("ozzie-qwen3:8b", false),
+        ("llama3.2:latest", false),
+    ] {
+        save_config(&dir.0, Route::Local, None, Some(model)).unwrap();
+        assert_eq!(status(&dir.0, &keys_used).not_offered, not_offered, "{model}");
+    }
+    save_config(&dir.0, Route::Managed, None, None).unwrap();
+    assert!(!status(&dir.0, &keys_used).not_offered);
     // The owner raises the cap by hand; switching routes keeps it.
     let mut edited: Value =
         serde_json::from_slice(&std::fs::read(dir.0.join(CONFIG_FILE)).unwrap()).unwrap();
@@ -1254,6 +1297,9 @@ fn status_says_which_key_is_missing_and_where_it_belongs() {
     assert_eq!(status(&dir.0, &no_keys()).setup, "not-connected");
     assert_eq!(status(&dir.0, &keys()).setup, "ready");
     save_config(&dir.0, Route::Local, None, None).unwrap();
+    let local = status(&dir.0, &no_keys());
+    assert_eq!((local.setup, local.key_account), ("not-checked", None));
+    save_local_checked(&dir.0, LOCAL_BASE, LOCAL_MODEL, 1, route_generation(&dir.0)).unwrap();
     let local = status(&dir.0, &no_keys());
     assert_eq!((local.setup, local.key_account), ("ready", None));
 }
@@ -2102,4 +2148,784 @@ fn a_note_with_a_hidden_character_is_refused_before_any_key_budget_or_request_an
         .err(),
         Some(ModelError::HiddenCharacter)
     );
+}
+
+// ---- The church's own key: a monthly limit, not a lifetime cap (onboarding spec S8) ----------------------------
+
+fn own_route(month_limit: u64) -> RouteConfig {
+    RouteConfig {
+        month_limit,
+        ..RouteConfig::new(
+            Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("fictional-model-1"),
+        )
+        .unwrap()
+    }
+}
+
+#[test]
+fn the_own_key_pauses_at_its_monthly_limit_and_starts_again_the_next_utc_month() {
+    let nov = crate::civil::day_of_text("2026-11-29").unwrap();
+    let dec = crate::civil::day_of_text("2026-12-01").unwrap();
+    let own = own_route(3);
+    let mut usage = Ledger::default();
+    // The old lifetime cap no longer applies here: far past 200 calls, the month decides.
+    usage.own.calls = 10_000;
+    for _ in 0..2 {
+        spend_on(&own, &mut usage, Spend::Call { day: nov }, false).unwrap();
+    }
+    spend_on(&own, &mut usage, Spend::AgentStep { day: nov }, false).unwrap();
+    // This month's three are spent: rewording, Ask and agent steps all pause, and nothing is counted.
+    for spend in [Spend::Call { day: nov }, Spend::AgentStep { day: nov }] {
+        assert_eq!(
+            spend_on(&own, &mut usage, spend, false),
+            Err(ModelError::MonthLimit)
+        );
+    }
+    assert_eq!((usage.own.calls, usage.own.month_calls), (10_003, 3));
+    // December starts afresh; a clock stepping back keeps counting December.
+    spend_on(&own, &mut usage, Spend::Call { day: dec }, false).unwrap();
+    spend_on(&own, &mut usage, Spend::Call { day: nov }, false).unwrap();
+    assert_eq!(usage.own.month_calls, 2);
+    assert_eq!(usage.own.month, crate::civil::month_of_day(dec));
+    // A raised limit applies at once.
+    let raised = own_route(5);
+    spend_on(&raised, &mut usage, Spend::Call { day: dec }, false).unwrap();
+    // The managed direct path keeps its lifetime cap; a local model has neither.
+    let managed = RouteConfig {
+        call_cap: 1,
+        ..RouteConfig::managed()
+    };
+    let mut other = Ledger::default();
+    spend_on(&managed, &mut other, Spend::Call { day: nov }, false).unwrap();
+    assert_eq!(
+        spend_on(&managed, &mut other, Spend::Call { day: nov }, false),
+        Err(ModelError::Budget)
+    );
+    let local = RouteConfig {
+        month_limit: 0,
+        call_cap: 0,
+        ..RouteConfig::new(Route::Local, None, None).unwrap()
+    };
+    for _ in 0..5 {
+        spend_on(&local, &mut other, Spend::Call { day: nov }, false).unwrap();
+    }
+    // The defaults: 1,000 a month, changeable from 100 to 20,000.
+    assert_eq!(
+        (
+            DEFAULT_MONTH_LIMIT,
+            *MONTH_LIMITS.start(),
+            *MONTH_LIMITS.end()
+        ),
+        (1_000, 100, 20_000)
+    );
+    assert_eq!(RouteConfig::managed().month_limit, 1_000);
+}
+
+#[test]
+fn at_the_monthly_limit_nothing_is_sent_and_status_says_when_ai_starts_again() {
+    let dir = TempDir::new("month");
+    std::fs::write(
+        dir.0.join(CONFIG_FILE),
+        serde_json::to_vec(&own_route(100)).unwrap(),
+    )
+    .unwrap();
+    let http = FakeHttp::default();
+    let keys = keys();
+    // A usage file from this month with the limit reached.
+    let today = utc_day(crate::sunday_check::unix_ms());
+    let month = crate::civil::month_of_day(today);
+    std::fs::write(
+        dir.ledger(),
+        json!({"own": {"calls": 100, "month": month, "month_calls": 100}}).to_string(),
+    )
+    .unwrap();
+    let config = load_config(&dir.0).unwrap();
+    assert_eq!(
+        send(&config, &dir.ledger(), &plain(), &keys, &http).err(),
+        Some(ModelError::MonthLimit)
+    );
+    assert_eq!(http.count(), 0);
+    let paused = status(&dir.0, &keys);
+    assert_eq!(paused.setup, "month-limit");
+    assert_eq!(
+        paused.month,
+        Some(MonthView {
+            used: 100,
+            limit: 100,
+            resets_on: crate::civil::next_month_start(today)
+        })
+    );
+    // "Change the limit": within 100 to 20,000 only; the route and its model are kept.
+    assert_eq!(
+        set_month_limit(&dir.0, 99).err(),
+        Some(ModelError::InvalidRequest)
+    );
+    assert_eq!(
+        set_month_limit(&dir.0, 20_001).err(),
+        Some(ModelError::InvalidRequest)
+    );
+    assert_eq!(
+        set_month_limit(&dir.0, 200).unwrap().model,
+        "fictional-model-1"
+    );
+    assert_eq!(status_for(&dir.0, &keys, false).setup, "ready");
+    send(
+        &load_config(&dir.0).unwrap(),
+        &dir.ledger(),
+        &plain(),
+        &keys,
+        &http,
+    )
+    .unwrap();
+    assert_eq!(ledger(&dir)["own"]["month_calls"], 101);
+    // Saving the route again keeps the church's limit.
+    save_config(
+        &dir.0,
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("fictional-model-2"),
+    )
+    .unwrap();
+    assert_eq!(load_config(&dir.0).unwrap().month_limit, 200);
+    // No route chosen: there is no limit to change.
+    clear_config(&dir.0).unwrap();
+    assert_eq!(
+        set_month_limit(&dir.0, 500).err(),
+        Some(ModelError::NotConfigured)
+    );
+    // An unreadable usage file can't prove the limit holds.
+    std::fs::write(
+        dir.0.join(CONFIG_FILE),
+        serde_json::to_vec(&own_route(100)).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.ledger(), b"not a ledger").unwrap();
+    assert_eq!(status(&dir.0, &keys).setup, "month-limit");
+    // The page reads these words.
+    assert_eq!(
+        serde_json::to_string(&ModelError::MonthLimit).unwrap(),
+        r#""month-limit""#
+    );
+    assert_eq!(
+        serde_json::to_string(&crate::agent::AgentError::from(ModelError::MonthLimit)).unwrap(),
+        r#""month-limit""#
+    );
+}
+
+#[test]
+fn review_m5_the_rewording_backstop_refuses_a_phone_or_an_email_in_the_note() {
+    for note in [
+        "Hi [Volunteer A], call me at 555 123 4567. [Your name]",
+        "Hi [Volunteer A], write pat@example.org. [Your name]",
+        // Fullwidth digits are a phone number too, once NFKC folds them.
+        "Hi [Volunteer A], call \u{ff15}\u{ff15}\u{ff15} \u{ff11}\u{ff12}\u{ff13} \u{ff14}\u{ff15}\u{ff16}\u{ff17}. [Your name]",
+    ] {
+        let request = draft(SYSTEM, &user("Make it warmer.", note), 120);
+        assert_eq!(
+            check_draft(&request, &NameGuard::default()),
+            Err(ModelError::ContactDetail),
+            "{note}"
+        );
+    }
+    // Times and dates are not contact details.
+    let request = draft(
+        SYSTEM,
+        &user(
+            "Make it warmer.",
+            "Hi [Volunteer A], could you serve at 9:30 on 11/22/2026? [Your name]",
+        ),
+        120,
+    );
+    assert_eq!(check_draft(&request, &NameGuard::default()), Ok(()));
+}
+
+#[test]
+fn vendor_check_out_of_credit_in_normal_use_is_no_credit_not_a_broken_request() {
+    let own = RouteConfig::new(
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("fictional-model-1"),
+    )
+    .unwrap();
+    let keys = keys();
+    for (status, body) in [
+        (
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#,
+        ),
+        (402, r#"{"type":"error","error":{"type":"billing_error"}}"#),
+        (
+            429,
+            r#"{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted"}}"#,
+        ),
+        (
+            403,
+            r#"{"error":{"code":403,"message":"Your project has an outstanding balance."}}"#,
+        ),
+    ] {
+        let dir = TempDir::new("no-credit");
+        let http = FakeHttp::answering(vec![Ok((status, body.to_string()))]);
+        assert_eq!(
+            send(&own, &dir.ledger(), &plain(), &keys, &http).err(),
+            Some(ModelError::NoCredit),
+            "{status}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&ModelError::NoCredit).unwrap(),
+        r#""no-credit""#
+    );
+    assert_eq!(
+        serde_json::to_string(&crate::agent::AgentError::from(ModelError::NoCredit)).unwrap(),
+        r#""no-credit""#
+    );
+    // A plain rate limit is still a rate limit.
+    let dir = TempDir::new("rate");
+    let http = FakeHttp::answering(vec![Ok((
+        429,
+        r#"{"error":{"code":"rate_limit_exceeded"}}"#.into(),
+    ))]);
+    assert_eq!(
+        send(&own, &dir.ledger(), &plain(), &keys, &http).err(),
+        Some(ModelError::RateLimited)
+    );
+}
+
+#[test]
+fn review_fix3_normal_use_table() {
+    let own = RouteConfig::new(
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("fictional-model-1"),
+    )
+    .unwrap();
+    let keys = keys();
+    let rows: Vec<(&str, u16, &str)> = vec![
+        (
+            "A 400 credit balance",
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#,
+        ),
+        (
+            "A 400 usage limits",
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits."}}"#,
+        ),
+        (
+            "A 400 workspace usage limits",
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified workspace API usage limits."}}"#,
+        ),
+        (
+            "A 429 enforced spend limit",
+            429,
+            r#"{"type":"error","error":{"type":"rate_limit_error","details":{"error_code":"enforced_spend_limit_reached"}}}"#,
+        ),
+        (
+            "A 429 plain",
+            429,
+            r#"{"type":"error","error":{"type":"rate_limit_error"}}"#,
+        ),
+        (
+            "A 529 overloaded",
+            529,
+            r#"{"type":"error","error":{"type":"overloaded_error"}}"#,
+        ),
+        (
+            "O 429 insufficient_quota",
+            429,
+            r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#,
+        ),
+        (
+            "O 429 org spend limit",
+            429,
+            r#"{"error":{"type":"insufficient_quota","code":"organization_spend_limit_exceeded"}}"#,
+        ),
+        (
+            "O 429 project spend limit",
+            429,
+            r#"{"error":{"code":"project_spend_limit_exceeded"}}"#,
+        ),
+        (
+            "O 429 rate limit",
+            429,
+            r#"{"error":{"code":"rate_limit_exceeded"}}"#,
+        ),
+        (
+            "G 402 prepay",
+            402,
+            r#"[{"error":{"code":402,"status":"RESOURCE_EXHAUSTED","message":"Prepay credit balance is depleted."}}]"#,
+        ),
+        (
+            "G 403 outstanding balance",
+            403,
+            r#"[{"error":{"code":403,"message":"Your project has an outstanding balance."}}]"#,
+        ),
+        (
+            "G 429 PerDay",
+            429,
+            r#"[{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}}]"#,
+        ),
+        (
+            "G 400 free tier country",
+            400,
+            r#"[{"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Gemini API free tier is not available in your country. Please enable billing on your project in Google AI Studio."}}]"#,
+        ),
+        (
+            "G 400 missing signature",
+            400,
+            r#"[{"error":{"code":400,"message":"Function call is missing a thought_signature in functionCall parts."}}]"#,
+        ),
+    ];
+    let mut out = String::from("| case | status | normal-use error |\n");
+    for (label, status, body) in rows {
+        let dir = TempDir::new("rf3");
+        let http = FakeHttp::answering(vec![Ok((status, body.to_string()))]);
+        let e = send(&own, &dir.ledger(), &plain(), &keys, &http).err();
+        out.push_str(&format!("| {label} | {status} | {e:?} |\n"));
+        assert_eq!(
+            http.count(),
+            1,
+            "{label}: exactly one request, never retried"
+        );
+    }
+    // Ozzie's own managed route straight to the gateway (no device token): a 402 there is Ozzie's account, not the church's.
+    let dir = TempDir::new("rf3m");
+    let http = FakeHttp::answering(vec![Ok((
+        402,
+        r#"{"error":{"type":"insufficient_funds"}}"#.to_string(),
+    ))]);
+    let e = send(
+        &RouteConfig::managed(),
+        &dir.ledger(),
+        &plain(),
+        &keys,
+        &http,
+    )
+    .err();
+    out.push_str(&format!("| managed (direct gateway) 402 | 402 | {e:?} |\n"));
+    std::fs::write(
+        std::env::temp_dir().join("ozzie-review-fix3-normal-use-table.md"),
+        &out,
+    )
+    .unwrap();
+}
+
+#[test]
+fn review_fix3_the_normal_use_table_asserted_uses_the_key_checks_markers() {
+    let own = RouteConfig::new(
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("fictional-model-1"),
+    )
+    .unwrap();
+    let keys = keys();
+    for (status, body, expected) in [
+        (
+            400,
+            r#"{"error":{"message":"You have reached your specified workspace API usage limits."}}"#,
+            ModelError::NoCredit,
+        ),
+        (
+            429,
+            r#"{"error":{"code":"organization_spend_limit_exceeded"}}"#,
+            ModelError::NoCredit,
+        ),
+        (
+            429,
+            r#"{"error":{"code":"project_spend_limit_exceeded"}}"#,
+            ModelError::NoCredit,
+        ),
+        (
+            429,
+            r#"{"error":{"code":"organization_usage_limit_exceeded"}}"#,
+            ModelError::NoCredit,
+        ),
+        (
+            429,
+            r#"{"error":{"details":{"error_code":"enforced_spend_limit_reached"}}}"#,
+            ModelError::NoCredit,
+        ),
+        (
+            429,
+            r#"[{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}]"#,
+            ModelError::DailyLimit,
+        ),
+        (
+            429,
+            r#"[{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}}]"#,
+            ModelError::RateLimited,
+        ),
+    ] {
+        let dir = TempDir::new("normal-use");
+        let http = FakeHttp::answering(vec![Ok((status, body.to_string()))]);
+        assert_eq!(
+            send(&own, &dir.ledger(), &plain(), &keys, &http).err(),
+            Some(expected),
+            "{body}"
+        );
+        // The key check reads the same markers the same way.
+        if expected == ModelError::NoCredit {
+            assert!(crate::own_key::out_of_credit(status, body), "{body}");
+        }
+    }
+}
+
+#[test]
+fn a_model_on_this_mac_whose_app_refuses_the_thinking_setting_is_asked_once_more_without_it() {
+    // Ollama 0.11.5 to 0.12.3 refused "none" this way (its source at v0.12.3). The model id is this test's own: the
+    // memory lasts the session (local_ai.rs).
+    let dir = TempDir::new("thinking-setting");
+    let refused = r#"{"error":{"message":"think value \"none\" is not supported for this model","type":"invalid_request_error"}}"#;
+    let reply = json!({"choices":[{"message":{"role":"assistant","content":"[Volunteer A], could you serve?"}}]})
+        .to_string();
+    let local = RouteConfig::new(Route::Local, None, Some("older-reword:3b")).unwrap();
+    let http = FakeHttp::answering(vec![Ok((400, refused.into())), Ok((200, reply.clone()))]);
+    let said = send(&local, &dir.ledger(), &plain(), &keys(), &http).unwrap();
+    assert_eq!(said.text, "[Volunteer A], could you serve?");
+    let sent = http.sent.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].body["reasoning_effort"], "none");
+    assert!(sent[1].body.get("reasoning_effort").is_none());
+    assert_eq!(sent[0].body["messages"], sent[1].body["messages"]);
+    assert!(sent.iter().all(|s| s.key.is_none()));
+    drop(sent);
+    // One answer, one call counted.
+    assert_eq!(ledger(&dir)["local"]["calls"], 1);
+    // Remembered: the next request goes once, without it.
+    let http = FakeHttp::answering(vec![Ok((200, reply))]);
+    send(&local, &dir.ledger(), &plain(), &keys(), &http).unwrap();
+    assert_eq!(http.count(), 1);
+    assert!(
+        http.sent.lock().unwrap()[0]
+            .body
+            .get("reasoning_effort")
+            .is_none()
+    );
+    // Any other refusal is not asked again, and no other route is: each stays the closed code it was.
+    let qwen = RouteConfig::new(Route::Local, None, Some("qwen3:8b")).unwrap();
+    let http = FakeHttp::answering(vec![Ok((
+        400,
+        r#"{"error":"qwen3:8b does not support tools"}"#.into(),
+    ))]);
+    assert_eq!(
+        send(&qwen, &dir.ledger(), &plain(), &keys(), &http).err(),
+        Some(ModelError::InvalidRequest)
+    );
+    assert_eq!(http.count(), 1);
+    let own = RouteConfig::new(
+        Route::Own,
+        Some("https://api.example.invalid/v1"),
+        Some("vendor/model-1"),
+    )
+    .unwrap();
+    let http = FakeHttp::answering(vec![Ok((400, refused.into()))]);
+    assert_eq!(
+        send(&own, &dir.ledger(), &plain(), &keys(), &http).err(),
+        Some(ModelError::InvalidRequest)
+    );
+    assert_eq!(http.count(), 1);
+}
+
+// ---- The key's header, chosen with the wire and written as chosen (review M1, 2026-11-18) ------------------------
+
+/// One whole request (head and body) from a connection: the bytes the HTTP library really writes.
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read as _;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut seen = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut buffer).unwrap_or(0);
+        seen.extend_from_slice(&buffer[..n]);
+        let text = String::from_utf8_lossy(&seen).to_string();
+        if let Some(end) = text.find("\r\n\r\n") {
+            let length = text[..end]
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+            if seen.len() >= end + 4 + length {
+                break;
+            }
+        }
+        if n == 0 {
+            break;
+        }
+    }
+    String::from_utf8(seen).unwrap()
+}
+/// One request read from a loopback listener, answered with `reply`.
+fn capture(
+    listener: std::net::TcpListener,
+    reply: &'static [u8],
+) -> std::thread::JoinHandle<String> {
+    use std::io::Write as _;
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let seen = read_request(&mut stream);
+        let _ = stream.write_all(reply);
+        seen
+    })
+}
+const ANSWERED: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+
+#[test]
+fn review_m1_the_key_goes_in_x_api_key_or_as_a_bearer_token_exactly_as_chosen() {
+    // Built in pieces, so nothing key-shaped is written here.
+    let key = ["fictional", "-loopback-", "key"].concat();
+    // A model on this Mac's client may reach plain http on this Mac's loopback.
+    let http = NativeModelHttp::new(Route::Local).unwrap();
+    // The header is the caller's choice, whatever else the request carries: a Messages request carries
+    // `anthropic-version`, and the key's header no longer depends on it.
+    for (header, versioned) in [
+        (KeyHeader::XApiKey, true),
+        (KeyHeader::XApiKey, false),
+        (KeyHeader::Bearer, false),
+        (KeyHeader::Bearer, true),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture(listener, ANSWERED);
+        let extra: &[(&str, &str)] = if versioned {
+            &[("anthropic-version", "2023-06-01")]
+        } else {
+            &[]
+        };
+        let (status, _) = http
+            .post(
+                &format!("http://127.0.0.1:{port}/v1/messages"),
+                Some((&key, header)),
+                extra,
+                b"{}",
+            )
+            .unwrap();
+        assert_eq!(status, 200);
+        let raw = server.join().unwrap();
+        let head = raw.split("\r\n\r\n").next().unwrap();
+        let lines: Vec<String> = head.lines().map(str::to_ascii_lowercase).collect();
+        let why = format!("{header:?}, anthropic-version {versioned}");
+        match header {
+            KeyHeader::XApiKey => {
+                assert!(lines.contains(&format!("x-api-key: {key}")), "{why}");
+                assert!(
+                    !lines.iter().any(|l| l.starts_with("authorization")),
+                    "{why}"
+                );
+            }
+            KeyHeader::Bearer => {
+                assert!(
+                    lines.contains(&format!("authorization: bearer {key}")),
+                    "{why}"
+                );
+                assert!(!lines.iter().any(|l| l.starts_with("x-api-key")), "{why}");
+            }
+        }
+        assert_eq!(
+            raw.matches(key.as_str()).count(),
+            1,
+            "{why}: the key once, in its header"
+        );
+    }
+    // No key, no key header.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = capture(listener, ANSWERED);
+    http.post(&format!("http://127.0.0.1:{port}/x"), None, &[], b"{}")
+        .unwrap();
+    let raw = server.join().unwrap().to_ascii_lowercase();
+    assert!(!raw.contains("authorization") && !raw.contains("x-api-key"));
+}
+
+#[test]
+fn review_m1_only_anthropics_messages_route_sends_the_key_in_x_api_key() {
+    let own =
+        |base: &str, model: &str| RouteConfig::new(Route::Own, Some(base), Some(model)).unwrap();
+    let claude = own("https://api.anthropic.com/v1", "claude-haiku-5-5");
+    assert!(crate::own_key::messages_wire(&claude));
+    assert_eq!(crate::own_key::key_header(&claude), KeyHeader::XApiKey);
+    for config in [
+        own("https://api.openai.com/v1", "gpt-5-mini"),
+        own(
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "gemini-2.5-flash",
+        ),
+        own("https://api.example.invalid/v1", "fictional-model-1"),
+        RouteConfig::managed(),
+        RouteConfig::new(Route::Local, None, Some("qwen3:8b")).unwrap(),
+    ] {
+        assert!(
+            !crate::own_key::messages_wire(&config),
+            "{}",
+            config.base_url
+        );
+        assert_eq!(
+            crate::own_key::key_header(&config),
+            KeyHeader::Bearer,
+            "{}",
+            config.base_url
+        );
+    }
+    // In use: rewording on another company's route sends its key as a bearer token, and the managed route its
+    // gateway key the same way.
+    let dir = TempDir::new("key-header");
+    let http = FakeHttp::answering(vec![]);
+    send(
+        &own("https://api.example.invalid/v1", "fictional-model-1"),
+        &dir.ledger(),
+        &plain(),
+        &keys(),
+        &http,
+    )
+    .unwrap();
+    send(
+        &RouteConfig::managed(),
+        &dir.ledger(),
+        &plain(),
+        &keys(),
+        &http,
+    )
+    .unwrap();
+    let sent = http.sent.lock().unwrap();
+    assert_eq!(
+        sent.iter()
+            .map(|s| (s.key.as_deref(), s.header))
+            .collect::<Vec<_>>(),
+        [
+            (Some(OWN_KEY), Some(KeyHeader::Bearer)),
+            (Some(GATEWAY_KEY), Some(KeyHeader::Bearer)),
+        ]
+    );
+}
+
+// ---- A model on this Mac: one deadline for a call and its second try (review M4, 2026-11-18) ----------------------
+
+/// A listener that answers the first request after `first_after` with `first`, then holds the next connection open
+/// without answering for `hold`. Returns how many requests it read.
+fn answer_then_hold(
+    listener: std::net::TcpListener,
+    first_after: Duration,
+    first: &'static [u8],
+    hold: Duration,
+) -> std::thread::JoinHandle<usize> {
+    use std::io::Write as _;
+    std::thread::spawn(move || {
+        let mut read = 0;
+        let (mut stream, _) = listener.accept().unwrap();
+        if !read_request(&mut stream).is_empty() {
+            read += 1;
+        }
+        std::thread::sleep(first_after);
+        let _ = stream.write_all(first);
+        drop(stream);
+        listener.set_nonblocking(true).unwrap();
+        let until = std::time::Instant::now() + hold;
+        while std::time::Instant::now() < until {
+            if let Ok((mut held, _)) = listener.accept() {
+                held.set_nonblocking(false).unwrap();
+                if !read_request(&mut held).is_empty() {
+                    read += 1;
+                }
+                std::thread::sleep(until.saturating_duration_since(std::time::Instant::now()));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        read
+    })
+}
+
+#[test]
+fn review_m4_asking_again_without_the_thinking_setting_shares_the_first_tries_deadline() {
+    // The first try is refused after a second; the second try then has only what is left of the call's 2.5 seconds,
+    // not a wait of its own (which would end at 3.5). Wide margins, so a busy machine can't pass it or fail it by
+    // chance.
+    let refused: &'static [u8] = Box::leak(
+        {
+            let body = r#"{"error":{"message":"think value \"none\" is not supported for this model","type":"invalid_request_error"}}"#;
+            format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
+        .into_bytes()
+        .into_boxed_slice(),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = answer_then_hold(
+        listener,
+        Duration::from_millis(1_000),
+        refused,
+        Duration::from_secs(5),
+    );
+    // This test's own model id: the refusal is remembered for the session (local_ai.rs).
+    let local = RouteConfig::new(
+        Route::Local,
+        Some(&format!("http://127.0.0.1:{port}/v1")),
+        Some("deadline-shared:1b"),
+    )
+    .unwrap();
+    let dir = TempDir::new("deadline");
+    let http = NativeModelHttp::new(Route::Local)
+        .unwrap()
+        .within(Duration::from_millis(2_500));
+    let began = std::time::Instant::now();
+    let said = send(&local, &dir.ledger(), &plain(), &keys(), &http);
+    let took = began.elapsed();
+    assert_eq!(said.err(), Some(ModelError::ProviderFailure));
+    assert!(took >= Duration::from_millis(2_400), "{took:?}");
+    assert!(
+        took < Duration::from_millis(3_200),
+        "{took:?}: the second try had a wait of its own"
+    );
+    assert_eq!(server.join().unwrap(), 2, "asked again while time was left");
+    // Past the deadline nothing more is sent: the client gives up before connecting.
+    let late = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let late_port = late.local_addr().unwrap().port();
+    late.set_nonblocking(true).unwrap();
+    assert_eq!(
+        http.post(
+            &format!("http://127.0.0.1:{late_port}/v1/chat/completions"),
+            None,
+            &[],
+            b"{}"
+        )
+        .err(),
+        Some(ModelError::ProviderFailure)
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        late.accept().is_err(),
+        "a request went out after the deadline"
+    );
+    // A model on this Mac's client starts with the route's whole wait as that deadline; the others keep their own.
+    assert_eq!(request_wait(Route::Local), crate::local_ai::ANSWER_WAIT);
+    let native = NativeModelHttp::new(Route::Local).unwrap();
+    let left = native
+        .until
+        .unwrap()
+        .saturating_duration_since(std::time::Instant::now());
+    let whole = crate::local_ai::ANSWER_WAIT;
+    assert!(
+        left <= whole && left > whole - Duration::from_secs(1),
+        "{left:?}"
+    );
+    assert!(NativeModelHttp::new(Route::Own).unwrap().until.is_none());
+    // A shorter deadline wins; a longer one never extends it.
+    let shorter = native
+        .within(Duration::from_secs(5))
+        .within(Duration::from_secs(60));
+    let left = shorter
+        .until
+        .unwrap()
+        .saturating_duration_since(std::time::Instant::now());
+    assert!(left <= Duration::from_secs(5), "{left:?}");
 }

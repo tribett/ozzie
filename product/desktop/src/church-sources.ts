@@ -1,7 +1,7 @@
-// Lists and notes the church adds ("Lists & notes"): spreadsheet files the leader chooses on this Mac, private links to
+// Lists and notes the church adds ("Church lists"): spreadsheet files the leader chooses on this Mac, private links to
 // published sheets, and the church's own notes (a plain text or Markdown file), read again from where they are through
 // native code (src-tauri/src/church_sources.rs) and read here, in memory, as a sheet (core/src/sources/sheet.ts) or as
-// notes (core/src/sources/notes.ts). The Lists & notes page shows them and lets the leader match a column to Planning
+// notes (core/src/sources/notes.ts). The Church lists page shows them and lets the leader match a column to Planning
 // Center teams and positions, or point to a section of notes from the cards for a team or a kind of finding; a Sunday
 // card then shows the matching rows, or the section's title with a way to open it, as the church's own words.
 //
@@ -65,7 +65,7 @@ const nativeInvoke: Invoke = (command, args) => allowed(command) ? tauriInvoke(c
 export type SourceRead = { ok: true; at: string; sheet: Sheet } | { ok: false; at: string; problem: string };
 /** Notes' last read: the notes, or why they couldn't be shown in plain words. */
 export type NotesRead = { ok: true; at: string; notes: Notes } | { ok: false; at: string; problem: string };
-/** A section of notes to open on Lists & notes, asked for from a Sunday card: the notes' id and the section's place. */
+/** A section of notes to open on Church lists, asked for from a Sunday card: the notes' id and the section's place. */
 export interface NoteFocus { id: string; section: number }
 
 export interface ChurchSourcesState {
@@ -83,7 +83,7 @@ export interface ChurchSourcesState {
   notes: NotesSource[];
   /** Each notes' latest read, by id, in memory only. */
   noteReads: ReadonlyMap<string, NotesRead>;
-  /** A section asked for from a Sunday card, until Lists & notes has shown it. */
+  /** A section asked for from a Sunday card, until Church lists has shown it. */
   focus: NoteFocus | null;
   reading: boolean;
   /** When the latest read of every list finished. */
@@ -113,7 +113,7 @@ export type ChooseResult = { added: string } | { problem: string } | { cancelled
 export type AddLinkResult = { added: string } | { problem: string };
 type Kind = SheetSource["kind"];
 
-/** How long a read is kept before Sunday or Lists & notes coming forward reads the files again. */
+/** How long a read is kept before Sunday or Church lists coming forward reads the files again. */
 export const READ_AGAIN_MS = 60 * 60_000;
 /** How long the page waits for one native call; choosing waits on the person. */
 export const CALL_LIMIT_MS = 30_000;
@@ -123,12 +123,12 @@ const CHOOSE_LIMIT_MS = 30 * 60_000;
 /** Page words for what native code doesn't decide. */
 export const TOO_MANY_LISTS = `Ozzie keeps up to ${MAX_SOURCES} lists and notes. Remove one to add another.`;
 export const NO_LABEL = `Give this list a name, up to ${MAX_LABEL} characters.`;
-/** When one more column than a Sunday card shows is ticked (two quick ticks can get past the page's own limit). */
-export const TOO_MANY_TICKED = `Ozzie shows up to ${MAX_TICKED} columns beside a Sunday card. Untick one to show another.`;
+/** When one more column than a matched card shows is ticked (two quick ticks can get past the page's own limit). */
+export const TOO_MANY_TICKED = `Ozzie shows up to ${MAX_TICKED} columns beside a matched card. Untick one to show another.`;
 export const NO_ADDRESS = "Paste the sheet's published link.";
 export const NO_NOTES_LABEL = `Give these notes a name, up to ${MAX_LABEL} characters.`;
-/** One file of notes points to at most MAX_ATTACHMENTS sections from Sunday (native code's limit too). */
-export const TOO_MANY_POINTERS = `Ozzie shows up to ${MAX_ATTACHMENTS} sections of one file of notes on Sunday. Choose “Not on Sunday” for one before choosing another.`;
+/** One file of notes points to at most MAX_ATTACHMENTS sections from the cards (native code's limit too). */
+export const TOO_MANY_POINTERS = `Ozzie shows up to ${MAX_ATTACHMENTS} sections of one file of notes beside the cards. Choose “Not on any card” for one before choosing another.`;
 
 /** A list's bytes as a sheet, or the problem in plain words (a link's in its own words). */
 export function readSource(reply: unknown, at: string, kind: Kind = "file"): SourceRead {
@@ -155,7 +155,7 @@ function linkAdded(reply: unknown): { source: unknown; sheet: unknown } | null {
 export interface ChurchSourcesDeps { invoke?: Invoke; now?: () => string; callLimitMs?: number }
 export type ChurchSources = ReturnType<typeof createChurchSources>;
 
-/** The lists' state and what the Lists & notes page and Sunday can do with it. Subscribe for changes (useSyncExternalStore). */
+/** The lists' state and what the Church lists page and Sunday can do with it. Subscribe for changes (useSyncExternalStore). */
 export function createChurchSources(deps: ChurchSourcesDeps = {}) {
   const invoke = deps.invoke ?? nativeInvoke;
   const limit = deps.callLimitMs ?? CALL_LIMIT_MS;
@@ -249,8 +249,8 @@ export function createChurchSources(deps: ChurchSourcesDeps = {}) {
   };
   /** Nothing of any list or notes kept: after "Forget all lists and notes". */
   /**
-   * After a forget whose links' addresses the Keychain kept: list natively at the next opening of Sunday or Lists &
-   * notes, whatever the time, since listing is what removes them (review U, finding 3).
+   * After a forget whose links' addresses the Keychain kept: list natively at the next opening of Sunday or Church
+   * lists, whatever the time, since listing is what removes them (review U, finding 3).
    */
   let listAgain = false;
   const forgotten = () => {
@@ -322,7 +322,7 @@ export function createChurchSources(deps: ChurchSourcesDeps = {}) {
     /** One list's "Read again". */
     readOne,
 
-    /** Sunday or Lists & notes in front: lists them the first time, then reads again once the last read is over an hour old. */
+    /** Sunday or Church lists in front: lists them the first time, then reads again once the last read is over an hour old. */
     async readIfOld(maxAgeMs = READ_AGAIN_MS) {
       if (state.reading) return;
       if (state.sources === null || listAgain) { listAgain = false; await controller.load(); return; }
@@ -400,7 +400,7 @@ export function createChurchSources(deps: ChurchSourcesDeps = {}) {
       return run;
     },
 
-    /** A section to open on Lists & notes (from a Sunday card's "Open"), or none once it has been shown. */
+    /** A section to open on Church lists (from a Sunday card's "Open"), or none once it has been shown. */
     focus(target: NoteFocus | null) { set({ focus: target }); },
 
     /** Removes a list or notes from Ozzie (a link's address from the Keychain too); its file or sheet stays as it is, and nothing read from it is kept. */

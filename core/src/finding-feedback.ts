@@ -174,7 +174,9 @@ export function briefTarget(f: Finding, occurrence: string, occurrenceLabel?: st
     // Kids findings add what they state (the rule's number, who is pending, the background-check fact), so a
     // correction stops hiding one as soon as that changes. Other kinds keep their facts exactly as before.
     facts: JSON.stringify([f.remaining ?? null, f.notification ?? null, f.sundays ?? null, f.person_id ?? null, sorted(f.confirmed), sorted(f.pending_leads),
-      ...(f.kind === "too-few-confirmed" || f.kind === "background-check" ? [f.needed ?? null, sorted(f.asked), sorted(f.not_sent), f.check ?? null, f.tone] : [])]),
+      ...(f.kind === "too-few-confirmed" || f.kind === "background-check" ? [f.needed ?? null, sorted(f.asked), sorted(f.not_sent), f.check ?? null, f.tone] : []),
+      // A blockout adds each role it overlaps and how Planning Center counts the person there.
+      ...(f.kind === "blockout" ? [(f.serving ?? []).map(s => [s.team_id, s.name, s.status, s.interval.starts_at, s.interval.ends_at])] : [])]),
     labels: { ...(team && f.position ? { team: f.position.name } : {}), ...(occurrenceLabel ? { occurrence: occurrenceLabel } : {}) },
   };
 }
@@ -218,7 +220,7 @@ export function changeFindingKind(kind: SundayChange["kind"]): string | null {
 }
 /**
  * The tone of the card a change is about, as the Sunday page shows it (sunday-brief.ts): an open role is a
- * decision; a declined request, a missing Sunday lead and a check that couldn't be completed are Worth a look.
+ * decision; a declined request, a missing lead and a check that couldn't be completed are Worth a look.
  */
 const CHANGE_TONE: Readonly<Record<string, "decision" | "look">> = { "needs-people": "decision", pending: "look", "lead-missing": "look", "worth-a-look": "look" };
 /** A new finding told right away carries its card's own tone. */
@@ -387,14 +389,15 @@ export const KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({
   "needs-people": "open roles",
   pending: "requests not yet accepted",
   streak: "serving streaks",
-  "lead-missing": "a missing Sunday lead",
-  "lead-unverified": "an unconfirmed Sunday lead",
+  "lead-missing": "a missing lead",
+  "lead-unverified": "an unconfirmed lead",
   "room-overlap": "overlapping room bookings",
   "unowned-overdue": "follow-ups without an owner",
   "group-meeting": "group meeting clashes",
   attention: "email and calendar that disagree",
   "too-few-confirmed": "kids teams with fewer confirmed people than your rule asks",
   "background-check": "missing or expiring background checks",
+  blockout: "blockouts during serving times",
   "checkins-below-rule": "Check-Ins rooms with fewer volunteers checked in than your kids rule's number",
   "form-submissions": "new form submissions",
   "registration-signup": "signup counts",

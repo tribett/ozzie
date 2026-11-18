@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { evaluateCoverage } from "../src/coverage.js";
-import { candidate, coverageFixture, observed } from "./fixtures/coverage/base.js";
+import { candidate, coverageFixture, observed, scheduled } from "./fixtures/coverage/base.js";
 
 describe("pure Sunday coverage", () => {
   it("C03/C24 contradictory duplicate assignment identities remain unverified", () => {
@@ -193,5 +193,119 @@ describe("pure Sunday coverage", () => {
     expect(result.positions[0]?.pending_assignment_ids).toEqual(["pending"]);
     expect(result.status).toBe("findings");
     expect(result.scopes).toEqual(input.scopes);
+  });
+});
+
+// Blockouts of people already scheduled (fixture matrix C30-C37). Planning Center still counts them, so remaining need
+// never changes; the overlap is a fact to look at, never a gap. Times: the fixture's 9:30-10:30 Eastern service.
+describe("scheduled people with a blockout", () => {
+  const SERVICE = { starts_at: "2026-11-22T09:30:00-05:00", ends_at: "2026-11-22T10:30:00-05:00" };
+  // Planning Center's all-day blockout: the church-local day as UTC instants, ending a second before midnight.
+  const ALL_DAY = { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z" };
+  const evaluate = (people: ReturnType<typeof scheduled>[], remaining = 0) => {
+    const input = coverageFixture();
+    input.positions[0]!.remaining_need = observed(remaining);
+    input.positions[0]!.assignments = observed(people.map(p => p.assignment));
+    input.positions[0]!.scheduled = people.map(p => p.person);
+    return { input, result: evaluateCoverage(input) };
+  };
+
+  it.each(["C", "U"] as const)("C30 a %s person whose all-day blockout covers the service is a finding, and the need is Planning Center's own", status => {
+    const { result } = evaluate([scheduled("a1", status, [ALL_DAY])]);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([{ assignment_id: "a1", person_id: "person-a1", interval: SERVICE }]);
+    expect(result.positions[0]?.remaining_need).toBe(0);
+    expect(result.status).toBe("findings");
+    expect(result.issues).toEqual([]);
+    // With an open request too, the count stays Planning Center's: nothing is added or subtracted.
+    expect(evaluate([scheduled("a1", status, [ALL_DAY])], 1).result.positions[0]?.remaining_need).toBe(1);
+  });
+
+  it("C30 a timed blockout that overlaps part of the serving time counts, compared as instants whatever the offset", () => {
+    const { result } = evaluate([scheduled("a1", "C", [{ starts_at: "2026-11-22T15:15:00Z", ends_at: "2026-11-22T17:00:00Z" }])]);
+    expect(result.positions[0]?.scheduled_blockouts.map(b => b.assignment_id)).toEqual(["a1"]);
+  });
+
+  it.each(["D", "cancelled"] as const)("C31 a %s person's blockout produces nothing", status => {
+    const { result } = evaluate([scheduled("a1", status, [ALL_DAY])]);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([]);
+    expect(result.status).toBe("checked-scope-clear");
+  });
+
+  it("C32 someone no longer on the plan produces nothing, even with their blockouts still supplied", () => {
+    const input = coverageFixture();
+    input.positions[0]!.remaining_need = observed(0);
+    input.positions[0]!.scheduled = [scheduled("gone", "C", [ALL_DAY]).person];
+    const result = evaluateCoverage(input);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([]);
+    expect(result.status).toBe("checked-scope-clear");
+  });
+
+  it.each([
+    ["ends as the service starts", { starts_at: "2026-11-22T08:00:00-05:00", ends_at: "2026-11-22T09:30:00-05:00" }],
+    ["starts as the service ends", { starts_at: "2026-11-22T15:30:00Z", ends_at: "2026-11-22T18:00:00Z" }],
+    ["the day before", { starts_at: "2026-11-21T05:00:00Z", ends_at: "2026-11-22T04:59:59Z" }],
+  ])("C33 a blockout that %s doesn't overlap and produces nothing", (_, blockout) => {
+    const { result } = evaluate([scheduled("a1", "C", [blockout])]);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([]);
+    expect(result.status).toBe("checked-scope-clear");
+  });
+
+  it("C33 uses the same overlap rule as people who could help: the same blockout settles both the same way", () => {
+    for (const blockout of [ALL_DAY, { starts_at: "2026-11-22T08:00:00-05:00", ends_at: "2026-11-22T09:30:00-05:00" }]) {
+      const input = coverageFixture(), person = candidate();
+      person.blockouts = observed([blockout]);
+      input.positions[0]!.candidates = [person];
+      const one = scheduled("a1", "C", [blockout]);
+      input.positions[0]!.assignments = observed([one.assignment]);
+      input.positions[0]!.scheduled = [one.person];
+      const p = evaluateCoverage(input).positions[0]!;
+      expect(p.scheduled_blockouts.length > 0).toBe(p.candidates[0]!.disposition === "excluded");
+    }
+  });
+
+  it("C34 two overlapping blockouts for one person make one entry", () => {
+    const { result } = evaluate([scheduled("a1", "C", [ALL_DAY, { starts_at: "2026-11-22T14:00:00Z", ends_at: "2026-11-22T16:00:00Z" }])]);
+    expect(result.positions[0]?.scheduled_blockouts).toHaveLength(1);
+  });
+
+  it("C35 a blockout that can't be checked (a repeating one arrives as null) is never read as clear", () => {
+    const { result } = evaluate([scheduled("a1", "C", null)]);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([]);
+    expect(result.status).toBe("unverified");
+    expect(result.issues).toEqual([expect.objectContaining({ code: "blockout-unverified", person_id: "person-a1", position_id: "position-a" })]);
+    expect(result.issues[0]!.message).toMatch(/^Worth a look: /);
+  });
+
+  it("C35 a blockout read that wasn't complete leaves that person unchecked, never clear", () => {
+    const input = evaluate([scheduled("a1", "C", [ALL_DAY])]).input;
+    input.positions[0]!.scheduled![0]!.blockouts.scope_id = "person:a1";
+    const result = evaluateCoverage(input);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([]);
+    expect(result.status).toBe("unverified");
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "observation-unverified", scope_id: "person:a1" }));
+  });
+
+  it("C36 a serving time that couldn't be verified is left to the existing assignment issue, not called clear or blocked out", () => {
+    const one = scheduled("a1", "C", [ALL_DAY]);
+    one.assignment.time_semantics = "unverified";
+    const { result } = evaluate([one]);
+    expect(result.positions[0]?.scheduled_blockouts).toEqual([]);
+    expect(result.status).toBe("unverified");
+    expect(result.issues.map(i => i.code)).toEqual(["assignment-unverified"]);
+  });
+
+  it("lists each scheduled person in the source's order, and checks nothing when no one's blockouts were supplied", () => {
+    const { result } = evaluate([scheduled("a2", "U", [ALL_DAY]), scheduled("a1", "C", []), scheduled("a3", "C", [ALL_DAY])]);
+    expect(result.positions[0]?.scheduled_blockouts.map(b => b.assignment_id)).toEqual(["a2", "a3"]);
+    const input = coverageFixture();
+    input.positions[0]!.assignments = observed([scheduled("a1", "C", [ALL_DAY]).assignment]);
+    expect(evaluateCoverage(input).positions[0]?.scheduled_blockouts).toEqual([]);
+  });
+
+  it("never changes its input", () => {
+    const { input } = evaluate([scheduled("a1", "C", [ALL_DAY])]);
+    const before = structuredClone(input);
+    evaluateCoverage(input);
+    expect(input).toEqual(before);
   });
 });

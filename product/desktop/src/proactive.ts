@@ -13,7 +13,9 @@ import {
 import { changeFindingKind, feedbackOf, foundOf, rightAwayChanges, routeChanges } from "../../../core/src/finding-feedback.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
-import { THIS_MAC_ONLY, thisMacOnly, type NoticeOptions } from "./phone-notice.js";
+import { thisMacOnly, type NoticeOptions } from "./phone-notice.js";
+import { noticeDayOf } from "./day-phrases.js";
+import type { NoticeDay } from "./onboarding-bridge.js";
 
 /**
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
@@ -33,11 +35,15 @@ export async function verifiedSundayCheck(ctx: { settings: Settings; status: Con
 }
 
 /**
- * Lock-screen privacy: the title and body are fixed in native code; the webview passes no text at all. Its one word,
- * "this Mac only", keeps the phone line of "A notice on your phone" back (phone-notice.ts); it never adds one.
+ * Lock-screen privacy: the title and body are fixed in native code; the webview passes no text at all. Its two closed
+ * words: "this Mac only", which keeps the phone line of "A notice on your phone" back (phone-notice.ts) and never adds
+ * one, and the day (native contract N8: a weekday, "weekend" or "service"), which picks the fixed line that names the
+ * watched service's real day. Absent, native says "Service coverage needs attention".
  */
-export const notifySundayAttention = (options?: NoticeOptions) =>
-  options?.localOnly ? invoke<void>("notify_sunday_attention", { localOnly: true }) : invoke<void>("notify_sunday_attention");
+export const notifySundayAttention = (options?: NoticeOptions) => {
+  const args = { ...(options?.localOnly ? { localOnly: true } : {}), ...(options?.day ? { day: options.day } : {}) };
+  return Object.keys(args).length ? invoke<void>("notify_sunday_attention", args) : invoke<void>("notify_sunday_attention");
+};
 /** Whether the Sunday notice for these changes stays on this Mac: every one is about a background check. Kinds only. */
 const macOnlyFor = (changes: readonly SundayChange[]) => thisMacOnly(changes.map(c => c.finding?.kind ?? changeFindingKind(c.kind)));
 
@@ -98,7 +104,15 @@ export const browserStore: KeyValueStore = {
   set: (key, value) => { try { localStorage.setItem(key, value); } catch { /* per-device convenience only */ } },
 };
 
-export interface ProactiveContext { settings: Settings; rules: SundayRules; status: ConnectionStatus | null }
+export interface ProactiveContext {
+  settings: Settings; rules: SundayRules; status: ConnectionStatus | null;
+  /**
+   * The day the coverage notice names (day-phrases.ts `noticeDayOf` of the watched service's day words), when App knows
+   * it. Absent: the day of the plan this check last read ("sunday" only when that plan is on a Sunday), else none, which
+   * native says as "Service coverage".
+   */
+  noticeDay?: NoticeDay;
+}
 export interface ProactiveHooks {
   context: () => ProactiveContext;
   onStatus: (s: ConnectionStatus) => void;
@@ -120,7 +134,7 @@ export interface ProactiveDeps {
    * `source` overrides how the ledger records it (a responsibility's run is automatic, though it asks like Check now).
    */
   check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic") => Promise<SundayCapture>;
-  /** The Sunday notice; `THIS_MAC_ONLY` when only background checks brought it (its phone line stays back). */
+  /** The coverage notice; `localOnly` when only background checks brought it (its phone line stays back), `day` its fixed line's day. */
   notify: (options?: NoticeOptions) => Promise<void>;
   /** Fixed local copy for a failed check. */
   problem: (error: unknown) => string;
@@ -223,6 +237,8 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     history = history.map(e => e.notice === "held" ? { ...e, notice: "none" } : e);
   };
   let hooks: ProactiveHooks | null = null;
+  /** The real day of the plan the last check read, for the notice when App doesn't say (ProactiveContext `noticeDay`). */
+  let checkedDay: NoticeDay | null = null;
   let inflight: Promise<SundayCapture> | null = null;
   let launched = false;
   let timer: unknown = null;
@@ -246,9 +262,14 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
   snapshot = build();
   const emit = () => { save(); snapshot = build(); listeners.forEach(l => l()); };
   const add = (entry: HistoryEntry) => { history = [entry, ...history].slice(0, HISTORY_LIMIT); };
-  /** `macOnly`: only background checks brought it, so "A notice on your phone" leaves it on this Mac. */
+  /**
+   * `macOnly`: only background checks brought it, so "A notice on your phone" leaves it on this Mac. The notice names the
+   * watched service's day by a closed code, never text.
+   */
   const deliver = async (macOnly: boolean): Promise<"sent" | "unavailable"> => {
-    try { await (macOnly ? deps.notify(THIS_MAC_ONLY) : deps.notify()); return "sent"; } catch { return "unavailable"; }
+    const day = hooks?.context().noticeDay ?? checkedDay;
+    const options: NoticeOptions = { ...(macOnly ? { localOnly: true as const } : {}), ...(day ? { day } : {}) };
+    try { await (Object.keys(options).length ? deps.notify(options) : deps.notify()); return "sent"; } catch { return "unavailable"; }
   };
 
   /** Compare with what was last known for this Sunday and decide on one notice. Never throws. */
@@ -260,7 +281,9 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const { changes, memory } = compareSundayCheck(prior, record, { now, urgentWithinHours: prefs.urgentWithinHours });
     // Every finding this check shows, kids teams, rooms and follow-ups included, with what the last check of this Sunday showed.
     const entries = feedbackOf(rules);
-    const shown = foundOf(buildSundayBrief(capture, rules, now), sundayOperations(capture, rules, { now }));
+    const brief = buildSundayBrief(capture, rules, now);
+    checkedDay = noticeDayOf(brief.day);
+    const shown = foundOf(brief, sundayOperations(capture, rules, { now }));
     const before = prior ? foundBy[key] ?? null : null;
     sundays = Object.fromEntries([...Object.entries({ ...sundays, [key]: memory })]
       .sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at)).slice(0, SUNDAYS_KEPT));

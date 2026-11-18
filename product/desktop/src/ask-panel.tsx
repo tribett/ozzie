@@ -12,16 +12,21 @@
 // the same language as a finding (the question, Ozzie's sentences, where the facts came from and when, and "See how
 // this works" with the steps), not a thread of chat bubbles. Earlier questions this session stay as a short list of
 // cards to reopen. Once there is an answer, the two notes about Ask fold away so the answer stays in view at any zoom.
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import "./ask-panel.css";
-import { MAX_QUESTION_CHARS, suggestedQuestions } from "../../../core/src/ask.js";
+import { MAX_QUESTION_CHARS, onDayPage, suggestedQuestions } from "../../../core/src/ask.js";
 import { kidsWording } from "../../../core/src/harness/compose.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
-import { ADDED_HOW, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, HELP, LOCAL_HOW, LOCAL_NOTE, type Account } from "./harness-words.js";
+import { addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, HELP, LOCAL_HOW, LOCAL_NOTE, procedureTitle, type Account } from "./harness-words.js";
 import { TaskAccount } from "./activity-page.js";
+import { ChooseAiButton, ChooseAiContext } from "./ai-line.js";
+import { NEEDS_AI } from "./ai-words.js";
 import { Icon } from "./icons.js";
+import { useDay } from "./day-words.js";
+import { dayName, pageRef } from "./day-phrases.js";
+import { ProcedureBody } from "./procedure-text.js";
 import { DraftActions, type OpenDraft } from "./draft-actions.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { isVoiceShortcut, listenInto, LISTENING_NOTE, nativeVoice, VOICE_HINT, VOICE_SHORTCUT, voiceOff, type Voice, type VoiceStatus } from "./voice.js";
@@ -108,36 +113,39 @@ export function answerAccount(answer: ShownAnswer): Account {
 
 /** "See how this works": the procedure Ozzie followed, verbatim, and the steps it took, in plain words. */
 export function HowItWorks({ answer }: { answer: ShownAnswer }) {
+  const day = useDay();
   return <div className="ask-how-body stack-tight">
     {answer.procedure && <>
-      <p className="bold">Ozzie followed this procedure: {answer.procedure.title}</p>
-      <div className="procedure-body">{answer.procedure.body}</div>
+      <p className="bold">Ozzie followed this procedure: {procedureTitle(answer.procedure.title, day) ?? answer.procedure.title}</p>
+      <ProcedureBody body={answer.procedure.body} />
     </>}
     <TaskAccount account={answerAccount(answer)} />
     {answer.local ? <p className="small">{LOCAL_HOW}</p>
       : <p className="small">The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such
         as [Person 1] and [Role 1]; Ozzie put them back on this Mac. The AI only chose which facts answer your question: Ozzie wrote every sentence
         here from those facts, in its own order. Nothing was sent to anyone, and nothing in Planning Center changed.</p>}
-    {answer.added && <p className="small">{ADDED_HOW}</p>}
+    {answer.added && <p className="small">{addedHow(day)}</p>}
   </div>;
 }
 
 /** An answer as a finding reads: what wasn't complete first, Ozzie's sentences, any draft, where it came from and when. */
 export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page: Page) => void }) {
   const [how, setHow] = useState(false);
+  // Fixed lines that point to "the Sunday page" name the watched service's own page (onboarding spec §5).
+  const d = useDay();
   return <div className="body ask-answer">
     {(answer.notCovered || answer.gaps.length > 0) && <div className="stack-tight">
       <span className="badge b-look"><Icon name="eye" small />Worth a look</span>
-      {answer.gaps.length > 0 && <ul className="list">{answer.gaps.map(g => <li key={g}><Icon name="dot" small />{g}</li>)}</ul>}
+      {answer.gaps.length > 0 && <ul className="list">{answer.gaps.map(g => <li key={g}><Icon name="dot" small />{onDayPage(g, d)}</li>)}</ul>}
     </div>}
-    {answer.body && <div className="ask-lines">{answer.body.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}</div>}
+    {answer.body && <div className="ask-lines">{onDayPage(answer.body, d).split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}</div>}
     {answer.local && <p className="small">{LOCAL_NOTE}</p>}
     {answer.draft && <DraftCard text={answer.draft} />}
     <div className="ask-src">
       <BasedOn text={answer.basedOn} />
       <div className="row ask-links">
         <button type="button" className="src" onClick={() => onOpen(answer.page)}>
-          <Icon name={answer.page === "today" ? "clock" : "sun"} small />{answer.page === "today" ? "Open Today" : "Open Sunday"}</button>
+          <Icon name={answer.page === "today" ? "clock" : "sun"} small />{answer.page === "today" ? "Open Today" : `Open ${dayName(d)}`}</button>
       </div>
     </div>
     <button type="button" className="btn btn-quiet btn-sm ask-how" aria-expanded={how} onClick={() => setHow(!how)}><Icon name="info" small />See how this works</button>
@@ -154,7 +162,7 @@ function cardBadge(turn: Turn): { label: string; tone: string } {
     case "help": return { label: "What Ozzie can do", tone: "b-muted" };
     case "cards": return { label: "Visitor cards", tone: "b-muted" };
     case "start": return { label: "Nothing read yet", tone: "b-muted" };
-    case "no-model": return { label: "AI help isn't set up", tone: "b-muted" };
+    case "no-model": return { label: NEEDS_AI.badge, tone: "b-muted" };
     case "refused": return { label: "Not sent", tone: "b-muted" };
     case "cancelled": return { label: "Stopped", tone: "b-muted" };
     case "problem": return { label: "Couldn't answer", tone: "b-attn" };
@@ -177,11 +185,14 @@ export function AskCard({ turn, page, onOpen, plans }: { turn: Turn; page?: stri
   </article>;
 }
 
-/** The set-up panel shown when no AI model is set up, in the panel and in a turn. */
-function NeedsModel({ page, onOpen }: { page: string | undefined; onOpen: (page: Page) => void }) {
+/**
+ * No AI works, in the panel and in a turn: one sentence and one step on, to "How should Ozzie use AI?" over the page
+ * (walk-through, 2026-11-18: "Set one up under Settings" was a dead end).
+ */
+function NeedsModel() {
   return <div className="panel-info"><Icon name="info" /><div className="stack-tight">
-    <p>{page === "connection" ? "Ask Ozzie needs an AI model. Set one up in AI help on this page." : "Ask Ozzie needs an AI model. Set one up under Settings."} Everything else works without it.</p>
-    {page !== "connection" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("connection")}>Open Settings</button></div>}</div></div>;
+    <p>{NEEDS_AI.ask}</p>
+    <ChooseAiButton /></div></div>;
 }
 
 /**
@@ -197,7 +208,7 @@ export function turnAnnouncement(turn: Turn | undefined): string {
     case "cards": return "Visitor cards are read on the Visitor cards page, on this Mac.";
     case "help": return "Ozzie listed what it can do here. Nothing was sent.";
     case "start": return ASK_START;
-    case "no-model": return "Ask Ozzie needs an AI model. Set one up under Settings.";
+    case "no-model": return NEEDS_AI.ask;
     case "refused": case "problem": case "cancelled": return turn.text;
     case "answered": {
       const a = turn.answer;
@@ -210,14 +221,16 @@ export function turnAnnouncement(turn: Turn | undefined): string {
 
 /** Where to go first when nothing has been read: Settings to connect, Sunday to check. Never a button to the page already on screen. */
 function NextSteps({ page, onOpen }: { page: string | undefined; onOpen: (page: Page) => void }) {
+  const d = useDay();
   return <div className="row">
     {page !== "connection" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("connection")}>Open Settings</button>}
-    {page !== "sunday" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("sunday")}>Open Sunday</button>}
+    {page !== "sunday" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("sunday")}>Open {dayName(d)}</button>}
   </div>;
 }
 
 /** Ozzie's side of one question. */
 export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined }) {
+  const d = useDay();
   switch (turn.state) {
     case "plan": return plans ? <div className="body"><PlanTurn parsed={turn.parsed} context={plans.context} actions={plans.actions} /></div> : null;
     case "cards": return <div className="body"><p>{CARDS_POINTER}</p>
@@ -230,10 +243,10 @@ export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: str
       <p className="small">Nothing was sent.</p></div>;
     case "start": return <div className="body stack-tight"><p>{ASK_START}</p><NextSteps page={page} onOpen={onOpen} /><p className="small">Nothing was sent.</p></div>;
     case "asking": return <div className="body"><p className="small"><Icon name="spinner" small spin /> Reading what Ozzie already has…</p></div>;
-    case "refused": return <div className="body"><p>{turn.text}</p>{!/nothing was sent/i.test(turn.text) && <p className="small">Nothing was sent.</p>}</div>;
-    case "no-model": return <div className="body"><NeedsModel page={page} onOpen={onOpen} /></div>;
-    case "cancelled": return <div className="body"><p className="small">{turn.text}</p></div>;
-    case "problem": return <div className="body"><p role="alert" className="problem">{turn.text}</p></div>;
+    case "refused": return <div className="body"><p>{onDayPage(turn.text, d)}</p>{!/nothing was sent/i.test(turn.text) && <p className="small">Nothing was sent.</p>}</div>;
+    case "no-model": return <div className="body"><NeedsModel /></div>;
+    case "cancelled": return <div className="body"><p className="small">{onDayPage(turn.text, d)}</p></div>;
+    case "problem": return <div className="body"><p role="alert" className="problem">{onDayPage(turn.text, d)}</p></div>;
     case "answered": return <Answer answer={turn.answer} onOpen={onOpen} />;
   }
 }
@@ -244,6 +257,8 @@ export function AskPanel(props: {
   ask: AskFn | null;
   brief: SundayBrief | null;
   modelReady: boolean; onOpen: (page: Page) => void;
+  /** How Planning Center stands, for the nothing-checked line: Connect is offered only when it isn't connected. */
+  connection?: "connected" | "checking" | "unchecked" | "not-connected";
   /** The page on screen beside the panel, so it never offers a button to where the person already is. */
   page?: string;
   /** Turns to start with (tests and restored views). */
@@ -256,7 +271,13 @@ export function AskPanel(props: {
   initialVoice?: VoiceStatus;
 }) {
   const { brief, modelReady } = props;
+  const day = useDay();
   const voice = props.voice ?? nativeVoice;
+  // "Choose how Ozzie uses AI" from inside the panel closes the panel as it opens the AI screens, which the panel would
+  // otherwise cover (live in the release app, 2026-11-18). The same button elsewhere is unchanged.
+  const chooseAi = useContext(ChooseAiContext);
+  const onClose = props.onClose;
+  const closeThenChoose = useMemo(() => chooseAi ? () => { onClose(); chooseAi(); } : null, [chooseAi, onClose]);
   const [turns, setTurns] = useState<Turn[]>(props.initialTurns ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(() => (props.initialTurns ?? []).some(t => t.state === "asking"));
@@ -358,20 +379,24 @@ export function AskPanel(props: {
     <p className="small ask-note"><Icon name="lock" small />{ASK_NOTE}</p>
     {answered && voiceAbout && <p className="small">{voiceAbout}</p>}
   </>;
-  return <aside id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
+  return <ChooseAiContext.Provider value={closeThenChoose}><aside id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
     onKeyDown={e => {
       if (e.key === "Escape") props.onClose();
       else if (isVoiceShortcut(e)) { e.preventDefault(); void toggleVoice(); }
     }}>
-    <div className="convo-head"><AskIcon />Ask Ozzie<span className="spacer" />
+    {/* Named with what it's for the first time it shows (spec §6): "Ask Ozzie (questions about Wednesday)". */}
+    <div className="convo-head"><AskIcon />Ask Ozzie<span className="small">&nbsp;(questions about {dayName(day)})</span><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close Ask Ozzie" onClick={props.onClose}><Icon name="x" /></button></div>
     <div className="ask-scroll">
       {!answered && notes}
       {/* No button to the page already on screen. */}
       {!brief && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
-        <p>Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on the Sunday page. You can also open the fictional example there, or ask what Ozzie can do.</p>
-        {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>Open Sunday</button></div>}</div></div>}
-      {!modelReady && <NeedsModel page={props.page} onOpen={props.onOpen} />}
+        <p>{props.connection === "checking" ? `Nothing has been checked yet. Ozzie is checking Planning Center now. You can also open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
+          : props.connection === "unchecked" ? `Nothing has been checked yet, and Ozzie couldn't check Planning Center just now. You can open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
+          : props.connection === "connected" ? `Nothing has been checked yet. Check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`
+          : `Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`}</p>
+        {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>Open {dayName(day)}</button></div>}</div></div>}
+      {!modelReady && <NeedsModel />}
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
       {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />A saved copy of a check from {time(brief.completed_at)}. Not a current check.</p>}
       {brief && !answered && <BasedOn text={basedOnBrief(brief)} />}
@@ -388,7 +413,7 @@ export function AskPanel(props: {
       <label htmlFor="ask-input" className="sr-only">Your question</label>
       <textarea id="ask-input" ref={inputRef} className="ask-input" rows={2} maxLength={MAX_QUESTION_CHARS} value={input} disabled={!canType || busy}
         readOnly={listening !== "no"}
-        placeholder={listening !== "no" ? "Listening…" : ready ? "Ask about this Sunday…" : props.plans ? "Ask Ozzie to keep an eye on something…"
+        placeholder={listening !== "no" ? "Listening…" : ready ? `Ask about ${day.thisOne}…` : props.plans ? "Ask Ozzie to keep an eye on something…"
           : canType ? "Ask what Ozzie can do…" : "Ask Ozzie isn't available yet"}
         onChange={e => { setInput(e.target.value); setVoiceNote(null); }}
         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} />
@@ -403,5 +428,5 @@ export function AskPanel(props: {
     </form>
     <p className="small ask-voice" id="ask-voice-line" role="status" aria-live="polite">{voiceLine ?? ""}</p>
     <p className="sr-only" role="status" aria-live="polite">{props.open ? turnAnnouncement(current) : ""}</p>
-  </aside>;
+  </aside></ChooseAiContext.Provider>;
 }

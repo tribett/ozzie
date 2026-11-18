@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   acceptAskReply, ASK_MAX_TOKENS, ASK_SYSTEM, AskSession, buildAskContext, containsNameWord, hasContactDetail, MAX_USER_CHARS, prepareAsk,
-  REFUSALS, restoreAnswer, suggestedQuestions, type AskContext, type AskedQuestion,
+  dayPage, onDayPage, REFUSALS, restoreAnswer, suggestedQuestions, type AskContext, type AskedQuestion,
 } from "../src/ask.js";
+import { wednesdayCapture, wednesdayWithChecks, wednesdayWords } from "./fixtures/service-days/wednesday.js";
+import { SUNDAY_WORDS, dayWords } from "../src/service-day.js";
 import { containsName, fold } from "../src/draft-request.js";
 import { buildSundayBrief, type SundayBrief } from "../src/sunday-brief.js";
 import { LATER, nov22Capture, nov22LaterCapture, PEOPLE, SERVICE, TEAMS } from "../src/fictional-sunday.js";
@@ -116,6 +118,30 @@ describe("Ask facts", () => {
     ].join("\n"));
     expect([...rich.roles]).toEqual([["[Role 1]", "Greeters (9:30) & Hosts"], ["[Role 2]", "Nursery"], ["[Role 3]", "Prayer Team"]]);
     expect(rich.facts).not.toMatch(/Tom|husband|555|Riley|Prayer|Greeter|Nursery/);
+  });
+
+  it("say someone scheduled with a blockout as B lines: each role, its time, the person and how Planning Center counts them, never a name", () => {
+    const c = nov22Capture();
+    for (const [person, starts_at, ends_at] of [[PEOPLE.greeterConfirmed, "2026-11-22T05:00:00Z", "2026-11-23T04:59:59Z"], [PEOPLE.lyricsPending, "2026-11-22T15:00:00Z", "2026-11-22T18:00:00Z"]] as const) {
+      c.reads.find(r => r.collection === "person_blockouts" && r.person_id === person)!.body =
+        { data: [{ type: "Blockout", id: `b${person}`, attributes: { starts_at, ends_at, repeat_frequency: "no_repeat" } }], meta: { count: 1, total_count: 1 } };
+    }
+    const session = new AskSession();
+    const context = buildAskContext(session, { brief: buildSundayBrief(c, rules, c.completed_at, true), names: c.names, organization: c.organization }, TZ)!;
+    const lines = context.facts.split("\n").filter(l => / \| B \| /u.test(l));
+    expect(lines).toEqual([
+      expect.stringMatching(/^F4 \| B \| \[Role 1\] \| 2026-11-22 09:30-10:30 \| \[Person \d+\] \| c$/u),
+      expect.stringMatching(/^F5 \| B \| \[Role 3\] \| 2026-11-22 09:30-10:30 \| \[Person \d+\] \| p$/u),
+    ]);
+    expect(context.people.get(/\[Person \d+\]/u.exec(lines[0]!)![0])).toBe(PEOPLE.greeterConfirmed);
+    expect(context.usable).toBe(true);
+    for (const part of Object.values(c.names).flatMap(n => n.split(" "))) expect(fold(context.facts)).not.toContain(fold(part));
+    expect(context.facts).not.toMatch(/blockout|Greeter|Lyrics/iu);
+    // The legend says what a B line is, in Ozzie's fixed words.
+    expect(ASK_SYSTEM).toContain("B: a person is scheduled for a role and has a blockout in Planning Center at that time;");
+    // The question that goes to the model holds only labels.
+    const q = asked("Is Avery Brightwater still able to greet?", session, context);
+    expect(containsName(q.sent, c.names)).toBe(false);
   });
 
   it("date the Sunday from sort_date's own date part: Planning Center gives it as local wall-clock time, never an instant", () => {
@@ -493,6 +519,38 @@ describe("suggested questions", () => {
         for (const word of role.match(/[\p{L}\p{N}]{3,}/gu)!) expect(fold(bare(sent)), `${chip}: ${word}`).not.toContain(fold(word));
       }
     }
+  });
+});
+
+// Onboarding spec §5 (decision 18): Ask's fixed words name the watched service by its own day.
+describe("a Wednesday service in Ask's fixed words", () => {
+  it("suggests questions about this Wednesday, and they pass the boundary as asked", () => {
+    const wed = wednesdayCapture();
+    const brief = buildSundayBrief(wed, rules, wed.completed_at, true);
+    const chips = suggestedQuestions(brief);
+    expect(chips).toEqual(["Who could cover Greeter?", "What still needs a decision this Wednesday?", "Why is Greeter flagged?", "Draft a note to someone who could cover Greeter"]);
+    const session = new AskSession();
+    const context = contextFor(session, brief, wed.names, wed.organization);
+    for (const chip of chips) expect(prepareAsk(new AskSession(), context, chip).ok, chip).toBe(true);
+  });
+
+  it("says background checks stay on the Wednesday page", () => {
+    const wed = wednesdayWithChecks();
+    const kids = { ...rules, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 1 }] };
+    const context = contextFor(new AskSession(), buildSundayBrief(wed, kids, wed.completed_at, true), wed.names, wed.organization);
+    expect(context.gaps).toContain("Background checks are shown on the Wednesday page only; they're never sent to an AI.");
+    expect(context.gaps.join(" ")).not.toMatch(/sunday/iu);
+  });
+
+  it("points to the watched service's own page, keeping each refusal the same sentence callers compare", () => {
+    const wednesday = wednesdayWords();
+    const weekend = dayWords({ sort_date: "2026-11-21T17:00:00Z", times: ["2026-11-21T23:00:00Z", "2026-11-22T15:00:00Z"] }, "America/Chicago");
+    expect(dayPage(wednesday)).toBe("the Wednesday page");
+    expect(dayPage(weekend)).toBe("the “This weekend” page");
+    expect(onDayPage(REFUSALS.background, wednesday)).toBe(REFUSALS.background.replace("the Sunday page", "the Wednesday page"));
+    expect(onDayPage("The Sunday page shows who.", weekend)).toBe("The “This weekend” page shows who.");
+    expect(onDayPage(REFUSALS.backgroundNote, SUNDAY_WORDS)).toBe(REFUSALS.backgroundNote);
+    expect(onDayPage(REFUSALS.backgroundNoteAlone, wednesday)).not.toMatch(/sunday/iu);
   });
 });
 

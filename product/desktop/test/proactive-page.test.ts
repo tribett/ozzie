@@ -48,19 +48,23 @@ const render = (view: ProactiveView, names: Record<string, string>, readiness: R
 }));
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, "\"").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
 
-describe("What runs automatically", () => {
+describe("Keeping watch", () => {
   it("says what runs, which account, what it can do, and how to stop it", async () => {
     const page = text(render(await viewAfterDecline(), {}));
+    expect(page).toContain("Keeping watch");
     expect(page).toContain("Keeping an eye on Sunday");
-    expect(page).toContain("The regular Sunday check");
+    expect(page).toContain("Ozzie keeps an eye on Sunday");
     // Its interval, under Schedule and quiet hours, is named for it (Keep Sunday covered keeps its own times).
-    expect(page).toContain("Regular Sunday check every");
-    expect(page).toContain("Reads only. It never changes Planning Center or sends messages.");
-    expect(page).toContain("Planning Center organization 1001");
+    expect(page).toContain("Look at Sunday every");
+    expect(page).toContain("Reads only. It never sends messages.");
+    // The church by its name when known; never its organization number (spec §6).
+    expect(page).toContain("Account Planning Center");
+    expect(page).not.toContain("1001");
+    expect(page).not.toMatch(/runs automatically|automatic checks|regular Sunday check/u);
     // Closing the window no longer stops Ozzie (it stays in the menu bar); quitting does.
     expect(page).toContain("When Ozzie opens, then every hour while Ozzie is running on this Mac, even with its window closed. Nothing runs after you quit it.");
     expect(page).toContain("Time zone");
-    expect(page).toContain("Pause automatic checks");
+    expect(page).toContain("Pause keeping an eye on Sunday");
     expect(page).toContain("Check now");
     expect(page).toContain("“Sunday coverage needs attention. Open Ozzie to see details.” It never includes names or details.");
   });
@@ -81,8 +85,8 @@ describe("What runs automatically", () => {
     const view = await viewAfterDecline();
     expect(text(render(view, {}, "not-connected"))).toContain("Not running yet. Connect Planning Center under Settings");
     const paused = text(render({ ...view, schedule: { ...view.schedule, paused: true, next_run_at: null } }, {}));
-    expect(paused).toContain("Resume automatic checks");
-    expect(paused).toContain("Paused. Nothing runs automatically until you resume.");
+    expect(paused).toContain("Resume keeping an eye on Sunday");
+    expect(paused).toContain("Paused. Ozzie doesn't look at Sunday until you resume.");
   });
 
   it("uses plain product language", async () => {

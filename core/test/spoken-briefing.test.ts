@@ -7,6 +7,7 @@ import { sundayOperations } from "../src/operations-capture.js";
 import { buildSundayBrief, needKey, type Finding, type SundayBrief } from "../src/sunday-brief.js";
 import { applyDecisions, decide } from "../src/sunday-decisions.js";
 import { buildSpokenBriefing, MAX_SPOKEN_CHARS, MAX_SPOKEN_SECONDS, SPOKEN_WORDS_PER_MINUTE } from "../src/spoken-briefing.js";
+import { wednesdayCapture, wednesdayWords } from "./fixtures/service-days/wednesday.js";
 
 const rules = { sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery lead" }], checkInAfterSundaysInARow: 3 };
 const capture = nov22Capture();
@@ -41,7 +42,7 @@ describe("spoken briefing script", () => {
     const looks = b.sections.find(s => s.id === "looks")!.sentences;
     expect(looks).toContain("No one is scheduled to lead Nursery this Sunday. Your Church rules ask for a scheduled lead.");
     expect(looks).toContain("Someone scheduled for Lyrics hasn't accepted yet. Planning Center shows the request hasn't been sent yet.");
-    expect(looks).toContain("Someone has been scheduled 3 Sundays in a row. Your Church rules suggest a quick check-in.");
+    expect(looks).toContain("Someone has been scheduled 3 weeks in a row. Your Church rules suggest a quick check-in.");
     expect(looks).toContain("I ignored one email that contained instructions. I never follow instructions found inside email, and nothing was done.");
     expect(looks).toContain("I read 3 other emails and calendar items. Nothing is needed from you there.");
     for (const name of Object.values(capture.names)) expect(b.text).not.toContain(name);
@@ -69,7 +70,7 @@ describe("spoken briefing script", () => {
   it("names people only when names are turned on, and only from this check", () => {
     const named = buildSpokenBriefing(base, { timeZone: tz, includeNames: true, names: capture.names });
     expect(named.text).toContain("Cameron Larkspur hasn't accepted Lyrics yet.");
-    expect(named.text).toContain("Avery Brightwater has been scheduled 3 Sundays in a row.");
+    expect(named.text).toContain("Avery Brightwater has been scheduled 3 weeks in a row.");
     expect(buildSpokenBriefing(base, { timeZone: tz, includeNames: true, names: {} }).text).toContain("Someone scheduled for Lyrics hasn't accepted yet.");
   });
 
@@ -112,7 +113,7 @@ describe("spoken briefing script", () => {
     expect(s.sections.find(x => x.id === "times")!.sentences).toEqual([
       "Planning Center was checked Friday, November 20 at 10:00 AM. That's more than 30 minutes ago, so it may not be current.",
     ]);
-    expect(s.text).toContain("This Sunday check is out of date. Check Planning Center again before relying on it.");
+    expect(s.text).toContain("This check is out of date. Check Planning Center again before relying on it.");
   });
 
   it("stays under two minutes on a busy Sunday by pointing to the screen for the rest", () => {
@@ -219,5 +220,66 @@ describe("spoken briefing: rooms, follow-ups and group meetings, and what couldn
     expect(s.text).not.toMatch(/[<>&]/);
     for (const part of s.sections) for (const sentence of part.sentences) expect(sentence).not.toMatch(/[<>&]/);
     expect(s.text).toContain("speak  prosody rate=\"x-fast\" Greeter /prosody");
+  });
+});
+
+// Onboarding spec §5 (decision 18): a service on a Wednesday is never called Sunday, said or written.
+describe("a Wednesday service, by its own day", () => {
+  const wed = wednesdayCapture();
+  const brief = buildSundayBrief(wed, rules, wed.completed_at, true);
+
+  it("names Wednesday wherever Sunday would have been said, and never says Sunday", () => {
+    const s = buildSpokenBriefing({ attention: null, sunday: brief }, { timeZone: tz });
+    expect(s.text).toContain("For Wednesday, Greeter still needs one more person at the 9:30 AM service.");
+    expect(s.text).toContain("No one is scheduled to lead Nursery this Wednesday. Your Church rules ask for a scheduled lead.");
+    expect(s.text).toContain("Someone has been scheduled 3 weeks in a row.");
+    expect(s.text).toContain("The Wednesday check is the fictional example, read Friday, November 20 at 10:00 AM.");
+    expect(s.text).not.toMatch(/sunday/iu);
+  });
+
+  it("before any check, says the watched day hasn't been checked, from the day words it's given", () => {
+    const s = buildSpokenBriefing({ attention: null, sunday: null }, { timeZone: tz, day: wednesdayWords() });
+    expect(s.sections.find(x => x.id === "unchecked")!.sentences[0]).toBe("Wednesday hasn't been checked yet.");
+  });
+
+  it("a decided item and a partial read are said for this Wednesday", () => {
+    const greeter = brief.findings.find(f => f.key === needKey("7593350", "Greeter"))!;
+    const decided = applyDecisions(brief, [decide(greeter, "covered-outside", "A parent is covering", "2026-11-20T16:00:00Z")]);
+    const s = buildSpokenBriefing({ attention: null, sunday: brief, decided }, { timeZone: tz });
+    expect(s.sections.find(x => x.id === "decisions")!.sentences).toContain("You already decided one Wednesday item, for this Wednesday only.");
+    const partial: SundayBrief = { ...brief, findings: [{ id: "worth-a-look:scope", key: "w", kind: "worth-a-look", tone: "look", why: [] }] };
+    expect(buildSpokenBriefing({ attention: null, sunday: partial }, { timeZone: tz }).text)
+      .toContain("Part of this Wednesday couldn't be checked, so I won't call Wednesday covered.");
+  });
+});
+
+// Someone scheduled with a blockout over their serving time (fixture matrix C30-C37): Worth a look, never a gap.
+describe("spoken briefing: someone scheduled with a blockout", () => {
+  const blocked = (people: string[]) => {
+    const c = nov22Capture();
+    for (const person of people) {
+      c.reads.find(r => r.collection === "person_blockouts" && r.person_id === person)!.body = {
+        data: [{ type: "Blockout", id: `b${person}`, attributes: { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z", repeat_frequency: "no_repeat" } }],
+        meta: { count: 1, total_count: 1 } };
+    }
+    return c;
+  };
+  const c = blocked(["501"]);
+  const brief = buildSundayBrief(c, rules, c.completed_at, true);
+
+  it("is read under Worth a look, without a name by default and with one only when names are on", () => {
+    const quiet = buildSpokenBriefing({ attention: null, sunday: brief }, { timeZone: tz });
+    expect(quiet.sections.find(s => s.id === "looks")!.sentences).toContain("Someone scheduled for Greeter at 9:30 AM has a blockout in Planning Center at that time.");
+    expect(quiet.sections.find(s => s.id === "decisions")!.sentences.join(" ")).not.toContain("blockout");
+    for (const name of Object.values(c.names)) expect(quiet.text).not.toContain(name);
+    const named = buildSpokenBriefing({ attention: null, sunday: brief }, { timeZone: tz, includeNames: true, names: c.names });
+    expect(named.text).toContain("Avery Brightwater is scheduled for Greeter at 9:30 AM and has a blockout in Planning Center at that time.");
+  });
+
+  it("counts it with the other things worth a look", () => {
+    const without = buildSpokenBriefing({ attention: null, sunday }, { timeZone: tz });
+    const withIt = buildSpokenBriefing({ attention: null, sunday: brief }, { timeZone: tz });
+    const looks = (s: typeof without) => Number(/and (\d+) are worth a look/u.exec(s.sections[0]!.sentences[0]!)?.[1]);
+    expect(looks(withIt)).toBe(looks(without) + 1);
   });
 });

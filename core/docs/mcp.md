@@ -166,7 +166,7 @@ By hand in Claude, the setup text is:
 
 In Claude, open Settings → Developer → Edit Config, paste it beside any apps already listed, save, then quit Claude
 and open it again. In Ozzie, check Sunday (or open the fictional example). Then ask Claude, for example, "What still
-needs attention for Sunday in Ozzie?"
+needs attention in Ozzie's last check?"
 
 Run Ozzie from the Applications folder: a downloaded app that macOS runs from a temporary copy has a
 path that changes, and one opened straight from its disk image goes away when the disk is ejected, so

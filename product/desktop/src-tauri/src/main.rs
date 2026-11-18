@@ -17,16 +17,18 @@ use ozzie_native_auth::{
     provider::{NativeHttp, PcoProvider},
     source::SourceError,
     sunday_check::{self, ReadNames, Reader, RecordingEntry, RecordingError, SundayCapture, Turn},
-    sunday_picker::{self, Choices, PlanChoice, ServiceTypeChoice},
+    sunday_picker::{self, Choices, PlanChoice, PlanNext, ServicePick, ServiceTypeChoice},
 };
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use ozzie_native_auth::lifetime;
+// The onboarding's AI screens: AI on this Mac (and Check my setup, Ozzie's AI offer).
+mod ai_setup;
 // H6: keeps running with the window closed (menu bar, timer, App Nap, open at login, responsibilities).
 mod always_on;
 // The macOS app menu: the default one, with a "Quit Ozzie" (Command-Q) that asks first (review P, M1).
@@ -35,7 +37,9 @@ mod app_menu;
 mod calendars;
 // Visitor cards: Ozzie's own images-only photo panel (no path ever comes from the page).
 mod card_picker;
+// The church's own AI key, taken in natively (clipboard or Ozzie's key window), checked, then kept in the Keychain.
 mod church_sources;
+mod key_sheet;
 // "Open in Mail" / "Open in Messages" on drafts: a new, unsent message the person sends.
 mod draft_apps;
 mod local_tools;
@@ -240,9 +244,12 @@ async fn connection_status(
 /// and saves nothing. A new sign-in revokes the saved credential it replaces. One that ends bound
 /// to another church changes nothing about the earlier one until the person answers
 /// (`answer_church_switch`); while that question is open, sign-ins wait (`switch-pending`).
+// Tauri passes each IPC argument by name; grouping them would change what the webview sends.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn connect_planning_center(
     consumer: tauri::State<'_, Consumer>,
+    app: tauri::AppHandle,
     client_id: String,
     organization: String,
     registered: bool,
@@ -257,7 +264,7 @@ async fn connect_planning_center(
         registrations.unwrap_or(false),
     );
     tauri::async_runtime::spawn_blocking(move || {
-        sign_in(&consumer, scopes, |consumer| {
+        sign_in(&consumer, &app, scopes, |consumer| {
             Ok(consumer
                 .0
                 .prepare(client_id, organization, registered, Purpose::SignIn)?)
@@ -272,6 +279,7 @@ async fn connect_planning_center(
 #[tauri::command]
 async fn connect_planning_center_app(
     consumer: tauri::State<'_, Consumer>,
+    app: tauri::AppHandle,
     operations: Option<bool>,
     check_ins: Option<bool>,
     registrations: Option<bool>,
@@ -283,7 +291,7 @@ async fn connect_planning_center_app(
         registrations.unwrap_or(false),
     );
     tauri::async_runtime::spawn_blocking(move || {
-        sign_in(&consumer, scopes, |consumer| {
+        sign_in(&consumer, &app, scopes, |consumer| {
             Ok(consumer.0.prepare_finder()?)
         })
     })
@@ -296,13 +304,17 @@ fn planning_center_app() -> bool {
     app_client_id().is_some()
 }
 /// Starts a browser sign-in on the controller `prepare` makes and waits for nothing: the
-/// loopback receiver finishes it, and the app polls `connection_status`.
+/// loopback receiver finishes it, and the app polls `connection_status`. A watcher brings Ozzie
+/// forward when the browser part ends (`watch_sign_in`).
 fn sign_in(
     consumer: &Consumer,
+    app: &tauri::AppHandle,
     scopes: Scopes,
     prepare: impl FnOnce(&Consumer) -> Result<Arc<AuthController>, ConsumerError>,
 ) -> Result<ConnectionStatus, ConsumerError> {
     {
+        // Before this sign-in can add a grant, the church in use gets its rooms-and-groups answer (re-check NH1).
+        decide_for_current_church(consumer, app);
         let (_transition, generation) = consumer
             .1
             .enter()
@@ -336,8 +348,53 @@ fn sign_in(
             consumer.stop();
             return Err(ConsumerError::BrowserUnavailable);
         }
+        watch_sign_in(app.clone(), auth.clone());
         auth.status().map_err(ConsumerError::from)
     }
+}
+/// How often the sign-in watcher looks, and for how long at most (the attempt's own five minutes, and a little).
+const WATCH_EVERY: Duration = Duration::from_millis(250);
+const WATCH_FOR: Duration = Duration::from_secs(5 * 60 + 15);
+/// What the watcher does once a sign-in leaves the browser: bring Ozzie forward and say so when it connected, or
+/// when Planning Center ended it (a refusal, a failure); nothing when it was cancelled or ran out of time on this
+/// Mac, where the person already is. None while it is still waiting or being checked.
+#[derive(Debug, PartialEq, Eq)]
+enum SignInEnd {
+    Connected,
+    FromTheBrowser,
+    HereOnThisMac,
+}
+fn sign_in_end(status: &ConnectionStatus) -> Option<SignInEnd> {
+    match (&status.state, &status.problem) {
+        (ConnectionState::Waiting | ConnectionState::Checking, _) => None,
+        (ConnectionState::Connected, _) => Some(SignInEnd::Connected),
+        (_, Some(AuthError::Cancelled | AuthError::Expired) | None) => {
+            Some(SignInEnd::HereOnThisMac)
+        }
+        _ => Some(SignInEnd::FromTheBrowser),
+    }
+}
+/// Onboarding spec S4: when the browser sign-in ends, Ozzie comes to the front by itself (and the Dock bounces in
+/// case macOS keeps the browser in front), and the page hears `ozzie:signed-in` on a connection.
+fn watch_sign_in(app: tauri::AppHandle, auth: Arc<AuthController>) {
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        while started.elapsed() < WATCH_FOR {
+            std::thread::sleep(WATCH_EVERY);
+            // A busy controller (the code being exchanged) is looked at again next time.
+            let Ok(status) = auth.status() else { continue };
+            match sign_in_end(&status) {
+                None => continue,
+                Some(SignInEnd::Connected) => {
+                    always_on::bring_forward(&app);
+                    let _ = app.emit("ozzie:signed-in", ());
+                }
+                Some(SignInEnd::FromTheBrowser) => always_on::bring_forward(&app),
+                Some(SignInEnd::HereOnThisMac) => {}
+            }
+            return;
+        }
+    });
 }
 #[tauri::command]
 async fn cancel_connection(consumer: tauri::State<'_, Consumer>) -> Result<(), ConsumerError> {
@@ -353,6 +410,7 @@ async fn cancel_connection(consumer: tauri::State<'_, Consumer>) -> Result<(), C
 #[tauri::command]
 async fn check_saved_connection(
     consumer: tauri::State<'_, Consumer>,
+    app: tauri::AppHandle,
     client_id: String,
     organization: String,
     registered: bool,
@@ -372,6 +430,16 @@ async fn check_saved_connection(
         }
         let status = auth.refresh()?;
         consumer.0.after_check(&auth);
+        // Launch: the church's rooms-and-groups answer is decided from the scopes it holds now, before any new grant.
+        if status.state == ConnectionState::Connected
+            && let Ok(dir) = app.path().app_data_dir()
+        {
+            decide_before_grant(
+                &dir,
+                &status.organization,
+                status.scopes.is_some_and(|scopes| scopes.operations()),
+            );
+        }
         Ok(consumer.0.view_of(status))
     })
     .await
@@ -474,6 +542,11 @@ async fn check_sunday(
     let names = names.inner().clone();
     let people = people.inner().clone();
     let kids_team_ids = kids_team_ids.unwrap_or_default();
+    // Rooms, follow-ups and group events only while this church's Settings switch is on (first-run review H1).
+    let operations = match (current_church(&consumer), app.path().app_data_dir()) {
+        (Some((organization, _)), Ok(dir)) => switch_at_check(&dir, &organization),
+        _ => false,
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let _turn = checks
             .take(Reader::Check, CHECK_WAITS_FOR_PICKER)
@@ -488,6 +561,7 @@ async fn check_sunday(
                 sunday_check::ChurchReads {
                     forms: form_ids.as_deref(),
                     checkins_event: checkins_event_id.as_deref(),
+                    operations,
                 },
                 &AtomicBool::new(false),
             )
@@ -507,6 +581,116 @@ async fn check_sunday(
     })
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// "Also check rooms, follow-ups and group events" (Settings): whether the check reads rooms and Calendar
+/// conflicts, People follow-ups, and the scheduled people's group memberships and events. Kept per church in the app
+/// data folder (`{"churches": {"<organization>": bool}}`), so a church switch never carries "on" over. A sign-in
+/// that holds those scopes (allowing People to fill in To on a note) never turns it on (first-run review H1; re-check
+/// NH1): each church's answer is decided and saved before any new grant can happen.
+const OPERATIONS_FILE: &str = "operations-reads.json";
+fn read_switches(dir: &std::path::Path) -> std::collections::BTreeMap<String, bool> {
+    std::fs::read(dir.join(OPERATIONS_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value["churches"].as_object().map(|churches| {
+                churches
+                    .iter()
+                    .filter(|(org, _)| ozzie_native_auth::oauth::numeric_id(org))
+                    .filter_map(|(org, on)| on.as_bool().map(|on| (org.clone(), on)))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+fn write_switches(
+    dir: &std::path::Path,
+    churches: &std::collections::BTreeMap<String, bool>,
+) -> bool {
+    std::fs::create_dir_all(dir).is_ok()
+        && std::fs::write(
+            dir.join(OPERATIONS_FILE),
+            serde_json::json!({ "churches": churches }).to_string(),
+        )
+        .is_ok()
+}
+/// A church's saved answer, if decided.
+fn operations_reads_saved(dir: &std::path::Path, organization: &str) -> Option<bool> {
+    read_switches(dir).get(organization).copied()
+}
+/// Before any new grant (at launch's check of the saved sign-in, and before a sign-in opens the browser): a church
+/// not yet decided gets the truthful start from the scopes it holds NOW, before the new grant. Those scopes came from
+/// the Settings action (the only way to ask for them before the People moment existed), so it stays on; otherwise
+/// off. A lost file is decided again by the same rule (Ozzie can't tell more).
+fn decide_before_grant(dir: &std::path::Path, organization: &str, operations_held: bool) {
+    let mut churches = read_switches(dir);
+    if !churches.contains_key(organization) {
+        churches.insert(organization.to_owned(), operations_held);
+        write_switches(dir, &churches);
+    }
+}
+/// At a check: the church's answer; a church never decided (first seen through a new sign-in, e.g. a church switch)
+/// is off, saved so.
+fn switch_at_check(dir: &std::path::Path, organization: &str) -> bool {
+    let mut churches = read_switches(dir);
+    if let Some(on) = churches.get(organization) {
+        return *on;
+    }
+    churches.insert(organization.to_owned(), false);
+    write_switches(dir, &churches);
+    false
+}
+fn set_switch(dir: &std::path::Path, organization: &str, on: bool) -> bool {
+    let mut churches = read_switches(dir);
+    churches.insert(organization.to_owned(), on);
+    write_switches(dir, &churches)
+}
+/// The church in use and whether its sign-in holds the Calendar, People and Groups scopes, when connected.
+fn current_church(consumer: &Consumer) -> Option<(String, bool)> {
+    let status = consumer.0.current()?.status().ok()?;
+    (status.state == ConnectionState::Connected).then(|| {
+        (
+            status.organization,
+            status.scopes.is_some_and(|scopes| scopes.operations()),
+        )
+    })
+}
+/// Decides the church in use before a sign-in can add a grant.
+fn decide_for_current_church(consumer: &Consumer, app: &tauri::AppHandle) {
+    if let (Some((organization, held)), Ok(dir)) =
+        (current_church(consumer), app.path().app_data_dir())
+    {
+        decide_before_grant(&dir, &organization, held);
+    }
+}
+/// Settings' "Also check rooms, follow-ups and group events" turns the reads on for the church in use (with its
+/// sign-in for those scopes); turning them off stops them at the next check. `not-connected` with no church.
+#[tauri::command]
+fn set_operations_reads(
+    app: tauri::AppHandle,
+    consumer: tauri::State<'_, Consumer>,
+    on: bool,
+) -> Result<bool, &'static str> {
+    let (organization, _) = current_church(&consumer).ok_or("not-connected")?;
+    let dir = app.path().app_data_dir().map_err(|_| "unavailable")?;
+    if set_switch(&dir, &organization, on) {
+        Ok(on)
+    } else {
+        Err("unavailable")
+    }
+}
+/// Whether the reads are on for the church in use, as the next check will use them (undecided: off). Never turns
+/// anything on by itself.
+#[tauri::command]
+fn operations_reads(app: tauri::AppHandle, consumer: tauri::State<'_, Consumer>) -> bool {
+    let Some((organization, _)) = current_church(&consumer) else {
+        return false;
+    };
+    app.path()
+        .app_data_dir()
+        .ok()
+        .and_then(|dir| operations_reads_saved(&dir, &organization))
+        .unwrap_or(false)
 }
 /// This session's verified Planning Center connection, or NotConnected, as it is: never renewed here.
 /// The Sunday check and setup's picker read through `read_renewing`, which renews a sign-in that needs
@@ -632,6 +816,46 @@ async fn list_upcoming_plans(
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
 }
+/// First run's "Which service should Ozzie watch?" (onboarding spec S5a): every service type with its next plan,
+/// that plan's day and service times, and the church's time zone, soonest first. Read-only; nothing is saved.
+#[tauri::command]
+async fn pick_service(
+    consumer: tauri::State<'_, Consumer>,
+    checks: tauri::State<'_, SundayChecks>,
+) -> Result<ServicePick, ConsumerError> {
+    let consumer = consumer.inner().clone();
+    let checks = checks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _turn = picker_turn(&checks)?;
+        read_renewing(&consumer, |auth| {
+            sunday_picker::pick_service(auth, &AtomicBool::new(false))
+        })?
+        .map_err(|error| ConsumerError::SundayChoices(error.reason()))
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// Moving on by itself (spec §5.3): the same service type's first plan after `after_date` (`YYYY-MM-DD`, the
+/// passed plan's local date), with its day and times; `null` while none is planned. Read-only.
+#[tauri::command]
+async fn next_plan(
+    consumer: tauri::State<'_, Consumer>,
+    checks: tauri::State<'_, SundayChecks>,
+    service_type_id: String,
+    after_date: String,
+) -> Result<Option<PlanNext>, ConsumerError> {
+    let consumer = consumer.inner().clone();
+    let checks = checks.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _turn = picker_turn(&checks)?;
+        read_renewing(&consumer, |auth| {
+            sunday_picker::next_plan(auth, &service_type_id, &after_date, &AtomicBool::new(false))
+        })?
+        .map_err(|error| ConsumerError::SundayChoices(error.reason()))
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
 fn recording_io(error: std::io::Error) -> ConsumerError {
     ConsumerError::Recording(if error.kind() == std::io::ErrorKind::InvalidInput {
         RecordingError::InvalidName
@@ -715,6 +939,22 @@ async fn model_status(app: tauri::AppHandle) -> Result<ModelStatus, ModelError> 
 struct ManagedConnect {
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
+    /// The waiting attempt's browser address, for "Open the page again" (review M3): the same attempt, not a new one.
+    url: Arc<Mutex<Option<String>>>,
+}
+/// After a paid connect ends: come forward when the browser part ended (connected, payment cancelled, refused on
+/// ozzie.church), never when nothing came back in time (`not-finished`, `expired`), when it was cancelled on this
+/// Mac, or when it never reached the browser (review L6).
+fn come_forward_after_paid(result: &Result<Account, ManagedError>, cancelled_here: bool) -> bool {
+    !cancelled_here
+        && !matches!(
+            result,
+            Err(ManagedError::NotFinished
+                | ManagedError::Expired
+                | ManagedError::Busy
+                | ManagedError::Unavailable
+                | ManagedError::BrowserUnavailable)
+        )
 }
 /// Connects this Mac to Ozzie managed (hosted.rs): opens ozzie.church's sign-in in the browser, waits
 /// up to five minutes for the loopback callback, exchanges the one-time code natively and keeps the
@@ -724,6 +964,8 @@ struct ManagedConnect {
 async fn managed_connect(
     managed: tauri::State<'_, ManagedConnect>,
     app: tauri::AppHandle,
+    // "personal" starts that plan on the way (sign-in, then Stripe's page, one browser trip; 30 minutes).
+    plan: Option<String>,
 ) -> Result<Account, ManagedError> {
     let managed = managed.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -740,7 +982,8 @@ async fn managed_connect(
         let hosted = HostedConfig::current();
         let clock =
             ozzie_native_auth::oauth::system_clock().map_err(|_| ManagedError::Unavailable)?;
-        let attempt = hosted::ConnectAttempt::begin(&hosted, clock())?;
+        let attempt = hosted::ConnectAttempt::begin_for(&hosted, clock(), plan.as_deref())?;
+        *managed.url.lock().unwrap_or_else(|e| e.into_inner()) = Some(attempt.url().to_owned());
         // ozzie.church's connect address with a challenge, a state, the loopback port and a fixed
         // label only. The one-time code and the device token are never passed to a process.
         let opened = std::process::Command::new("/usr/bin/open")
@@ -751,17 +994,50 @@ async fn managed_connect(
         if !opened.is_ok_and(|status| status.success()) {
             return Err(ManagedError::BrowserUnavailable);
         }
-        hosted::connect(
+        let connected = hosted::connect(
             &attempt,
             &hosted,
             &KeychainKeys,
             &managed.cancel,
             &*clock,
             &dir,
-        )
+        );
+        *managed.url.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // Back from the browser by itself, as after a Planning Center sign-in (review L6 for when).
+        if come_forward_after_paid(&connected, managed.cancel.load(Ordering::SeqCst)) {
+            always_on::bring_forward(&app);
+        }
+        connected
     })
     .await
     .map_err(|_| ManagedError::Unavailable)?
+}
+/// "Open the page again" while a connect waits (spec S10b; review M3): the same attempt's address in the browser
+/// again (same state, no new attempt), so it never races a new connect into `busy`. `no-attempt` when none waits.
+#[tauri::command]
+async fn managed_connect_reopen(
+    managed: tauri::State<'_, ManagedConnect>,
+) -> Result<(), &'static str> {
+    let url = managed
+        .url
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or("no-attempt")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let opened = std::process::Command::new("/usr/bin/open")
+            .arg(&url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if opened.is_ok_and(|status| status.success()) {
+            Ok(())
+        } else {
+            Err("browser-unavailable")
+        }
+    })
+    .await
+    .map_err(|_| "browser-unavailable")?
 }
 /// Stops a connect that is waiting for the browser.
 #[tauri::command]
@@ -776,6 +1052,8 @@ async fn managed_disconnect(
     app: tauri::AppHandle,
 ) -> Result<ModelStatus, ManagedError> {
     managed.cancel.store(true, Ordering::SeqCst);
+    // The AI route changes: every Gemini signature goes (review F7).
+    agent::forget_all_signatures();
     tauri::async_runtime::spawn_blocking(move || {
         let dir = app
             .path()
@@ -799,7 +1077,8 @@ async fn reword_draft(
     let names = names.inner().snapshot();
     tauri::async_runtime::spawn_blocking(move || {
         let dir = model_dir(&app)?;
-        let config = model_route::load_config(&dir).ok_or(ModelError::NotConfigured)?;
+        // A model on this Mac only at its app's own address and once checked (review L8).
+        let config = model_route::usable_config(&dir).ok_or(ModelError::NotConfigured)?;
         model_route::reword(
             &config,
             &dir.join(model_route::LEDGER_FILE),
@@ -838,7 +1117,7 @@ async fn agent_step(
             .path()
             .app_data_dir()
             .map_err(|_| AgentError::NotConfigured)?;
-        let config = model_route::load_config(&dir).ok_or(AgentError::NotConfigured)?;
+        let config = model_route::usable_config(&dir).ok_or(AgentError::NotConfigured)?;
         agent::agent_step(
             &config,
             &dir.join(model_route::LEDGER_FILE),
@@ -900,6 +1179,10 @@ async fn ledger_transition(
     code: Option<String>,
 ) -> Result<TaskRow, LedgerError> {
     let ledger = ledger.get()?;
+    // A task that ends takes its Gemini signatures with it (review F7).
+    if matches!(to.as_str(), "verified" | "failed" | "cancelled") {
+        agent::forget_signatures(&task_id);
+    }
     tauri::async_runtime::spawn_blocking(move || ledger.transition(&task_id, &to, code.as_deref()))
         .await
         .map_err(|_| LedgerError::Unavailable)?
@@ -1013,8 +1296,18 @@ async fn set_model_route(
     model: Option<String>,
 ) -> Result<ModelStatus, ModelError> {
     let names = names.inner().snapshot();
+    // The AI route changes: every Gemini signature goes (review F7).
+    agent::forget_all_signatures();
     tauri::async_runtime::spawn_blocking(move || {
         let route = Route::parse(&route).ok_or(ModelError::InvalidRequest)?;
+        // A model on this Mac only at Ollama's or LM Studio's own address on 127.0.0.1 (review L8).
+        if route == Route::Local
+            && base_url
+                .as_deref()
+                .is_some_and(|base| !model_route::local_base_allowed(base))
+        {
+            return Err(ModelError::InvalidRequest);
+        }
         if model
             .as_deref()
             .is_some_and(|model| !model_route::model_free_of_names(model, &names))
@@ -1120,26 +1413,34 @@ fn dev_defaults() -> DevDefaults {
 }
 /// Lock-screen privacy: the only notice Ozzie shows. Fixed here, never names or details.
 const SUNDAY_NOTICE_TITLE: &str = "Ozzie";
+/// The Sunday line, pinned by tests to phone_notice.rs `Line::SundayAttention` (the body now comes from the line).
+// Read only by the tests; a test-only attribute here would hide the commands below from the tests that read this
+// file as text.
+#[allow(dead_code)]
 const SUNDAY_NOTICE_BODY: &str = "Sunday coverage needs attention. Open Ozzie to see details.";
-/// The webview asks for the Sunday notice and passes no text. The capability grants none of the
-/// notification plugin's own commands, so the webview cannot show any other notification text. While
-/// "A notice on your phone" is on, its fixed line also goes to the leader's phone, after this one,
-/// unless the page says it stays on this Mac (`local_only`: a notice only about a background check).
+/// The webview asks for the coverage notice and passes no text: only the watched service's day as a closed word
+/// (`day`: "sunday" … "saturday", "weekend" or "service"; absent: "service", so a non-Sunday service is never
+/// called Sunday; onboarding spec §5.2). The capability grants none of the notification plugin's own commands, so
+/// the webview cannot show any other notification text. While "A notice on your phone" is on, its fixed line also
+/// goes to the leader's phone, after this one, unless the page says it stays on this Mac (`local_only`: a notice
+/// only about a background check).
 #[tauri::command]
 fn notify_sunday_attention(
     app: tauri::AppHandle,
     local_only: Option<bool>,
+    day: Option<String>,
 ) -> Result<(), &'static str> {
     use ozzie_native_auth::phone_notice::Line;
     use tauri_plugin_notification::NotificationExt;
+    let line = Line::attention(day.as_deref().unwrap_or("service")).ok_or("invalid-day")?;
     let shown = app
         .notification()
         .builder()
         .title(SUNDAY_NOTICE_TITLE)
-        .body(SUNDAY_NOTICE_BODY)
+        .body(line.text())
         .show()
         .map_err(|_| "notification-unavailable");
-    phone_notice::also_to_phone(&app, Line::SundayAttention, local_only);
+    phone_notice::also_to_phone(&app, line, local_only);
     shown
 }
 fn main() {
@@ -1151,9 +1452,11 @@ fn main() {
         .manage(consumer)
         .manage(SundayChecks::default())
         .manage(SessionNames::default())
+        .manage(ai_setup::ModelJob::default())
         .manage(CheckedPeople::default())
         .manage(Ledger::default())
         .manage(ManagedConnect::default())
+        .manage(key_sheet::Desk::default())
         .manage(local_tools::LocalTools::default())
         .manage(shortcuts::OpenedPage::default())
         .manage(Smoke {
@@ -1196,8 +1499,12 @@ fn main() {
             retry_church_sign_out,
             remove_refused_sign_ins,
             check_sunday,
+            set_operations_reads,
+            operations_reads,
             list_service_types,
             list_upcoming_plans,
+            pick_service,
+            next_plan,
             list_sunday_recordings,
             load_sunday_recording,
             delete_sunday_recordings,
@@ -1206,6 +1513,7 @@ fn main() {
             model_status,
             managed_connect,
             managed_connect_cancel,
+            managed_connect_reopen,
             managed_disconnect,
             reword_draft,
             agent_step,
@@ -1219,6 +1527,31 @@ fn main() {
             stop_sharing_check,
             clear_shared_check,
             set_model_route,
+            key_sheet::own_key_providers,
+            key_sheet::open_help_page,
+            key_sheet::own_key_paste,
+            key_sheet::own_key_enter,
+            key_sheet::own_key_check_again,
+            key_sheet::own_key_use_kept,
+            key_sheet::own_key_forget,
+            key_sheet::own_key_remove,
+            key_sheet::set_month_limit,
+            key_sheet::set_no_ai,
+            key_sheet::remove_own_key,
+            key_sheet::own_key_saved,
+            key_sheet::own_key_count,
+            ai_setup::local_ai_find,
+            ai_setup::local_ai_open,
+            ai_setup::local_ai_check,
+            ai_setup::local_model_download,
+            ai_setup::local_model_progress,
+            ai_setup::local_model_cancel,
+            ai_setup::local_model_remove,
+            ai_setup::managed_offer,
+            ai_setup::managed_account_now,
+            ai_setup::notification_permission,
+            ai_setup::open_notification_settings,
+            ai_setup::setup_check,
             notify_sunday_attention,
             local_tools::speak_briefing,
             local_tools::stop_briefing,
@@ -1324,6 +1657,162 @@ mod tests {
     use super::*;
     use ozzie_native_auth::source::SourceError;
     use std::time::Instant;
+
+    #[test]
+    fn rooms_follow_ups_and_groups_are_decided_per_church_before_any_new_grant() {
+        let dir = std::env::temp_dir().join(format!("ozzie-operations-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // No file. At launch (or before a sign-in opens the browser) the church holds Services only: saved off.
+        decide_before_grant(&dir, "1001", false);
+        // People is then allowed from a note: the grant changes nothing saved, and the check reads none of them.
+        assert!(!switch_at_check(&dir, "1001"));
+        assert_eq!(operations_reads_saved(&dir, "1001"), Some(false));
+        // An install that already held those scopes before this build (only Settings asked for them): kept on.
+        decide_before_grant(&dir, "2002", true);
+        assert!(switch_at_check(&dir, "2002"));
+        // Once decided, a later look never changes it.
+        decide_before_grant(&dir, "1001", true);
+        assert!(!switch_at_check(&dir, "1001"));
+        // A church switch: the new church was never decided before its grant, so it starts off, and "on" for
+        // another church is never carried over.
+        assert!(!switch_at_check(&dir, "3003"));
+        assert_eq!(operations_reads_saved(&dir, "3003"), Some(false));
+        assert!(switch_at_check(&dir, "2002"));
+        // The Settings action turns it on for the church in use, and off again.
+        assert!(set_switch(&dir, "1001", true));
+        assert!(switch_at_check(&dir, "1001"));
+        assert!(set_switch(&dir, "1001", false));
+        assert!(!switch_at_check(&dir, "1001"));
+        // The earlier one-switch file is not read as anyone's choice.
+        std::fs::write(dir.join(OPERATIONS_FILE), r#"{"on":true}"#).unwrap();
+        assert_eq!(operations_reads_saved(&dir, "2002"), None);
+        assert!(!switch_at_check(&dir, "2002"));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Where it is decided: before the browser opens for any sign-in, at launch's check of the saved sign-in,
+        // and at the check only for a church never decided.
+        let main = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let sign_in = &main[main.find("fn sign_in(").unwrap()..];
+        assert!(
+            sign_in
+                .find("decide_for_current_church(consumer, app);")
+                .unwrap()
+                < sign_in.find("/usr/bin/open").unwrap()
+        );
+        let launch = &main[main.find("async fn check_saved_connection(").unwrap()..];
+        assert!(launch[..launch.find("\n}\n").unwrap()].contains("decide_before_grant("));
+        assert!(main.contains(
+            "checkins_event: checkins_event_id.as_deref(),\n                    operations,"
+        ));
+        assert!(!main.contains("operations_reads_on("));
+    }
+
+    #[test]
+    fn after_paying_ozzie_comes_forward_only_when_the_browser_part_ended() {
+        let account = Account {
+            plan: "personal".into(),
+            allowance_steps: 1500,
+            used_steps: 0,
+            period_ends: "2026-12-17".into(),
+            warning: None,
+            checked_at_ms: 0,
+            offline: false,
+            plan_reason: None,
+            paused_until: None,
+            answers_left: None,
+        };
+        assert!(come_forward_after_paid(&Ok(account), false));
+        for e in [
+            ManagedError::PaymentCancelled,
+            ManagedError::Cancelled,
+            ManagedError::Refused,
+        ] {
+            assert!(come_forward_after_paid(&Err(e), false), "{e:?}");
+        }
+        for e in [
+            ManagedError::NotFinished,
+            ManagedError::Expired,
+            ManagedError::Busy,
+            ManagedError::BrowserUnavailable,
+        ] {
+            assert!(!come_forward_after_paid(&Err(e), false), "{e:?}");
+        }
+        // Cancelled on this Mac: the person is already here.
+        assert!(!come_forward_after_paid(
+            &Err(ManagedError::Cancelled),
+            true
+        ));
+        // "Open the page again" re-opens the waiting attempt and starts none.
+        let main = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let reopen = &main[main.find("async fn managed_connect_reopen(").unwrap()..];
+        let reopen = &reopen[..reopen.find("\n}\n").unwrap()];
+        assert!(reopen.contains(".url") && !reopen.contains("ConnectAttempt::begin"));
+    }
+
+    #[test]
+    fn the_sign_in_watcher_brings_ozzie_forward_only_when_the_browser_part_ended() {
+        let status = |state: ConnectionState, problem: Option<AuthError>| ConnectionStatus {
+            state,
+            organization: String::new(),
+            checked_at_ms: None,
+            source: "native",
+            problem,
+            organization_diagnostic: None,
+            scopes: None,
+            found: false,
+            found_at_ms: None,
+            organization_name: None,
+        };
+        let end = |state, problem| sign_in_end(&status(state, problem));
+        assert_eq!(end(ConnectionState::Waiting, None), None);
+        assert_eq!(end(ConnectionState::Checking, None), None);
+        assert_eq!(
+            end(ConnectionState::Connected, None),
+            Some(SignInEnd::Connected)
+        );
+        // "You chose not to allow Ozzie", or Planning Center said yes and something failed: back to Ozzie.
+        assert_eq!(
+            end(ConnectionState::Cancelled, Some(AuthError::Denied)),
+            Some(SignInEnd::FromTheBrowser)
+        );
+        assert_eq!(
+            end(ConnectionState::Failed, Some(AuthError::ScopeMismatch)),
+            Some(SignInEnd::FromTheBrowser)
+        );
+        assert_eq!(
+            end(ConnectionState::Failed, Some(AuthError::ProviderFailure)),
+            Some(SignInEnd::FromTheBrowser)
+        );
+        // Cancelled or out of time on this Mac: the person is already here.
+        assert_eq!(
+            end(ConnectionState::Cancelled, Some(AuthError::Cancelled)),
+            Some(SignInEnd::HereOnThisMac)
+        );
+        assert_eq!(
+            end(ConnectionState::Expired, Some(AuthError::Expired)),
+            Some(SignInEnd::HereOnThisMac)
+        );
+        // It looks four times a second for the attempt's five minutes and a little more, never longer.
+        assert_eq!(WATCH_EVERY, Duration::from_millis(250));
+        assert!(WATCH_FOR > Duration::from_millis(ozzie_native_auth::oauth::ATTEMPT_LIFETIME_MS));
+        assert!(WATCH_FOR < Duration::from_secs(6 * 60));
+        // Both sign-ins start it.
+        let main = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert_eq!(
+            main.matches("watch_sign_in(app.clone(), auth.clone());")
+                .count(),
+            1
+        );
+        assert_eq!(main.matches("sign_in(&consumer, &app, scopes,").count(), 2);
+    }
 
     #[test]
     fn sunday_notice_is_fixed_and_discreet() {

@@ -152,11 +152,11 @@ describe("rooms, follow-ups and group meetings from the capture", () => {
     const o = ops(c);
     expect(roomFindings(c)).toEqual([]);
     expect(o.result!.unchecked_scope_ids).toContain(`${room}-bookings`);
-    expect(o.not_checked).toEqual(expect.arrayContaining(["Room bookings: the read didn't cover this whole Sunday.", "Group meetings for 1 person: the read didn't cover this whole Sunday."]));
+    expect(o.not_checked).toEqual(expect.arrayContaining(["Room bookings: the read didn't cover the whole day of the service.", "Group meetings for 1 person: the read didn't cover the whole day of the service."]));
     // A found meeting is still a fact; the missing coverage is listed, not hidden.
     expect(o.group_meetings.map(m => m.person_id)).toEqual([PEOPLE.lyricsPending]);
     const missing = edit(capture(), "calendar_resource_bookings", r => { delete r.window; });
-    expect(ops(missing).not_checked).toContain("Room bookings: the read didn't cover this whole Sunday.");
+    expect(ops(missing).not_checked).toContain("Room bookings: the read didn't cover the whole day of the service.");
   });
 
   it("the church-local day decides: evening bookings that cross the UTC date stay, a Saturday-evening one doesn't", () => {

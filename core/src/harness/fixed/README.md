@@ -10,10 +10,11 @@ leader's question and the model's own output) is name-checked; tool results must
 | File | What it is |
 |---|---|
 | `policy.txt` | Ozzie's policy. The policy text is the file with its final line break removed. |
+| `policy-local.txt` | The policy an Ask step to a model on this Mac carries instead (below). Never sent by the webview, never to ozzie.church or an AI company. |
 | `tool-specs.json` | The 13 tool specs (`ToolSpec` in `contract.ts`), in `NATIVE_TOOL_ALLOWLIST` order, exactly as offered. A task is offered a subset, in its skill's `tools:` order. |
 | `vocabulary.json` | The closed grammar of a tool result, the system message format and the procedure prompt. |
 | `common-words.txt` | Lower-case common English words, one per line, for the "capitalized only" name rule. |
-| `pins.json` | sha-256 of each bundled skill file and of the exact system message for it. |
+| `pins.json` | sha-256 of each bundled skill file and of the exact system message for it; under `local_policy`, of `policy-local.txt` and of the Ask system message it makes. |
 | `background-wording.json` | Never sent: the background-check wording no request (and no copy shared with other AI apps) may carry (owner decision 2026-11-14). The page (`core/src/harness/background-wording.ts`), native (`core/native-auth/src/background.rs`) and ozzie.church (a byte-for-byte copy, and a verbatim copy of the matching code) each refuse any text that varies holding it, before a request is made. On the oracle corpus it refuses everything the page's earlier regex refused apart from Ozzie's one own sentence (`core/test/harness/background-wording-oracle.test.ts`), and the three sides give the same verdict there and the same words for every character in the differential (`core/test/harness/background-wording-differential.test.ts`); shared vectors in `core/test/harness/background-wording-vectors.json`. Its `ozzies_own` is Ozzie's stale-check line, which a tool result carries as a whole string: only that whole string is set aside. The refresh tool's spec and the sunday-ready procedure also say "the last check is out of date"; they are pinned, never scanned, and the test names them. Nothing else above holds the wording (`core/test/harness/background-wording.test.ts`). |
 
 ## The system message
@@ -22,6 +23,19 @@ leader's question and the model's own output) is name-checked; tool results must
 (trimmed) and `body` is everything after the closing `---` fence line, trimmed (`core/src/harness/skills.ts`
 `parseSkill`). An ask task uses the `answer-from-what-was-read` procedure. `pins.json` holds the sha-256 of the
 resulting text for every bundled procedure, so native can pin it without parsing the skill files.
+
+### AI on this Mac (2026-11-18)
+
+On the wire to a model on this Mac (the local route) only, native `agent_step` sends an Ask's system message with
+`policy-local.txt` in place of the policy, the procedure after it unchanged (`agent.rs` `step_body`, `fixed.rs`
+`local_ask_system`). Every check runs first on the message exactly as the webview sent it, pinned as above; only the Ask
+procedure's exact text is ever replaced, and only by these pinned words. A procedure task, and every other route, sends
+the system message as checked. The local policy keeps every line of the policy that says what Ozzie is and never does,
+word for word (tests on both sides), shows the answer forms with no example id (`FACT`, `DRAFT`, which the grammar never
+accepts as ids: the medium model copied the policy's "f4" and "f3" before any lookup), says which lookup fits which
+question, and what to choose when more than 24 facts would answer (measured 2026-11-18). `pins.json` still pins what
+the webview sends, which is unchanged, and under `local_policy` the sha-256 of `policy-local.txt` and of the Ask system
+message it makes, so a change to it fails a test on each side.
 
 ## The user message
 
@@ -69,8 +83,9 @@ The model's final reply (a reply with no tool calls) is only a JSON object in th
 Whitespace around it and one code fence (a first line of ```` ``` ```` or ```` ```json ````, a last line of
 ```` ``` ````) are allowed; nothing else: no prose, no other key, no repeated key, no escape (every string is
 `[a-z0-9_-]`), at most `max_facts` distinct fact ids. Every id must be one a tool result in this task holds (native
-checks the request's tool messages; the webview checks the task's evidence and refuses
-`nothing-needs-a-decision` unless the overview read counts none). Ozzie writes the answer's sentences on the Mac
+checks the request's tool messages, the webview the task's evidence), and both refuse `nothing-needs-a-decision`
+unless the task read the overview and it counts none (shared cases in `core/test/answer-parity.json` `evidence`).
+Ozzie writes the answer's sentences on the Mac
 from fixed templates per fact (`core/src/harness/compose.ts`), with people in label order and a draft only ever the
 drafting tool's own text.
 

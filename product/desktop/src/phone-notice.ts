@@ -13,6 +13,7 @@
 // keep a line off the phone, never add one.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { Finding } from "../../../core/src/sunday-brief.js";
+import type { NoticeDay } from "./onboarding-bridge.js";
 
 export type Invoke = <T>(command: string) => Promise<T>;
 const nativeInvoke: Invoke = command => tauriInvoke(command);
@@ -28,8 +29,12 @@ export interface PhoneView { on: boolean; channel: string | null; last?: LastNot
 
 /** The finding kind of a background check (core/src/kids-rules.ts). */
 export const BACKGROUND_CHECK: Finding["kind"] = "background-check";
-/** What a notice command may say besides its kind: only that the notice stays on this Mac. */
-export interface NoticeOptions { localOnly?: true }
+/**
+ * What a notice command may say besides its kind: that the notice stays on this Mac, and, for the coverage notice only,
+ * which fixed line names the watched service's day (`notify_sunday_attention`'s `day`, native contract N8). Both are
+ * closed codes; neither is ever text.
+ */
+export interface NoticeOptions { localOnly?: true; day?: NoticeDay }
 export const THIS_MAC_ONLY: NoticeOptions = Object.freeze({ localOnly: true });
 /**
  * Whether a notice stays on this Mac: every finding that brought it is a background check. `kinds`: the finding kind
@@ -59,8 +64,11 @@ export const PHONE_TITLE = "A notice on your phone";
 export const PHONE_BODY = "Each time Ozzie sends a notice, it can send the same short line to your phone too, even if this Mac's own notifications are turned off for Ozzie.";
 export const PHONE_SWITCH = "Send Ozzie's notices to my phone too";
 export const PHONE_OFF_NOTE = "Off unless you turn it on. Turning it off stops sending and forgets the channel.";
-/** One of the fixed lines, word for word (the Sunday notice; core/native-auth phone_notice.rs `Line::text`). */
-export const PHONE_EXAMPLE = "Sunday coverage needs attention. Open Ozzie to see details.";
+/**
+ * One of the fixed lines, word for word (core/native-auth phone_notice.rs `Line::text`): one that names no day, so the
+ * example is true whatever day the church's service is on.
+ */
+export const PHONE_EXAMPLE = "Something Ozzie is keeping an eye on needs a decision. Open Ozzie to see it.";
 export const PHONE_WHAT = `Each notice goes through ntfy.sh, a free service Ozzie doesn't run. It holds only a fixed line, such as "${PHONE_EXAMPLE}", and never a name, a number or a link.`;
 export const PHONE_SEEN = "ntfy.sh, and the phone makers' services it uses to reach your phone (Google's, and Apple's for an iPhone), can see which line was sent and when; ntfy.sh also sees this Mac's internet address and keeps each line for a while (about half a day by its usual setting).";
 export const PHONE_RISK = "Anyone who learned your channel name could read those lines too, and could send your phone a notice that looks like Ozzie's. Ozzie's own notices are only these fixed lines and never hold a link. That's why Ozzie makes a long, random channel name, and why you can make a new one at any time.";

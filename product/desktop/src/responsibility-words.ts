@@ -7,7 +7,10 @@ import {
 } from "../../../core/src/harness/responsibilities.js";
 import { describeChange } from "../../../core/src/sunday-changes.js";
 import { kindWords } from "../../../core/src/finding-feedback.js";
+import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
 import type { NoticedItem } from "./responsibility-runner.js";
+import { dayName, eyeLine, keepTitle, pageRef } from "./day-phrases.js";
+import { promise } from "./promises.js";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 /** "7:00 AM" for a church-local "07:00". */
@@ -32,43 +35,65 @@ export function whenText(iso: string, now?: string): string {
 const list = (items: string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+// The watched service is named by its real day (onboarding spec §5, decision 18): every sentence below that names it
+// takes the day words (core service-day.ts), "Keep Wednesday covered", "as this weekend gets close". Template ids and the
+// titles the store keeps are unchanged; a title is put in the day's words only when shown. Without day words (a caller
+// that has none, a test), the Sunday words apply.
+
+/** A template's title as shown: Keep Sunday covered becomes "Keep Wednesday covered", "Keep this weekend covered". */
+export const templateTitle = (template: TemplateId, d: DayWords = SUNDAY_WORDS): string =>
+  template === "keep-sunday-covered" ? keepTitle(d) : TEMPLATES[template].title;
+/** A job's title as shown: its template's in the day's words while it still has the template's own title. */
+export const jobTitle = (r: Pick<Responsibility, "template" | "title">, d: DayWords = SUNDAY_WORDS): string =>
+  r.template && Object.hasOwn(TEMPLATES, r.template) && r.title === TEMPLATES[r.template].title ? templateTitle(r.template, d) : r.title;
+/** The morning briefing's fuller brief, by the service's day, as its own heading says it (sunday-ready.tsx): "“Ready for Wednesday” brief". */
+export const readyBriefName = (d: DayWords = SUNDAY_WORDS): string => `“Ready for ${dayName(d)}” brief`;
+
 /** What each one watches, in a sentence. */
-export const WATCHES: Readonly<Record<TemplateId, string>> = Object.freeze({
-  "keep-sunday-covered": "Open roles, who has accepted or declined, and Sunday leads for the Sunday chosen in Settings.",
-  "watch-room-bookings": "Room bookings on Sunday that overlap under your room rules.",
-  "follow-ups-without-owner": "Follow-ups in Planning Center People that are overdue with no one assigned.",
-  "group-night-clashes": "Group meetings at the same time as someone is serving on Sunday.",
-  "morning-briefing": "What still needs you before Sunday, brought together each morning at the time you choose. Thursday's includes the full Sunday Ready brief.",
-});
+export function watchesText(template: TemplateId, d: DayWords = SUNDAY_WORDS): string {
+  switch (template) {
+    case "keep-sunday-covered": return "Open roles, who has accepted or declined, and scheduled leads for the service Ozzie watches.";
+    case "watch-room-bookings": return `Room bookings on ${dayName(d)} that overlap under your room rules.`;
+    case "follow-ups-without-owner": return "Follow-ups in Planning Center People that are overdue with no one assigned.";
+    case "group-night-clashes": return `Group meetings at the same time as someone is serving on ${dayName(d)}.`;
+    case "morning-briefing": return `What still needs you before ${dayName(d)}, brought together each morning at the time you choose. Thursday's includes the full ${readyBriefName(d)}.`;
+  }
+}
 /** The template picker's one line for each. */
-export const PURPOSE: Readonly<Record<TemplateId, string>> = Object.freeze({
-  "keep-sunday-covered": "Checks every day, more often as Sunday gets close, and tells you when a role needs a decision.",
-  "watch-room-bookings": "Checks each week for room bookings that overlap.",
-  "follow-ups-without-owner": "Checks each week for overdue follow-ups that no one owns.",
-  "group-night-clashes": "Checks each week for group meetings that clash with serving.",
-  "morning-briefing": "Prepares Today's briefing each weekday at 7:00 AM, or the time you choose, if this Mac is awake and Ozzie is running. Thursday's includes the full Sunday Ready brief.",
-});
+export function purposeText(template: TemplateId, d: DayWords = SUNDAY_WORDS): string {
+  switch (template) {
+    case "keep-sunday-covered": return `Checks every day, more often as ${dayName(d)} gets close, and tells you when a role needs a decision.`;
+    case "watch-room-bookings": return "Checks each week for room bookings that overlap.";
+    case "follow-ups-without-owner": return "Checks each week for overdue follow-ups that no one owns.";
+    case "group-night-clashes": return "Checks each week for group meetings that clash with serving.";
+    case "morning-briefing": return `Prepares Today's briefing each weekday at 7:00 AM, or the time you choose, if this Mac is awake and Ozzie is running. Thursday's includes the full ${readyBriefName(d)}.`;
+  }
+}
 /**
- * How the two things that check Sunday differ, on What runs automatically, in two sentences under the same two names
- * used everywhere (audit item 28). The regular Sunday check (proactive.ts) is the steady look; Keep Sunday covered
- * (on_change, near_deadline) is a job the leader starts, with its own plan, limits and end.
+ * How the two things that look at the service differ, on Keeping watch, in two sentences under the same two
+ * names used everywhere (audit item 28, spec §6). Ozzie keeping an eye on the day (proactive.ts) is the steady look; Keep
+ * {day} covered (on_change, near_deadline) is a job the leader starts, with its own plan, limits and end.
  */
-export const SUNDAY_TOGETHER = "The regular Sunday check is always on while Ozzie is open: it looks at the chosen Sunday on its schedule and sends a private notice when something gets worse. Keep Sunday covered is a job you start, with a plan, limits and an end you choose: it checks more often as Sunday gets close, checks sooner when the regular check finds a change, prepares notes, and tells you when something needs a decision.";
-/** Offered in the Sunday item when Keep Sunday covered isn't on. */
-export const SUNDAY_OFFER = "It checks more often as Sunday gets close, tells you when something needs a decision, and prepares notes. You confirm a short plan before anything starts.";
+export const togetherText = (d: DayWords = SUNDAY_WORDS): string =>
+  `${eyeLine(d)} whenever it is open: it looks at the service on its schedule and sends a private notice when something gets worse. ${keepTitle(d)} is a job you start, with a plan, limits and an end you choose: it checks more often as ${dayName(d)} gets close, checks sooner when Ozzie's regular look finds a change, prepares notes, and tells you when something needs a decision.`;
+/** Offered beside the hourly look when Keep {day} covered isn't on. */
+export const offerText = (d: DayWords = SUNDAY_WORDS): string =>
+  `It checks more often as ${dayName(d)} gets close, tells you when something needs a decision, and prepares notes. You confirm a short plan before anything starts.`;
 /** Every automatic check depends on this; said wherever a plan says when it checks. */
 export const ONLY_WHILE = "Only while this Mac is awake and Ozzie is running.";
 /** What the run checks, finishing "Ozzie couldn't check …". */
-const SUBJECT: Readonly<Record<TemplateId, string>> = Object.freeze({
-  "keep-sunday-covered": "Sunday", "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups",
-  "group-night-clashes": "group nights", "morning-briefing": "your morning briefing",
-});
+const subject = (template: TemplateId, d: DayWords) => template === "keep-sunday-covered" ? dayName(d)
+  : ({ "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups", "group-night-clashes": "group nights", "morning-briefing": "your morning briefing" } as const)[template];
 
-/** Which Planning Center areas it reads, with the organization. */
-export function accountsText(template: TemplateId, organization: string): string {
+/** Which Planning Center areas it reads: "Planning Center Services and Calendar". */
+export function areasText(template: TemplateId): string {
   const areas = template === "watch-room-bookings" ? "Services and Calendar" : template === "follow-ups-without-owner" ? "Services and People"
     : template === "group-night-clashes" ? "Services and Groups" : "Services";
-  return `Planning Center ${areas}${organization ? `, organization ${organization}` : ""}. Reads only.`;
+  return `Planning Center ${areas}`;
+}
+/** Which Planning Center areas it reads, with the church by its name when known (never its organization number, spec §6). */
+export function accountsText(template: TemplateId, church?: string | null): string {
+  return `${areasText(template)}${church ? `, ${church}` : ""}. ${promise("readsShort")}`;
 }
 /** The access a template needs that this connection hasn't granted, or null. */
 export function missingAccess(template: TemplateId, granted: readonly string[]): string | null {
@@ -91,10 +116,12 @@ export function daysText(weekdays: readonly number[]): string {
  * before Sunday." The extra times are the ones its schedule will really use (core nearDeadlineTimes):
  * none on chosen weekdays, none for a plan that ends before it reaches them.
  */
-export function scheduleText(plan: Pick<Plan, "template" | "schedule" | "lifetime">, at: { now: string; zone: string }): string {
+export function scheduleText(plan: Pick<Plan, "template" | "schedule" | "lifetime">, at: { now: string; zone: string }, d: DayWords = SUNDAY_WORDS): string {
   const base = `${daysText(plan.schedule.weekdays)} at ${clockText(plan.schedule.time)}${plan.schedule.on_change ? ", and sooner when something changes" : ""}.`;
   const extra = nearDeadlineTimes(plan, at.now, at.zone);
-  return base + (extra.length ? ` Also at ${list(extra.map(clockText))} in the two days before Sunday.` : "");
+  // The extra times fall in the two days before a Sunday (core nearDeadline); a service on another day hears the days by name.
+  const sunday = d.kind === "weekday" && d.weekday === 0;
+  return base + (extra.length ? ` Also at ${list(extra.map(clockText))} ${sunday ? "in the two days before Sunday" : "on Fridays and Saturdays"}.` : "");
 }
 /** `weekdays`: a daily one kept to chosen days (the morning briefing on weekdays) doesn't run every day. */
 export function lifetimeText(lifetime: Lifetime, template: TemplateId, weekdays: readonly number[] = []): string {
@@ -121,8 +148,8 @@ export function limitsText(plan: Pick<Plan, "limits">, modelReady: boolean): str
     ? `${checks} Uses the AI at most ${plan.limits.ai_steps_per_day} times a day to write a short summary; it sees labels, not the names Ozzie read.`
     : `${checks} No AI model is set up, so Ozzie reports what Planning Center shows without a written summary.`;
 }
-export const STOP_TEXT = "Stop it any time in What runs automatically.";
-export const NEVER_TEXT = "Ozzie only reads. It won't change Planning Center or contact anyone; you decide what happens next.";
+export const STOP_TEXT = "Stop it any time in Keeping watch.";
+export const NEVER_TEXT = `${promise("reads")} It won't contact anyone; you decide what happens next.`;
 export function assumedText(plan: Plan, assumed: readonly string[]): string | null {
   if (!assumed.includes("lifetime")) return null;
   return plan.lifetime.kind === "until"
@@ -133,9 +160,9 @@ export function assumedText(plan: Plan, assumed: readonly string[]): string | nu
 /** Why the store refused (responsibilities.rs ResponsibilityError), for a person. */
 export function refusalText(code: string): string {
   switch (code) {
-    case "full": return "Ozzie is already keeping an eye on as many things as it can. Stop one in What runs automatically first.";
+    case "full": return "Ozzie is already keeping an eye on as many things as it can. Stop one in Keeping watch first.";
     case "invalid": return "That plan isn't one Ozzie can run. Try Change it.";
-    case "paused-all": return "Everything is paused. Resume everything in What runs automatically first.";
+    case "paused-all": return "Everything is paused. Resume everything in Keeping watch first.";
     case "paused": return "It's paused. Resume it first.";
     case "ended": case "expired": return "It has ended. Set up a new one if you still need it.";
     case "checks-limit": return "It has used today's checks. It will check again later, within its limits.";
@@ -167,7 +194,7 @@ export function foundText(item: Pick<NoticedItem, "template" | "decisions" | "lo
 /** The run's own report, when Ozzie still has it: what it found, labeled. */
 const reportOf = (run: RunRow, report?: NoticedItem | null) => report && report.run_id === run.run_id ? report : null;
 /**
- * One run in What runs automatically. With the run's report, what it found is labeled the same way as
+ * One run in Keeping watch. With the run's report, what it found is labeled the same way as
  * everywhere else; without it, the store's single number is called findings so it can't be read as
  * Sunday's things to decide.
  */
@@ -184,10 +211,8 @@ export function runText(run: RunRow, now?: string, report?: NoticedItem | null):
 // ---- A job's write-up (audit item 6) -------------------------------------------------------------------
 
 /** What a job's run checked, finishing "Ozzie checked … at 9:06 AM:". */
-const CHECKED: Readonly<Record<TemplateId, string>> = Object.freeze({
-  "keep-sunday-covered": "Sunday", "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups",
-  "group-night-clashes": "group nights", "morning-briefing": "Sunday for your briefing",
-});
+const checked = (template: TemplateId, d: DayWords) => template === "keep-sunday-covered" ? dayName(d) : template === "morning-briefing" ? `${dayName(d)} for your briefing`
+  : ({ "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups", "group-night-clashes": "group nights" } as const)[template];
 /** "at 9:06 AM" today on this Mac's clock, otherwise "on Sat at 7:02 AM". */
 export function atText(iso: string, now?: string): string {
   const d = new Date(iso);
@@ -195,15 +220,17 @@ export function atText(iso: string, now?: string): string {
   const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return d.toDateString() === (now ? new Date(now) : new Date()).toDateString() ? `at ${time}` : `on ${d.toLocaleDateString("en-US", { weekday: "short" })} at ${time}`;
 }
-/** The first line of a job's write-up: "Ozzie checked Sunday at 9:06 AM:". */
-export const writeupHead = (item: Pick<NoticedItem, "template" | "at">, now?: string) => `Ozzie checked ${CHECKED[item.template]} ${atText(item.at, now)}:`;
+/** The first line of a job's write-up: "Ozzie checked Wednesday at 9:06 AM:". */
+export const writeupHead = (item: Pick<NoticedItem, "template" | "at">, now?: string, d: DayWords = SUNDAY_WORDS) => `Ozzie checked ${checked(item.template, d)} ${atText(item.at, now)}:`;
 /**
  * Said quietly on a job's card when AI help is set up and its run has no write-up, so the card is never blank about it.
  * A run paused during its write-up says nothing (none is kept), and "off" is shown nowhere (review H, L15).
  */
-export const NO_WRITEUP: Readonly<Record<"off" | "spent" | "run-limit" | "unverified" | "unavailable", string>> = Object.freeze({
+export const NO_WRITEUP: Readonly<Record<"off" | "spent" | "no-credit" | "run-limit" | "unverified" | "unavailable", string>> = Object.freeze({
   off: "No write-up this time: AI help is off. This card shows what Ozzie's own check of Planning Center found.",
   spent: "No write-up this time: AI help has reached its limit for now. This card shows what Ozzie's own check of Planning Center found.",
+  // The AI company's account out of credit (native no-credit), never "ran past what one run may use" (review F5).
+  "no-credit": "No write-up this time: the AI company says your account has no credit left, or has reached a spending limit. This card shows what Ozzie's own check of Planning Center found.",
   // One run's own step or size limit, not the allowance (review G).
   "run-limit": "No write-up this time: the AI's answer ran past what one run may use. This card shows what Ozzie's own check of Planning Center found.",
   unverified: "No write-up this time: the AI's answer didn't check out against what Ozzie read, so it isn't shown. This card shows what Ozzie's own check of Planning Center found.",
@@ -214,10 +241,11 @@ export const WRITEUP_HOW = "The AI saw labels such as [Person 1] and [Role 1], n
 /** The first step of a write-up's account: Ozzie's own check came first, with no AI. */
 export const WRITEUP_CHECK = "Ozzie read Planning Center and worked out what it found itself, with no AI.";
 
-/** The title of what the AI wrote for a report whose decisions are on the Sunday card: what was written, never the decisions again. */
-export function preparedTitle(ready: { summary: string | null; draft: string | null }): string {
-  return ready.summary && ready.draft ? "Ozzie wrote up where Sunday stands and drafted a note."
-    : ready.draft ? "Ozzie drafted a note for Sunday." : "Ozzie wrote up where Sunday stands.";
+/** The title of what the AI wrote for a report whose decisions are on the service's card: what was written, never the decisions again. */
+export function preparedTitle(ready: { summary: string | null; draft: string | null }, d: DayWords = SUNDAY_WORDS): string {
+  const day = dayName(d);
+  return ready.summary && ready.draft ? `Ozzie wrote up where ${day} stands and drafted a note.`
+    : ready.draft ? `Ozzie drafted a note for ${day}.` : `Ozzie wrote up where ${day} stands.`;
 }
 /** Why a run couldn't finish or couldn't start, finishing "Couldn't finish: …". Says only what is known. */
 export function problemText(code: string | null | undefined): string {
@@ -239,7 +267,7 @@ export function problemText(code: string | null | undefined): string {
   }
 }
 /**
- * Its status on What runs automatically. `problem`: the newest thing it reported was that it couldn't
+ * Its status on Keeping watch. `problem`: the newest thing it reported was that it couldn't
  * check (the store refused the run, so no run is listed). A run paused part-way isn't a problem.
  */
 export function statusText(r: Responsibility, pausedAll: boolean, problem = false): { label: string; tone: "ok" | "muted" | "attn" } {
@@ -255,9 +283,9 @@ export function statusText(r: Responsibility, pausedAll: boolean, problem = fals
 // ---- What Ozzie noticed -------------------------------------------------------------------------------
 
 const AT_TIME = (iso: string, now?: string) => whenText(iso, now);
-/** The headline of one "Ozzie noticed" item. Names come only from `names`, resolved on this Mac. */
-export function noticedTitle(item: NoticedItem, now?: string): string {
-  const title = TEMPLATES[item.template].title;
+/** The headline of one "Ozzie noticed" item. Names come only from `names`, resolved on this Mac. `d`: the watched service's day words. */
+export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUNDAY_WORDS): string {
+  const title = templateTitle(item.template, d);
   switch (item.kind) {
     case "found": {
       const parts: string[] = [];
@@ -274,7 +302,7 @@ export function noticedTitle(item: NoticedItem, now?: string): string {
     case "briefing": {
       const n = item.overnight_count ?? 0;
       const kept = (item.kept ?? []).reduce((sum, k) => sum + k.count, 0);
-      return `Your morning briefing is ready.${item.sunday_ready ? " Today it includes the full Sunday Ready brief." : ""}${n
+      return `Your morning briefing is ready.${item.sunday_ready ? ` Today it includes the full ${readyBriefName(d)}.` : ""}${n
         ? ` ${n === 1 ? "One thing" : `${n} things`} came up overnight; ${n === 1 ? "it's" : "they're"} marked Overnight.` : ""}${kept
         ? ` It includes ${kept === 1 ? "one thing" : `${kept} things`} your Church rules keep for the briefing.` : ""}`;
     }
@@ -282,7 +310,7 @@ export function noticedTitle(item: NoticedItem, now?: string): string {
       const at = AT_TIME(item.scheduled_for ?? item.at, now);
       const why = item.code === "denied" && item.access ? "this connection doesn't include what it needs" : problemText(item.code);
       const next = item.retry_at ? ` It will try again at ${AT_TIME(item.retry_at, now)}.` : item.access ? " Add access under Settings, then it can check." : " It will try again at its next scheduled time.";
-      return `Ozzie couldn't check ${SUBJECT[item.template]} at ${at} — ${why}.${next}`;
+      return `Ozzie couldn't check ${subject(item.template, d)} at ${at} — ${why}.${next}`;
     }
     case "missed": {
       const at = AT_TIME(item.scheduled_for!, now), ran = AT_TIME(item.ran_at ?? item.at, now);
@@ -304,7 +332,7 @@ export function noticedTitle(item: NoticedItem, now?: string): string {
     case "limit": return `${title} has used its checks for now. It will check again later, within its limits.`;
     // "As planned" only when it didn't miss any of its checks on the way.
     case "ended": return item.until
-      ? `${title} ended after ${dateText(item.until)}${item.missed_count ? "" : ", as planned"}. Anything still open is on the Sunday page.`
+      ? `${title} ended after ${dateText(item.until)}${item.missed_count ? "" : ", as planned"}. Anything still open is on ${pageRef(d)}.`
       : `${title} has ended.`;
   }
 }
@@ -324,9 +352,10 @@ const WEEK_MS = 7 * 86_400_000;
  * such job gets its own plain sentence. A run paused part-way isn't a problem, and one still running isn't
  * counted yet. Nothing ran this week: nothing to say (null). Job titles are fixed; no names.
  */
-export function weekRollup(jobs: readonly Pick<Responsibility, "title" | "runs">[], now: string): { line: string | null; problems: string[] } {
+export function weekRollup(jobs: readonly (Pick<Responsibility, "title" | "runs"> & Partial<Pick<Responsibility, "template">>)[], now: string,
+  d: DayWords = SUNDAY_WORDS): { line: string | null; problems: string[] } {
   const since = Date.parse(now) - WEEK_MS;
-  const ran = jobs.map(j => ({ title: j.title, runs: j.runs.filter(r => r.outcome !== null && Date.parse(r.started_at) > since && Date.parse(r.started_at) <= Date.parse(now)) }))
+  const ran = jobs.map(j => ({ title: j.template ? jobTitle({ template: j.template, title: j.title }, d) : j.title, runs: j.runs.filter(r => r.outcome !== null && Date.parse(r.started_at) > since && Date.parse(r.started_at) <= Date.parse(now)) }))
     .filter(j => j.runs.length > 0);
   if (!ran.length) return { line: null, problems: [] };
   const problems = ran.map(j => ({ title: j.title, total: j.runs.length, failed: j.runs.filter(r => r.outcome !== "ok" && r.code !== "cancelled").length }))
@@ -338,13 +367,13 @@ export function weekRollup(jobs: readonly Pick<Responsibility, "title" | "runs">
     problems: problems.map(j => `${j.title} couldn't finish ${j.failed} of ${count(j.total, "check", "checks")} this week.`),
   };
 }
-/** What changed since the last run, one sentence each, names resolved locally. */
-export function noticedChanges(item: NoticedItem, names: Readonly<Record<string, string>>): string[] {
-  return (item.changes ?? []).filter(c => c.effect === "worse").slice(0, 5).map(c => describeChange(c, id => names[id]));
+/** What changed since the last run, one sentence each, names resolved locally, the service named by its real day. */
+export function noticedChanges(item: NoticedItem, names: Readonly<Record<string, string>>, d: DayWords = SUNDAY_WORDS): string[] {
+  return (item.changes ?? []).filter(c => c.effect === "worse").slice(0, 5).map(c => describeChange(c, id => names[id], d));
 }
 export function noticedBadge(item: NoticedItem): { label: string; tone: "attn" | "look" | "ok" | "muted" } {
   switch (item.kind) {
-    // Only what needs a decision on the Sunday page does here: a confirmed room overlap, never an uncertain one.
+    // Only what needs a decision on the service's page does here: a confirmed room overlap, never an uncertain one.
     case "found": return item.decisions || item.findings?.rooms || item.findings?.follow_ups ? { label: "Needs a decision", tone: "attn" } : { label: "Worth a look", tone: "look" };
     case "briefing": return { label: "Ready", tone: "ok" };
     case "clear": return { label: "Checked", tone: "ok" };

@@ -38,21 +38,22 @@ describe("a read Planning Center refused (audit item 5)", () => {
     const t = text(html);
     expect(html).toContain('role="alert"');
     for (const line of [
-      "Planning Center didn't let Ozzie read this Sunday.",
+      // Said of the service, never "this Sunday" (onboarding spec §5); "account" and "connect again", never "login" or "sign in again" (§6).
+      "Planning Center didn't let Ozzie read this service's plan.",
       "It's one of these, and Ozzie can't tell which from here:",
-      "The Planning Center login you signed in with can't see this service type's plans. A Planning Center administrator at your church can give that login access to it in Planning Center Services.",
-      "That sign-in is no longer accepted. Signing in again fixes this.",
-      "Then sign in again, or choose a Sunday this login can see.",
+      "The Planning Center account you signed in with can't see this service's plans. A Planning Center administrator at your church can give that account access to it in Planning Center Services.",
+      "That sign-in is no longer accepted. Connecting again fixes this.",
+      "Then connect again, or choose a service this account can see.",
     ]) expect(t).toContain(line);
-    expect(html).toContain(">Open Settings to sign in again</button>");
-    expect(html).toContain(">Open Settings to choose another Sunday</button>");
+    expect(html).toContain(">Open Settings to connect again</button>");
+    expect(html).toContain(">Open Settings to choose another service</button>");
     expect(t.replaceAll("not ranked", "")).not.toMatch(FORBIDDEN);
   });
   it("is told apart from other problems by the native code alone", () => {
     expect(refusedRead("denied")).toBe(true);
     expect(refusedRead({ "sunday-check": "denied" })).toBe(true);
     for (const other of ["rate-limited", "not-connected", "provider-failure", "organization-unverified", undefined]) expect(refusedRead(other), String(other)).toBe(false);
-    expect(sundayProblem("denied")).toBe("Planning Center didn't let Ozzie read this Sunday. Either the login you signed in with can't see this service type's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access; then sign in again under Settings, or choose another Sunday.");
+    expect(sundayProblem("denied")).toBe("Planning Center didn't let Ozzie read this service's plan. Either the account you signed in with can't see this service's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your account access; then connect again under Settings, or choose another service.");
     // Any other problem stays one plain line.
     const other = text(refusedPage(false));
     expect(other).not.toContain("It's one of these");
@@ -63,21 +64,21 @@ describe("a sign-in that was running out and wasn't renewed (native main.rs rene
   const notRenewed = (reason: string) => ({ "sign-in-not-renewed": reason });
   it("says why, true to the cause, and what to do next", () => {
     for (const reason of ["invalid-credentials", "missing-credentials"]) {
-      expect(sundayProblem(notRenewed(reason))).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed, so nothing was read. Sign in again in Settings.");
+      expect(sundayProblem(notRenewed(reason))).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed, so nothing was read. Connect again in Settings.");
     }
     // No answer, a 429 or a 5xx (review N, 8): the connection stays as it was and the next check tries again.
     expect(sundayProblem(notRenewed("provider-failure"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and Planning Center didn't renew it just now, so nothing was read. Ozzie tries again at the next check.");
     // The Keychain, before Planning Center was asked (review N, 4): locked comes right by itself; refused or missing needs the leader.
     expect(sundayProblem(notRenewed("locked"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage was locked, so nothing was read. Ozzie tries again at the next check.");
     expect(sundayProblem(notRenewed("denied"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac didn't let Ozzie use it, so nothing was read. Allow access when macOS asks, then check again.");
-    expect(sundayProblem(notRenewed("store-unavailable"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage couldn't be read, so nothing was read. Check again in a moment; if it keeps happening, sign in again in Settings.");
+    expect(sundayProblem(notRenewed("store-unavailable"))).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage couldn't be read, so nothing was read. Check again in a moment; if it keeps happening, connect again in Settings.");
     for (const reason of ["busy", "cancelled"]) {
-      expect(sundayProblem(notRenewed(reason)), reason).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed just now, so nothing was read. Try again in a moment, or sign in again in Settings.");
+      expect(sundayProblem(notRenewed(reason)), reason).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed just now, so nothing was read. Try again in a moment, or connect again in Settings.");
     }
     // Never the refused-read card, whose causes are a login's access or a sign-in Planning Center refused at a read.
     for (const reason of ["busy", "cancelled", "locked", "denied", "store-unavailable", "invalid-credentials"]) expect(refusedRead(notRenewed(reason)), reason).toBe(false);
     // "Check now" when the saved sign-in can't be renewed: no sign-in Ozzie can use.
-    expect(sundayProblem({ authentication: "invalid-token" })).toBe("Ozzie has no sign-in to Planning Center it can use, so nothing was read. Sign in again in Settings.");
+    expect(sundayProblem({ authentication: "invalid-token" })).toBe("Ozzie has no sign-in to Planning Center it can use, so nothing was read. Connect again in Settings.");
     for (const reason of ["invalid-credentials", "provider-failure", "busy", "denied"]) expect(sundayProblem(notRenewed(reason))).not.toMatch(FORBIDDEN);
   });
   it("is never what What happened says for Planning Center out of reach, unless it was", () => {
@@ -229,7 +230,7 @@ describe("one count for what the page shows, and what it is showing", () => {
       const html = page(b);
       expect(text(html)).toMatch(new RegExp(`${line} · \\d+ reads · `, "u"));
       if (banner) expect(text(html)).toContain(banner);
-      expect(html).toContain('role="group" aria-label="What Sunday shows: a live check, the last saved check or the fictional example"');
+      expect(html).toContain('role="group" aria-label="What this page shows: a live check, the last saved check or the fictional example"');
       expect(text(html)).not.toMatch(/recording/iu);
     }
   });
@@ -251,6 +252,38 @@ describe("one count for what the page shows, and what it is showing", () => {
     })));
     expect(stale).toMatch(/Out of date .* Why I flagged this Planning Center Checked /u);
     expect(stale).toContain("doesn't treat its rooms, follow-ups or group meetings as current");
+  });
+
+  it("someone scheduled with a blockout is a Worth a look card with its source and check time, and a covered Sunday no longer reads as covered", () => {
+    // Every role filled, no check-ins, nothing else to look at: the one Sunday the page calls covered.
+    const covered = () => {
+      const c = nov22Capture();
+      const read = (collection: string, person?: string) => c.reads.find(r => r.collection === collection && (!person || r.person_id === person))!;
+      read("person_blockouts", PEOPLE.drew).body = { data: [], meta: { count: 0, total_count: 0 } };
+      read("needed_positions").body = { data: [], meta: { count: 0, total_count: 0 } };
+      read("team_members").body!.data = (read("team_members").body!.data as { id: string }[]).filter(m => m.id !== "403");
+      for (const r of c.reads.filter(x => x.collection === "team_position_assignments")) {
+        r.body!.data = (r.body!.data as { relationships: { person: { data: { id: string } } } }[]).filter(a => [PEOPLE.greeterConfirmed, PEOPLE.nurseryConfirmed].includes(a.relationships.person.data.id));
+      }
+      return c;
+    };
+    const quiet = { ...rules, checkInAfterSundaysInARow: 0 };
+    expect(text(page(brief(covered(), quiet)))).toContain("Everything Ozzie checked is covered.");
+    const c = covered();
+    c.reads.find(r => r.collection === "person_blockouts" && r.person_id === PEOPLE.greeterConfirmed)!.body = {
+      data: [{ type: "Blockout", id: "b1", attributes: { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z", repeat_frequency: "no_repeat" } }], meta: { count: 1, total_count: 1 } };
+    const html = page(brief(c, quiet));
+    const t = text(html);
+    expect(t).not.toContain("Everything Ozzie checked is covered.");
+    expect(t).toContain("Nothing needs a decision and 1 is worth a look.");
+    const card = html.split(/<article class="find/u).slice(1).find(x => x.includes("has a blockout"))!;
+    expect(card).toContain('<span class="badge b-look">');
+    const shown = text(card);
+    expect(shown).toContain("Worth a look");
+    expect(shown).toMatch(/Avery Brightwater is scheduled for Greeter at \d{1,2}:30\s?[AP]M and has a blockout in Planning Center at that time\./u);
+    expect(shown).toContain("Planning Center still counts them as confirmed for Greeter, so it isn't an open spot. Only they can say whether they'll be there.");
+    expect(shown).toMatch(/Why I flagged this Planning Center Checked [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, /u);
+    expect(shown).not.toMatch(FORBIDDEN);
   });
 
   it("Resolved by you looks neutral, never like confirmed coverage", () => {

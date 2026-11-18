@@ -54,7 +54,7 @@ export interface SundayOperations {
 type State = "ok" | "not-requested" | "denied" | "truncated" | "timeout" | "failed" | "missing" | "window";
 const REASON: Record<Exclude<State, "ok">, string> = {
   "not-requested": "turned off in Settings", denied: "Planning Center didn't allow it", truncated: "only partly read",
-  timeout: "took too long", failed: "couldn't be read", missing: "not read", window: "the read didn't cover this whole Sunday",
+  timeout: "took too long", failed: "couldn't be read", missing: "not read", window: "the read didn't cover the whole day of the service",
 };
 const COMPLETENESS: Record<State, SourceScope["completeness"]> = {
   ok: "complete", "not-requested": "unverified", denied: "denied", truncated: "partial", timeout: "unreadable", failed: "unreadable", missing: "unverified", window: "unverified",

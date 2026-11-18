@@ -211,7 +211,7 @@ describe("every tool's words, over every kind of check", () => {
   it("gives the Church rules in words and the procedures Ozzie follows", async () => {
     const { text } = await sharedFor(harnessData());
     const out = textOf(call(serverOver(() => text), "church_rules"));
-    expect(out).toContain("Your Church rules suggest a check-in after 3 Sundays in a row.");
+    expect(out).toContain("Your Church rules suggest a check-in after 3 weeks in a row.");
     expect(out).toMatch(/\[Room \d+\] isn't shared, with 15 minutes of setup time\./u);
     for (const s of skills.values()) expect(out).toContain(`- ${s.title}: ${s.purpose}`);
   });

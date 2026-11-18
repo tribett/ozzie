@@ -286,15 +286,29 @@ fn exchange_and_refresh_fail_closed_on_missing_or_mismatched_source_organization
     }
 }
 #[test]
-fn provider_denial_callback_is_cancelled_and_consumed() {
-    let auth = controller(Arc::new(MemoryStore::default()));
+fn provider_denial_callback_is_denied_ends_the_attempt_and_saves_nothing() {
+    // Onboarding spec N2: "You chose not to allow Ozzie" is told apart from cancelling on this Mac.
+    let store = Arc::new(MemoryStore::default());
+    let auth = controller(store.clone());
     let callback = callback_url(&auth).replace("code=fictional-code", "error=access_denied");
-    assert_eq!(auth.callback(&callback).err(), Some(AuthError::Cancelled));
-    assert_eq!(auth.status().unwrap().state, ConnectionState::Cancelled);
+    assert_eq!(auth.callback(&callback).err(), Some(AuthError::Denied));
+    let status = auth.status().unwrap();
+    assert_eq!(status.state, ConnectionState::Cancelled);
+    assert_eq!(status.problem, Some(AuthError::Denied));
+    assert_eq!(store.get("fictional-workspace", "1001").unwrap(), None);
+    assert_eq!(
+        serde_json::to_string(&status.problem).unwrap(),
+        r#""denied""#
+    );
     assert_eq!(
         auth.callback(&callback).err(),
         Some(AuthError::StateMismatch)
     );
+    // Any other error from Planning Center still ends it as cancelled.
+    let auth = controller(Arc::new(MemoryStore::default()));
+    let callback = callback_url(&auth).replace("code=fictional-code", "error=server_error");
+    assert_eq!(auth.callback(&callback).err(), Some(AuthError::Cancelled));
+    assert_eq!(auth.status().unwrap().problem, Some(AuthError::Cancelled));
 }
 
 /// Loopback tests share the fixed callback port; run them one at a time.

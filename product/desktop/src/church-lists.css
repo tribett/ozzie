@@ -1,4 +1,4 @@
-/* The church's own lists: the Lists & notes page (church-lists-page.tsx) and the box beside a Sunday card (church-own-words.tsx). */
+/* The church's own lists: the Church lists page (church-lists-page.tsx) and the box beside a Sunday card (church-own-words.tsx). */
 .oz .church-own-words { margin-top: 14px; padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--sunken); display: flex; flex-direction: column; gap: 8px; }
 .oz .own-frame { font: 600 var(--t-sm)/1.4 var(--f-ui); color: var(--ink-2); overflow-wrap: anywhere; }
 .oz .own-table-wrap { overflow-x: auto; max-width: 100%; }

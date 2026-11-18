@@ -357,7 +357,15 @@ mod tests {
             .iter()
             .find(|(n, _)| n == "notify_sunday_attention")
             .unwrap();
-        assert_eq!(sunday.1, "app: tauri::AppHandle, local_only: Option<bool>");
+        // The coverage notice also names its day, a closed word mapped natively to one fixed line
+        // (`Line::attention`), never shown as given.
+        assert_eq!(
+            sunday.1,
+            "app: tauri::AppHandle, local_only: Option<bool>, day: Option<String>"
+        );
+        assert!(include_str!("main.rs").contains(
+            "let line = Line::attention(day.as_deref().unwrap_or(\"service\")).ok_or(\"invalid-day\")?;"
+        ));
         // Every command is registered, and nothing else in the app sends to a phone.
         let registered = include_str!("main.rs");
         for (name, _) in &found {
@@ -401,7 +409,7 @@ mod tests {
             (
                 &main,
                 "fn notify_sunday_attention(",
-                "phone_notice::also_to_phone(&app, Line::SundayAttention, local_only);",
+                "phone_notice::also_to_phone(&app, line, local_only);",
             ),
         ] {
             let body = source

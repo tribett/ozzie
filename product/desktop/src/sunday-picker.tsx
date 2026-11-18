@@ -1,9 +1,9 @@
-// Choosing the Sunday in setup: once Planning Center is connected, Ozzie lists the church's service
+// Choosing another plan in Settings (first run's own step is your-service.tsx): once Planning Center is connected, Ozzie lists the church's service
 // types and the chosen type's upcoming plans (read-only, native sunday_picker.rs), and the person
 // picks one. Only the two ids are kept, exactly as typing them did; "Enter the plan by hand" stays below.
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
-import { choicesProblem, sundaySource, type Choices, type PlanChoice, type ServiceTypeChoice, type Settings } from "./sunday-source.js";
-import { SundayPlanFields } from "./planning-center-forms.js";
+import { choicesProblem, PICKER_REFUSED, sundaySource, type Choices, type PlanChoice, type ServiceTypeChoice, type Settings } from "./sunday-source.js";
+import { CopyForAdministrator, SundayPlanFields } from "./planning-center-forms.js";
 import { Icon } from "./icons.js";
 
 export type Loaded<T> = { state: "idle" } | { state: "loading" } | { state: "ready"; value: Choices<T> } | { state: "problem"; text: string };
@@ -26,7 +26,7 @@ export function planWhen(plan: Pick<PlanChoice, "sort_date" | "dates">, now: str
 }
 /** The plan's title and series, as Planning Center names them. */
 export const planName = (plan: Pick<PlanChoice, "title" | "series_title">) => [plan.title, plan.series_title].filter(Boolean).join(" · ");
-const typeName = (t: ServiceTypeChoice) => t.name ?? `Service type ${t.id}`;
+const typeName = (t: ServiceTypeChoice) => t.name ?? "A service with no name";
 
 /** The picker's states, drawn without reading anything: what the person sees at each step. */
 export function SundayChoicesView({ connected, settings, onSettings, types, typeId, onType, plans, onRetry, now, handOpen, onHand }: {
@@ -42,20 +42,20 @@ export function SundayChoicesView({ connected, settings, onSettings, types, type
   const problem = types.state === "problem" ? types.text : plans.state === "problem" ? plans.text : null;
   const pick = (plan: PlanChoice) => onSettings(withPlan(settings, typeId, plan.id));
   return <div className="picker">
-    {!connected && <p className="panel-info"><Icon name="info" small /><span>Connect Planning Center first. Then your upcoming Sundays are listed here to choose from.</span></p>}
-    {types.state === "loading" && <p className="picker-status" role="status"><Icon name="spinner" small spin />Reading your service types from Planning Center…</p>}
-    {types.state === "ready" && list.length === 0 && <p className="panel-sunken">Planning Center shows no service types this account can see. Enter the plan by hand below.</p>}
-    {list.length === 1 && <p className="picker-type"><span className="field-l">Service type</span>{typeName(list[0]!)}</p>}
+    {!connected && <p className="panel-info"><Icon name="info" small /><span>Connect Planning Center first. Then your upcoming plans are listed here to choose from.</span></p>}
+    {types.state === "loading" && <p className="picker-status" role="status"><Icon name="spinner" small spin />Reading your services from Planning Center…</p>}
+    {types.state === "ready" && list.length === 0 && <p className="panel-sunken">Planning Center shows no services this account can see. You can paste a plan's address below, under My plan isn't listed.</p>}
+    {list.length === 1 && <p className="picker-type"><span className="field-l">Service</span>{typeName(list[0]!)}</p>}
     {list.length > 1 && <div className="field picker-type">
-      <label className="field-l" htmlFor={`${id}-type`}>Service type</label>
+      <label className="field-l" htmlFor={`${id}-type`}>Service</label>
       <select id={`${id}-type`} className="input" value={typeId} onChange={e => onType(e.target.value)}>
-        {!typeId && <option value="">Choose a service type</option>}
+        {!typeId && <option value="">Choose a service</option>}
         {list.map(t => <option key={t.id} value={t.id}>{typeName(t)}</option>)}
       </select>
-      {types.state === "ready" && types.value.more && <p className="input-help">Showing the first {list.length}. Another service type can be entered by hand below.</p>}
+      {types.state === "ready" && types.value.more && <p className="input-help">Showing the first {list.length}. Another service's plan can be pasted below.</p>}
     </div>}
     {plans.state === "loading" && <p className="picker-status" role="status"><Icon name="spinner" small spin />Reading upcoming plans…</p>}
-    {plans.state === "ready" && shown.length === 0 && <p className="panel-sunken">No upcoming plans in this service type. {list.length > 1 ? "Choose another, or enter" : "Enter"} the plan by hand below.</p>}
+    {plans.state === "ready" && shown.length === 0 && <p className="panel-sunken">No upcoming plans in this service. {list.length > 1 ? "Choose another, or paste" : "Paste"} a plan's address below.</p>}
     {shown.length > 0 && <fieldset className="picker-plans">
       <legend className="field-l">Upcoming plans</legend>
       {shown.map(p => {
@@ -66,16 +66,17 @@ export function SundayChoicesView({ connected, settings, onSettings, types, type
           <span><span className="choice-t">{planWhen(p, now)}</span>{name && <span className="choice-d">{name}</span>}</span>
         </label>;
       })}
-      {plans.state === "ready" && plans.value.more && <p className="input-help">Showing the next {shown.length}. A later Sunday can be entered by hand below.</p>}
+      {plans.state === "ready" && plans.value.more && <p className="input-help">Showing the next {shown.length}. A later plan can be pasted below, under My plan isn't listed.</p>}
     </fieldset>}
     {problem && <div className="picker-problem"><p role="alert" className="problem">{problem}</p>
-      {connected && <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>Try again</button>}</div>}
-    {chosen && !chosenListed && types.state !== "loading" && plans.state !== "loading"
+      {connected && <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>Try again</button>}
+      {problem === PICKER_REFUSED && <CopyForAdministrator />}</div>}
+    {connected && chosen && !chosenListed && types.state !== "loading" && plans.state !== "loading"
       && <p className="small">Chosen now: a plan entered by hand. It isn't in this list.</p>}
     <details className="picker-hand" open={handOpen} onToggle={e => onHand((e.target as HTMLDetailsElement).open)}>
-      <summary><Icon name="chev" small />Enter the plan by hand</summary>
+      <summary><Icon name="chev" small />My plan isn't listed</summary>
       <div className="picker-hand-body">
-        <p className="small">In Planning Center Services, open the Sunday plan you want checked and copy the address from your browser, then paste it here.</p>
+        <p className="small">In Planning Center Services, open the plan you want Ozzie to watch and copy the address from your browser, then paste it here.</p>
         <SundayPlanFields settings={settings} onSettings={onSettings} />
       </div>
     </details>

@@ -206,13 +206,33 @@ fn every_kind_of_notice_maps_to_one_line_of_a_closed_set() {
     ] {
         assert_eq!(Line::for_notice(kind), None, "{kind:?}");
     }
-    // Six lines, all different, each one plain sentence: printable ASCII, no digit (so no count), no
-    // line break, no address, no quotation.
+    // Fourteen lines (one coverage line per day of the watched service, onboarding spec §5.2), all different,
+    // each one plain sentence: printable ASCII, no digit (so no count), no line break, no address, no quotation.
     let texts: Vec<&str> = Line::ALL.iter().map(|l| l.text()).collect();
     let mut distinct = texts.clone();
     distinct.sort();
     distinct.dedup();
-    assert_eq!(distinct.len(), 6);
+    assert_eq!(distinct.len(), 14);
+    // The day is a closed word; the service's own name or any text never becomes a line.
+    for (day, line) in [
+        ("sunday", Line::SundayAttention),
+        ("wednesday", Line::WednesdayAttention),
+        ("weekend", Line::WeekendAttention),
+        ("service", Line::ServiceAttention),
+    ] {
+        assert_eq!(Line::attention(day), Some(line));
+    }
+    for other in ["Sunday", "youth night", "", "sunday ", "weekday", "Riley"] {
+        assert_eq!(Line::attention(other), None, "{other:?}");
+    }
+    // Only the Sunday line says Sunday.
+    for line in Line::ALL {
+        assert_eq!(
+            line.text().contains("Sunday"),
+            line == Line::SundayAttention,
+            "{line:?}"
+        );
+    }
     for text in &texts {
         assert!(text.bytes().all(|b| (b' '..=b'~').contains(&b)), "{text}");
         assert!(!text.bytes().any(|b| b.is_ascii_digit()), "{text}");
@@ -478,8 +498,12 @@ fn turning_it_on_keeps_a_new_channel_in_the_keychain_and_sends_each_line_to_it()
     // Turning on again keeps the same channel.
     assert_eq!(s.phone.turn_on().unwrap().channel, Some(channel.clone()));
     assert_eq!(s.phone.status().channel, Some(channel.clone()));
-    for line in Line::ALL {
-        assert_eq!(s.phone.send(line), Outcome::Accepted);
+    // Every line reaches the phone; past an hour's twelve, the next hour (by this Mac's clock) takes the rest.
+    for (n, line) in Line::ALL.into_iter().enumerate() {
+        if n > 0 && n % PER_HOUR == 0 {
+            s.clock.fetch_add(HOUR_MS, Ordering::SeqCst);
+        }
+        assert_eq!(s.phone.send(line), Outcome::Accepted, "{line:?}");
     }
     let url = format!("https://ntfy.sh/{channel}");
     assert_eq!(

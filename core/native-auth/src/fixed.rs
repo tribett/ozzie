@@ -156,6 +156,9 @@ pub const TOOL_SPECS_FILE: &str = include_str!("../../src/harness/fixed/tool-spe
 pub const VOCABULARY_FILE: &str = include_str!("../../src/harness/fixed/vocabulary.json");
 /// common-words.txt: lower-case common English words for the "capitalized only" name rule.
 pub const COMMON_WORDS_FILE: &str = include_str!("../../src/harness/fixed/common-words.txt");
+/// policy-local.txt: the policy an Ask step to a model on this Mac carries instead of policy.txt (2026-11-18,
+/// `local_ask_system`).
+pub const LOCAL_POLICY_FILE: &str = include_str!("../../src/harness/fixed/policy-local.txt");
 
 /// The policy: policy.txt with its final line break removed.
 pub fn policy() -> &'static str {
@@ -163,6 +166,27 @@ pub fn policy() -> &'static str {
         .strip_suffix("\r\n")
         .or_else(|| POLICY_FILE.strip_suffix('\n'))
         .unwrap_or(POLICY_FILE)
+}
+
+/// The local route's policy: policy-local.txt with its final line break removed.
+pub fn local_policy() -> &'static str {
+    LOCAL_POLICY_FILE
+        .strip_suffix("\r\n")
+        .or_else(|| LOCAL_POLICY_FILE.strip_suffix('\n'))
+        .unwrap_or(LOCAL_POLICY_FILE)
+}
+/// AI on this Mac (measured 2026-11-18): the Ask
+/// procedure's exact system message with the local route's own policy in place of the policy, and the procedure after
+/// it unchanged; None for any other text. With policy.txt the answer check refused the medium model on three of Ozzie's
+/// four suggested questions: two it answered at once without a lookup, copying the policy's example ids ("f4", "f3"),
+/// and beside a draft it named an example fact no result held. This policy shows no example id and says which lookup
+/// fits which question. Only `agent::step_body` uses it, on
+/// the wire to a model on this Mac, after every check passed on the request as the webview sent it: Ozzie's pinned words
+/// for Ozzie's pinned words.
+pub fn local_ask_system(system: &str) -> Option<String> {
+    let ask = system_text(skill(ASK_SKILL)?)?;
+    let rest = ask.strip_prefix(policy())?;
+    (system == ask).then(|| format!("{}{rest}", local_policy()))
 }
 
 #[derive(Deserialize)]
@@ -942,6 +966,7 @@ mod tests {
             ("tool-specs.json", TOOL_SPECS_FILE),
             ("vocabulary.json", VOCABULARY_FILE),
             ("common-words.txt", COMMON_WORDS_FILE),
+            ("policy-local.txt", LOCAL_POLICY_FILE),
         ] {
             assert_eq!(fixed_file(name), compiled, "{name}");
         }
@@ -983,6 +1008,22 @@ mod tests {
                 format!("{}\n\nProcedure: {}\n{}", policy(), skill.title, skill.body)
             );
         }
+        // policy-local.txt, pinned the same way: the file, and the Ask system message it makes (`local_ask_system`),
+        // the one a model on this Mac receives. Never a procedure's pin.
+        let local = &pins["local_policy"];
+        assert_eq!(local["file"], "core/src/harness/fixed/policy-local.txt");
+        assert_eq!(local["procedure"], ASK_SKILL);
+        assert_eq!(local["file_sha256"], sha256_hex(LOCAL_POLICY_FILE));
+        let ask = system_text(skill(ASK_SKILL).unwrap()).unwrap();
+        assert_eq!(
+            local["system_sha256"],
+            sha256_hex(&local_ask_system(&ask).unwrap())
+        );
+        assert!(
+            !procedures
+                .values()
+                .any(|pin| pin["system_sha256"] == local["system_sha256"])
+        );
         // A placeholder inside a procedure is text, never replaced again.
         let odd = BundledSkill {
             id: "x".into(),
@@ -1056,6 +1097,25 @@ mod tests {
                 Some(ToolMessage::Error)
             );
         }
+    }
+
+    /// Someone scheduled with a blockout over their serving time (fixture matrix C30-C37), as tools.ts writes the
+    /// overview over core/test/harness/fixtures.ts `withScheduledBlockouts`: its kind word comes from vocabulary.json.
+    #[test]
+    fn a_scheduled_blockout_in_the_overview_fits_the_closed_grammar() {
+        let text = r#"{"tool":"sunday.overview","source":"Planning Center Services","check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{"fact":"f1","mode":"live","sunday":"2026-11-22","reads":26,"reads_not_completed":0,"needs_a_decision":2,"worth_a_look":4,"findings":[{"fact":"f5","kind":"scheduled with a blockout at this time","tone":"worth a look","person":"[Person 2]","serving":[{"role":"[Role 1]","status":"confirmed","time":{"starts_at":"2026-11-22T09:30-05:00","ends_at":"2026-11-22T10:30-05:00"}}]},{"fact":"f6","kind":"scheduled with a blockout at this time","tone":"worth a look","person":"[Person 1]","serving":[{"role":"[Role 3]","status":"pending","time":{"starts_at":"2026-11-22T09:30-05:00","ends_at":"2026-11-22T10:30-05:00"}}]}]}}"#;
+        let Some(ToolMessage::Envelope { slots, .. }) = tool_message(text) else {
+            panic!("{text}");
+        };
+        for label in ["[Person 1]", "[Person 2]", "[Role 1]", "[Role 3]"] {
+            assert!(slots.iter().any(|slot| slot == label), "{label}");
+        }
+        // A kind word, or a status, outside vocabulary.json is refused.
+        assert_eq!(tool_message(&text.replace("at this time", "today")), None);
+        assert_eq!(
+            tool_message(&text.replace("\"confirmed\"", "\"away\"")),
+            None
+        );
     }
 
     #[test]

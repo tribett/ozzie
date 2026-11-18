@@ -1,4 +1,4 @@
-// "Add a list from a private link" on Lists & notes: the leader names the list and pastes the link Google Sheets (or
+// "Add a list from a private link" on Church lists: the leader names the list and pastes the link Google Sheets (or
 // another site) gives for a sheet published as comma-separated values. The link works like a password: it goes to
 // native code once, through church-sources.ts, which keeps it in this Mac's Keychain and shows only where it points.
 // This form holds it only while it is typed, hidden as a password is, and lets it go once it has been tried, whatever

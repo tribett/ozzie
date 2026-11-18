@@ -10,6 +10,7 @@ import { nov22Capture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.
 import { BACKGROUND_CHECKS } from "../../../core/src/kids-rules.js";
 import { describeChange } from "../../../core/src/sunday-changes.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
+import { wednesdayCapture } from "../../../core/test/fixtures/service-days/wednesday.js";
 
 const settings: Settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" };
 const status = (state: ConnectionStatus["state"]): ConnectionStatus => ({ state, organization: "1001", checked_at_ms: null, source: "", problem: null });
@@ -17,8 +18,8 @@ const rules: SundayRules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
 const ZONE = "America/Chicago";
 
 /** The fictional Sunday, read at `iso`, optionally changed. */
-function captureAt(iso: string, change?: (c: SundayCapture) => void): SundayCapture {
-  const c = nov22Capture();
+function captureAt(iso: string, change?: (c: SundayCapture) => void, base: () => SundayCapture = nov22Capture): SundayCapture {
+  const c = base();
   change?.(c);
   const delta = Date.parse(iso) - Date.parse(c.completed_at);
   const shift = (t: string) => new Date(Date.parse(t) + delta).toISOString();
@@ -31,7 +32,7 @@ const decline = (c: SundayCapture) => {
   rows(c, "needed_positions").find(n => n.attributes.team_position_name === "Greeter")!.attributes.quantity = 2;
 };
 
-function harness(start: string, store = memoryStore()) {
+function harness(start: string, store = memoryStore(), base: () => SundayCapture = nov22Capture) {
   let now = start;
   let change: ((c: SundayCapture) => void) | undefined;
   let fail: unknown = null;
@@ -39,14 +40,14 @@ function harness(start: string, store = memoryStore()) {
   const check = vi.fn(async () => {
     if (hold) await hold;
     if (fail !== null) throw fail;
-    return captureAt(now, change);
+    return captureAt(now, change, base);
   });
   const notify = vi.fn(async () => {});
   const deps: ProactiveDeps = {
     store, now: () => now, timeZone: () => ZONE, check, notify, problem: sundayProblem,
     timers: { setInterval: () => 0, clearInterval: () => {} },
   };
-  const context = { settings, rules, status: status("connected") as ConnectionStatus | null };
+  const context: ReturnType<ProactiveHooks["context"]> = { settings, rules, status: status("connected") as ConnectionStatus | null };
   const hooks: ProactiveHooks = { context: () => context, onStatus: () => {}, onCapture: vi.fn() };
   const p = createProactive(deps);
   return {
@@ -85,7 +86,8 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     await h.p.tick();
     expect(h.check).toHaveBeenCalledTimes(2);
     expect(h.notify).toHaveBeenCalledTimes(1);
-    expect(h.notify).toHaveBeenCalledWith();
+    // The fictional plan is on a Sunday: the notice's fixed line names Sunday by its closed code (native contract N8).
+    expect(h.notify).toHaveBeenCalledWith({ day: "sunday" });
     const [latest] = h.p.view().history;
     expect(latest).toMatchObject({ kind: "changes", trigger: "scheduled", notice: "sent" });
     expect(latest!.changes!.map(c => [c.kind, c.urgency])).toEqual([["confirmed-declined", "urgent"], ["need-increased", "urgent"]]);
@@ -554,6 +556,37 @@ describe("changes handed to Keep Sunday covered", () => {
     await changed(h, "2026-11-20T16:00:00Z");
     expect(entry(h).notice).toBe("sent");
     expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the notice names the watched service's real day (onboarding spec §5.2, native contract N8)", () => {
+  it("a Wednesday plan's notice asks for the Wednesday line, never Sunday's", async () => {
+    const h = harness("2026-11-20T15:00:00Z", memoryStore(), wednesdayCapture);
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledWith({ day: "wednesday" });
+  });
+
+  it("App's day, when it gives one, is the one used", async () => {
+    const h = harness("2026-11-20T15:00:00Z", memoryStore(), wednesdayCapture);
+    h.context.noticeDay = "weekend";
+    await h.launch();
+    h.changeTo(decline);
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledWith({ day: "weekend" });
+  });
+
+  it("passes the day as a closed code beside localOnly, and nothing when neither applies", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    await notifySundayAttention({ day: "wednesday" });
+    await notifySundayAttention({ localOnly: true, day: "service" });
+    await notifySundayAttention({});
+    expect(invoke.mock.calls).toEqual([["notify_sunday_attention", { day: "wednesday" }], ["notify_sunday_attention", { localOnly: true, day: "service" }], ["notify_sunday_attention"]]);
   });
 });
 

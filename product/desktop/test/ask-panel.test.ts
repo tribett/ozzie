@@ -8,11 +8,15 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
-import { Answer, ASK_ABOUT, ASK_INTRO, ASK_NOTE, AskPanel, EARLIER_SHOWN, HowItWorks, isCardsRequest, isHelpRequest, routeQuestion, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
+import { ChooseAiContext } from "../src/ai-line.js";
+import { NEEDS_AI } from "../src/ai-words.js";
+import { Answer, ASK_ABOUT, ASK_INTRO, ASK_NOTE, AskCard, AskPanel, EARLIER_SHOWN, HowItWorks, isCardsRequest, isHelpRequest, routeQuestion, TurnBody, turnAnnouncement, type Turn } from "../src/ask-panel.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import { App } from "../src/App.js";
 import { askOzzie, createAppHarness, type AskTurn, type ShownAnswer } from "../src/harness-bridge.js";
 import { ASK_FAILURES, ASK_START } from "../src/harness-words.js";
+import { DayProvider } from "../src/day-words.js";
+import { wednesdayCapture, wednesdayWords } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { BACKGROUND_IN_REQUEST, draftTurns, everyRequest, fictionalData, greeterTurns, HIDDEN_WORDS, scripted, text } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
@@ -38,7 +42,7 @@ describe("Ask Ozzie panel", () => {
     const html = panel({ brief: null, modelReady: false });
     expect(html).toContain("Nothing has been checked yet.");
     expect(text(html)).toContain("Connect Planning Center in Settings");
-    expect(html).toContain("Ask Ozzie needs an AI model. Set one up under Settings.");
+    expect(text(html)).toContain("Ask Ozzie needs AI, but everything else in Ozzie works without it.");
     expect(html).not.toMatch(/<textarea[^>]*disabled=""/);
     expect(html).toContain(note);
     // The one suggestion before anything is checked: what Ozzie can do, answered here.
@@ -116,12 +120,34 @@ describe("Ask Ozzie panel", () => {
 
   it("says plainly why a question wasn't answered", () => {
     expect(text(body({ id: 1, question: "q", state: "refused", text: REFUSALS.contact }))).toContain("Nothing was sent.");
-    expect(text(body({ id: 1, question: "q", state: "no-model" }))).toContain("Ask Ozzie needs an AI model. Set one up under Settings.");
-    expect(body({ id: 1, question: "q", state: "no-model" })).toContain(">Open Settings</button>");
+    expect(text(body({ id: 1, question: "q", state: "no-model" }))).toContain("Ask Ozzie needs AI, but everything else in Ozzie works without it.");
     for (const t of [ASK_FAILURES.egress, ASK_FAILURES.fidelity, ASK_FAILURES.unfinished]) {
       expect(body({ id: 1, question: "q", state: "problem", code: null, text: t })).toMatch(/role="alert"/);
     }
     expect(text(body({ id: 1, question: "q", state: "cancelled", text: ASK_FAILURES.cancelled }))).toContain("You stopped this question.");
+  });
+
+  it("with no AI, is never a dead end: one sentence, and one button to How should Ozzie use AI? (walk-through, 2026-11-18)", () => {
+    const opened: string[] = [];
+    const withWay = (el: React.ReactElement) => renderToStaticMarkup(React.createElement(ChooseAiContext.Provider, { value: () => { opened.push("ai"); } }, el));
+    expect(NEEDS_AI.ask).toBe("Ask Ozzie needs AI, but everything else in Ozzie works without it.");
+    expect(NEEDS_AI.button).toBe("Choose how Ozzie uses AI");
+    // On top of the panel, on any page, Settings included (it no longer says "Set one up in AI help on this page").
+    for (const page of ["today", "sunday", "connection"]) {
+      const html = withWay(React.createElement(AskPanel, { open: true, onClose: () => {}, ask: never, brief: fictional, modelReady: false, onOpen: () => {}, page }));
+      expect(text(html)).toContain(NEEDS_AI.ask);
+      expect(html).toContain(`>${NEEDS_AI.button}</button>`);
+      expect(html).not.toMatch(/AI model|Set one up|isn&#x27;t set up/u);
+    }
+    // A question asked anyway: its card says the same, badged "Needs AI", with the same one step, and VoiceOver hears it.
+    const card = withWay(React.createElement(AskCard, { turn: { id: 1, question: "Who could cover Greeter?", state: "no-model" }, onOpen: () => {} }));
+    expect(card).toContain(">Needs AI</span>");
+    expect(text(card)).toContain(NEEDS_AI.ask);
+    expect(card).toContain(`>${NEEDS_AI.button}</button>`);
+    expect(turnAnnouncement({ id: 1, question: "q", state: "no-model" })).toBe(NEEDS_AI.ask);
+    // Where nothing opens the AI screens (a page drawn alone), no button promises it.
+    expect(body({ id: 1, question: "q", state: "no-model" })).not.toContain(NEEDS_AI.button);
+    expect(opened).toEqual([]);
   });
 
   it("tells VoiceOver one short status per turn instead of reading the whole thread again", async () => {
@@ -151,13 +177,19 @@ describe("Ask Ozzie panel", () => {
     }
   });
 
-  it("is reachable from every screen through the sidebar, and closed until the leader opens it, at any width (audit item 8)", () => {
+  it("is reachable from every screen through the sidebar once a first result is seen, and closed until the leader opens it, at any width (audit item 8, review M11)", () => {
+    // Before the first result (a fresh Mac), Ask waits so nothing pulls a person off setup's one step (review M11).
     const html = renderToStaticMarkup(React.createElement(App));
-    expect(html).toMatch(/<button[^>]*aria-controls="ask-panel"[^>]*>.*Ask Ozzie<\/span><\/button>/);
+    expect(html).not.toMatch(/<button[^>]*aria-controls="ask-panel"/);
     expect(html).toMatch(/<aside id="ask-panel"[^>]*hidden=""/);
     expect(html).toContain("shell shell-2");
-    // Never docked open by a wide window: it opens only on the leader's click, and stays as they left it.
+    // Once a result is seen, the sidebar's button opens it, from every page.
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    expect(app).toMatch(/\{askShown && <button type="button" ref=\{askEntry\} className="btn btn-secondary ask-entry" aria-expanded=\{askOpen\} aria-controls="ask-panel"/u);
+    expect(app).toContain("const resultSeen = recordings.length > 0 || Boolean(ofWatched);");
+    // A church that leaves setup without a result can still reach Ask (re-check Low).
+    expect(app).toContain('const askShown = resultSeen || setup === null;');
+    // Never docked open by a wide window: it opens only on the leader's click, and stays as they left it.
     expect(app).toMatch(/const \[askOpen, setAskOpen\] = useState\(false\);/u);
     expect(app).not.toMatch(/min-width: 1440px/u);
   });
@@ -324,7 +356,7 @@ describe("Ask before anything is connected, and what Ozzie can do (owner decisio
 
   it("lists what Ozzie can do here and what it never does, with nothing sent", () => {
     const t = text(body({ id: 1, question: "What can you do?", state: "help", checked: true }));
-    for (const s of ["Check Sunday", "who on a team could help", "Prepare a note", "copy", "Keep an eye on Sunday", "room bookings", "follow-ups", "group meetings",
+    for (const s of ["Check the service Ozzie watches", "who on a team could help", "Prepare a note", "copy", "Keep an eye on the service", "room bookings", "follow-ups", "group meetings",
       "morning briefing", "visitor cards", "never sends messages", "never changes anything in Planning Center", "prayers", "sermons", "Nothing was sent."]) expect(t, s).toContain(s);
     expect(t).not.toMatch(HIDDEN_WORDS);
     // Before anything is checked: what to do first, and the way there.
@@ -367,3 +399,48 @@ afterAll(() => {
   expect(everyRequest.length).toBeGreaterThan(0);
   for (const r of everyRequest) expect(JSON.stringify(r)).not.toMatch(BACKGROUND_IN_REQUEST);
 });
+
+// Onboarding spec §5 and §6 (decision 18): the panel names the watched service by its own day, never "Sunday".
+describe("Ask Ozzie for a Wednesday service", () => {
+  const wed = wednesdayCapture();
+  const brief = buildSundayBrief(wed, rules, wed.completed_at, true);
+  const inWednesday = (node: React.ReactElement) => renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() }, node));
+  const wedPanel = (over: Partial<React.ComponentProps<typeof AskPanel>> = {}) => inWednesday(React.createElement(AskPanel, {
+    open: true, onClose: () => {}, ask: never, brief, modelReady: true, onOpen: () => {}, ...over,
+  }));
+
+  it("asks about this Wednesday, says what Ask is for, and suggests Wednesday's questions", () => {
+    const html = wedPanel();
+    expect(html).toContain('placeholder="Ask about this Wednesday…"');
+    expect(text(html)).toContain("Ask Ozzie (questions about Wednesday)");
+    expect(text(html)).toContain("What still needs a decision this Wednesday?");
+    expect(text(html)).not.toMatch(/sunday/iu);
+  });
+
+  it("before anything is checked, points to the Wednesday page and opens it by name", () => {
+    const html = wedPanel({ brief: null, page: "today" });
+    expect(text(html)).toContain("check Planning Center on the Wednesday page.");
+    expect(html).toContain(">Open Wednesday</button>");
+    expect(text(html)).not.toMatch(/sunday/iu);
+  });
+
+  it("a refusal that points to the Sunday page points to the Wednesday page instead", () => {
+    const html = inWednesday(React.createElement(TurnBody, { turn: { id: 1, question: "q", state: "refused", text: REFUSALS.background } as Turn, onOpen: () => {} }));
+    expect(text(html)).toContain("look at the Wednesday page.");
+    expect(text(html)).not.toMatch(/sunday/iu);
+  });
+});
+
+describe("Ask with nothing checked says what is true of the connection (0.3.0 live: no 'Connect' to a set-up church)", () => {
+  const text = (html: string) => html.replace(/<[^>]+>/g, " ").replaceAll("&#x27;", "'").replace(/\s+/g, " ");
+  it("offers Connect only when Planning Center isn't connected; says it is checking while the launch check runs", () => {
+    expect(text(panel({ brief: null }))).toContain("Nothing has been checked yet. Connect Planning Center in Settings");
+    const checking = text(panel({ brief: null, connection: "checking" }));
+    expect(checking).toContain("Nothing has been checked yet. Ozzie is checking Planning Center now.");
+    expect(checking).not.toContain("Connect Planning Center");
+    const connected = text(panel({ brief: null, connection: "connected" }));
+    expect(connected).toContain("Nothing has been checked yet. Check Planning Center on");
+    expect(connected).not.toContain("Connect Planning Center");
+  });
+});
+

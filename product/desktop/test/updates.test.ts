@@ -162,7 +162,7 @@ describe("updates: Settings section", () => {
       updates: React.createElement(UpdatesSection, { state: state(view()), nowMs: NOW, cards: 0 }),
     })));
     // The sections themselves, after Settings' index (audit item 27), which names them too.
-    const sections = settings.slice(settings.indexOf("Planning Center and which Sunday Reads only."));
+    const sections = settings.slice(settings.indexOf("Planning Center and which service Ozzie watches Reads only."));
     expect(sections.indexOf("When the window is closed")).toBeGreaterThan(-1);
     expect(sections.indexOf("Updates")).toBeGreaterThan(sections.indexOf("When the window is closed"));
     expect(sections.indexOf("Saved checks")).toBeGreaterThan(sections.indexOf("Updates"));

@@ -1,51 +1,81 @@
-// AI settings after the H5b hardening (harness plan, integration item 2): what model_status.setup says is missing,
-// the own-provider key's account bound to the provider's address, the exact Terminal command (the key typed at a
-// hidden prompt, never on a command line), and a model name refused for holding a name. No native calls.
+// Settings' AI section after the new onboarding (spec §3 S8, §6; native contract N5): the key is taken natively and
+// never typed, copied or shown in the app, so there is no Terminal command any more; a key saved the old way is
+// explained and replaced in the app; "Keychain" is said only inside "See how this works"; a model name refused for
+// holding a name is said plainly. Native is a recording fake.
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
-import { SetupNeeds } from "../src/ai-settings.js";
-import { keychainCommand, routeProblem, type ModelStatus } from "../src/model.js";
-import { HIDDEN_WORDS, text } from "./harness-fakes.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { installFakeDom } from "./fake-dom.js";
+import { fakeNative } from "./onboarding-fakes.js";
+const native = vi.hoisted(() => ({ invoke: null as null | ((command: string, args?: Record<string, unknown>) => Promise<unknown>) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn((command: string, args?: Record<string, unknown>) => native.invoke ? native.invoke(command, args) : new Promise(() => {})) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+import { AiSettings } from "../src/ai-settings.js";
+import { routeProblem, type ModelStatus } from "../src/model.js";
+import { HIDDEN_WORDS } from "./harness-fakes.js";
 
-const shown = (status: ModelStatus | null) => text(renderToStaticMarkup(React.createElement(SetupNeeds, { status })));
-const own = (setup: NonNullable<ModelStatus["setup"]>): ModelStatus =>
-  ({ configured: setup === "ready", route: "own", label: "Your AI provider at api.example.com (vendor/model-1)", setup, key_account: "own-provider:api.example.com" });
+const dom = installFakeDom();
+type Node = { tagName?: string; textContent: string; childNodes: Node[] } & Record<string, unknown>;
+const all = (n: Node): Node[] => [n, ...n.childNodes.flatMap(all)];
+let unmount: (() => Promise<void>) | null = null;
+afterEach(async () => { await unmount?.(); unmount = null; native.invoke = null; });
+
+async function shown(status: ModelStatus) {
+  const fake = fakeNative({ model_status: status });
+  native.invoke = fake.invoke as never;
+  const { act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(dom.root as unknown as Element);
+  await act(async () => { root.render(React.createElement(AiSettings, { onChange() {} })); });
+  await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); });
+  unmount = async () => { await act(async () => { root.unmount(); }); };
+  let outsideHow = (dom.root as unknown as Node).textContent;
+  for (const how of all(dom.root as unknown as Node).filter(n => n.tagName === "DETAILS")) outsideHow = outsideHow.replace(how.textContent, "");
+  return { text: dom.seen(), outsideHow, calls: fake.calls };
+}
+const own = (setup: NonNullable<ModelStatus["setup"]>): ModelStatus => ({ configured: setup === "ready", route: "own", label: "Your AI provider at api.example.com (vendor/model-1)",
+  setup, key_account: "own-provider:api.example.com", provider: null, month: { used: 3, limit: 1000, resets_on: "2026-12-01" } });
 
 describe("AI settings", () => {
-  it("shows the exact Keychain command for the route's own account, with the key asked for at a hidden prompt", () => {
-    expect(keychainCommand("own-provider:api.example.com")).toBe('security add-generic-password -a "own-provider:api.example.com" -s church.ozzie.model.v1 -w');
-    expect(keychainCommand("own-provider:api.example.com:8443")).toBe('security add-generic-password -a "own-provider:api.example.com:8443" -s church.ozzie.model.v1 -w');
-    // Nothing from the account can break out of its quotes.
-    expect(keychainCommand('own-provider:x"; rm -rf ~ #')).toBe('security add-generic-password -a "own-provider:x; rm -rf ~ #" -s church.ozzie.model.v1 -w');
-    const missing = shown(own("no-key"));
-    expect(missing).toContain("under the account “own-provider:api.example.com”");
-    expect(missing).toContain('security add-generic-password -a "own-provider:api.example.com" -s church.ozzie.model.v1 -w');
-    expect(missing).toContain("hidden prompt");
-    expect(missing).not.toMatch(HIDDEN_WORDS);
+  it("never shows a Terminal command, a Keychain account or a Copy command, whatever the key's state", async () => {
+    for (const setup of ["no-key", "own-key-not-bound", "ready", "month-limit"] as const) {
+      const { text, outsideHow, calls } = await shown(own(setup));
+      expect(text, setup).not.toMatch(/security add-generic-password|Copy command|own-provider|api\.example\.com|vendor\/model-1|-w\b/u);
+      // "Keychain" only inside "See how this works" (spec §6).
+      expect(outsideHow, setup).not.toContain("Keychain");
+      expect(text).not.toMatch(HIDDEN_WORDS);
+      // Reading the section asks native for its status, which companies' keys are kept (closed ids, for "Remove my
+      // key from this Mac") and how many keys removing would take (a count from the Keychain's list, review L-4), and
+      // nothing else; no call carries any argument, so none can carry a key.
+      expect(calls.map(c => c.command)).toEqual(["model_status", "own_key_saved", "own_key_count"]);
+      expect(calls.map(c => c.args)).toEqual([{}, {}, {}]);
+      await unmount!(); unmount = null;
+    }
   });
 
-  it("explains a key saved under the old account that is tied to no address", () => {
-    const old = shown(own("own-key-not-bound"));
-    expect(old).toContain("old Keychain account “own-provider”");
-    expect(old).toContain("Save it again under “own-provider:api.example.com”");
-    expect(old).toContain('-a "own-provider:api.example.com"');
+  it("explains a key saved the old way, tied to no address, and replaces it in the app", async () => {
+    const { text } = await shown(own("own-key-not-bound"));
+    expect(text).toContain("A key saved the old way, in Terminal, isn't tied to the company's address, so Ozzie doesn't use it. Paste the key here instead and Ozzie keeps it safely on this Mac.");
+    expect(text).toContain("Paste my key");
+    await unmount!(); unmount = null;
+    const missing = await shown(own("no-key"));
+    expect(missing.text).toContain("Ozzie doesn't have the company's key on this Mac yet, so AI is off.");
   });
 
-  it("says nothing more when the route is ready, not chosen, or a model on this Mac", () => {
-    expect(shown(own("ready"))).toBe("");
-    expect(shown({ configured: false, route: "none", label: "No AI model set up", setup: "no-route", key_account: null })).toBe("");
-    expect(shown({ configured: true, route: "local", label: "AI model on this Mac (llama)", setup: "ready", key_account: null })).toBe("");
-    expect(shown(null)).toBe("");
-    // The managed route's account is the gateway key's.
-    expect(shown({ configured: false, route: "managed", label: "Ozzie managed AI", setup: "no-key", key_account: "vercel-ai-gateway" }))
-      .toContain('-a "vercel-ai-gateway" -s church.ozzie.model.v1 -w');
+  it("says nothing is wrong when the key works, and nothing about a key for AI on this Mac", async () => {
+    const ready = await shown(own("ready"));
+    expect(ready.text).toContain("AI: another AI company, your key");
+    expect(ready.text).toContain("3 of 1,000 AI requests used this month. The count starts again on December 1.");
+    expect(ready.text).not.toMatch(/paused|not answering|doesn't have/u);
+    await unmount!(); unmount = null;
+    const local = await shown({ configured: true, route: "local", label: "AI model on this Mac (llama3.2:latest)", setup: "ready", key_account: null, checked_at_ms: Date.UTC(2026, 10, 17, 15, 14) });
+    expect(local.text).toContain("AI: on this Mac (llama3.2)");
+    expect(local.text).toMatch(/Answered Ozzie's check on November 17(?:,| at) \d{1,2}:14 [AP]M\. Nothing leaves this Mac\./u);
+    expect(local.text).not.toMatch(/key/iu);
   });
 
   it("says plainly when a model name holds a person's name, or an address can't be used", () => {
     expect(routeProblem("name-present")).toMatch(/model name looks like it holds a person's name, so Ozzie didn't save it/u);
     expect(routeProblem("invalid-request")).toMatch(/https address/u);
-    expect(routeProblem("provider-failure")).toBe("Ozzie couldn't save that choice. Try again.");
+    expect(routeProblem("provider-failure")).toBe("Ozzie couldn't save that choice. Nothing changed. Try again.");
   });
 });

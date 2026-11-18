@@ -15,6 +15,7 @@ import { localDate } from "./church-time.js";
 import type { ServingInterval } from "./coverage.js";
 import type { Finding, SundayBrief } from "./sunday-brief.js";
 import type { KidsTeamSetting, SundayCapture, SundayRead, SundayRules } from "./sunday-capture.js";
+import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
 /** The People read behind rule 2 (native `Collection::PeopleBackgroundChecks`). Never a Services read. */
 export const BACKGROUND_CHECKS = "people_background_checks";
@@ -96,12 +97,17 @@ export interface KidsContext {
   sundayDate: string | null;
   /** The church's time zone, for the local date of a check time; null falls back to the UTC date. */
   zone: string | null;
+  /** The words for the service's real day (service-day.ts); absent: the Sunday words. Display only. */
+  words?: DayWords;
 }
 export interface KidsResult { findings: Finding[]; not_checked: string[] }
 
 export function kidsFindings(capture: SundayCapture, rules: SundayRules, ctx: KidsContext): KidsResult {
   const teams = kidsTeams(rules);
   if (!teams.length) return { findings: [], not_checked: [] };
+  const d = ctx.words ?? SUNDAY_WORDS;
+  // "Wednesday's date", "the service's date": the service by its day, never a fixed "Sunday" (onboarding spec §5).
+  const dateOf = d.kind === "weekday" ? `${d.day}'s date` : "the service's date";
   const memberReads = capture.reads.filter(r => r.collection === "team_members");
   const timeReads = capture.reads.filter(r => r.collection === "plan_times");
   const members = memberReads.filter(r => r.body).flatMap(r => rows(r.body!.data)).filter(m => m.type === "PlanPerson");
@@ -122,7 +128,7 @@ export function kidsFindings(capture: SundayCapture, rules: SundayRules, ctx: Ki
   // Rule 1: confirmed people at each service time, only when who is scheduled and the times were fully read.
   const counted = allOk(memberReads) && allOk(timeReads);
   if (onPlan.length && !counted) not_checked.push("Kids team counts weren't checked, because who is scheduled didn't fully load.");
-  if (offPlan && counted) not_checked.push(`${plural(offPlan, "kids team")} ${offPlan === 1 ? "isn't" : "aren't"} on this Sunday's plan, so ${offPlan === 1 ? "it wasn't" : "they weren't"} counted.`);
+  if (offPlan && counted) not_checked.push(`${plural(offPlan, "kids team")} ${offPlan === 1 ? "isn't" : "aren't"} on ${d.kind === "spread" ? "these services' plan" : `${d.thisOne}'s plan`}, so ${offPlan === 1 ? "it wasn't" : "they weren't"} counted.`);
   for (const team of counted ? onPlan : []) {
     const name = ctx.teamNames.get(team.team_id) ?? "A kids team";
     const own = members.filter(m => teamOf(m) === team.team_id);
@@ -151,7 +157,7 @@ export function kidsFindings(capture: SundayCapture, rules: SundayRules, ctx: Ki
         needed: team.min_confirmed, confirmed, asked, not_sent,
         why: [
           `Your Church rules ask for at least ${team.min_confirmed} confirmed people on this kids team at each service time.`,
-          `Planning Center shows ${confirmed.length} confirmed for ${interval ? "this service time" : "this Sunday"}.`,
+          `Planning Center shows ${confirmed.length} confirmed for ${interval ? "this service time" : d.thisOne}.`,
           ...(asked.length || not_sent.length ? [`Pending isn't counted as confirmed: ${[
             ...(asked.length ? [`${asked.length} asked with no answer yet`] : []), ...(not_sent.length ? [`${not_sent.length} not sent yet`] : [])].join(", ")}.`] : []),
           ...(uncertain ? [`Planning Center doesn't show which service time ${plural(maybe.length, "confirmed person", "confirmed people")} ${maybe.length === 1 ? "serves" : "serve"}, so Ozzie can't count them for this time.`] : []),
@@ -210,7 +216,7 @@ export function kidsFindings(capture: SundayCapture, rules: SundayRules, ctx: Ki
   const nothingVisible = results.length > 0 && results.every(r => r.rows === 0);
   for (const r of results) {
     if (r.state === "on-file") continue;
-    if (r.state === "no-date") { gap("expiry couldn't be compared with Sunday's date", r.person); continue; }
+    if (r.state === "no-date") { gap("no-date", r.person); continue; }
     const m = scheduled.get(r.person)!;
     const team = teamOf(m)!;
     const time = relIds(m, "times").find(id => times.has(id));
@@ -222,7 +228,7 @@ export function kidsFindings(capture: SundayCapture, rules: SundayRules, ctx: Ki
       why: [
         "Your Church rules ask for a current background check before anyone serves on a kids team.",
         r.state === "none-current" ? "Planning Center People shows no current background check on file for this person."
-          : r.state === "expires-before-sunday" ? "Planning Center People shows the background check on file expires before this Sunday."
+          : r.state === "expires-before-sunday" ? `Planning Center People shows the background check on file expires before ${d.thisOne}.`
             : "Planning Center People shows the background check on file expires on the day of this service, so it may not count that day.",
         ...(nothingVisible ? ["Planning Center People showed no current background checks for anyone on your kids teams. That can mean none are on file, or that your Planning Center login can't see them."] : []),
         "Ozzie never shows a background check's details, and it only sees checks your Planning Center login can see.",
@@ -232,7 +238,7 @@ export function kidsFindings(capture: SundayCapture, rules: SundayRules, ctx: Ki
   const GAP_TEXT: Record<string, (n: number) => string> = {
     "weren't part of this check": n => `Background checks for ${plural(n, "person", "people")} weren't part of this check.`,
     denied: n => `Background checks for ${plural(n, "person", "people")}: Planning Center didn't allow it. Your Planning Center login might not be able to see background checks.`,
-    "expiry couldn't be compared with Sunday's date": n => `Background checks for ${plural(n, "person", "people")}: the expiry date couldn't be compared with Sunday's date.`,
+    "no-date": n => `Background checks for ${plural(n, "person", "people")}: the expiry date couldn't be compared with ${dateOf}.`,
   };
   for (const [text, people] of gaps) not_checked.push((GAP_TEXT[text] ?? (n => `Background checks for ${plural(n, "person", "people")}: ${text}.`))(people.size));
   return { findings, not_checked };

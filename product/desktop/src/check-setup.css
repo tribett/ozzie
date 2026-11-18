@@ -1,0 +1,33 @@
+/* "Check my setup" (check-setup.tsx, onboarding spec §4.3): one row per thing Ozzie needs, a plain verdict and at most
+   one button each. Layout only; type and colours are hearth.css's tokens, light and dark (.oz, .oz.dark). Text sizes use
+   --t-xs…--t-lg only; buttons are --h-btn, small ones keep a 44px hit area. Rows stack under 760px. */
+.oz .check-setup { display: flex; flex-direction: column; gap: 12px; max-width: 760px; }
+.oz .check-status { min-height: 1.5em; }
+.oz .check-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.oz .check-row { display: grid; grid-template-columns: minmax(150px, 13rem) minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 12px 16px; min-height: 60px; border-top: 1px solid var(--line); }
+.oz .check-row:first-child { border-top: 0; }
+.oz .check-label { font-weight: 600; font-size: var(--t-md); color: var(--ink); }
+.oz .check-verdict { display: flex; align-items: flex-start; gap: 8px; font-size: var(--t-md); color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; }
+.oz .check-verdict .ic { margin-top: 3px; flex: none; }
+.oz .check-row.is-ok .check-verdict .ic { color: var(--accent); }
+.oz .check-row.is-needs .check-verdict { color: var(--ink); }
+.oz .check-row.is-needs .check-verdict .ic { color: var(--attn); }
+.oz .check-row.is-unknown .check-verdict .ic { color: var(--look); }
+.oz .check-fix { justify-self: end; }
+.oz .check-acts { margin-top: 4px; }
+
+@media (max-width: 760px) {
+  .oz .check-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .oz .check-fix { justify-self: start; margin-top: 6px; }
+}
+@media (max-width: 480px) {
+  .oz .check-acts { flex-direction: column; align-items: stretch; }
+  .oz .check-acts .btn { width: 100%; }
+}
+@media (prefers-contrast: more) {
+  .oz .check-rows, .oz .check-row { border-color: var(--line-strong); }
+  .oz .check-verdict { color: var(--ink); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oz .check-setup .btn { transition: none; }
+}

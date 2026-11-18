@@ -1,4 +1,4 @@
-//! A private link to a published sheet ("Add a list from a private link" on Lists & notes): the address Google Sheets
+//! A private link to a published sheet ("Add a list from a private link" on Church lists): the address Google Sheets
 //! gives for File › Share › Publish to web › Comma-separated values, or any https address that gives back CSV or
 //! tab-separated text. https as written only: a calendar's `webcal://`, which a calendar link reads as https, is refused. Read-only: one GET, nothing else, through the calendar links' guarded client
 //! (calendar_link.rs `GuardedHttp::get_body`): https on port 443 only, no user name or password in the address and no

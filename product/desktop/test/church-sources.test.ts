@@ -1,5 +1,5 @@
 // The church's own lists in the app: the controller that reads them through native code and keeps them in memory
-// (church-sources.ts), the Lists & notes page, and the box beside a matched Sunday card. A stand-in for the native
+// (church-sources.ts), the Church lists page, and the box beside a matched Sunday card. A stand-in for the native
 // church_* commands; fictional lists only. Native code itself is tested in src-tauri/src/church_sources_tests.rs; this
 // file also holds the two sides to the same codes and limits.
 import { readFileSync } from "node:fs";
@@ -143,7 +143,7 @@ describe("the lists in memory", () => {
     expect(f.calls.at(-1)).toEqual(["church_sources_forget_all", undefined]);
   });
 
-  it("reads again only when Sunday or Lists & notes comes forward after an hour, or on Read again", async () => {
+  it("reads again only when Sunday or Church lists comes forward after an hour, or on Read again", async () => {
     clock = "2026-11-16T15:06:00.000Z";
     const f = fake();
     const c = controller(f);
@@ -285,7 +285,7 @@ describe("the lists in memory", () => {
     const second = c.update("keys", { ticked: now => [...now, "I"] });
     expect(await first).toBeNull();
     expect(await second).toBe(TOO_MANY_TICKED);
-    expect(TOO_MANY_TICKED).toBe(`Ozzie shows up to ${MAX_TICKED} columns beside a Sunday card. Untick one to show another.`);
+    expect(TOO_MANY_TICKED).toBe(`Ozzie shows up to ${MAX_TICKED} columns beside a matched card. Untick one to show another.`);
     expect(c.state().sources![0]!.ticked).toEqual(eight);
   });
 
@@ -359,14 +359,14 @@ describe("beside a Sunday card", () => {
     expect(render(c.state())).toBe("");
   });
 
-  it("shows a few rows and says how many more are in Lists & notes", async () => {
+  it("shows a few rows and says how many more are in Church lists", async () => {
     const rows = Array.from({ length: ROWS_BESIDE + 3 }, (_, i) => `Person ${i},Greeter`);
     const state = await loaded({ column: "Team", ticked: ["Name"], matches: { Greeter: { team_id: "7593350" } } }, ["Name,Team", ...rows].join("\n"));
     const html = render(state, greeter, () => undefined);
     expect(html.match(/<tr>/gu)).toHaveLength(ROWS_BESIDE + 1);
     expect(text(html)).toContain(moreRows(3));
-    expect(moreRows(3)).toBe("and 3 more in Lists & notes");
-    expect(html).toContain("<button type=\"button\" class=\"btn btn-quiet btn-sm\">and 3 more in Lists &amp; notes</button>");
+    expect(moreRows(3)).toBe("and 3 more in Church lists");
+    expect(html).toContain("<button type=\"button\" class=\"btn btn-quiet btn-sm\">and 3 more in Church lists</button>");
     expect(render(state)).not.toContain("<button");
   });
 
@@ -380,7 +380,7 @@ describe("beside a Sunday card", () => {
   });
 });
 
-describe("the Lists & notes page", () => {
+describe("the Church lists page", () => {
   const renderPage = async (over: Record<string, unknown>, answers: Record<string, unknown> = {}, positions = POSITIONS) => {
     const c = controller(fake({ church_sources: [entry(over)], ...answers }));
     await c.load();
@@ -592,7 +592,7 @@ describe("a list from a private link", () => {
     expect(c.state().reads.size).toBe(0);
   });
 
-  it("reads a link again only when Sunday or Lists & notes comes forward after an hour, or on Read again", async () => {
+  it("reads a link again only when Sunday or Church lists comes forward after an hour, or on Read again", async () => {
     clock = "2026-11-16T15:06:00.000Z";
     const f = fake({ church_sources: [linkEntry()] });
     const c = controller(f);
@@ -722,7 +722,7 @@ describe("a list from a private link", () => {
     expect(await c.forgetAll()).toBe(SOURCE_PROBLEMS["links-left-in-keychain"]);
     expect(c.state()).toMatchObject({ sources: [], listUnreadable: false, linksUnreadable: false });
     expect(c.state().reads.size).toBe(0);
-    // Review U, finding 3 (the reviewer's l7-relist case): the next opening of Sunday or Lists & notes lists natively,
+    // Review U, finding 3 (the reviewer's l7-relist case): the next opening of Sunday or Church lists lists natively,
     // at once and whatever the time, which is what removes the addresses; only once.
     f.calls.length = 0;
     const listed = () => f.calls.filter(([command]) => command === "church_sources").length;
@@ -730,7 +730,7 @@ describe("a list from a private link", () => {
     expect(f.calls[0]?.[0]).toBe("church_sources");
     await c.readIfOld();
     expect(listed()).toBe(1);
-    expect(SOURCE_PROBLEMS["links-left-in-keychain"]).toBe("Ozzie forgot your lists and notes, but this Mac's Keychain didn't answer, so the private links' addresses are still in it. Ozzie removes them the next time you open Lists & notes and the Keychain answers.");
+    expect(SOURCE_PROBLEMS["links-left-in-keychain"]).toBe("Ozzie forgot your lists and notes, but this Mac's Keychain didn't answer, so the private links' addresses are still in it. Ozzie removes them the next time you open Church lists and the Keychain answers.");
   });
 
   it("never reads a link on its own: a day with no page opened and no button pressed reads nothing (review T, L3)", async () => {
@@ -982,8 +982,8 @@ describe("the church's own notes", () => {
     expect(box).toBe("");
     const words = text(pageOf(c));
     expect(words).toContain(notesPage.changedNotice("Who to call", 3));
-    expect(notesPage.changedNotice("Who to call", 3)).toBe("These notes changed: there are now 3 sections called “Who to call”. Choose again, so Sunday shows the one you mean.");
-    expect(notesPage.changedNotice("Keys", 1)).toBe("These notes changed: there is now 1 section called “Keys”. Choose again, so Sunday shows the one you mean.");
+    expect(notesPage.changedNotice("Who to call", 3)).toBe("These notes changed: there are now 3 sections called “Who to call”. Choose again, so the cards show the one you mean.");
+    expect(notesPage.changedNotice("Keys", 1)).toBe("These notes changed: there is now 1 section called “Keys”. Choose again, so the cards show the one you mean.");
     expect(words).toContain(notesPage.FORGET_POINTER);
     // No section's choice shows it as chosen.
     for (const section of [0, 2, 4]) {
@@ -1024,7 +1024,7 @@ describe("the church's own notes", () => {
     expect(words).toContain(notesPage.goneNotice("Gone away"));
     expect(words).toContain(notesPage.goneNotice("Who to call (3)"));
     expect(words).toContain(notesPage.FORGET_POINTER);
-    expect(notesPage.goneNotice("Gone away")).toBe("“Gone away” was shown on Sunday, but it is no longer in these notes. If a section with that title comes back, Ozzie shows it there again.");
+    expect(notesPage.goneNotice("Gone away")).toBe("“Gone away” was shown on cards, but it is no longer in these notes. If a section with that title comes back, Ozzie shows it there again.");
   });
 
   it("keeps at most 50 sections on Sunday for one file of notes, and says so (review V, L7)", async () => {

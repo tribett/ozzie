@@ -59,7 +59,11 @@ describe("the words in Settings", () => {
     expect(PHONE_OFF_NOTE).toBe("Off unless you turn it on. Turning it off stops sending and forgets the channel.");
     // The example is one of native's lines, word for word, and no line holds a digit or a link.
     const lines = Object.values(nativeLines());
-    expect(lines).toHaveLength(6);
+    // Four kinds, a test, and the coverage line for each weekday, a weekend and "the service" (onboarding spec §5.2, contract N8).
+    expect(lines).toHaveLength(14);
+    for (const day of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "This weekend's", "Service"]) {
+      expect(lines).toContain(`${day} coverage needs attention. Open Ozzie to see details.`);
+    }
     expect(lines).toContain(PHONE_EXAMPLE);
     for (const line of lines) expect(line).not.toMatch(/\d|https?|www\.|\.(?:com|sh|org)\b/u);
     // "At most 12 an hour" and the 10 seconds are native's own numbers; the 12 hold while Ozzie runs (review N, L4).
@@ -360,7 +364,8 @@ describe("the phone notice rides on the notices the page already holds back", ()
     expect(Object.isFrozen(THIS_MAC_ONLY)).toBe(true);
     // The schedule and what Ozzie keeps an eye on reach native through exactly these (proactive.ts, App.tsx).
     expect(source("../src/proactive.ts")).toContain("    notify: notifySundayAttention,\n");
-    expect(source("../src/App.tsx")).toContain("  notify: background.notify, nextDue: background.nextDue,");
+    // App's own wrapper only remembers that a notice was sent (for the phone question, spec §4.2), then passes it on.
+    expect(source("../src/App.tsx")).toContain("  notify: (kind, options) => background.notify(kind, options).then(sent => { moments.noticeSent(); return sent; }),");
     // Native maps each kind to its line and sends nothing for a kind it doesn't know (src-tauri phone_notice.rs tests).
     const rust = source("../../../core/native-auth/src/phone_notice.rs");
     for (const kind of ["briefing-ready", "needs-decision", "checked", "couldnt-check"]) expect(rust).toContain(`"${kind}" => Line::`);
@@ -451,7 +456,8 @@ describe("the phone notice rides on the notices the page already holds back", ()
       const above = code.slice(0, at).trimEnd().split("\n").at(-1)!.trim();
       expect(above, fn).toBe("#[tauri::command]");
       const params = code.slice(at).split("{")[0]!;
-      expect(params, fn).toMatch(/\blocal_only: Option<bool>,?\s*\)/u);
+      // The coverage notice also takes its day as a closed code (contract N8), after the flag.
+      expect(params, fn).toMatch(/\blocal_only: Option<bool>,?\s*(?:day: Option<String>,?\s*)?\)/u);
       expect(params, fn).not.toMatch(/localOnly|rename/u);
     }
     // Nowhere in the app does a command attribute take arguments (rename_all or anything else).
@@ -459,7 +465,8 @@ describe("the phone notice rides on the notices the page already holds back", ()
     expect(files).toEqual(expect.arrayContaining(["always_on.rs", "main.rs", "phone_notice.rs"]));
     for (const file of files) expect(rust(file), file).not.toMatch(/#\[\s*tauri::command\s*\(|#\[\s*command\s*\(/u);
     // The page: both call sites send exactly `localOnly: true`, and no other spelling reaches a notice command.
-    expect(source("../src/proactive.ts")).toContain('invoke<void>("notify_sunday_attention", { localOnly: true })');
+    expect(source("../src/proactive.ts")).toContain('const args = { ...(options?.localOnly ? { localOnly: true } : {}), ...(options?.day ? { day: options.day } : {}) };');
+    expect(source("../src/proactive.ts")).toContain('invoke<void>("notify_sunday_attention", args)');
     expect(source("../src/background.ts")).toContain('invoke<void>("notify_ozzie", options?.localOnly ? { kind, localOnly: true } : { kind })');
     for (const file of readdirSync(new URL("../src/", import.meta.url)).filter(f => /\.tsx?$/u.test(f))) {
       const page = source(`../src/${file}`);
@@ -490,7 +497,8 @@ describe("the phone notice rides on the notices the page already holds back", ()
       h.set("2026-11-20T16:00:00Z");
       await h.p.tick();
       // The Mac's notice goes either way; only the phone line is kept back, and only when nothing else brought it.
-      expect(sundayNotices(), `mixed: ${mixed}`).toEqual([mixed ? ["notify_sunday_attention"] : ["notify_sunday_attention", { localOnly: true }]]);
+      // The day is the checked plan's (a Sunday here), a closed code beside the flag (native contract N8).
+      expect(sundayNotices(), `mixed: ${mixed}`).toEqual([mixed ? ["notify_sunday_attention", { day: "sunday" }] : ["notify_sunday_attention", { localOnly: true, day: "sunday" }]]);
       expect(h.p.view().history[0]).toMatchObject({ kind: "changes", notice: "sent" });
     }
   });
@@ -507,7 +515,7 @@ describe("the phone notice rides on the notices the page already holds back", ()
     expect(h.p.view().history[0]!.notice).toBe("held");
     h.set("2026-11-21T13:01:00Z"); // 7:01 AM
     await h.p.tick();
-    expect(sundayNotices()).toEqual([["notify_sunday_attention", { localOnly: true }]]);
+    expect(sundayNotices()).toEqual([["notify_sunday_attention", { localOnly: true, day: "sunday" }]]);
   });
 
   /** The runner with a small stand-in for the native store, the fictional Sunday and Church rules with a kids team. */
@@ -702,6 +710,6 @@ describe("the phone notice rides on the notices the page already holds back", ()
     h.setRules(kids([rightAway("background-check")]));
     h.set("2026-11-21T13:01:00Z"); // 7:01 AM
     await h.p.tick();
-    expect(sundayNotices()).toEqual([["notify_sunday_attention"]]);
+    expect(sundayNotices()).toEqual([["notify_sunday_attention", { day: "sunday" }]]);
   });
 });

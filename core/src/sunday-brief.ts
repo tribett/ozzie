@@ -8,6 +8,7 @@ import { captureToCoverage, isChurchRead, isKidsRead, isOperationsRead, LIVE_CHE
 import type { DecidedBrief } from "./sunday-decisions.js";
 import type { SundayOperations } from "./operations-capture.js";
 import type { OperationsResult } from "./operations-findings/index.js";
+import { dayWords, planTimes, type DayWords } from "./service-day.js";
 
 export interface BriefPerson { person_id: string; reasons: string[] }
 export interface Finding {
@@ -15,7 +16,7 @@ export interface Finding {
   id: string;
   /** Stable across checks (team and position, assignment or person; never a row index). Decisions are kept by this. */
   key: string;
-  kind: "needs-people" | "lead-missing" | "lead-unverified" | "pending" | "streak" | "worth-a-look" | "too-few-confirmed" | "background-check";
+  kind: "needs-people" | "lead-missing" | "lead-unverified" | "pending" | "streak" | "worth-a-look" | "too-few-confirmed" | "background-check" | "blockout";
   /** "decision" = Needs a decision; "look" = Worth a look. Never a score. */
   tone: "decision" | "look";
   position?: { id: string; team_id: string; name: string; interval: ServingInterval | null };
@@ -44,6 +45,11 @@ export interface Finding {
   /** Where and when this finding's facts were read, when that isn't the Services check (background-check). */
   source?: string;
   checked_at?: string;
+  /**
+   * blockout: each role this person is scheduled for (confirmed or pending) whose serving time their own blockout in
+   * Planning Center overlaps, in Planning Center's order, with that serving time. The first is `position`.
+   */
+  serving?: { name: string; team_id: string; status: "confirmed" | "pending"; interval: ServingInterval }[];
   /** "Why I flagged this": the rule, the source facts and when they were read. Name-free. */
   why: string[];
 }
@@ -58,6 +64,12 @@ export interface SundayBrief {
   plan: { id: string; title: string | null; dates: string | null; sort_date: string | null; date: string | null; starts_at: string | null };
   /** The church's IANA time zone from Planning Center Services; null when it wasn't read. Never this Mac's zone. */
   time_zone: string | null;
+  /**
+   * The words for this plan's real day (service-day.ts): "Wednesday", "this weekend's services". Every fixed sentence
+   * here and in what reads a brief names the service with these, never a fixed "Sunday" (onboarding spec §5).
+   * Absent only on a brief built by hand (a test); readers then use the Sunday words.
+   */
+  day?: DayWords;
   checked_at: string | null;
   completed_at: string;
   status: CoverageResult["status"];
@@ -75,6 +87,18 @@ export const needKey = (team_id: string, name: string) => JSON.stringify(["need"
 export const leadKey = (team_id: string) => JSON.stringify(["lead", team_id]);
 
 const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+const andList = (items: readonly string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
+/** A blockout finding's roles, each once in Planning Center's order: "Greeter", "Greeter and Usher". */
+export const blockoutRoles = (f: Pick<Finding, "serving" | "position">): string =>
+  andList([...new Set((f.serving ?? []).map(s => s.name))]) || f.position?.name || "a role";
+/** How Planning Center still counts the person on those roles: "confirmed for Greeter and pending for Usher". */
+export const blockoutCounted = (f: Pick<Finding, "serving" | "position">): string =>
+  andList([...new Set((f.serving ?? []).map(s => `${s.status} for ${s.name}`))]) || `scheduled for ${blockoutRoles(f)}`;
+/** The one serving time a blockout finding is about, or null when it names more than one. */
+export const blockoutTime = (f: Pick<Finding, "serving" | "position">): ServingInterval | null => {
+  const times = [...new Map((f.serving ?? []).map(s => [JSON.stringify(s.interval), s.interval])).values()];
+  return times.length === 1 ? times[0]! : times.length ? null : f.position?.interval ?? null;
+};
 const bucket = (cs: CandidateAssessment[], d: CandidateAssessment["disposition"]) =>
   cs.filter(c => c.disposition === d).map(c => ({ person_id: c.person_id, reasons: c.reasons }));
 
@@ -147,6 +171,9 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   // People forms, Check-Ins and Registrations are reported by core/src/church-reads, never as Services reads.
   const services = capture.reads.filter(r => !isOperationsRead(r) && !isKidsRead(r) && !isChurchRead(r) && r.collection !== ORGANIZATION_COLLECTION);
   const time_zone = churchTimeZone(capture);
+  const day = dayWords({ sort_date: mapped.plan.sort_date, times: planTimes(capture.reads) }, time_zone);
+  // "a scheduled Wednesday lead", "a scheduled lead": the rule names the service's real day, never a fixed Sunday (spec §5).
+  const dayLead = day.kind === "weekday" ? `${day.day} lead` : "lead";
   const checkTimes = services.map(r => r.checked_at).sort();
   const checked_at = checkTimes[0] ?? null;
   const stale = !fictional && capture.kind === "live" && checked_at !== null && Date.parse(now) > Date.parse(checked_at) + LIVE_CHECK_VALID_MS;
@@ -167,6 +194,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   const failed = services.filter(r => r.outcome !== "ok").map(r => ({ collection: r.collection, outcome: r.outcome }));
   const coreFailed = failed.some(f => CORE.includes(f.collection));
   const leadTeams = new Set<string>();
+  const toldPending = new Set<string>();
 
   for (const p of result.positions) {
     const pos = label(p.position_id);
@@ -194,9 +222,9 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
         id: `lead:${pos.position_id}`, key: leadKey(pos.team_id), kind: "lead-missing", tone: "look", position,
         pending_leads: peopleIn(pos.team_id, leadPosition, "U"), ...team,
         why: [
-          `Your Church rules ask for a scheduled Sunday lead on this team (position "${leadPosition}").`,
+          `Your Church rules ask for a scheduled ${dayLead} on this team (position "${leadPosition}").`,
           "No confirmed lead covers this service time in Planning Center.",
-          ...(team.leaders?.length ? [`Planning Center lists ${plural(team.leaders.length, "team leader")} for this team. Leading the team isn't the same as being scheduled to lead this Sunday.`]
+          ...(team.leaders?.length ? [`Planning Center lists ${plural(team.leaders.length, "team leader")} for this team. Leading the team isn't the same as being scheduled to lead ${day.thisOne}.`]
             : team.leaders ? ["Planning Center doesn't list a team leader for this team."] : ["The team's leaders couldn't be read."]),
         ],
       });
@@ -207,16 +235,24 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
         id: `lead-unverified:${pos.position_id}`, key: JSON.stringify(["lead-unverified", pos.team_id]), kind: "lead-unverified", tone: "look", position,
         ...leadersOf(pos.team_id),
         why: [
-          `Your Church rules ask for a scheduled Sunday lead on this team (position "${leadPosition}").`,
+          `Your Church rules ask for a scheduled ${dayLead} on this team (position "${leadPosition}").`,
           "Planning Center has a lead scheduled, but their answer or serving time couldn't be confirmed, so Ozzie doesn't count it as covered.",
         ],
       });
     }
     for (const assignment of p.pending_assignment_ids) {
+      // A scheduled lead's row is checked with each position of their team: one finding per assignment, named for the
+      // row's own role, as the blockout finding below is (B-1).
+      if (toldPending.has(assignment)) continue;
+      toldPending.add(assignment);
       const a = pendingByAssignment.get(assignment);
       const person = personOf.get(assignment);
+      const row = members.find(m => m.id === assignment);
+      const own = typeof row?.attributes?.team_position_name === "string" ? row.attributes.team_position_name : pos.name;
+      // A lead's own serving time, when it has one, rather than the first position's of their team.
+      const interval = own !== pos.name && a?.intervals.length === 1 ? { ...a.intervals[0]! } : position.interval;
       findings.push({
-        id: `pending:${assignment}`, key: JSON.stringify(["pending", assignment]), kind: "pending", tone: "look", position,
+        id: `pending:${assignment}`, key: JSON.stringify(["pending", assignment]), kind: "pending", tone: "look", position: { ...position, name: own, interval },
         ...(person ? { person_id: person } : {}), notification: a?.notification === "sent" ? "sent" : "unsent",
         why: [
           "Planning Center shows this assignment as pending (not yet accepted).",
@@ -226,12 +262,44 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       });
     }
   }
+  // Someone confirmed or pending whose own blockout overlaps their serving time: Worth a look, once per person, naming
+  // every role it overlaps (someone on two roles at once is told once). Planning Center still counts them, so no role
+  // reads as open and no count changes.
+  const blocked = new Map<string, { position_id: string; serving: NonNullable<Finding["serving"]> }>();
+  const told = new Set<string>();
+  for (const p of result.positions) for (const b of p.scheduled_blockouts) {
+    // A scheduled lead is checked with each position of their team: once is enough.
+    if (told.has(b.assignment_id)) continue;
+    told.add(b.assignment_id);
+    const row = members.find(m => m.id === b.assignment_id);
+    const name = typeof row?.attributes?.team_position_name === "string" ? row.attributes.team_position_name : label(p.position_id).name;
+    const seen = blocked.get(b.person_id) ?? { position_id: p.position_id, serving: [] };
+    seen.serving.push({ name, team_id: (row && relIds(row, "team")[0]) ?? p.team_id,
+      status: pendingByAssignment.get(b.assignment_id)?.status === "U" ? "pending" : "confirmed", interval: b.interval });
+    blocked.set(b.person_id, seen);
+  }
+  for (const [person, { position_id, serving }] of blocked) {
+    const first = serving[0]!;
+    const times = new Set(serving.map(s => JSON.stringify(s.interval))).size;
+    findings.push({
+      id: `blockout:${person}`, key: JSON.stringify(["blockout", person]), kind: "blockout", tone: "look",
+      position: { id: position_id, team_id: first.team_id, name: first.name, interval: first.interval }, person_id: person, serving,
+      why: [
+        ...new Set(serving.map(s => `Planning Center Services has them ${s.status} for ${s.name}.`)),
+        `Planning Center has a blockout for them that overlaps ${times > 1 ? "those times" : "that time"}. A blockout is when someone has told Planning Center they'll be away.`,
+        "Planning Center still counts them as scheduled, so its count of who is still needed doesn't change, and Ozzie doesn't change it either.",
+        "This is a schedule fact, not a judgment about anyone.",
+      ],
+    });
+  }
+  // Blockouts of people scheduled that couldn't be checked (a repeating one isn't placed on dates): never read as clear.
+  const uncheckedBlockouts = new Set(result.issues.filter(i => i.code === "blockout-unverified").map(i => i.person_id)).size;
   for (const s of servingStreaks(capture, rules.checkInAfterSundaysInARow)) {
     findings.push({
       id: `streak:${s.person_id}`, key: JSON.stringify(["streak", s.person_id]), kind: "streak", tone: "look", person_id: s.person_id, sundays: s.sundays,
       why: [
-        `Your Church rules say: check in with anyone scheduled ${rules.checkInAfterSundaysInARow} Sundays in a row.`,
-        `Planning Center shows ${plural(s.sundays, "confirmed Sunday")} in a row${s.team_position_name ? ` (${s.team_position_name})` : ""}, ending this Sunday.`,
+        `Your Church rules say: check in with anyone scheduled ${rules.checkInAfterSundaysInARow} weeks in a row.`,
+        `Planning Center shows them confirmed ${plural(s.sundays, "week")} in a row${s.team_position_name ? ` (${s.team_position_name})` : ""}, ending ${day.thisOne}.`,
         "This is a schedule fact, not a judgment about anyone.",
       ],
     });
@@ -239,7 +307,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   // Church rules for kids teams: confirmed people per service time, and background checks (kids-rules.ts).
   const teamNames = new Map<string, string>();
   for (const p of mapped.positions) teamNames.set(p.team_id, teamNames.has(p.team_id) ? `${teamNames.get(p.team_id)!}, ${p.name}` : p.name);
-  const kids = kidsFindings(capture, rules, { teamNames, sundayDate: planDate(mapped.plan.sort_date), zone: time_zone });
+  const kids = kidsFindings(capture, rules, { teamNames, sundayDate: planDate(mapped.plan.sort_date), zone: time_zone, words: day });
   findings.push(...kids.findings);
   const unread = unreadParts(services);
   const scopeIssues = result.issues.filter(i => i.person_id === null && i.code !== "observation-unverified" && i.code !== "lead-unverified");
@@ -257,7 +325,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   return {
     mode: fictional ? "fictional" : capture.kind,
     plan: { id: capture.plan_id, ...mapped.plan, date: planDate(mapped.plan.sort_date), starts_at: planStart(mapped.plan.sort_date, time_zone) },
-    time_zone, checked_at, completed_at: capture.completed_at, status: result.status, stale,
+    time_zone, day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
     sources: { reads: services.length, failed },
     findings: kept.shown,
     ...(kept.hidden.length ? { hidden: kept.hidden.map(h => ({ finding: h.item, entry: h.entry })) } : {}),
@@ -271,6 +339,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       ...unreadGroups(capture.reads),
       "Whether someone is willing to serve isn't something Planning Center records.",
       ...kids.not_checked,
+      ...(uncheckedBlockouts ? [`Blockouts for ${plural(uncheckedBlockouts, "scheduled person", "scheduled people")} couldn't be checked for this service time.`] : []),
       ...unread,
       ...(failed.length ? ["Some Planning Center reads didn't complete; see What happened."] : []),
       ...(stale ? ["Anything changed in Planning Center since this check isn't shown. Check again before relying on it."] : []),

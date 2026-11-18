@@ -16,8 +16,8 @@
   --t-xs:14px;--t-sm:15px;--t-md:16px;--t-lg:18px;
   /* Control heights: a button is 44px; a small one looks 40px and takes clicks over 44px (its ::after). */
   --h-btn:44px;--h-btn-sm:40px;
-  /* The sidebar: wide enough for "What runs automatically" on one line at 16px. */
-  --w-side:272px;
+  /* The sidebar: wide enough for its longest entry on one line at 16px (onboarding spec §6). */
+  --w-side:304px;
   font-family:var(--f-ui);font-size:var(--t-md);line-height:1.5;color:var(--ink);background:var(--paper);
   display:flex;flex-direction:column;overflow:hidden;position:relative;-webkit-font-smoothing:antialiased;
 }

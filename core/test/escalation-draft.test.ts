@@ -59,9 +59,12 @@ describe("note to the team's leader", () => {
     for (const finding of [nursery, lead]) {
       const ctx = { finding, leader_id: PEOPLE.nurseryLeader };
       expect(escalationDraft(ctx).text).toContain(` on ${new Date(finding.position!.interval!.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}`);
-      // No service time read: the Sunday's own date when it's known, otherwise just Sunday.
+      // No service time read: the service's own date when it's known, on whatever day it is, otherwise the next service.
       expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader, sunday: "2026-11-29" }).text).toContain(" on Sunday, November 29");
-      expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader }).text).toMatch(/ on Sunday (?:still needs|in Planning Center)/u);
+      expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader, sunday: "2026-11-25" }).text).toContain(" on Wednesday, November 25");
+      expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader }).text).toMatch(/ at the next service (?:still needs|in Planning Center)/u);
+      // Decision 18: never Sunday for a Wednesday service or one whose date isn't known.
+      for (const sunday of ["2026-11-25", null]) expect(escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader, sunday }).text).not.toMatch(/Sunday/u);
       for (const text of [escalationDraft(ctx).text, escalationDraft({ finding: untimed(finding), leader_id: PEOPLE.nurseryLeader }).text]) {
         expect(text).not.toMatch(/this week|this Sunday/u);
       }

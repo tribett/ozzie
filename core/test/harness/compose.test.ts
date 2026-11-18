@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentStepReply, AgentStepRequest, ModelStep, ToolEnvelope } from "../../src/harness/contract.js";
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
 import {
-  ALSO_ON_SUNDAY, BACKGROUND_OFF, BACKGROUND_ON_FILE, BACKGROUND_UNCONFIRMED, composeAnswer, DECISION_QUESTION, decisionsLeftOut, DRAFT_INTRO, isDecisionQuestion, KEPT_HERE,
-  kidsAnswer, kidsQuestion, kidsWording, MEMBERS_UNREAD, NO_KIDS_TEAM, NOBODY_SCHEDULED, NOTHING_OPEN, ON_SUNDAY, openDecisions, setAside, NOT_COVERED_MORE, NOT_FREE, NOT_RANKED, NOTHING_TO_DECIDE,
+  ALSO_ON_SUNDAY, alsoOnPage, backgroundSentence, BACKGROUND_OFF, BACKGROUND_ON_FILE, BACKGROUND_UNCONFIRMED, composeAnswer, DECISION_QUESTION, decisionsLeftOut, DRAFT_INTRO, isDecisionQuestion, KEPT_HERE,
+  kidsAnswer, kidsQuestion, kidsWording, MEMBERS_UNREAD, NO_KIDS_TEAM, NOBODY_SCHEDULED, nobodyScheduled, NOTHING_OPEN, ON_SUNDAY, onPage, openDecisions, setAside, NOT_COVERED_MORE, NOT_FREE, NOT_RANKED, NOTHING_TO_DECIDE,
 } from "../../src/harness/compose.js";
 import { envelopeProblems } from "../../src/harness/fixed.js";
 import { Harness } from "../../src/harness/index.js";
@@ -14,8 +14,11 @@ import { HarnessTools, type HarnessData } from "../../src/harness/tools.js";
 import { TsLoop } from "../../src/harness/ts-loop.js";
 import { NOT_COVERED } from "../../src/ask.js";
 import { CHECKED, nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../src/fictional-sunday.js";
-import type { SundayCapture } from "../../src/sunday-capture.js";
-import type { Finding } from "../../src/sunday-brief.js";
+import type { SundayCapture, SundayRules } from "../../src/sunday-capture.js";
+import { buildSundayBrief, type Finding } from "../../src/sunday-brief.js";
+import { sundayOperations } from "../../src/operations-capture.js";
+import { dayWords, SUNDAY_WORDS, UNKNOWN_WORDS, type DayWords } from "../../src/service-day.js";
+import { wednesdayWithEverything } from "../fixtures/service-days/wednesday.js";
 import type { CorrectionEntry } from "../../src/finding-feedback.js";
 import { decide } from "../../src/sunday-decisions.js";
 import { allEnvelopes, FIXTURES, FRESH, harnessData, KIDS_RULES, LEAD_RULES, RULES } from "./fixtures.js";
@@ -132,7 +135,22 @@ describe("fixed framing for each kind of answer", () => {
       payload: { fact: "f1", mode: "live", sunday: "2026-11-22", reads: 20, reads_not_completed: 0, needs_a_decision: 0, worth_a_look: 1,
         findings: [{ fact: "f2", kind: "check-in suggested", tone: "worth a look", person: "[Person 2]", sundays_in_a_row: 4 }] } };
     expect(composeAnswer('{"answer":"nothing-needs-a-decision","facts":["f2"]}', [overview]).paragraphs).toEqual([NOTHING_TO_DECIDE,
-      "Worth a look: [Person 2] is scheduled 4 Sundays in a row. Your Church rules suggest a check-in, which is about care, not performance."]);
+      "Worth a look: [Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance."]);
+  });
+  it("someone scheduled with a blockout: Worth a look, each role with Planning Center's own status and time, never an open role", async () => {
+    const overview: ToolEnvelope = { tool: "sunday.overview", source: "Planning Center Services", check_time: "2026-11-20T15:00:00Z", completeness: "complete",
+      payload: { fact: "f1", mode: "live", sunday: "2026-11-22", reads: 20, reads_not_completed: 0, needs_a_decision: 0, worth_a_look: 2, findings: [
+        { fact: "f2", kind: "scheduled with a blockout at this time", tone: "worth a look", person: "[Person 1]",
+          serving: [{ role: "[Role 1]", status: "confirmed", time: { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" } }] },
+        { fact: "f3", kind: "scheduled with a blockout at this time", tone: "worth a look", person: "[Person 2]",
+          serving: [{ role: "[Role 1]", status: "confirmed", time: { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" } },
+            { role: "[Role 2]", status: "pending", time: { starts_at: "2026-11-22T11:00-05:00", ends_at: "2026-11-22T12:00-05:00" } }] },
+      ] } };
+    expect(envelopeProblems(overview)).toEqual([]);
+    expect(composeAnswer('{"answer":"facts","facts":["f2","f3"]}', [overview]).paragraphs).toEqual([
+      "Worth a look: [Person 1] is scheduled for [Role 1] (confirmed) at 2026-11-22T09:30-05:00 and has a blockout in Planning Center at that time. Planning Center still counts them, so it isn't an open spot.",
+      "Worth a look: [Person 2] is scheduled for [Role 1] (confirmed) at 2026-11-22T09:30-05:00 and [Role 2] (pending) at 2026-11-22T11:00-05:00 and has a blockout in Planning Center at those times. Planning Center still counts them, so they aren't open spots.",
+    ]);
   });
   it("a draft is only the drafting tool's text (C1): a draft id with no draft, or another tool's, shows no draft", async () => {
     const evidence = await help();
@@ -259,7 +277,7 @@ describe("kids teams and background checks, answered on this Mac without the AI"
     const out = (await local("Is the nursery ready for Sunday?"))!;
     expect(out.restored).toEqual([
       "Needs a decision: Nursery volunteer at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count. Already confirmed: Blake Ashgrove. " +
-        "Team leaders in Planning Center: Jordan Ashdown (oversight of the team, not a Sunday assignment).",
+        "Team leaders in Planning Center: Jordan Ashdown (oversight of the team, not a serving assignment).",
       "Needs a decision: Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person, and your Church rules ask for at least 2. Pending isn't counted, and Ozzie doesn't check ages.",
       "Needs a decision: Blake Ashgrove has no current background check on file. Scheduled for Nursery volunteer at 9:30 AM on November 22. " +
         `Your Church rules ask for a current background check before serving with kids. From Planning Center People, checked 10:00 AM on November 20. ${KEPT_HERE}`,
@@ -478,6 +496,8 @@ describe("review Q: never an implied all clear, never blank, decided and set-asi
     for (const q of ["What still needs a decision this Sunday?", "Any problems this Sunday?", "Anything I should know about Sunday?", "Are we good for Sunday?", "Is Sunday covered?",
       "What's open for Sunday?", "Anything I need to deal with this weekend?", "What needs my attention?", "Is everything set for Sunday?", "Any issues?"]) expect(isDecisionQuestion(q), q).toBe(true);
     for (const q of ["Who could cover Greeter?", "When is the youth retreat?", "Draft a note to Riley"]) expect(isDecisionQuestion(q), q).toBe(false);
+    // A church that meets on another day asks about its own day (decision 18).
+    for (const q of ["Is Wednesday covered?", "Are we ready for Saturday?", "Wednesday ready?", "Is this weekend covered?"]) expect(isDecisionQuestion(q), q).toBe(true);
   });
 
   it("lists every open decision here when a decision question names background checks, and says when nothing is open (H2, M2)", async () => {
@@ -494,5 +514,97 @@ describe("review Q: never an implied all clear, never blank, decided and set-asi
     const empty = harnessData({ mode: "live", capture, operationsOff: true });
     const none = await openDecisions(new HarnessTools(empty, new HarnessSession(), { now: () => FRESH }), signal);
     expect(none.paragraphs[0]).toBe(NOTHING_OPEN);
+  });
+});
+
+// ---- Decision 18 (onboarding spec §5.1): a Wednesday church's answers never call its service Sunday -----------------
+
+/** The fictional church moved to Wednesday, November 25: its rooms, follow-ups, group meeting and background checks too. */
+const WEDNESDAY_RULES: SundayRules = { ...KIDS_RULES, sundayLeads: LEAD_RULES.sundayLeads };
+function wednesdayData(rules: SundayRules = WEDNESDAY_RULES, capture: SundayCapture = wednesdayWithEverything()): HarnessData {
+  const live: SundayCapture = { ...capture, kind: "live" };
+  return { capture: live, brief: buildSundayBrief(live, rules, FRESH), operations: sundayOperations(live, rules, { now: FRESH }), decisions: [], rules,
+    attention: null, granted: ["services", "operations"], mode: "live", connected: false };
+}
+/** With the Wednesday Nursery need marked not needed, so a decision is said back. */
+function wednesdayDecided(): HarnessData {
+  const data = wednesdayData();
+  const nursery = data.brief!.findings.find(f => f.kind === "needs-people" && f.position?.team_id === TEAMS.nursery)!;
+  return { ...data, decisions: [decide(nursery, "not-needed", "Only two babies registered", CHECKED)] };
+}
+const shownBy = (tools: HarnessTools, data: HarnessData) => (t: string) =>
+  showTimes(restoreLabels(t, tools.session, { names: data.capture!.names, organization: data.capture!.organization, timeZone: data.brief!.time_zone }), data.brief!.time_zone);
+
+describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
+  it("every fact every tool gives, with the day words and without them", async () => {
+    const data = wednesdayDecided();
+    expect(data.brief!.day).toMatchObject({ kind: "weekday", day: "Wednesday", date: "Wednesday, November 25" });
+    const evidence = await allEnvelopes(data);
+    const ids = [...new Set(evidence.flatMap(e => [...JSON.stringify(e.payload).matchAll(/"fact":"(f\d+)"/gu)].map(m => m[1]!)))];
+    expect(ids.length).toBeGreaterThan(30);
+    const said = (day: DayWords | null) => ids.flatMap(id => composeAnswer(JSON.stringify({ answer: "facts", facts: [id] }), evidence, day).paragraphs);
+    const withDay = said(data.brief!.day!), without = said(null);
+    for (const line of [...withDay, ...without]) expect(line).not.toMatch(/Sunday/u);
+    // The real day and date, the page by its real name, and the Church rules' own words.
+    expect(withDay).toContain("For Wednesday, November 25, this check found 4 items that need a decision and 3 worth a look. Some findings are shown only in Ozzie on this Mac, on the Wednesday page.");
+    expect(withDay.join(" ")).toContain("You decided: not needed this Wednesday.");
+    expect(withDay.join(" ")).toMatch(/is scheduled \d+ weeks in a row/u);
+    expect(withDay.join(" ")).toContain("They ask for a scheduled Wednesday lead for [Role");
+    expect(withDay.join(" ")).toMatch(/1 person serving this Wednesday has a group meeting at the same time\./u);
+    expect(withDay.join(" ")).toContain("(oversight of the team, not a serving assignment)");
+    // Without them (what composeAnswer's callers pass today): the plan's own date, and neutral words otherwise.
+    expect(without).toContain("For Wednesday, November 25, this check found 4 items that need a decision and 3 worth a look. Some findings are shown only in Ozzie on this Mac.");
+    expect(without.join(" ")).toContain("You decided: not needed for this service.");
+    expect(without.join(" ")).toContain("They ask for a scheduled lead for [Role");
+    expect(without.join(" ")).toMatch(/1 person serving at this service has a group meeting at the same time\./u);
+  });
+
+  it("answers written on this Mac: kids teams, background checks, open decisions, what's set aside and nobody scheduled", async () => {
+    const lines: string[] = [];
+    const run = async (data: HarnessData, work: (tools: HarnessTools) => Promise<{ paragraphs: string[]; fill: (s: string) => string }>) => {
+      const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
+      const out = await work(tools);
+      const shown = out.paragraphs.map(p => out.fill(shownBy(tools, data)(p)));
+      lines.push(...shown);
+      return shown;
+    };
+    const data = wednesdayDecided();
+    for (const typed of ["Is the nursery ready?", "Any background check problems?", "Who could cover the nursery?"]) {
+      expect((await run(data, t => kidsAnswer(t, kidsQuestion(typed, data)!, signal))).length, typed).toBeGreaterThan(0);
+    }
+    const checks = await run(data, t => kidsAnswer(t, kidsQuestion("Any background check problems?", data)!, signal));
+    expect(checks.join(" ")).toMatch(/background check on file expires before Wednesday\./u);
+    expect((await run(data, t => decisionsLeftOut(t, '{"answer":"not-covered"}', [], signal)))[0]).toBe("Also on the Wednesday page, needing a decision:");
+    expect((await run(data, t => openDecisions(t, signal)))[0]).toBe("On the Wednesday page, needing a decision:");
+    const aside = await run(setAsideIn(data, f => f.kind === "background-check"), t => kidsAnswer(t, kidsQuestion("Any background check problems?", data)!, signal));
+    expect(aside).toEqual(["2 background checks are set aside by your Church rules, so they aren't listed here; they're on the Wednesday page."]);
+    const nobody = wednesdayData({ ...RULES, kidsTeams: [{ team_id: "7599999", min_confirmed: 2 }] });
+    const quiet = await run(nobody, t => kidsAnswer(t, kidsQuestion("Any background check problems?", nobody)!, signal));
+    expect(quiet).toEqual(["No one is confirmed or pending on your kids teams this Wednesday, so there were no background checks to look at."]);
+    // An untimed background check says the day, never a fixed Sunday.
+    const finding = data.brief!.findings.find(f => f.kind === "background-check")!;
+    expect(backgroundSentence({ ...finding, position: { ...finding.position!, interval: null } }, "[Kept person 1]", "[Kept role 1]", null, "Needs a decision", data.brief!.day!))
+      .toMatch(/Scheduled for \[Kept role 1\] this Wednesday\./u);
+    for (const line of lines) expect(line).not.toMatch(/Sunday/u);
+  });
+
+  it("the fictional church is a Sunday, and keeps its own words", async () => {
+    const data = kidsData();
+    expect(data.brief!.day).toMatchObject({ day: "Sunday" });
+    const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
+    const overview = await tools.run("sunday.overview", {}, signal, "t");
+    const head = composeAnswer(JSON.stringify({ answer: "facts", facts: [(overview.payload as { fact: string }).fact] }), [overview], data.brief!.day!).paragraphs[0];
+    expect(head).toMatch(/^For Sunday, November 22, this check found .* on the Sunday page\.$/u);
+    expect([ALSO_ON_SUNDAY, ON_SUNDAY, NOBODY_SCHEDULED]).toEqual([alsoOnPage(SUNDAY_WORDS), onPage(SUNDAY_WORDS), nobodyScheduled(SUNDAY_WORDS)]);
+    expect(NOBODY_SCHEDULED).toBe("No one is confirmed or pending on your kids teams this Sunday, so there were no background checks to look at.");
+    expect(setAside(1, "finding", data.brief!.day!)).toBe("One finding is set aside by your Church rules, so it isn't listed here; it's on the Sunday page.");
+  });
+
+  it("a weekend, or a day not known, gets its own words, never a fixed Sunday", () => {
+    const weekend = dayWords({ sort_date: "2026-11-21T17:00:00Z", times: ["2026-11-21T23:00:00Z", "2026-11-22T15:00:00Z"] }, "America/Chicago");
+    expect(alsoOnPage(weekend)).toBe("Also on the “This weekend” page, needing a decision:");
+    expect(nobodyScheduled(weekend)).toBe("No one is confirmed or pending on your kids teams this weekend, so there were no background checks to look at.");
+    expect(nobodyScheduled(UNKNOWN_WORDS)).toBe("No one is confirmed or pending on your kids teams for your service, so there were no background checks to look at.");
+    expect(setAside(2, "finding", UNKNOWN_WORDS)).toBe("2 findings are set aside by your Church rules, so they aren't listed here; they're on the “Your service” page.");
   });
 });

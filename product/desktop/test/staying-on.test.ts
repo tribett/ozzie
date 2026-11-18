@@ -29,7 +29,9 @@ describe("Ozzie isn't set to start with this Mac (audit item 23)", () => {
 
   it("is never changed without a click: App asks only an install that hasn't answered, while Ozzie doesn't start with the Mac", () => {
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-    expect(app).toContain("startQuestion={!startAsked && startOn === false && connected && !fictional ? { onYes: () => answerStart(true), onNo: () => answerStart(false), failed: startFailed } : null}");
+    // Asked now as Today's "Finish setting up" item 1 (onboarding spec §4.1), which replaces this card; the answer is the leader's click.
+    expect(app).toContain("startQuestion={null}");
+    expect(app).toContain("<FinishSettingUp facts={finishFacts} startFailed={startFailed} onStartWithMac={answerStart}");
     // The only place App sets the switch is the leader's answer.
     expect(app.match(/autostart\.set\(/gu)).toHaveLength(1);
     expect(app).toContain("void autostart.set(on).then(");
@@ -39,14 +41,14 @@ describe("Ozzie isn't set to start with this Mac (audit item 23)", () => {
 describe("asking before Ozzie quits (audit items 20 and 23)", () => {
   it("says what quitting stops or discards, with buttons that name the effect, and starts on the safe answer", () => {
     expect(quitWords({ cards: 3, checks: false })).toEqual({ title: "Quit and discard the cards?", quit: "Quit and discard the cards", keep: "Keep Ozzie running",
-      lines: ["You have 3 visitor cards that aren't saved anywhere. Quitting discards them.", "Closing the window instead keeps Ozzie running in the menu bar."] });
+      lines: ["You have 3 visitor cards that aren't saved anywhere. Quitting discards them.", "Closing the window instead keeps Ozzie running, as the small Ozzie picture at the top of your screen."] });
     expect(quitWords({ cards: 0, checks: true })).toEqual({ title: "Quit Ozzie?", quit: "Quit Ozzie", keep: "Keep Ozzie running",
-      lines: ["Checks and notices stop until you open Ozzie again.", "Closing the window instead keeps Ozzie running in the menu bar."] });
+      lines: ["Checks and notices stop until you open Ozzie again.", "Closing the window instead keeps Ozzie running, as the small Ozzie picture at the top of your screen."] });
     // Both at once: one question.
     const both = quitWords({ cards: 1, checks: true });
     expect(both.title).toBe("Quit Ozzie?");
     expect(both.lines).toEqual(["You have 1 visitor card that isn't saved anywhere. Quitting discards it.", "Checks and notices stop until you open Ozzie again.",
-      "Closing the window instead keeps Ozzie running in the menu bar."]);
+      "Closing the window instead keeps Ozzie running, as the small Ozzie picture at the top of your screen."]);
     expect(both.quit).toBe("Quit and discard the card");
     const html = renderToStaticMarkup(React.createElement(QuitQuestion, { ask: { cards: 2, checks: true }, onQuit() {}, onKeep() {} }));
     expect(html).toContain('role="alertdialog" aria-modal="true" aria-labelledby="quit-title" aria-describedby="quit-body"');

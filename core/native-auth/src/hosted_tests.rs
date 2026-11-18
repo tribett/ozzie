@@ -157,9 +157,11 @@ fn connecting_runs_the_browser_flow_and_keeps_the_token_only_in_the_keychain() {
     .unwrap();
     let (status, page) = browser.join().unwrap();
     assert_eq!(status, 200);
-    assert!(page.contains(
-        "This Mac is connected to Ozzie managed. You can close this tab and return to Ozzie."
-    ));
+    // The tab says so in the spec's words, with the way back to Ozzie (onboarding spec S10b).
+    assert!(page.contains("<h1>Ozzie's AI is on</h1>"));
+    // Review L2: Ozzie can't know the window came forward, so the tab says to go back.
+    assert!(page.contains("You can close this tab. Go back to Ozzie to continue."));
+    assert!(page.contains(r#"<a href="ozzie://connected">Go back to Ozzie</a>"#));
     assert_eq!(keys.token().as_deref(), Some(FAKE_TOKENS[0]));
     assert_eq!(
         account,
@@ -171,6 +173,9 @@ fn connecting_runs_the_browser_flow_and_keeps_the_token_only_in_the_keychain() {
             warning: None,
             checked_at_ms: NOW,
             offline: false,
+            plan_reason: None,
+            paused_until: None,
+            answers_left: None,
         }
     );
     // The exchange sent the one-time code and the verifier, and no authorization.
@@ -268,7 +273,12 @@ fn the_receiver_answers_and_ignores_anything_but_this_attempts_callback() {
     let (answers, (status, page)) = poker.join().unwrap();
     for answer in &answers {
         assert!(answer.starts_with("HTTP/1.1 400 Bad Request"), "{answer}");
-        assert!(answer.contains("This Mac couldn't be connected. Return to Ozzie and try again."));
+        // Review M7/L2: a request that isn't this attempt's gets the fixed stray page exactly; nothing reflected.
+        let body = &answer[answer.find("\r\n\r\n").unwrap() + 4..];
+        assert_eq!(
+            body,
+            crate::callback::outcome_page(crate::callback::Outcome::Stray)
+        );
         assert!(
             answer.contains("Cache-Control: no-store") && answer.contains("frame-ancestors 'none'")
         );
@@ -347,7 +357,7 @@ fn connecting_ends_when_cancelled_declined_refused_or_after_five_minutes() {
         declined
             .join()
             .unwrap()
-            .contains("Connecting was cancelled. Return to Ozzie.")
+            .contains("<h1>This Mac isn't connected to Ozzie's AI</h1><p>If you paid, Personal is on your account: go back to Ozzie and press Try again. You won't be charged again.</p>")
     );
     // A malformed code with the right state ends it without asking ozzie.church.
     let attempt = ConnectAttempt::begin(&hosted, NOW).unwrap();
@@ -403,7 +413,7 @@ fn connecting_ends_when_cancelled_declined_refused_or_after_five_minutes() {
         refused
             .join()
             .unwrap()
-            .contains("This Mac couldn't be connected.")
+            .contains("<h1>Ozzie couldn't finish connecting</h1>")
     );
     // Nothing was saved by any of them.
     assert_eq!(keys.token(), None);
@@ -458,7 +468,7 @@ fn connecting_again_revokes_the_token_it_replaces_and_a_keychain_failure_keeps_n
     };
     let (result, page) = connect(&refusing);
     assert_eq!(result.err(), Some(ManagedError::Keychain));
-    assert!(page.contains("This Mac couldn't be connected."));
+    assert!(page.contains("<h1>Ozzie couldn't finish connecting</h1>"));
     assert_eq!(refusing.token(), None);
     assert_eq!(
         server.state.lock().unwrap().revoked,
@@ -489,6 +499,9 @@ fn plan_and_usage_are_read_at_most_once_a_minute_and_the_last_reading_is_kept_of
         warning: None,
         checked_at_ms: NOW,
         offline: false,
+        plan_reason: None,
+        paused_until: None,
+        answers_left: None,
     };
     assert_eq!(
         account_using(&hosted, &keys, &http, &dir.0, NOW),
@@ -591,8 +604,15 @@ fn a_refused_token_asks_to_connect_again_and_attach_says_so() {
         (true, "connected", Some(account))
     );
     no_token_in(&serde_json::to_string(&known).unwrap());
-    // On another route only the managed row changes.
-    save_config(&dir.0, Route::Local, None, None).unwrap();
+    // On another route only the managed row changes (a local model that answered its check).
+    crate::model::save_local_checked(
+        &dir.0,
+        crate::model::LOCAL_BASE,
+        crate::model::LOCAL_MODEL,
+        1,
+        crate::model::route_generation(&dir.0),
+    )
+    .unwrap();
     let mut local_status = status_for(&dir.0, &keys, false);
     attach(&mut local_status, AccountState::Reconnect);
     assert_eq!(
@@ -705,9 +725,12 @@ fn disconnecting_revokes_then_deletes_the_token_even_when_ozzie_church_is_unreac
         AccountState::Known(_)
     ));
     assert!(dir.cached().is_some());
+    let choices = crate::model::route_generation(&dir.0);
     disconnect_using(&hosted, &keys, &http, &dir.0).unwrap();
     assert_eq!(keys.token(), None);
     assert_eq!(dir.cached(), None);
+    // Signing out is a choice of AI: a check under way then doesn't switch the AI when it finishes (review M-2).
+    assert_ne!(crate::model::route_generation(&dir.0), choices);
     let state = server.state.lock().unwrap();
     assert_eq!(state.revoked, [FAKE_TOKENS[0]]);
     let revoke = state
@@ -872,4 +895,296 @@ fn ozzie_church_refusals_and_connect_errors_are_closed_vocabularies() {
         assert!(!token_ok(bad), "{bad}");
     }
     assert!(!connected(&connected_keys("short")));
+}
+
+// ---- Ozzie's AI, paid in one browser trip (onboarding spec S10, lane N7) -----------------------------------------
+
+#[test]
+fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_taken() {
+    let server = FakeServer::start();
+    let hosted = local(&server);
+    let dir = TempDir::new("paid");
+    let keys = MemoryKeys::default();
+    let attempt = ConnectAttempt::begin_for(&hosted, NOW, Some("personal")).unwrap();
+    let url = url::Url::parse(attempt.url()).unwrap();
+    let names: Vec<String> = url.query_pairs().map(|(k, _)| k.into_owned()).collect();
+    assert_eq!(
+        names,
+        [
+            "redirect_port",
+            "state",
+            "code_challenge",
+            "device_label",
+            "plan"
+        ]
+    );
+    assert!(attempt.url().ends_with("&plan=personal"));
+    assert_eq!(attempt.expires_ms, NOW + 30 * 60_000);
+    // Only a plan on sale may be asked for.
+    for plan in ["team", "church", "leader", "", "personal&x=1"] {
+        assert_eq!(
+            ConnectAttempt::begin_for(&hosted, NOW, Some(plan)).err(),
+            Some(ManagedError::Unavailable),
+            "{plan}"
+        );
+    }
+    // Stripe's back button: ozzie.church sends the browser back with error=payment_cancelled.
+    let back = std::thread::spawn({
+        let (host, state) = (attempt.host.clone(), attempt.state.clone());
+        move || {
+            get(
+                &host,
+                &format!("/ozzie/callback?error=payment_cancelled&state={state}"),
+            )
+        }
+    });
+    assert_eq!(
+        connect_using(
+            &attempt,
+            &hosted,
+            &keys,
+            &native(&hosted),
+            &AtomicBool::new(false),
+            &|| NOW,
+            &dir.0
+        )
+        .err(),
+        Some(ManagedError::PaymentCancelled)
+    );
+    let page = back.join().unwrap();
+    assert!(page.contains("<h1>No payment was taken</h1>"));
+    assert!(keys.token().is_none());
+    assert_eq!(
+        serde_json::to_string(&ManagedError::PaymentCancelled).unwrap(),
+        r#""payment-cancelled""#
+    );
+    // Website change 02a4df66: after paying, the person presses "Connect this Mac" before any callback comes,
+    // and a plan not yet applied sends them to the account page with no callback at all. The listener waits the
+    // whole thirty minutes for a slow payer, then ends as a closed "not-finished": try again re-opens the connect
+    // step (the site shows "Connect this Mac" without charging an account that already has the plan).
+    let attempt = ConnectAttempt::begin_for(&hosted, NOW, Some("personal")).unwrap();
+    assert_eq!(
+        connect_using(
+            &attempt,
+            &hosted,
+            &keys,
+            &native(&hosted),
+            &AtomicBool::new(false),
+            &|| NOW + PAID_CONNECT_LIFETIME_MS,
+            &dir.0
+        )
+        .err(),
+        Some(ManagedError::NotFinished)
+    );
+    assert_eq!(
+        serde_json::to_string(&ManagedError::NotFinished).unwrap(),
+        r#""not-finished""#
+    );
+    // A slow payer who clicks at minute 29 is still heard.
+    let attempt = ConnectAttempt::begin_for(&hosted, NOW, Some("personal")).unwrap();
+    let late = std::thread::spawn({
+        let (host, state) = (attempt.host.clone(), attempt.state.clone());
+        move || {
+            get(
+                &host,
+                &format!("/ozzie/callback?error=payment_cancelled&state={state}"),
+            )
+        }
+    });
+    assert_eq!(
+        connect_using(
+            &attempt,
+            &hosted,
+            &keys,
+            &native(&hosted),
+            &AtomicBool::new(false),
+            &|| NOW + 29 * 60_000,
+            &dir.0
+        )
+        .err(),
+        Some(ManagedError::PaymentCancelled)
+    );
+    late.join().unwrap();
+    // The receiver listens on 127.0.0.1 at a port the site accepts (1024-65535), path /ozzie/callback only.
+    let port: u16 = attempt
+        .host
+        .strip_prefix("127.0.0.1:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(port >= 1024);
+    // A connect without a plan keeps Planning Center's five minutes and its plain "expired".
+    let attempt = ConnectAttempt::begin(&hosted, NOW).unwrap();
+    assert_eq!(
+        connect_using(
+            &attempt,
+            &hosted,
+            &keys,
+            &native(&hosted),
+            &AtomicBool::new(false),
+            &|| NOW + CONNECT_LIFETIME_MS,
+            &dir.0
+        )
+        .err(),
+        Some(ManagedError::Expired)
+    );
+    assert_eq!(PAID_CONNECT_LIFETIME_MS, 1_800_000);
+    assert_eq!(
+        CONNECT_LIFETIME_MS, 300_000,
+        "Planning Center's sign-in keeps five minutes"
+    );
+}
+
+/// ozzie.church's GETs answered from a list: (path, status, body).
+struct Answers(Vec<(&'static str, u16, &'static str)>);
+impl ModelHttp for Answers {
+    fn post(
+        &self,
+        _: &str,
+        _: Option<(&str, crate::model::KeyHeader)>,
+        _: &[(&str, &str)],
+        _: &[u8],
+    ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
+        panic!("reading the offer or the account posts nothing")
+    }
+    fn get(&self, url: &str, _: Option<&str>) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
+        self.0
+            .iter()
+            .find(|(path, _, _)| url.ends_with(path))
+            .map(|(_, status, body)| (*status, Zeroizing::new(body.as_bytes().to_vec())))
+            .ok_or(ModelError::ProviderFailure)
+    }
+}
+
+#[test]
+fn the_offer_is_shown_only_as_ozzie_church_gives_it_and_closed_otherwise() {
+    let hosted = HostedConfig::from_env(false, None);
+    let open = r#"{"open":true,"plan":"personal","price_text":"$19 a month","answers_text":"About 400 answers a month","extra":"ignored"}"#;
+    let offer = offer_using(&hosted, &Answers(vec![(OFFER_PATH, 200, open)]));
+    assert_eq!(
+        serde_json::to_string(&offer).unwrap(),
+        r#"{"open":true,"plan":"personal","price_text":"$19 a month","answers_text":"About 400 answers a month","reason":null}"#
+    );
+    let closed = |body: &'static str| offer_using(&hosted, &Answers(vec![(OFFER_PATH, 200, body)]));
+    for body in [
+        r#"{"open":false}"#,
+        r#"{"open":true,"plan":"team","price_text":"$59 a month","answers_text":"About 2000 answers"}"#,
+        r#"{"open":true,"plan":"personal","price_text":"<b>$19</b>","answers_text":"About 400 answers a month"}"#,
+        r#"{"open":true,"plan":"personal","price_text":"$19 a month, see https://evil.example","answers_text":"x"}"#,
+        r#"{"open":true,"plan":"personal","price_text":"","answers_text":"About 400 answers a month"}"#,
+        r#"{"open":true,"plan":"personal"}"#,
+        "not json",
+    ] {
+        assert_eq!(
+            (closed(body).open, closed(body).reason),
+            (false, Some("closed")),
+            "{body}"
+        );
+    }
+    for answers in [vec![(OFFER_PATH, 503, "")], vec![]] {
+        let offer = offer_using(&hosted, &Answers(answers));
+        assert_eq!(
+            (offer.open, offer.reason, offer.price_text),
+            (false, Some("unreachable"), None)
+        );
+    }
+}
+
+#[test]
+fn why_there_is_no_plan_is_one_of_a_few_words_and_a_fresh_reading_skips_the_minute() {
+    let hosted = HostedConfig::from_env(false, None);
+    let dir = TempDir::new("reason");
+    let token = Zeroizing::new(FAKE_TOKENS[0].to_owned());
+    let body = |reason: &str| -> &'static str {
+        Box::leak(format!(r#"{{"plan":"none","allowance_steps":0,"used_steps":0,"period_ends":"2026-12-17","plan_reason":"{reason}"}}"#).into_boxed_str())
+    };
+    for (sent, kept) in [
+        ("payment-failed", Some("payment-failed")),
+        ("cancelled", Some("cancelled")),
+        ("none", Some("none")),
+        ("card declined at <bank>", None),
+    ] {
+        let http = Answers(vec![(ACCOUNT_PATH, 200, body(sent))]);
+        let AccountState::Known(account) =
+            account_reading(&hosted, &token, &http, &dir.0, NOW, false)
+        else {
+            panic!("{sent}");
+        };
+        assert_eq!(account.plan_reason.as_deref(), kept, "{sent}");
+    }
+    // A reading from a second ago: the regular status uses it; the poll after paying asks again.
+    let paid = Answers(vec![(
+        ACCOUNT_PATH,
+        200,
+        r#"{"plan":"personal","allowance_steps":1500,"used_steps":0,"period_ends":"2026-12-17"}"#,
+    )]);
+    let AccountState::Known(cached) =
+        account_reading(&hosted, &token, &paid, &dir.0, NOW + 1_000, true)
+    else {
+        panic!("cached");
+    };
+    assert_eq!(cached.plan, "none");
+    let AccountState::Known(fresh) =
+        account_reading(&hosted, &token, &paid, &dir.0, NOW + 1_000, false)
+    else {
+        panic!("fresh");
+    };
+    assert_eq!((fresh.plan.as_str(), fresh.plan_reason), ("personal", None));
+}
+
+// ---- Re-check NM1: why ozzie.church asked Ozzie to wait, and until when -------------------------------------------
+
+#[test]
+fn review_nm1_a_daily_ceiling_is_its_own_code_and_the_account_says_until_when() {
+    let refused = |body: &str| refusal(429, body.as_bytes());
+    assert_eq!(
+        refused(
+            r#"{"error":"rate-limited","reason":"daily-limit","paused_until":"2026-11-18T00:00:00.000Z"}"#
+        ),
+        Some(ModelError::DailyLimit)
+    );
+    assert_eq!(
+        refused(r#"{"error":"rate-limited","reason":"busy"}"#),
+        Some(ModelError::RateLimited)
+    );
+    assert_eq!(
+        refused(r#"{"error":"rate-limited"}"#),
+        Some(ModelError::RateLimited)
+    );
+    assert_eq!(
+        refused(r#"{"error":"rate-limited","reason":"something new"}"#),
+        Some(ModelError::RateLimited)
+    );
+    // The account carries when the pause ends and the answers left, checked; anything else is dropped.
+    let hosted = HostedConfig::from_env(false, None);
+    let dir = TempDir::new("paused-until");
+    let token = Zeroizing::new(FAKE_TOKENS[0].to_owned());
+    let read = |body: &'static str| {
+        let AccountState::Known(account) = account_reading(
+            &hosted,
+            &token,
+            &Answers(vec![(ACCOUNT_PATH, 200, body)]),
+            &dir.0,
+            NOW,
+            false,
+        ) else {
+            panic!("{body}")
+        };
+        account
+    };
+    let paused = read(
+        r#"{"plan":"personal","allowance_steps":1500,"used_steps":1500,"period_ends":"2026-12-17","paused_until":"2026-12-17T00:00:00.000Z","answers_left":0}"#,
+    );
+    assert_eq!(
+        (paused.paused_until.as_deref(), paused.answers_left),
+        (Some("2026-12-17T00:00:00.000Z"), Some(0))
+    );
+    let odd = read(
+        r#"{"plan":"personal","allowance_steps":1500,"used_steps":10,"period_ends":"2026-12-17","paused_until":"tomorrow <b>","answers_left":99999999999}"#,
+    );
+    assert_eq!((odd.paused_until, odd.answers_left), (None, None));
+    let none = read(
+        r#"{"plan":"personal","allowance_steps":1500,"used_steps":10,"period_ends":"2026-12-17"}"#,
+    );
+    assert_eq!((none.paused_until, none.answers_left), (None, None));
 }

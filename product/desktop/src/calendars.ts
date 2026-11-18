@@ -72,8 +72,10 @@ export const LINK_PROBLEMS: Readonly<Record<LinkError, string>> = Object.freeze(
   "no-label": "Give this calendar a name, up to 60 characters.",
   "too-many": "Ozzie reads up to 8 private links. Remove one to add another.",
   unknown: "Ozzie doesn't have that calendar any more.",
-  missing: "Its address is no longer in this Mac's Keychain. Remove it and add it again.",
-  "list-unreadable": "Ozzie couldn't read its list of private calendar links on this Mac (it may have been saved by a newer Ozzie). The addresses are still in this Mac's Keychain, and nothing was removed.",
+  // Where the addresses are kept is said plainly; "Keychain" only under See how this works (onboarding spec §6). locked and
+  // denied below name it as the part of macOS that refused, as Church lists does (core/src/sources/words.ts).
+  missing: "Ozzie no longer has its address on this Mac. Remove it and add it again.",
+  "list-unreadable": "Ozzie couldn't read its list of private calendar links on this Mac (it may have been saved by a newer Ozzie). The addresses are still kept safely on this Mac, and nothing was removed.",
   unreachable: "The calendar's website couldn't be reached. Check the internet connection and try again.",
   timeout: "The calendar's website took too long to answer.",
   refused: "The calendar's website didn't give Ozzie the calendar. The address may have been reset; copy it again.",

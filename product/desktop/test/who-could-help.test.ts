@@ -14,7 +14,7 @@ import { HarnessSession } from "../../../core/src/harness/session.js";
 import type { HarnessData } from "../../../core/src/harness/index.js";
 import type { Finding } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRead, SundayRules } from "../../../core/src/sunday-capture.js";
-import { nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../../core/src/fictional-sunday.js";
+import { nov22Capture, PEOPLE, TEAMS, withFictionalBackgroundChecks } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
@@ -23,6 +23,8 @@ import { listedPeople, lookEnded, READS_FOR, readsFor, SundayPage, WhoCouldHelpC
 import { taskAccount, type TaskEventRow } from "../src/harness-words.js";
 import { calls, facts, fakeNative, fictionalData, HIDDEN_WORDS, payloadOf, row, RULES, scripted, taskIds, text, type Turn } from "./harness-fakes.js";
 import { installFakeDom } from "./fake-dom.js";
+import { ChooseAiContext } from "../src/ai-line.js";
+import { NEEDS_AI } from "../src/ai-words.js";
 
 const dom = installFakeDom();
 
@@ -338,6 +340,20 @@ describe("Ask Ozzie to look at who could help, from a Sunday card", () => {
     expect(html).not.toMatch(/Draft only|Hi Riley|Copy|Open in Mail|>\s*Send/u);
   });
 
+  it("with no AI, says the look needs AI and the list above still stands, with one step to the AI choice (walk-through, 2026-11-18)", () => {
+    const turn: AskTurn = { state: "no-model" };
+    const card = (way: (() => void) | null) => renderToStaticMarkup(React.createElement(ChooseAiContext.Provider, { value: way },
+      React.createElement(WhoCouldHelpCard, { turn, finding: greeter(fictionalData()), names: {} })));
+    const html = card(() => {});
+    expect(text(html)).toContain(NEEDS_AI.look);
+    expect(NEEDS_AI.look).toBe("Asking Ozzie to look at who could help needs AI, but everything else in Ozzie works without it.");
+    expect(text(html)).toContain("The list above is still the full list from Ozzie's own check.");
+    expect(html).toContain(`>${NEEDS_AI.button}</button>`);
+    expect(html).not.toMatch(/AI model|Set one up/u);
+    // Drawn where nothing opens the AI screens: the words only.
+    expect(card(null)).not.toContain(NEEDS_AI.button);
+  });
+
   it("a run that couldn't finish says so in this card's own words, and that the list above is unchanged (review H, L11)", async () => {
     const { turn } = await look([() => calls(["sunday.open_needs"]), () => facts(["f99"])]);
     expect(turn.state).toBe("problem");
@@ -482,6 +498,9 @@ describe("every Sunday card's See how this works: Ozzie's own check, no AI (audi
     // The engine declares no reads per kind, so the table is hand-kept and held here: each read of the fictional check is
     // failed in turn, and a read belongs to a kind exactly when failing it changes that kind's findings.
     const full = withFictionalOperations(withFictionalBackgroundChecks(nov22Capture()));
+    // The confirmed greeter has a blockout over the service, so the blockout card is derived too.
+    full.reads.find(r => r.collection === "person_blockouts" && r.person_id === PEOPLE.greeterConfirmed)!.body = {
+      data: [{ type: "Blockout", id: "b1", attributes: { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z", repeat_frequency: "no_repeat" } }], meta: { count: 1, total_count: 1 } };
     const ruleSets = [RULES, { ...RULES, sundayLeads: [{ team_id: TEAMS.greeter, lead_position: "Greeter Lead" }], kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 3 }] }];
     const at = full.completed_at;
     const kindsOf = (c: SundayCapture, rules: SundayRules): Record<string, string> => {
@@ -505,7 +524,7 @@ describe("every Sunday card's See how this works: Ozzie's own check, no AI (audi
       }
     }
     // Every kind the fictional check produces, and the rooms, follow-ups and group meetings cards.
-    expect([...derived.keys()].sort()).toEqual(["background-check", "follow-ups", "group-meetings", "lead-missing", "needs-people", "pending", "rooms", "streak", "too-few-confirmed"]);
+    expect([...derived.keys()].sort()).toEqual(["background-check", "blockout", "follow-ups", "group-meetings", "lead-missing", "needs-people", "pending", "rooms", "streak", "too-few-confirmed"]);
     for (const [kind, reads] of derived) {
       const inOrder = collections.filter(c => reads.has(c));
       // Follow-up steps only name a step and its owner: failing them leaves the findings as they were, so they are added by hand.

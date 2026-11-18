@@ -239,12 +239,20 @@ pub fn pause_label(paused: bool) -> &'static str {
 /// The menu item that pauses or resumes everything, so its words follow the store.
 struct PauseItem(Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>);
 
-fn show_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+pub(crate) fn show_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
         let _ = app.emit("ozzie:shown", ());
+    }
+}
+/// Back from the browser (a sign-in or Ozzie's AI's connect ended; onboarding spec S4): the window comes forward,
+/// and the Dock icon bounces once in case macOS keeps the browser in front (cooperative activation, macOS 14+).
+pub(crate) fn bring_forward<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    show_main(app);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
     }
 }
 fn set_paused_everywhere<R: tauri::Runtime>(app: &tauri::AppHandle<R>, paused: bool) {
@@ -712,19 +720,20 @@ pub async fn responsibility_run_end(
     blocking(move || store.run_end(&id, &run_id, &outcome, code.as_deref(), noticed, drafts)).await
 }
 /// What must hold before a responsibility run's grant pays for an AI step, in order: the ledger task
-/// is a running procedure (not a question), an AI route is set up (nothing is spent on a step that
-/// could never be sent), and then the store pays — only for the run's own template's procedure,
-/// within its grant and the template's day, and never while it or everything is paused.
+/// is a running procedure (not a question), the step could be sent now (`config`, `step_route`: an
+/// AI route set up and, on a model on this Mac, time left in the task's run; nothing is spent on a
+/// step that could never be sent), and then the store pays — only for the run's own template's
+/// procedure, within its grant and the template's day, and never while it or everything is paused.
 pub fn pay_for_step<C>(
     store: &ResponsibilityStore,
     run_id: &str,
     view: &StepView,
-    config: impl FnOnce() -> Option<C>,
+    config: impl FnOnce() -> Result<C, AgentError>,
 ) -> Result<C, AgentError> {
     if view.kind != TaskKind::Skill {
         return Err(AgentError::InvalidTask);
     }
-    let config = config().ok_or(AgentError::NotConfigured)?;
+    let config = config()?;
     store
         .take_ai_step(run_id, &view.skill_id)
         .map_err(|error| match error {
@@ -733,10 +742,24 @@ pub fn pay_for_step<C>(
         })?;
     Ok(config)
 }
+/// The route a job's step goes on, once it could be sent now: an AI route set up (`not-configured`
+/// otherwise) and, on a model on this Mac, time left in the task's run (`agent::time_left`:
+/// `provider-failure` with none). Asked before the grant pays, so a step agent_step would refuse
+/// for lack of time spends nothing (review L-1).
+fn step_route(
+    dir: &std::path::Path,
+    ledger: &ozzie_native_auth::ledger::TaskLedger,
+    task_id: &str,
+) -> Result<model_route::RouteConfig, AgentError> {
+    let config = model_route::usable_config(dir).ok_or(AgentError::NotConfigured)?;
+    agent::time_left(&config, ledger, task_id)?;
+    Ok(config)
+}
 /// One AI step of a responsibility run: the request passes every agent_step check first, then
-/// `pay_for_step` (refused as `invalid-task` for another task's procedure, `not-configured` before
-/// anything is spent, `limit` past the grant or while paused), then it goes through agent_step itself
-/// (the same route, keys, name guard, per-task cap and paid call cap as any task).
+/// `pay_for_step` (refused as `invalid-task` for another task's procedure, `not-configured` or, on a
+/// model on this Mac with no time left, `provider-failure` before anything is spent, `limit` past the
+/// grant or while paused), then it goes through agent_step itself (the same route, keys, name guard,
+/// per-task cap and paid call cap as any task).
 #[tauri::command]
 pub async fn responsibility_agent_step(
     names: tauri::State<'_, SessionNames>,
@@ -758,7 +781,9 @@ pub async fn responsibility_agent_step(
             .path()
             .app_data_dir()
             .map_err(|_| AgentError::NotConfigured)?;
-        let config = pay_for_step(&store, &run_id, &view, || model_route::load_config(&dir))?;
+        let config = pay_for_step(&store, &run_id, &view, || {
+            step_route(&dir, &ledger, &request.task_id)
+        })?;
         agent::agent_step(
             &config,
             &dir.join(model_route::LEDGER_FILE),
@@ -1205,15 +1230,12 @@ mod tests {
     #[test]
     fn a_runs_grant_pays_only_for_its_own_procedure_and_only_once_a_route_is_set_up() {
         let (dir, store, run) = store_with_a_run("pay");
-        let config = || Some("route");
+        let config = || Ok("route");
         // No AI route: refused before anything is spent.
         assert_eq!(
-            pay_for_step(
-                &store,
-                &run,
-                &view(TaskKind::Skill, "room-check"),
-                || None::<&str>
-            )
+            pay_for_step(&store, &run, &view(TaskKind::Skill, "room-check"), || {
+                Err::<&str, _>(AgentError::NotConfigured)
+            })
             .err(),
             Some(AgentError::NotConfigured)
         );
@@ -1240,6 +1262,63 @@ mod tests {
             Some(AgentError::Limit)
         );
         assert_eq!(steps_taken(&store), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn review_l1_a_step_with_no_time_left_is_refused_before_the_grant_pays() {
+        use ozzie_native_auth::ledger::TaskLedger;
+        let (dir, store, run) = store_with_a_run("time-left");
+        let room = view(TaskKind::Skill, "room-check");
+        // The route can't be used now (a model on this Mac whose task's time is gone): nothing is spent.
+        assert_eq!(
+            pay_for_step(&store, &run, &room, || Err::<&str, _>(
+                AgentError::ProviderFailure
+            ))
+            .err(),
+            Some(AgentError::ProviderFailure)
+        );
+        assert_eq!(steps_taken(&store), 0);
+        // What the job's step asks before paying: a route set up, and for a model on this Mac its task's time left
+        // (`agent::time_left`, which refuses a task with none, or one not running).
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let ledger = TaskLedger::open(&dir.join("ledger")).unwrap();
+        let task = "0f8c2a4e-7b1d-4c3a-9e5f-1a2b3c4d5e6f";
+        assert_eq!(
+            step_route(&models, &ledger, task).err(),
+            Some(AgentError::NotConfigured)
+        );
+        model_route::save_local_checked(
+            &models,
+            "http://127.0.0.1:11434/v1",
+            "qwen3:8b",
+            1,
+            model_route::route_generation(&models),
+        )
+        .unwrap();
+        assert_eq!(
+            pay_for_step(&store, &run, &room, || step_route(&models, &ledger, task)).err(),
+            Some(AgentError::InvalidTask)
+        );
+        assert_eq!(steps_taken(&store), 0);
+        // An AI company's route keeps no task time: it pays as before.
+        model_route::save_config(
+            &models,
+            model_route::Route::Own,
+            Some("https://api.example.invalid/v1"),
+            Some("vendor/model-1"),
+        )
+        .unwrap();
+        assert!(pay_for_step(&store, &run, &room, || step_route(&models, &ledger, task)).is_ok());
+        assert_eq!(steps_taken(&store), 1);
+        // The job's step pays only through `step_route`.
+        let source = include_str!("always_on.rs");
+        let command = &source[source
+            .find("pub async fn responsibility_agent_step(")
+            .unwrap()..];
+        let command = &command[..command.find("#[cfg(test)]").unwrap()];
+        assert!(command.contains("pay_for_step(&store, &run_id, &view, || {\n            step_route(&dir, &ledger, &request.task_id)"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

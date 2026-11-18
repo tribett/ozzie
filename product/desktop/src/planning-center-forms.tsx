@@ -1,13 +1,14 @@
 // The Planning Center sign-in and "which Sunday" fields, shared by Settings and guided setup so both
-// use the same connection calls and say connected only after Planning Center confirmed the organization.
+// use the same connection calls and say connected only after Planning Center confirmed the organization; and the copy
+// button beside every refusal that says an administrator can give access.
 import { useEffect, useId, useState } from "react";
 import {
-  attemptCopy, churchLabel, churchShort, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
+  attemptCopy, churchShort, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
   missingCopy, parseDeclined, parseInUse, parseLastAttempt, parseSwitchQuestion, parseUnretired, signInInstead, switchCopy, switchProblem,
   switchSettings, disconnectNote, type ConnectionStatus, type MoreProducts, type RulesAtStake,
   type SwitchDecision, type SwitchQuestion, type Unretired,
 } from "./connection.js";
-import { loadRules, type Settings } from "./sunday-source.js";
+import { ADMIN_COPIED, ADMIN_COPY, adminMessage, loadRules, type Settings } from "./sunday-source.js";
 import { loadRulesByChurch, rulesAtStake } from "./church-in-use.js";
 import { Icon } from "./icons.js";
 
@@ -15,10 +16,31 @@ const numeric = (v: string) => /^[1-9]\d{0,31}$/.test(v);
 const at = (ms: number) => new Date(ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const stateCopy: Record<Exclude<ConnectionStatus["state"], "connected">, string> = {
   disconnected: "Planning Center is disconnected.", waiting: "Finish signing in in your browser. This attempt lasts five minutes.",
-  checking: "Checking the organization with Planning Center…",
+  // Which church, as first run says it (spec §6: never "organization" outside the fold for a copy you built yourself).
+  checking: "Checking which church it is with Planning Center…",
   "stored-unchecked": "A connection is saved on this Mac but hasn't been checked yet. Check it before use.", cancelled: "Sign-in was cancelled on this Mac.",
   expired: "Sign-in expired. Start a new connection.", failed: "The connection couldn't be checked, so it isn't connected.",
 };
+
+/**
+ * "Copy a message for your administrator", beside a refusal that says an administrator can give access (sunday-source.ts
+ * `adminMessage`). It says "Copied" as Ozzie's other copy buttons do; if this Mac won't copy, the message is shown to
+ * select instead.
+ */
+export function CopyForAdministrator() {
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const message = adminMessage();
+  const write = () => navigator.clipboard ? navigator.clipboard.writeText(message) : Promise.reject(new Error("no clipboard"));
+  return <div className="stack-tight">
+    <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => { void write().then(() => setCopy("copied"), () => setCopy("failed")); }}>
+      {copy === "copied" ? "Copied" : ADMIN_COPY}</button></div>
+    {copy === "copied" && <p className="small" role="status">{ADMIN_COPIED}</p>}
+    {copy === "failed" && <>
+      <p role="alert" className="problem">That couldn't be copied. Select the message below and copy it yourself.</p>
+      <p className="small">{message}</p>
+    </>}
+  </div>;
+}
 
 /** Picks the service type and plan numbers out of a pasted Planning Center Services address. */
 export function planFromAddress(text: string): { serviceTypeId?: string; planId?: string } {
@@ -177,11 +199,11 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       onRetry={() => { void run(() => connection.retrySignOut()); }} onRemove={() => { void run(() => connection.removeRefused()); }} />}
     {builtIn
       ? <>
-        <p className="find-body">Sign in to Planning Center in your browser and choose Allow. Ozzie finds your church's organization itself; there's nothing to copy or paste.</p>
+        <p className="find-body">Sign in to Planning Center in your browser and choose Allow. Ozzie finds your church itself; there's nothing to copy or paste.</p>
         <div className="row form-actions">
           <button className={`btn ${connected || asking ? "btn-secondary" : "btn-primary"}`} disabled={working || pending || asking}
-            onClick={() => { void run(() => connection.connectApp()); }}>{connected ? "Sign in again" : "Connect Planning Center"}</button>
-          {saved && <button className="btn btn-secondary" disabled={!canCheck || working} onClick={() => { void run(control.checkSaved); }}>Check saved connection</button>}
+            onClick={() => { void run(() => connection.connectApp()); }}>{connected ? "Connect again" : "Connect Planning Center"}</button>
+          {saved && <button className="btn btn-secondary" disabled={!canCheck || working} onClick={() => { void run(control.checkSaved); }}>{CHECK_CONNECTION}</button>}
           {/* While the question is open a check of the church still in use may run; it isn't a sign-in to cancel. */}
           {pending && !asking && <button className="btn btn-quiet" onClick={() => { void run(() => connection.cancel()); }}>Cancel sign-in</button>}
         </div>
@@ -189,12 +211,12 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       : <>
         <OwnRegistration settings={settings} onSettings={onSettings} control={control} connected={connected} />
         {(saved || pending) && <div className="row form-actions">
-          {saved && <button className="btn btn-secondary" disabled={!canCheck || working} onClick={() => { void run(control.checkSaved); }}>Check saved connection</button>}
+          {saved && <button className="btn btn-secondary" disabled={!canCheck || working} onClick={() => { void run(control.checkSaved); }}>{CHECK_CONNECTION}</button>}
           {pending && !asking && <button className="btn btn-quiet" onClick={() => { void run(() => connection.cancel()); }}>Cancel sign-in</button>}
         </div>}
       </>}
     {connected
-      ? <p className="panel-ok" role="status"><Icon name="check" small /><span>Connected. Planning Center confirmed {churchLabel(status.organization, status.organization_name)}{status.checked_at_ms != null ? ` at ${at(status.checked_at_ms)}` : ""}.</span></p>
+      ? <p className="panel-ok" role="status"><Icon name="check" small /><span>Connected. Planning Center confirmed {churchShort(status.organization, status.organization_name)}{status.checked_at_ms != null ? ` at ${at(status.checked_at_ms)}` : ""}.</span></p>
       : <p aria-live="polite">{state}</p>}
     {shownProblem && <p role="alert" className="problem">{shownProblem}</p>}
     {disconnectNote(status) && <p className="small">{disconnectNote(status)}</p>}
@@ -205,20 +227,26 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       return after.status;
     }} />}
     {builtIn && <details className="listen-more" open={ownIds || undefined}>
-      <summary><Icon name="chev" small />Advanced: use your own Planning Center registration</summary>
-      <p className="small">For a copy of Ozzie you built yourself, or a church that registered its own Public application in Planning Center. Leave the application ID empty to use Ozzie's.</p>
+      <summary><Icon name="chev" small />{OWN_REGISTRATION}</summary>
+      <p className="small">Or for a church that registered its own Public application in Planning Center. Leave the application ID empty to use Ozzie's.</p>
       <OwnRegistration settings={settings} onSettings={onSettings} control={control} connected={connected} />
     </details>}
   </div>;
 }
 
+/** The fold for your own Planning Center registration (spec §6): the only place its IDs and return address show. */
+export const OWN_REGISTRATION = "For a copy of Ozzie you built yourself";
+/** Checks the saved sign-in again: says what it does, beside "Connect again" (0.3.0 live click-through). */
+export const CHECK_CONNECTION = "Check the connection";
+/** One name for disconnecting (spec §6). */
+export const DISCONNECT = "Disconnect Planning Center";
 export const DISCONNECT_CARDS_ASK = (n: number) =>
   `You have ${n === 1 ? "1 visitor card" : `${n} visitor cards`} open. Disconnecting discards ${n === 1 ? "it" : "them"}.`;
 export const DISCONNECT_KEEP = "Keep the cards and stay connected";
 export const DISCONNECT_DISCARD = (n: number) => `Disconnect and discard ${n === 1 ? "the card" : "the cards"}`;
 export const DISCONNECT_FAILED = "Planning Center is still connected, so your visitor cards are still open.";
 /**
- * "Disconnect and revoke access". While visitor cards are open it asks first: disconnecting forgets the church they
+ * "Disconnect Planning Center". While visitor cards are open it asks first: disconnecting forgets the church they
  * belong to, so a later sign-in could bring in another church without "Switch Ozzie to this church?", and they end
  * (review P, L4). They end only once Planning Center comes back disconnected; a disconnect that didn't happen (a check
  * still stopping, a refusal) keeps them, and says so (review G, L-d). With none open it disconnects at once, as before.
@@ -237,9 +265,9 @@ export function DisconnectButton({ cards, working, onDisconnect, onDiscardCards 
     const after = await onDisconnect();
     if (after?.state === "disconnected") onDiscardCards?.(); else setKept(true);
   };
-  if (cards <= 0) return <div><button className="btn btn-forget btn-sm" disabled={working} onClick={() => { void onDisconnect(); }}>Disconnect and revoke access</button></div>;
+  if (cards <= 0) return <div><button className="btn btn-forget btn-sm" disabled={working} onClick={() => { void onDisconnect(); }}>{DISCONNECT}</button></div>;
   return <div className="stack-tight">
-    <div><button className="btn btn-forget btn-sm" disabled={working} aria-expanded={asked} aria-controls={id} onClick={() => { setKept(false); setAsked(!asked); }}>Disconnect and revoke access</button></div>
+    <div><button className="btn btn-forget btn-sm" disabled={working} aria-expanded={asked} aria-controls={id} onClick={() => { setKept(false); setAsked(!asked); }}>{DISCONNECT}</button></div>
     {kept && <p className="small" role="status">{DISCONNECT_FAILED}</p>}
     {asked && <div id={id} className="decide" role="group" aria-labelledby={`${id}-q`}>
       <p id={`${id}-q`} className="find-body">{DISCONNECT_CARDS_ASK(cards)}</p>
@@ -256,14 +284,14 @@ export function answeredCopy(answered: { decision: SwitchDecision; question: Swi
   const { to, to_name, from, from_name } = answered.question;
   const toShort = churchShort(to, to_name, from_name), fromShort = churchShort(from, from_name, to_name);
   if (answered.decision === "stay") {
-    return `Ozzie still uses ${churchLabel(from, from_name)}.${leftTo ? "" : ` Planning Center no longer accepts the sign-in for ${toShort}, and it's removed from this Mac.`}`;
+    return `Ozzie still uses ${fromShort}.${leftTo ? "" : ` Planning Center no longer accepts the sign-in for ${toShort}, and it's removed from this Mac.`}`;
   }
   if (answered.decision === "sign-in") {
-    return `Ozzie still uses ${churchLabel(from, from_name)}. Sign in to ${toShort}; once you have, Ozzie asks before it stops using ${fromShort}.`;
+    return `Ozzie still uses ${fromShort}. Sign in to ${toShort}; once you have, Ozzie asks before it stops using ${fromShort}.`;
   }
   const rules = answered.stake.from ? ` Church rules for ${fromShort}'s teams and rooms are kept for that church.${answered.stake.to ? ` The ones you set for ${toShort} before are back.` : ` You can set ${toShort}'s in Church rules.`}`
     : answered.stake.to ? ` The Church rules you set for ${toShort} before are back.` : "";
-  return `Ozzie now uses ${churchLabel(to, to_name)}. Choose which of its Sundays to check below.${rules}`;
+  return `Ozzie now uses ${toShort}. Choose which of its services Ozzie watches below.${rules}`;
 }
 
 /**
@@ -311,13 +339,13 @@ export function SwitchWaiting({ question, onOpen }: { question: SwitchQuestion; 
   return <div className="col">
     <div className="banner switch-waiting" role="status">
       <Icon name="question" small />
-      <span>Ozzie is still using {churchLabel(question.from, question.from_name)}. A sign-in for {churchLabel(question.to, question.to_name)} is waiting for you to choose which church Ozzie uses.</span>
+      <span>Ozzie is still using {churchShort(question.from, question.from_name, question.to_name)}. A sign-in for {churchShort(question.to, question.to_name, question.from_name)} is waiting for you to choose which church Ozzie uses.</span>
       <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>Choose in Settings</button>
     </div>
   </div>;
 }
 
-/** Which Sunday to check: paste the plan's address, or type its two numbers. */
+/** Which service to watch: paste the plan's address, or type its two numbers. */
 export function SundayPlanFields({ settings, onSettings }: { settings: Settings; onSettings: (s: Settings) => void }) {
   const id = useId();
   const [address, setAddress] = useState("");
@@ -333,7 +361,7 @@ export function SundayPlanFields({ settings, onSettings }: { settings: Settings;
           const picked = planFromAddress(text);
           if (picked.serviceTypeId || picked.planId) onSettings({ ...settings, ...picked });
         }} />
-      {address && <p className="input-help" role="status">{found.serviceTypeId && found.planId ? "Found both numbers below. Check they're the Sunday you meant."
+      {address && <p className="input-help" role="status">{found.serviceTypeId && found.planId ? "Found both numbers below. Check they're the service you meant."
         : found.planId ? "Found the plan number. Type the service type number below." : found.serviceTypeId ? "Found the service type number. Type the plan number below."
           : "That address doesn't show the numbers. Type them below instead."}</p>}
     </div>

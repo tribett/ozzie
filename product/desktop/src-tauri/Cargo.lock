@@ -2583,7 +2583,7 @@ dependencies = [
 
 [[package]]
 name = "ozzie-desktop"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "libc",
  "objc2",
@@ -2606,9 +2606,12 @@ name = "ozzie-native-auth"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "core-foundation",
+ "core-foundation-sys",
  "getrandom 0.3.4",
  "icu_normalizer",
  "icu_properties",
+ "libc",
  "reqwest 0.12.28",
  "security-framework",
  "serde",

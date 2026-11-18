@@ -13,7 +13,7 @@ export const SIRI_BODY = "Ask Ozzie from Spotlight without opening this window, 
 export const SIRI_SEES = "Siri and Shortcuts hear counts and times from Ozzie's last check: open spots and how many roles they're in, how many people are pending, with and without a request sent, teams without a confirmed lead, kids teams with fewer confirmed people than your Church rules ask, what Ozzie isn't sure of as Worth a look, how many you marked as handled, whether part of the check couldn't be read or was too long to say in full, that some findings are shown only in Ozzie when your Church rules keep them there, and when it was checked.";
 export const SIRI_NEVER = "They never hear a name, a role, team or room name, a background check or anything you asked Ozzie. Answering reads nothing from Planning Center, uses no AI help, and can't change or send anything. Siri hears your question as it hears any other; what Apple keeps is up to Apple.";
 export const SIRI_HOW = [
-  "While this is on, Ozzie keeps a small copy of its last check's Sunday overview on this Mac. People and roles appear in it only as labels like [Role 1], and answers don't say even those, only counts and times.",
+  "While this is on, Ozzie keeps a small copy of its last check's overview on this Mac. People and roles appear in it only as labels like [Role 1], and answers don't say even those, only counts and times.",
   "When Spotlight or a shortcut asks, a small part of Ozzie reads that copy and answers. It doesn't open Ozzie's window or check Planning Center again.",
   "macOS lets Ozzie's own actions in Siri and Shortcuts read only that copy among Ozzie's files: not your saved checks, not the copy for other AI apps, not your documents, and nothing from Planning Center.",
   "When the check is more than 30 minutes old, the saved copy of an earlier check, Ozzie's fictional example, or marked with a time later than this Mac's clock, the answer says so. When there's no current check, it says that instead.",
@@ -79,7 +79,7 @@ function ByHand({ found }: { found: string | null }) {
     <ol className="ask-steps">{ASK_STEPS.map(step => <li key={step}>{step}</li>)}</ol>
     <p className="small">Command:</p>
     <CopyLine text={askCommand(found)} label="Copy command" />
-    <p className="small">"{OPEN_NAME}" opens Ozzie to Sunday. This one doesn't need Allow Running Scripts.</p>
+    <p className="small">"{OPEN_NAME}" opens Ozzie to the page of the service it watches. This one doesn't need Allow Running Scripts.</p>
     <ol className="ask-steps">{OPEN_STEPS.map(step => <li key={step}>{step}</li>)}</ol>
     <p className="small">Link:</p>
     <CopyLine text={OPEN_LINK} label="Copy link" />

@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ToolEnvelope } from "../../src/harness/contract.js";
-import { parseAnswer } from "../../src/harness/fixed.js";
+import { envelopeProblems, parseAnswer } from "../../src/harness/fixed.js";
 import { verifyAnswer } from "../../src/harness/verify.js";
 
 const env = (tool: string, payload: unknown): ToolEnvelope => ({ tool, source: "Planning Center Services", check_time: "2026-11-20T15:00:00Z", completeness: "complete", payload });
@@ -38,6 +38,18 @@ describe("answer verification", () => {
     expect(verdict('{"answer":"facts","facts":["f1"]}', [echoed]).ok).toBe(true);
   });
 
+  it("refuses what AI on this Mac answered before any lookup, as measured (2026-11-18), on this side too", () => {
+    // ozzie-qwen3:8b with policy.txt copied its example ids at once; native refuses these first (agent_tests).
+    for (const answer of ['{"answer":"nothing-needs-a-decision","facts":["f4"]}', '{"answer":"facts","facts":["f3"]}', '{"answer":"facts","facts":["f2"]}']) {
+      expect(verdict(answer, []), answer).toEqual({ ok: false, code: "fidelity" });
+    }
+    // Before a lookup the overview wasn't read, so "nothing needs a decision" can't stand even without ids.
+    expect(verdict('{"answer":"nothing-needs-a-decision"}', [])).toEqual({ ok: false, code: "fidelity" });
+    // A draft beside a fact its result doesn't hold; the draft alone passes.
+    expect(verdict('{"answer":"draft","draft":"d1","facts":["f3"]}', [DRAFT])).toEqual({ ok: false, code: "fidelity" });
+    expect(verdict('{"answer":"draft","draft":"d1"}', [DRAFT]).ok).toBe(true);
+  });
+
   it("says nothing needs a decision only beside an overview that counts none", () => {
     expect(verdict('{"answer":"nothing-needs-a-decision"}', [overview(0)]).ok).toBe(true);
     expect(verdict('{"answer":"nothing-needs-a-decision","facts":["f9"]}', [overview(0)]).ok).toBe(true);
@@ -54,5 +66,18 @@ describe("answer verification", () => {
     for (const text of parity.invalid) expect(parseAnswer(text), text).toBeNull();
     expect(parity.valid.length).toBeGreaterThanOrEqual(10);
     expect(parity.invalid.length).toBeGreaterThanOrEqual(30);
+  });
+
+  it("holds each answer to its task's results as core/test/answer-parity.json says, the cases native runs too", () => {
+    const { evidence } = JSON.parse(readFileSync(new URL("../answer-parity.json", import.meta.url), "utf8")) as {
+      evidence: { results: Record<string, ToolEnvelope>; cases: { why: string; results: string[]; answer: string; ok: boolean }[] };
+    };
+    for (const [name, result] of Object.entries(evidence.results)) expect(envelopeProblems(result), name).toEqual([]);
+    for (const c of evidence.cases) {
+      expect(verifyAnswer(c.answer, c.results.map(name => evidence.results[name]!)).ok, c.why).toBe(c.ok);
+    }
+    // Among them, "nothing needs a decision" after one lookup that wasn't the overview, which native once let through.
+    expect(evidence.cases.some(c => !c.ok && c.results.length === 1 && evidence.results[c.results[0]!]!.tool !== "sunday.overview"
+      && parseAnswer(c.answer)?.answer === "nothing-needs-a-decision")).toBe(true);
   });
 });

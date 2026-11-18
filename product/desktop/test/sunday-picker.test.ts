@@ -6,9 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => ({ items: [], more: false })) }));
 import { invoke } from "@tauri-apps/api/core";
 import { choicesProblem, sundaySource, type Choices, type PlanChoice, type ServiceTypeChoice } from "../src/sunday-source.js";
-import { planName, planWhen, serialReads, sundayChoices, SundayChoicesView, typeAfterLoad, withPlan, type Loaded, type PickerSource } from "../src/sunday-picker.js";
-import { SetupFlow } from "../src/setup-flow.js";
-import { DEFAULT_PREFS } from "../src/proactive.js";
+import { planName, planWhen, serialReads, sundayChoices, SundayChoicesView, SundayPicker, typeAfterLoad, withPlan, type Loaded, type PickerSource } from "../src/sunday-picker.js";
 import { text } from "./harness-fakes.js";
 
 const NOW = "2026-11-20T15:00:00.000Z";
@@ -32,21 +30,22 @@ describe("the two reads behind the picker", () => {
     expect(vi.mocked(invoke).mock.calls).toEqual([["list_service_types"], ["list_upcoming_plans", { serviceTypeId: "1500" }]]);
   });
   it("explain a failure in fixed words, never Planning Center's or the Mac's own text", () => {
-    expect(choicesProblem("not-connected")).toBe("Connect Planning Center first. Then your upcoming Sundays are listed here.");
+    expect(choicesProblem("not-connected")).toBe("Connect Planning Center first. Then your upcoming services are listed here.");
     expect(choicesProblem({ "sunday-choices": "rate-limited" })).toContain("asked Ozzie to slow down");
     expect(choicesProblem({ "sunday-choices": "busy" })).toContain("Try again in a moment.");
     // A refused read says which access could be missing, who can give it and what next (audit item 5).
-    expect(choicesProblem({ "sunday-choices": "denied" })).toBe("Planning Center didn't let Ozzie list your church's plans. Either the login you signed in with can't see Planning Center Services, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access to Services; then sign in again. You can also enter a plan by hand.");
-    expect(choicesProblem({ "sunday-choices": "organization-unverified" })).toContain("couldn't be verified");
+    expect(choicesProblem({ "sunday-choices": "denied" })).toBe("Planning Center didn't let Ozzie list your church's plans. Either the account you signed in with can't see Planning Center Services, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your account access to Services; then connect again. You can also enter a plan by hand.");
+    // Said by what it is, never "organization" or a number (onboarding spec §6).
+    expect(choicesProblem({ "sunday-choices": "organization-unverified" })).toBe("Ozzie couldn't confirm which church this Planning Center sign-in is for, so nothing was read.");
     const odd = choicesProblem({ "sunday-choices": "provider-failure", detail: "Avery Brightwater <script>" });
     expect(odd).toBe("Planning Center couldn't be read just now. Try again, or enter the plan by hand.");
     // The sign-in was running out and wasn't renewed (native main.rs renewed_auth), true to the cause.
-    expect(choicesProblem({ "sign-in-not-renewed": "invalid-credentials" })).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed, so your Sundays weren't listed. Sign in again in Settings, or enter the plan by hand.");
-    expect(choicesProblem({ "sign-in-not-renewed": "provider-failure" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and Planning Center didn't renew it just now, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
-    expect(choicesProblem({ "sign-in-not-renewed": "locked" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage was locked, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
-    expect(choicesProblem({ "sign-in-not-renewed": "denied" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac didn't let Ozzie use it, so your Sundays weren't listed. Allow access when macOS asks, then try again, or enter the plan by hand.");
-    expect(choicesProblem({ "sign-in-not-renewed": "store-unavailable" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage couldn't be read, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
-    expect(choicesProblem({ "sign-in-not-renewed": "busy" })).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed just now, so your Sundays weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "invalid-credentials" })).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed, so your services weren't listed. Connect again in Settings, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "provider-failure" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and Planning Center didn't renew it just now, so your services weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "locked" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage was locked, so your services weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "denied" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac didn't let Ozzie use it, so your services weren't listed. Allow access when macOS asks, then try again, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "store-unavailable" })).toBe("Ozzie's sign-in to Planning Center needed renewing, and this Mac's credential storage couldn't be read, so your services weren't listed. Try again in a moment, or enter the plan by hand.");
+    expect(choicesProblem({ "sign-in-not-renewed": "busy" })).toBe("Ozzie's sign-in to Planning Center needed renewing and couldn't be renewed just now, so your services weren't listed. Try again in a moment, or enter the plan by hand.");
   });
 });
 
@@ -75,40 +74,38 @@ describe("the picker on screen", () => {
   it("lists the service types and the upcoming plans as one group of choices, the chosen one selected", () => {
     const html = view({ settings: { ...settings, serviceTypeId: "1500", planId: "92902197" } });
     const t = text(html);
-    expect(html).toMatch(/<label[^>]*>Service type<\/label><select[^>]*>.*<option value="1500"[^>]*>Sunday Morning<\/option><option value="1502"[^>]*>Service type 1502<\/option>/u);
+    expect(html).toMatch(/<label[^>]*>Service<\/label><select[^>]*>.*<option value="1500"[^>]*>Sunday Morning<\/option><option value="1502"[^>]*>A service with no name<\/option>/u);
     expect(html).toMatch(/<fieldset class="picker-plans"><legend class="field-l">Upcoming plans<\/legend>/u);
     expect(html.match(/type="radio"/gu)).toHaveLength(2);
     expect(html).toMatch(/<label class="choice is-sel"><input type="radio"[^>]*checked=""/u);
     expect(t).toContain("Sunday, November 29 · 9:00 AM Ozzie Demo — Main Sunday (fictional)");
     expect(t).toContain("Sunday, December 6 · 9:00 AM Advent");
-    expect(t).toContain("Showing the next 2. A later Sunday can be entered by hand below.");
+    expect(t).toContain("Showing the next 2. A later plan can be pasted below, under My plan isn't listed.");
     expect(t).not.toContain("Chosen now");
     // Typing the ids is still there, folded away.
-    expect(html).toMatch(/<details class="picker-hand"><summary>.*Enter the plan by hand<\/summary>/u);
+    expect(html).toMatch(/<details class="picker-hand"><summary>.*My plan isn&#x27;t listed<\/summary>/u);
     expect(t).toContain("Service type ID");
   });
   it("says what is happening at each step, and what to do when nothing can be listed", () => {
     expect(text(view({ connected: false, types: { state: "idle" }, plans: { state: "idle" }, handOpen: true })))
-      .toContain("Connect Planning Center first. Then your upcoming Sundays are listed here to choose from.");
+      .toContain("Connect Planning Center first. Then your upcoming plans are listed here to choose from.");
     expect(view({ connected: false, types: { state: "idle" }, plans: { state: "idle" }, handOpen: true })).toMatch(/<details class="picker-hand" open="">/u);
-    expect(text(view({ types: { state: "loading" }, plans: { state: "idle" } }))).toContain("Reading your service types from Planning Center…");
+    expect(text(view({ types: { state: "loading" }, plans: { state: "idle" } }))).toContain("Reading your services from Planning Center…");
     expect(text(view({ plans: { state: "loading" } }))).toContain("Reading upcoming plans…");
-    expect(text(view({ types: ready({ items: [types.items[0]!], more: false }) }))).toMatch(/Service type Sunday Morning Upcoming plans/u);
-    expect(text(view({ types: ready({ items: [], more: false }), plans: { state: "idle" } }))).toContain("Planning Center shows no service types this account can see.");
-    expect(text(view({ plans: ready({ items: [], more: false }) }))).toContain("No upcoming plans in this service type. Choose another, or enter the plan by hand below.");
+    expect(text(view({ types: ready({ items: [types.items[0]!], more: false }) }))).toMatch(/Service Sunday Morning Upcoming plans/u);
+    expect(text(view({ types: ready({ items: [], more: false }), plans: { state: "idle" } }))).toContain("Planning Center shows no services this account can see.");
+    expect(text(view({ plans: ready({ items: [], more: false }) }))).toContain("No upcoming plans in this service. Choose another, or paste a plan's address below.");
     const problem = text(view({ types: { state: "problem", text: choicesProblem("denied") }, plans: { state: "idle" } }));
     expect(problem).toContain("Planning Center didn't let Ozzie list your church's plans.");
     expect(problem).toContain("Try again");
     expect(text(view({ settings: { ...settings, serviceTypeId: "1500", planId: "92900001" } }))).toContain("Chosen now: a plan entered by hand. It isn't in this list.");
+    // Disconnected, nothing is listed, so nothing is said about a chosen plan (0.3.0 live click-through).
+    expect(text(view({ connected: false, types: { state: "idle" }, plans: { state: "idle" }, settings: { ...settings, serviceTypeId: "1500", planId: "92900001" } })))
+      .not.toContain("Chosen now");
   });
-  it("is the Sunday step of guided setup, with the fields for typing the ids kept", () => {
-    const step = (connected: boolean) => text(renderToStaticMarkup(React.createElement(SetupFlow, {
-      status: connected ? { state: "connected", organization: "1001", checked_at_ms: Date.UTC(2026, 10, 20, 15), source: "", problem: null } : null,
-      settings, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS, onModel() {}, onClose() {}, onExample() {}, onAutomatic() {}, initial: "sunday",
-    })));
-    expect(step(false)).toContain("Choose it from your upcoming plans");
+  it("is Settings' way to choose another plan, with the fields for typing the ids kept (first run's own step is your-service.tsx)", () => {
+    const step = (connected: boolean) => text(renderToStaticMarkup(React.createElement(SundayPicker, { connected, settings, onSettings() {}, source: { serviceTypes: () => new Promise<never>(() => {}), upcomingPlans: () => new Promise<never>(() => {}) } })));
     expect(step(false)).toContain("Connect Planning Center first.");
-    expect(step(false)).toContain("Enter the plan by hand");
     expect(step(true)).not.toContain("Connect Planning Center first.");
     expect(step(true)).toContain("Paste the plan's address (optional)");
   });

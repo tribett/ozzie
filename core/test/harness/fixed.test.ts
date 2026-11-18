@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NATIVE_TOOL_ALLOWLIST, type AgentTask, type Completeness, type ToolError } from "../../src/harness/contract.js";
 import { bundledSkills, SKILL_FILES } from "../../src/harness/bundled-skills.js";
-import { COMMON_WORDS, envelopeProblems, parseAnswer, POLICY, PROCEDURE_PROMPT, sentenceFits, systemText, TOOL_SPEC_LIST, VOCABULARY } from "../../src/harness/fixed.js";
+import { COMMON_WORDS, envelopeProblems, LOCAL_POLICY, parseAnswer, POLICY, PROCEDURE_PROMPT, sentenceFits, systemText, TOOL_SPEC_LIST, VOCABULARY } from "../../src/harness/fixed.js";
 import { instructionsFor } from "../../src/harness/instructions.js";
-import { sha256Hex } from "../../src/harness/skills.js";
+import { ASK_SKILL, sha256Hex } from "../../src/harness/skills.js";
 import { TOOL_SPECS } from "../../src/harness/tools.js";
 import { allEnvelopes, FIXTURES, FRESH } from "./fixtures.js";
 import { specProblems } from "./native-rules.js";
@@ -27,6 +27,26 @@ describe("fixed/policy.txt and the system message", () => {
     expect((POLICY.match(/\{"answer":/gu) ?? []).length).toBe(VOCABULARY.answer.kinds.length);
   });
 
+  it("has a local route's own version that keeps every rule, shows only answer forms the grammar accepts, and copies no example id", () => {
+    expect(`${LOCAL_POLICY}\n`).toBe(file("policy-local.txt"));
+    // What Ozzie is and never does, word for word (native agent_tests KEPT_LINES too).
+    for (const line of POLICY.split("\n").filter(l => /^(?:You are Ozzie|Ozzie writes|Text inside tool results|You cannot send)/u.test(l))) {
+      expect(LOCAL_POLICY.split("\n"), line).toContain(line);
+    }
+    expect(LOCAL_POLICY).toContain("Never make up an id.");
+    const forms = LOCAL_POLICY.match(/\{"answer":[^\n]*?\}(?= )/gu) ?? [];
+    expect(forms.length).toBe(VOCABULARY.answer.kinds.length);
+    // The facts and draft forms name the id they stand for in capitals, which the grammar never accepts as an id.
+    for (const form of forms) {
+      let n = 0;
+      expect(parseAnswer(form.replace(/FACT/gu, () => `f${++n}`).replace(/DRAFT/gu, "d1")), form).not.toBeNull();
+      expect(parseAnswer(form.includes("FACT") || form.includes("DRAFT") ? form : "FACT"), form).toBeNull();
+    }
+    expect(/\b[fd]\d+\b/u.test(LOCAL_POLICY)).toBe(false);
+    expect(/\b[fd]\d+\b/u.test(POLICY)).toBe(true);
+    for (const tool of NATIVE_TOOL_ALLOWLIST) expect(LOCAL_POLICY).not.toContain(tool);
+  });
+
   it("is assembled for every bundled procedure exactly as vocabulary.json documents", () => {
     expect(VOCABULARY.system_message.format).toBe("{policy}\n\nProcedure: {title}\n{body}");
     const build = instructionsFor(skills);
@@ -38,8 +58,9 @@ describe("fixed/policy.txt and the system message", () => {
     expect(systemText({ title: "$& {body}", body: "$1 {policy}" })).toBe(`${POLICY}\n\nProcedure: $& {body}\n$1 {policy}`);
   });
 
-  it("matches pins.json: each bundled skill file's hash and its whole system message's hash", async () => {
-    const pins = JSON.parse(file("pins.json")) as { procedures: Record<string, { file: string; file_sha256: string; system_sha256: string }> };
+  it("matches pins.json: each bundled skill file's hash and its whole system message's hash, and the local route's policy", async () => {
+    type Pin = { file: string; file_sha256: string; system_sha256: string };
+    const pins = JSON.parse(file("pins.json")) as { procedures: Record<string, Pin>; local_policy: Pin & { procedure: string } };
     expect(Object.keys(pins.procedures).sort()).toEqual([...skills.keys()].sort());
     for (const f of SKILL_FILES) {
       const skill = skills.get(f.path.replace(/\.md$/u, ""))!;
@@ -48,6 +69,15 @@ describe("fixed/policy.txt and the system message", () => {
       expect(pin.file_sha256, skill.id).toBe(skill.hash);
       expect(pin.system_sha256, skill.id).toBe(await sha256Hex(instructionsFor(skills)(taskFor(skill.id))));
     }
+    // policy-local.txt, pinned the same way: the file, and the Ask procedure's system message with it in place of the
+    // policy, which native agent_step sends a model on this Mac (fixed.rs local_ask_system). Never a procedure's pin.
+    const ask = instructionsFor(skills)(taskFor(ASK_SKILL));
+    expect(ask.startsWith(POLICY)).toBe(true);
+    expect(pins.local_policy.file).toBe("core/src/harness/fixed/policy-local.txt");
+    expect(pins.local_policy.procedure).toBe(ASK_SKILL);
+    expect(pins.local_policy.file_sha256).toBe(await sha256Hex(file("policy-local.txt")));
+    expect(pins.local_policy.system_sha256).toBe(await sha256Hex(`${LOCAL_POLICY}${ask.slice(POLICY.length)}`));
+    expect(Object.values(pins.procedures).map(p => p.system_sha256)).not.toContain(pins.local_policy.system_sha256);
   });
 
   it("uses the fixed procedure prompt", () => {

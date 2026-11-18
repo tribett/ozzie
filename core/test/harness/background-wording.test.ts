@@ -12,7 +12,7 @@ import {
   type Folding,
 } from "../../src/harness/background-wording.js";
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
-import { POLICY, PROCEDURE_PROMPT, systemText, TOOL_SPEC_LIST, VOCABULARY } from "../../src/harness/fixed.js";
+import { LOCAL_POLICY, POLICY, PROCEDURE_PROMPT, systemText, TOOL_SPEC_LIST, VOCABULARY } from "../../src/harness/fixed.js";
 import { allEnvelopes, FIXTURES, harnessData } from "./fixtures.js";
 
 interface Vectors {
@@ -130,8 +130,9 @@ describe("Ozzie's own sentence is the only thing set aside, and only as a whole 
 });
 
 describe("nothing Ozzie itself sends to a model holds the wording, so scanning what varies never refuses ordinary work", () => {
-  it("not the policy, any procedure's system message, any tool spec, the procedure prompt or a fixed value", () => {
+  it("not the policy (nor the local route's), any procedure's system message, any tool spec, the procedure prompt or a fixed value", () => {
     expect(backgroundWording(POLICY)).toBe(false);
+    expect(backgroundWording(LOCAL_POLICY)).toBe(false);
     expect(skills.size).toBeGreaterThan(5);
     for (const skill of skills.values()) expect(backgroundWording(pinnedText(systemText(skill))), skill.id).toBe(false);
     for (const spec of TOOL_SPEC_LIST) expect(backgroundWording(pinnedText(JSON.stringify(spec))), spec.name).toBe(false);

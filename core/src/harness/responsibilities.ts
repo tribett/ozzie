@@ -418,6 +418,14 @@ const TOPICS: readonly [TemplateId, RegExp][] = [
   ["morning-briefing", /\b(?:briefing|morning summary|morning report|morning update)\b/u],
 ];
 const SUNDAY_WORDS = /\b(?:sunday|coverage|covered|volunteers?|serving|scheduled|positions?|roles?|teams?|declines?|declined|open spots?)\b/u;
+/**
+ * The watched service named by its day, whatever day it's on (onboarding spec §5.2, C3): "keep an eye on Wednesday",
+ * "…Saturday", "…this weekend", "…the service". A weekday inside a schedule ("every Wednesday", "on Mondays") says when
+ * to look, not what, so it's taken out first; "until Wednesday" and "this Wednesday" still name the service.
+ */
+const SERVICE_WORDS = new RegExp(`\\b(?:${DAY}|weekend|(?:the|our|my|this) services?)\\b`, "u");
+const SCHEDULE_DAYS = new RegExp(`\\b(?:(?:every|each) ${DAY}|on ${DAY}s)\\b`, "gu");
+const namesService = (text: string) => SUNDAY_WORDS.test(text) || SERVICE_WORDS.test(text.replace(SCHEDULE_DAYS, " "));
 
 function parseTime(text: string): string | null {
   if (/\bat noon\b/u.test(text)) return "12:00";
@@ -459,10 +467,11 @@ function parseLifetime(text: string, now: string, zone: string, template: Templa
   const named = new RegExp(`\\b(?:${UNTIL} (this )?|(this) (?:coming )?)${DAY}\\b`, "u").exec(text);
   if (named) {
     const day = DAYS.indexOf(named[3]!);
-    // "Until Sunday" is the Sunday being watched (the first Sunday on or after the plan chosen in Settings, while it's ahead);
-    // "this Sunday" is the coming one, whatever is chosen.
-    const chosen = day === 0 && !named[1] && !named[2] ? chosenAhead(now, zone, options) : null;
-    const l = until(chosen ? sundayFrom(chosen) : coming(day));
+    // "Until Sunday" is the Sunday being watched (the first Sunday on or after the plan chosen in Settings, while it's ahead),
+    // and "until Wednesday" the chosen plan when it's on a Wednesday; "this Sunday" is the coming one, whatever is chosen.
+    const ahead = !named[1] && !named[2] ? chosenAhead(now, zone, options) : null;
+    const chosen = !ahead ? null : day === 0 ? sundayFrom(ahead) : day === weekdayOf(ahead) ? ahead : null;
+    const l = until(chosen ?? coming(day));
     return l ? { kind: "set", lifetime: l } : unclear();
   }
   if (new RegExp(`\\b${UNTIL} tomorrow\\b`, "u").test(text)) {
@@ -493,7 +502,7 @@ export function parseRequest(typed: string, now: string, zone: string, options: 
   const strong = STRONG.test(text), weak = WEAK.test(text);
   if (!strong && !weak) return { kind: "none" };
   const topics = TOPICS.filter(([, re]) => re.test(text)).map(([id]) => id);
-  const chosen: TemplateId[] = topics.length ? topics : SUNDAY_WORDS.test(text) ? ["keep-sunday-covered"] : [];
+  const chosen: TemplateId[] = topics.length ? topics : namesService(text) ? ["keep-sunday-covered"] : [];
   if (!chosen.length) return strong ? { kind: "ask", need: "what", choices: [...TEMPLATE_IDS] } : { kind: "none" };
   if (chosen.length > 1) return { kind: "ask", need: "what", choices: TEMPLATE_IDS.filter(id => chosen.includes(id)) };
   const template = chosen[0]!;

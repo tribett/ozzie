@@ -1,4 +1,6 @@
 import type { SundayRules } from "../../../core/src/sunday-capture.js";
+import { SUNDAY_WORDS, type DayWords } from "./day-words.js";
+import { dayName } from "./day-phrases.js";
 import { backgroundChecksOn, KIDS_DEFAULT_MIN, KIDS_MAX_MIN, KIDS_MAX_TEAMS, kidsTeams, withKidsBackgroundChecks, withKidsTeam } from "../../../core/src/kids-rules.js";
 
 /**
@@ -6,8 +8,10 @@ import { backgroundChecksOn, KIDS_DEFAULT_MIN, KIDS_MAX_MIN, KIDS_MAX_TEAMS, kid
  * count re-checks what was already read; the background-check rule needs the next check to read People. Teams
  * marked earlier that aren't on the Sunday checked last are still listed, so they can be removed.
  */
-export function KidsTeamsRules({ rules, onChange, teams }: {
+export function KidsTeamsRules({ rules, onChange, teams, words: d = SUNDAY_WORDS }: {
   rules: SundayRules; onChange: (r: SundayRules) => void;
+  /** The watched service's day words (Church rules passes `useDay()`); the Sunday words otherwise. */
+  words?: DayWords;
   /** Teams from the last check: team id and its position names. */
   teams: [string, string[]][];
 }) {
@@ -24,7 +28,7 @@ export function KidsTeamsRules({ rules, onChange, teams }: {
   return <section className="find rule-kids" aria-labelledby="kids-rules-title">
     <h2 id="kids-rules-title" className="h3">Kids teams</h2>
     <p className="find-body">Mark the teams that serve with children, and how many confirmed people each needs at every service time. Pending isn't counted. Ozzie counts confirmed people on the team; it doesn't check ages.</p>
-    {teams.length === 0 && <p className="small">Check a Sunday first to see its teams.</p>}
+    {teams.length === 0 && <p className="small">Check {dayName(d)} first to see its teams.</p>}
     {teams.map(([team, positionNames]) => {
       const min = minFor(team), name = positionNames.join(", "), label = `${name} team`;
       return <div className="rule-team" key={team}>
@@ -40,7 +44,7 @@ export function KidsTeamsRules({ rules, onChange, teams }: {
     {elsewhere.map(t => <div className="rule-team" key={t.team_id}>
       <div className="row rule-row">
         <span className="bold">{t.name ? `${t.name} team` : "A team marked earlier"}</span>
-        <span className="small">Not on the Sunday checked last. {t.min_confirmed} confirmed at each time.</span>
+        <span className="small">Not on the service checked last. {t.min_confirmed} confirmed at each time.</span>
         <button type="button" className="btn btn-quiet btn-sm" onClick={() => onChange(withKidsTeam(rules, t.team_id, null))}>Unmark this team</button>
       </div>
     </div>)}

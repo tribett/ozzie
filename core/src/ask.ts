@@ -56,6 +56,7 @@ import { applyDecisions, type DecisionChoice, type SundayDecision } from "./sund
 import { BACKGROUND_LINE, forModels } from "./kids-rules.js";
 import { BOOKS, containsName, fold, nameTerms, NOT_OURS, UNSPACED } from "./draft-request.js";
 import { backgroundWording, newerCharacter } from "./harness/background-wording.js";
+import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
 // Pinned natively by model_tests.rs (`the_fixed_ask_text_matches_the_webview_exactly`).
 export const ASK_SYSTEM = [
@@ -76,6 +77,7 @@ export const ASK_SYSTEM = [
   "N: a role still needs people; then the role, the service time and how many more.",
   "M: the church rules ask for a scheduled Sunday lead for the role, and none is scheduled.",
   "W: a person is pending for a role; then the role, the time, the person, and s (request sent, no answer yet) or n (request not sent yet).",
+  "B: a person is scheduled for a role and has a blockout in Planning Center at that time; then the role, the time, the person, and c (confirmed) or p (pending). Planning Center still counts them, so the role isn't open.",
   "K: a person is scheduled this many Sundays in a row; the church rules suggest a check-in, which is about care, not performance.",
   "G: part of the check couldn't be verified; then how many reads didn't complete, and s if the check is too old to treat as current.",
   "U: a Sunday lead is scheduled for the role, but their answer or serving time couldn't be confirmed.",
@@ -378,13 +380,14 @@ export function buildAskContext(session: AskSession, sources: AskSources, option
     return label;
   };
   // Every position name is a label (header, point 2), restored on this Mac.
-  const role = (finding: Finding) => {
-    const name = finding.position?.name.trim() ?? "";
+  const roleNamed = (position: string | undefined) => {
+    const name = position?.trim() ?? "";
     if (!name) return "-";
     const label = session.role(name);
     roles.set(label, name);
     return label;
   };
+  const role = (finding: Finding) => roleNamed(finding.position?.name);
   const tz = options.timeZone;
   // Decisions contribute their choice and reopened state only: never the typed reason, earlier reasons or changes.
   const decided = new Map(applyDecisions(brief, sources.decisions ?? []).items.flatMap(i => i.decision ? [[i.finding.id, i] as const] : []));
@@ -409,6 +412,10 @@ export function buildAskContext(session: AskSession, sources: AskSources, option
         for (const x of ids(f.pending_leads)) add(0, id, "w", person(x));
         break;
       case "pending": add(0, id, "W", r, where, person(f.person_id), f.notification === "sent" ? "s" : "n"); break;
+      // Each role the blockout overlaps, as Planning Center still counts them on it.
+      case "blockout":
+        for (const s of f.serving ?? []) add(0, id, "B", roleNamed(s.name), span(s.interval, tz), person(f.person_id), s.status === "pending" ? "p" : "c");
+        break;
       case "streak": add(0, id, "K", person(f.person_id), f.sundays ?? "?"); break;
       case "worth-a-look": add(0, id, "G", brief.sources.failed.length, f.stale ? "s" : "-"); break;
       // Kids rules: counts only for the team (background checks never reach here).
@@ -460,7 +467,7 @@ export function buildAskContext(session: AskSession, sources: AskSources, option
     ...(n ? [`${n} Planning Center ${n === 1 ? "read" : "reads"} didn't complete.`] : []),
     ...(brief.findings.some(f => f.kind === "worth-a-look" || f.kind === "lead-unverified") ? ["Some coverage couldn't be verified."] : []),
     ...(dropped ? ["Some details were left out to keep the question short."] : []),
-    ...(keptHere ? ["Background checks are shown on the Sunday page only; they're never sent to an AI."] : []),
+    ...(keptHere ? [`Background checks are shown on ${dayPage(brief.day ?? SUNDAY_WORDS)} only; they're never sent to an AI.`] : []),
     ...(attention && (attention.gaps.length || attention.stale || attention.status === "worth-a-look") ? ["Part of the fictional email import needs a closer look."] : []),
   ];
   const context: AskContext = Object.freeze({
@@ -491,6 +498,19 @@ export interface AskedQuestion {
 }
 export type AskPrepared = { ok: true; asked: AskedQuestion } | { ok: false; refusal: string };
 const asked = new WeakSet<AskedQuestion>();
+
+/**
+ * The sidebar page of the watched service, mid-sentence, by its real day (onboarding spec §5): "the Sunday page", "the
+ * Wednesday page", "the “This weekend” page" (the same shape as the desktop's day-phrases.ts `pageRef`).
+ */
+export const dayPage = (d: DayWords): string => d.kind === "weekday" ? `the ${d.page} page` : `the “${d.page}” page`;
+/**
+ * A fixed sentence that names "the Sunday page" (the REFUSALS below, which callers compare by identity, and the app's
+ * fixed answer lines), said with the watched service's page instead, for display only. Nothing else is changed.
+ */
+export const onDayPage = (text: string, d: DayWords): string =>
+  d.kind === "weekday" && d.weekday === 0 ? text
+    : text.replace(/\b([Tt])he Sunday page\b/gu, (_m, t: string) => t === "T" ? dayPage(d).replace(/^t/u, "T") : dayPage(d));
 
 export const REFUSALS = {
   empty: "Type a question first.",
@@ -1044,15 +1064,16 @@ export function restoreAnswer(answer: CheckedAnswer, sender: string): AskAnswer 
  *  that tool's draft, never one the AI writes). */
 export function suggestedQuestions(brief: SundayBrief | null): string[] {
   if (!brief) return [];
+  const thisOne = (brief.day ?? SUNDAY_WORDS).thisOne;
   const role = (f: Finding) => f.position?.name.replace(/\s+/gu, " ").trim() ?? "";
   const open = brief.findings.find(f => f.kind === "needs-people" && role(f));
   const flagged = brief.findings.find(f => role(f));
   const out = [
     ...(open ? [`Who could cover ${role(open)}?`] : []),
-    ...(brief.findings.some(f => f.tone === "decision") ? ["What still needs a decision this Sunday?"] : []),
+    ...(brief.findings.some(f => f.tone === "decision") ? [`What still needs a decision ${thisOne}?`] : []),
     ...(flagged ? [`Why is ${role(flagged)} flagged?`] : []),
     ...(open ? [`Draft a note to someone who could cover ${role(open)}`] : []),
-    ...(brief.findings.length === 0 ? ["What did you check for this Sunday?"] : []),
+    ...(brief.findings.length === 0 ? [`What did you check for ${thisOne}?`] : []),
   ];
   return out.slice(0, 4);
 }

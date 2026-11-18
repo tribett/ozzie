@@ -45,7 +45,7 @@ export const SOURCE_PROBLEMS: Readonly<Record<SourceProblem, string>> = Object.f
   "private-place": "Ozzie doesn't read files from that folder: it holds this Mac's own settings, hidden files or Ozzie's own. Move the file to Documents or Desktop and choose it again.",
   "list-unreadable": "Ozzie couldn't read which lists and notes you added on this Mac (they may have been saved by a newer Ozzie). Nothing was removed.",
   pdf: "That's a PDF. Ozzie reads lists saved as CSV and notes saved as plain text or Markdown.",
-  "section-title": "Ozzie can't show this section on Sunday because of how its title is written. Change the title in the file, then choose again.",
+  "section-title": "Ozzie can't show this section beside a card because of how its title is written. Change the title in the file, then choose again.",
   "not-an-address": "That doesn't look like a web address. Copy the whole link, starting with https://.",
   "not-https": "Ozzie only reads links that start with https://.",
   "sign-in-in-address": "That link has a user name or password written into it. Use the sheet's published link instead.",
@@ -62,7 +62,7 @@ export const SOURCE_PROBLEMS: Readonly<Record<SourceProblem, string>> = Object.f
   "links-unreadable": "Ozzie couldn't read its list of private links on this Mac (it may have been saved by a newer Ozzie). The links are still in this Mac's Keychain, and nothing was removed.",
   "keychain-locked": "This Mac's Keychain is locked. Unlock this Mac and try again.",
   "keychain-denied": "This Mac's Keychain didn't let Ozzie use it. Try again, and choose Allow if macOS asks.",
-  "links-left-in-keychain": "Ozzie forgot your lists and notes, but this Mac's Keychain didn't answer, so the private links' addresses are still in it. Ozzie removes them the next time you open Lists & notes and the Keychain answers.",
+  "links-left-in-keychain": "Ozzie forgot your lists and notes, but this Mac's Keychain didn't answer, so the private links' addresses are still in it. Ozzie removes them the next time you open Church lists and the Keychain answers.",
   unavailable: "Ozzie couldn't do that on this Mac just now. Try again.",
 });
 /** The problems a file and a private link share, said of a link's sheet (it is never a file on this Mac). */
@@ -96,8 +96,8 @@ export const NOTE_KIND_WORDS: Readonly<Record<NoteFindingKind, string>> = Object
   "needs-people": "Roles that still need someone",
   pending: "Requests not yet accepted",
   streak: "Serving streaks",
-  "lead-missing": "A missing Sunday lead",
-  "lead-unverified": "An unconfirmed Sunday lead",
+  "lead-missing": "A missing lead",
+  "lead-unverified": "An unconfirmed lead",
   "too-few-confirmed": "Kids teams below the number your kids rule asks for",
   "background-check": "Missing or expiring background checks",
 });

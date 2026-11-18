@@ -17,6 +17,8 @@ import { HowOzzieChecks, RulesPage } from "../src/rules-page.js";
 import { FIXED_HOW, GroupMeetings, OperationsSection, readsFor, SundayPage, Why } from "../src/sunday-page.js";
 import { HIDDEN_WORDS, row, text } from "./harness-fakes.js";
 import type { FailureCode } from "../../../core/src/harness/contract.js";
+import { DayProvider } from "../src/day-words.js";
+import { wednesdayWords } from "../../../core/test/fixtures/service-days/wednesday.js";
 
 const skills = await bundledSkills();
 const ordered = PROCEDURE_ORDER.map(id => skills.get(id)!);
@@ -40,21 +42,21 @@ const interrupted = row({ task_id: "00000000-0000-4000-8000-000000000004", kind:
 describe("What happened: the task ledger in plain words", () => {
   it("gives each task one line: what it was, how it ended, how much was looked at, and when", () => {
     expect(taskLine(answered, { now })).toBe(`Answered a question · checked · 3 things looked at · ${clock}`);
-    expect(taskLine(automatic, { now, trigger: "automatic" })).toBe(`Automatic Sunday check · ${new Date("2026-11-20T21:00:00Z").toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`);
-    expect(taskLine(automatic, { now, trigger: "manual" })).toMatch(/^Sunday check you started · /u);
+    expect(taskLine(automatic, { now, trigger: "automatic" })).toBe(`Planning Center check, on schedule · ${new Date("2026-11-20T21:00:00Z").toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`);
+    expect(taskLine(automatic, { now, trigger: "manual" })).toMatch(/^Planning Center check you started · /u);
     expect(taskLine({ ...automatic, events: [...automatic.events.slice(0, 2), ev(2, "tool", "planning_center.refresh partial"), ev(3, "verified")] }, { now }))
-      .toMatch(/^Sunday check · part of it couldn't be read · /u);
+      .toMatch(/^Planning Center check · part of it couldn't be read · /u);
     expect(taskLine(failed, { now })).toBe(`A question · Couldn't finish: the answer couldn't be backed up by what Ozzie read · ${clock}`);
     expect(taskLine(interrupted, { now, procedures: skills })).toBe(`Sunday ready · Couldn't finish: it was stopped before it finished · ${clock}`);
     expect(taskLine(row({ kind: "ask", state: "cancelled" }), { now })).toBe(`A question · You stopped it · ${clock}`);
     // A Sunday check that couldn't finish says why, true to the cause (harness-bridge.ts checkFailure).
     const check = (failure: FailureCode) => row({ kind: "check", state: "failed", failure, events: [ev(0, "admitted"), ev(1, "running"), ev(2, "failed", failure)] });
     const why = (failure: FailureCode) => taskLine(check(failure), { now, trigger: "automatic" });
-    expect(why("denied")).toBe(`Automatic Sunday check · Couldn't finish: Planning Center access wasn't available · ${clock}`);
+    expect(why("denied")).toBe(`Planning Center check, on schedule · Couldn't finish: Planning Center access wasn't available · ${clock}`);
     // Out of reach, a 429 or a 5xx alike (review N, 8).
-    expect(why("provider-failure")).toBe(`Automatic Sunday check · Couldn't finish: Planning Center didn't answer just now · ${clock}`);
-    expect(why("unverified")).toBe(`Automatic Sunday check · Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read · ${clock}`);
-    expect(why("cancelled")).toBe(`Automatic Sunday check · Couldn't finish: Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped · ${clock}`);
+    expect(why("provider-failure")).toBe(`Planning Center check, on schedule · Couldn't finish: Planning Center didn't answer just now · ${clock}`);
+    expect(why("unverified")).toBe(`Planning Center check, on schedule · Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read · ${clock}`);
+    expect(why("cancelled")).toBe(`Planning Center check, on schedule · Couldn't finish: Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped · ${clock}`);
     expect(taskAccount(check("unverified"), { now, start: "automatic" }).ended)
       .toBe("Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read.");
     expect(taskAccount(check("cancelled"), { now, start: "manual" }).ended)
@@ -72,7 +74,7 @@ describe("What happened: the task ledger in plain words", () => {
     // A question through the AI: two steps, three reads (one Ozzie doesn't allow is never named), checked, answered.
     expect(taskAccount(answered, { now })).toEqual({
       started: `You asked a question at ${clock}.`,
-      looked: ["Looked at the open roles for Sunday — all of it", "Looked at who is on the team for an open role — part of it couldn't be read",
+      looked: ["Looked at the open roles for the service — all of it", "Looked at who is on the team for an open role — part of it couldn't be read",
         "Tried something Ozzie doesn't allow — not shared with Ozzie"],
       ai: "Ozzie asked the AI twice. The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything.",
       ended: "Answered.",
@@ -81,10 +83,10 @@ describe("What happened: the task ledger in plain words", () => {
     expect(taskAccount(answered, { now, end: "not-covered" }).ended).toBe("What Ozzie read didn't answer it, and the answer said so.");
     // A question answered on this Mac: no AI.
     expect(taskAccount(row({ kind: "ask", state: "verified", events: [ev(0, "admitted"), ev(1, "running"), ev(2, "tool", "sunday.overview complete"), ev(3, "verified")] }),
-      { now, start: "on-this-mac" })).toMatchObject({ looked: ["Looked at this Sunday's overview — all of it"], ai: "No AI was used: Ozzie answered this on this Mac from its last check." });
+      { now, start: "on-this-mac" })).toMatchObject({ looked: ["Looked at the overview of the service — all of it"], ai: "No AI was used: Ozzie answered this on this Mac from its last check." });
     // The regular Sunday check, and one the leader started: Ozzie's own check, no AI.
     expect(taskAccount(automatic, { now, start: "automatic" })).toEqual({
-      started: `Ozzie checked Sunday automatically at ${t("2026-11-20T21:00:00Z")}.`, looked: ["Read this Sunday from Planning Center — all of it"],
+      started: `Ozzie checked Planning Center on schedule at ${t("2026-11-20T21:00:00Z")}.`, looked: ["Read the service from Planning Center — all of it"],
       ai: "No AI was used: this was Ozzie's own check of Planning Center.", ended: "Finished.",
     });
     expect(taskAccount(automatic, { now, start: "manual" }).started).toBe(`You asked Ozzie to check Planning Center at ${t("2026-11-20T21:00:00Z")}.`);
@@ -93,7 +95,7 @@ describe("What happened: the task ledger in plain words", () => {
       ev(4, "tool", "sunday.overview complete"), ev(5, "tool", "sunday.not_checked complete"), ev(6, "model", "2"), ev(7, "model", "2 stop"), ev(8, "verified")] });
     expect(taskAccount(job, { now, start: "job:keep-sunday-covered:scheduled" })).toEqual({
       started: `Keep Sunday covered ran on schedule, at ${clock}.`,
-      looked: ["Looked at this Sunday's overview — all of it", "Looked at what the check couldn't read — all of it"],
+      looked: ["Looked at the overview of the service — all of it", "Looked at what the check couldn't read — all of it"],
       ai: "Ozzie asked the AI twice. The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything.",
       ended: "Finished. Ozzie wrote up the facts the AI chose, and the write-up is with this job.",
     });
@@ -117,17 +119,17 @@ describe("What happened: the task ledger in plain words", () => {
     expect(aiText("ask", undefined, 0, false)).toBe("Ozzie didn't reach the AI.");
     // 13 fixed sentences, each pinned to its tool (review H, M15), none a tool's own name.
     expect(TOOL_PHRASES).toEqual({
-      "sunday.overview": "Looked at this Sunday's overview", "sunday.open_needs": "Looked at the open roles for Sunday",
+      "sunday.overview": "Looked at the overview of the service", "sunday.open_needs": "Looked at the open roles for the service",
       "sunday.who_could_help": "Looked at who is on the team for an open role", "sunday.pending_requests": "Looked at requests still waiting for an answer",
       "sunday.rule_checkins": "Looked at the check-ins your Church rules suggest", "sunday.not_checked": "Looked at what the check couldn't read",
-      "rooms.conflicts": "Looked at room bookings", "followups.unowned": "Looked at follow-ups without an owner", "groups.clashes": "Looked at group meetings on Sunday",
+      "rooms.conflicts": "Looked at room bookings", "followups.unowned": "Looked at follow-ups without an owner", "groups.clashes": "Looked at group meetings on the service's day",
       "today.attention": "Looked at the fictional email and calendar import", "rules.current": "Looked at your Church rules",
       "planning_center.refresh": "Looked at whether Planning Center needed reading again", "drafts.prepare_note": "Asked for a draft note",
     });
     expect(Object.keys(TOOL_PHRASES)).toHaveLength(13);
     // An out-of-date check isn't called a saved copy (L3); checking again where it isn't offered never reads as done (L2).
     expect(taskAccount(row({ kind: "ask", state: "verified", events: [ev(0, "tool", "sunday.overview stale")] }), { now }).looked)
-      .toEqual(["Looked at this Sunday's overview — from a check that is too old to treat as current"]);
+      .toEqual(["Looked at the overview of the service — from a check that is too old to treat as current"]);
     expect(taskAccount(row({ kind: "skill", state: "verified", events: [ev(0, "tool", "planning_center.refresh denied")] }), { now }).looked)
       .toEqual(["Didn't read Planning Center again: that isn't possible here"]);
     for (const [name, phrase] of Object.entries(TOOL_PHRASES)) { expect(phrase).not.toContain(name); expect(phrase).toMatch(/^[A-Z][a-z]/u); }
@@ -141,13 +143,13 @@ describe("What happened: the task ledger in plain words", () => {
     expect(t).toContain("What Ozzie did");
     expect(t).toContain("Recent work");
     expect(t).toContain("Every read in the latest check");
-    expect(t.indexOf("A question · Couldn't finish")).toBeLessThan(t.indexOf("Automatic Sunday check"));
+    expect(t.indexOf("A question · Couldn't finish")).toBeLessThan(t.indexOf("Planning Center check, on schedule"));
     expect(html.match(/<details class="recent-task">/g)).toHaveLength(3);
     expect(html).not.toMatch(/<details[^>]*open/);
-    expect(t).toContain("Looked at the open roles for Sunday — all of it");
+    expect(t).toContain("Looked at the open roles for the service — all of it");
     expect(t).toContain("No AI was used: this was Ozzie's own check of Planning Center.");
     expect(t).toContain("The AI's answer didn't check out against what Ozzie read, so nothing was shown.");
-    expect(t).toContain("Read this Sunday's plan");
+    expect(t).toContain("Read the service's plan");
     expect(t).not.toMatch(HIDDEN_WORDS);
     expect(t).not.toMatch(/sunday\.|planning_center|tool_calls|fidelity|egress|answer-from/u);
   });
@@ -177,7 +179,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(renderToStaticMarkup(React.createElement(RecentWork, { tasks: undefined }))).toBe("");
     expect(text(renderToStaticMarkup(React.createElement(RecentWork, { tasks: [] })))).toContain("Nothing yet.");
     // The reads list still shows with an unavailable ledger.
-    expect(text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: nov22Capture(), tasks: null })))).toContain("Read this Sunday's plan");
+    expect(text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: nov22Capture(), tasks: null })))).toContain("Read the service's plan");
   });
 });
 
@@ -221,10 +223,10 @@ describe("Sunday: See how this works says the finding came from Ozzie's own chec
   it("names the reads each kind of finding is worked out from, in What happened's own words, and never a procedure", () => {
     for (const f of brief.findings) for (const r of readsFor(f)) expect(r).toMatch(/^Read |^Every read in this check/u);
     // Held to the engine in who-could-help.test.ts (review H, L5).
-    expect(readsFor({ kind: "rooms" })).toEqual(["Read this Sunday's plan", "Read the church's time zone", "Read the list of rooms", "Read room bookings for this Sunday",
+    expect(readsFor({ kind: "rooms" })).toEqual(["Read the service's plan", "Read the church's time zone", "Read the list of rooms", "Read room bookings for the service's day",
       "Read one event's room conflicts"]);
-    expect(readsFor({ kind: "group-meetings" })).toEqual(["Read this Sunday's plan", "Read the service times", "Read who is scheduled", "Read the church's time zone",
-      "Read one person's groups", "Read one group's events this Sunday"]);
+    expect(readsFor({ kind: "group-meetings" })).toEqual(["Read the service's plan", "Read the service times", "Read who is scheduled", "Read the church's time zone",
+      "Read one person's groups", "Read one group's events on the service's day"]);
   });
 
   it("puts See how this works inside Why I flagged this on every card: Services, rooms, follow-ups and group meetings", () => {
@@ -251,5 +253,21 @@ describe("Sunday: See how this works says the finding came from Ozzie's own chec
     expect(page).not.toContain("See how this works");
     expect(text(page)).not.toMatch(HIDDEN_WORDS);
     expect(text(page)).not.toMatch(/procedure|Who could help ·/u);
+  });
+});
+
+describe("What happened for a church whose service is on a Wednesday (onboarding spec §5)", () => {
+  it("names jobs and the procedure by the real day, and points to the Wednesday page; a check's own line names no day", () => {
+    const day = wednesdayWords();
+    const job = row({ kind: "skill", skill_id: "sunday-ready", state: "verified", events: [ev(0, "admitted"), ev(1, "running"), ev(2, "tool", "sunday.overview complete"), ev(3, "verified")] });
+    expect(taskLine(job, { now, day, trigger: "job:keep-sunday-covered:scheduled", procedures: skills })).toBe(`Keep Wednesday covered · checked · 1 thing looked at · ${clock}`);
+    expect(taskAccount(job, { now, day, start: "job:keep-sunday-covered:scheduled" }).started).toBe(`Keep Wednesday covered ran on schedule, at ${clock}.`);
+    expect(taskAccount(job, { now, day, procedures: skills }).started).toBe(`Ready for Wednesday ran at ${clock}.`);
+    const lines = [taskLine(automatic, { now, day, trigger: "automatic" }), JSON.stringify(taskAccount(automatic, { now, day, start: "automatic" })), JSON.stringify(taskAccount(job, { now, day }))];
+    for (const line of lines) expect(line).not.toContain("Sunday");
+    const page = text(renderToStaticMarkup(React.createElement(DayProvider, { value: day }, React.createElement(ActivityPage, { capture: null, tasks: [], now }))));
+    expect(page).toContain("Every read appears here once Wednesday is checked, or when you open the fictional example on the Wednesday page.");
+    expect(page).not.toContain("Sunday");
+    expect(page).not.toMatch(HIDDEN_WORDS);
   });
 });

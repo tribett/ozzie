@@ -3,11 +3,14 @@ import { buildAskContext, containsNameWord, hasContactDetail, prepareAsk } from 
 import { ToolFailure } from "../../src/broker.js";
 import { HARNESS_LIMITS, NATIVE_TOOL_ALLOWLIST, type ToolEnvelope } from "../../src/harness/contract.js";
 import { HarnessSession, LABEL_PATTERN, restoreLabels } from "../../src/harness/session.js";
+import { envelopeProblems } from "../../src/harness/fixed.js";
 import { HarnessTools, localIso, TOOL_SPECS, type HarnessData } from "../../src/harness/tools.js";
 import { CHECKED, nov22Capture, PEOPLE, SERVICE, TEAMS } from "../../src/fictional-sunday.js";
 import { decide } from "../../src/sunday-decisions.js";
 import { buildSundayBrief } from "../../src/sunday-brief.js";
-import { FRESH, harnessData, LEAD_RULES, sourceStrings } from "./fixtures.js";
+import type { SundayCapture } from "../../src/sunday-capture.js";
+import { wednesdayCapture } from "../fixtures/service-days/wednesday.js";
+import { FRESH, harnessData, LEAD_RULES, sourceStrings, withScheduledBlockouts } from "./fixtures.js";
 
 const signal = new AbortController().signal;
 const tools = (data: HarnessData = harnessData(), now = FRESH) => new HarnessTools(data, new HarnessSession(), { now: () => now });
@@ -64,6 +67,26 @@ describe("Sunday tools", () => {
     const p = env.payload as { mode: string; sunday: string; reads: number; reads_not_completed: number; findings: { kind: string }[] };
     expect(p).toMatchObject({ mode: "fictional", sunday: "2026-11-22", reads: 26, reads_not_completed: 0 });
     expect(p.findings.map(f => f.kind)).toEqual(["needs people", "needs people", "pending", "check-in suggested"]);
+  });
+
+  it("overview: someone scheduled with a blockout as their label, each role with Planning Center's own status and time, worth a look", async () => {
+    const data = harnessData({ mode: "live", capture: withScheduledBlockouts(nov22Capture()) });
+    const t = tools(data);
+    const p = (await run(t, "sunday.overview")).payload as { worth_a_look: number; findings: Record<string, unknown>[] };
+    const blocked = p.findings.filter(f => f["kind"] === "scheduled with a blockout at this time");
+    const time = { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" };
+    expect(blocked).toEqual([
+      { kind: "scheduled with a blockout at this time", tone: "worth a look", person: expect.stringMatching(LABEL_PATTERN), serving: [{ role: expect.stringMatching(LABEL_PATTERN), status: "confirmed", time }] },
+      { kind: "scheduled with a blockout at this time", tone: "worth a look", person: expect.stringMatching(LABEL_PATTERN), serving: [{ role: expect.stringMatching(LABEL_PATTERN), status: "pending", time }] },
+    ]);
+    expect(blocked.map(f => personOf(t, f["person"] as string))).toEqual([PEOPLE.greeterConfirmed, PEOPLE.lyricsPending]);
+    expect(t.session.target((blocked[0]!["serving"] as { role: string }[])[0]!.role)).toMatchObject({ kind: "role", name: "Greeter" });
+    expect(p.worth_a_look).toBe(data.brief!.findings.filter(f => f.tone === "look").length);
+    // Not an open need: Planning Center still counts them, so the open roles are exactly as before.
+    const needs = async (d: HarnessData) => ((await run(tools(d), "sunday.open_needs")).payload as { needs: unknown[] }).needs;
+    expect(await needs(data)).toEqual(await needs(harnessData({ mode: "live" })));
+    // A blockout that couldn't be checked is said in Ozzie's own words under what wasn't checked.
+    expect(((await run(t, "sunday.not_checked")).payload as { services: string[] }).services).toContain("Blockouts for 1 scheduled person couldn't be checked for this service time.");
   });
 
   it("open needs: each role as a label, its time, Planning Center's remaining count and how many people were listed", async () => {
@@ -275,6 +298,34 @@ describe("today, rules, refresh and drafts", () => {
     const restored = restoreLabels((env.payload as { draft: string }).draft, t.session, { names: t.data.capture!.names, sender: "Pat", firstNames: true, timeZone: "America/New_York" });
     expect(restored).toMatch(/^Hi Riley,\n\nWe still need someone for Greeter at 9:30 AM on November 22\./);
     expect(restored).toMatch(/Thank you,\nPat$/);
+  });
+
+  it("drafts: with no service time read, the service's own date on whatever day it is, never a fixed Sunday (decision 18)", async () => {
+    const untimed = (capture: SundayCapture): HarnessData => {
+      const data = harnessData({ capture });
+      const brief = data.brief!;
+      return { ...data, brief: { ...brief, findings: brief.findings.map(f => f.position ? { ...f, position: { ...f.position, interval: null } } : f) } };
+    };
+    const drafted = async (data: HarnessData) => {
+      const t = tools(data);
+      const role = await roleLabel(t, "Greeter");
+      const people = (await run(t, "sunday.who_could_help", { role })).payload as { people: { person: string; status: string }[] };
+      const riley = people.people.find(p => personOf(t, p.person) === PEOPLE.riley)!.person;
+      const env = await t.run("drafts.prepare_note", { person: riley, role }, signal);
+      expect(envelopeProblems(env, label => t.session.has(label))).toEqual([]);
+      const draft = (env.payload as { draft: string }).draft;
+      return { draft, shown: restoreLabels(draft, t.session, { names: t.data.capture!.names, sender: "Pat", firstNames: true, timeZone: "America/New_York" }) };
+    };
+    const wednesday = await drafted(untimed(wednesdayCapture()));
+    expect(wednesday.draft).toMatch(/for \[Role \d+\] on 2026-11-25\. Would you be able to help\?/u);
+    expect(wednesday.shown).toMatch(/^Hi Riley,\n\nWe still need someone for Greeter on November 25\./u);
+    // The fictional church is a Sunday: its date, as its own.
+    expect((await drafted(untimed(nov22Capture()))).shown).toMatch(/^Hi Riley,\n\nWe still need someone for Greeter on November 22\./u);
+    // No date known either: nothing about when, rather than a day that may be wrong.
+    const dateless = untimed(wednesdayCapture());
+    const none = await drafted({ ...dateless, brief: { ...dateless.brief!, plan: { ...dateless.brief!.plan, date: null } } });
+    expect(none.shown).toMatch(/^Hi Riley,\n\nWe still need someone for Greeter\. Would you be able to help\?/u);
+    for (const d of [wednesday, none]) expect(d.shown).not.toMatch(/Sunday/u);
   });
 
   it("drafts: none for someone the check didn't list for that role's open need, or for a role with no open need (B-S1, N3)", async () => {

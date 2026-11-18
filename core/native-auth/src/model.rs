@@ -23,10 +23,11 @@ use crate::name_guard::NameGuard;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     io::{self, Read, Write},
-    path::Path,
-    sync::Mutex,
-    time::Duration,
+    path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
+    time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
 
@@ -59,8 +60,13 @@ pub const MAX_SYSTEM_CHARS: usize = 2000;
 pub const MAX_USER_CHARS: usize = 4000;
 pub const MAX_REPLY_CHARS: usize = 4000;
 pub const MAX_TOKENS: u32 = 400;
-/// Paid calls allowed until the owner raises `call_cap` in model.json.
+/// Calls allowed on the managed route's direct path (debug builds, the owner's AI Gateway key) until the owner
+/// raises `call_cap` in model.json. The own-key route has a monthly limit instead (`DEFAULT_MONTH_LIMIT`).
 pub const DEFAULT_CALL_CAP: u64 = 200;
+/// AI requests a UTC month on the church's own key (onboarding spec S8, "The monthly limit"), changeable in
+/// Settings within `MONTH_LIMITS` (`set_month_limit`). Stops a runaway bill on a key the church pays for.
+pub const DEFAULT_MONTH_LIMIT: u64 = 1_000;
+pub const MONTH_LIMITS: std::ops::RangeInclusive<u64> = 100..=20_000;
 /// Agent steps per route per day (UTC), on every route, local included, whatever the call cap,
 /// until the owner changes `agent_steps_per_day` in model.json.
 pub const DEFAULT_AGENT_STEPS_PER_DAY: u64 = 200;
@@ -95,8 +101,9 @@ pub enum ModelError {
     ModelNotAllowed,
     /// A name this session has shown appears in the request; nothing was sent.
     NamePresent,
-    /// Agent steps only: today's agent steps on this route (model.json `agent_steps_per_day`)
-    /// are spent. Rewording and Ask never return it.
+    /// Today's agent steps on this route (model.json `agent_steps_per_day`) are spent, or, through ozzie.church, the
+    /// account's own daily ceiling (429 `rate-limited`, reason `daily-limit`; re-check NM1), which rewording can meet
+    /// too. AI starts again after midnight UTC.
     DailyLimit,
     /// Ozzie managed: the church's allowance on ozzie.church is spent, so AI help is paused until
     /// it resets or the plan changes (HTTP 402 `allowance-paused`). Checks and briefings keep working.
@@ -116,6 +123,13 @@ pub enum ModelError {
     /// break; `hidden_in_note`), found here or by ozzie.church (HTTP 400 `hidden-character`). Nothing
     /// was sent to the AI (review B2 M-1).
     HiddenCharacter,
+    /// The company says the church's account has no credit left (Anthropic's "credit balance is too low" or 402,
+    /// OpenAI's `insufficient_quota` / `credit_balance_exhausted`, Google's "outstanding balance"), in normal use after
+    /// the key was saved. Nothing more is sent until credit is added.
+    NoCredit,
+    /// The church's own key: this UTC month's AI requests (model.json `month_limit`) are spent; AI pauses until
+    /// the next month. Nothing was sent.
+    MonthLimit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,9 +155,6 @@ impl Route {
             Self::Local => "local",
         }
     }
-    fn paid(self) -> bool {
-        self != Self::Local
-    }
 }
 
 /// Non-secret route settings, stored as model.json in the app data directory.
@@ -159,9 +170,19 @@ pub struct RouteConfig {
     /// Owner-set ceiling on agent steps per UTC day, on any route. Only editable in model.json.
     #[serde(default = "default_day_cap")]
     pub agent_steps_per_day: u64,
+    /// The own-key route's AI requests a UTC month (`set_month_limit`, within MONTH_LIMITS).
+    #[serde(default = "default_month_limit")]
+    pub month_limit: u64,
+    /// A local model only: when "Check that it answers" last passed for this address and model (Unix ms). Until
+    /// then the route is chosen but not checked, never "ready".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at_ms: Option<u64>,
 }
 fn default_cap() -> u64 {
     DEFAULT_CALL_CAP
+}
+fn default_month_limit() -> u64 {
+    DEFAULT_MONTH_LIMIT
 }
 fn default_day_cap() -> u64 {
     DEFAULT_AGENT_STEPS_PER_DAY
@@ -178,6 +199,10 @@ fn host_key(url: &url::Url) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
     })
+}
+/// `host_key` of a URL given as text.
+pub fn host_key_of(url: &str) -> Option<String> {
+    url::Url::parse(url).ok().as_ref().and_then(host_key)
 }
 /// Planning Center and Church Center (its people-facing site), on any route.
 pub(crate) fn planning_center_host(host: &str) -> bool {
@@ -270,7 +295,9 @@ const MODEL_WORDS: [&str; 34] = [
 /// built-in model ids are fixed text and pass; any other is checked word by word, as Ask checks a
 /// question, with vendor and family words (MODEL_WORDS) set aside.
 pub fn model_free_of_names(model: &str, names: &NameGuard) -> bool {
-    if model == MANAGED_MODEL || model == LOCAL_MODEL {
+    // Ozzie's own set-up copies on this Mac ("ozzie-qwen3:8b") are fixed text from providers.json too, so a member
+    // called Ozzie never stops them.
+    if model == MANAGED_MODEL || model == LOCAL_MODEL || crate::local_models::is_setup_name(model) {
         return true;
     }
     let mut words: Vec<&str> = Vec::new();
@@ -304,6 +331,8 @@ impl RouteConfig {
             model: MANAGED_MODEL.into(),
             call_cap: DEFAULT_CALL_CAP,
             agent_steps_per_day: DEFAULT_AGENT_STEPS_PER_DAY,
+            month_limit: DEFAULT_MONTH_LIMIT,
+            checked_at_ms: None,
         }
     }
     /// The base URL's host (see `host_key`).
@@ -357,6 +386,8 @@ impl RouteConfig {
             model: model.into(),
             call_cap: DEFAULT_CALL_CAP,
             agent_steps_per_day: DEFAULT_AGENT_STEPS_PER_DAY,
+            month_limit: DEFAULT_MONTH_LIMIT,
+            checked_at_ms: None,
         };
         config.endpoint().map_err(|_| ModelError::InvalidRequest)?;
         Ok(config)
@@ -376,6 +407,7 @@ impl RouteConfig {
         let clean = model_id_ok(&self.model)
             && self.call_cap <= 1_000_000
             && self.agent_steps_per_day <= 100_000
+            && self.month_limit <= 1_000_000
             && base.len() <= 256
             && !base.ends_with('/')
             && url.username().is_empty()
@@ -401,12 +433,17 @@ impl RouteConfig {
         if !clean || planning_center || !allowed {
             return refuse;
         }
+        // Claude through Anthropic's own Messages API (anthropic.rs); everything else speaks Chat Completions.
+        if crate::own_key::messages_wire(self) {
+            return Ok(format!("{base}/messages"));
+        }
         Ok(format!("{base}/chat/completions"))
     }
 }
 
-/// Read-only key source. Provider keys are added outside the app (macOS `security`); nothing here
-/// writes one. hosted.rs writes only Ozzie managed's device token (`hosted::TokenStore`).
+/// Read-only key source. A church's own key is written only by own_key.rs (`own_key::KeyStore`), after its
+/// check works; keys saved earlier with macOS `security` keep working. hosted.rs writes only Ozzie managed's
+/// device token (`hosted::TokenStore`).
 pub trait ModelKeys: Send + Sync {
     fn key(&self, account: &str) -> Result<Option<Zeroizing<String>>, StoreError>;
 }
@@ -489,6 +526,8 @@ pub fn request_body(config: &RouteConfig, request: &DraftRequest) -> Result<Valu
         // token budget and return empty text (observed live with claude-haiku-5.5).
         body["reasoning"] = json!({"enabled": false});
     }
+    // The church's own key at a company Ozzie knows: that company's request rules (providers.json).
+    crate::own_key::shape(config, &mut body);
     Ok(body)
 }
 
@@ -608,6 +647,15 @@ pub fn check_draft(request: &DraftRequest, names: &NameGuard) -> Result<(), Mode
     .any(|text| names.present(text))
     {
         return Err(ModelError::NamePresent);
+    }
+    // No phone number or email address either (review M5): agent steps refuse them natively and the page takes them
+    // out, but rewording now reaches outside companies with a church's own key, so the backstop holds here too. Raw
+    // and NFKC, so fullwidth digits count.
+    if [note, compat_note.as_ref()]
+        .iter()
+        .any(|text| contact_detail_strict(text))
+    {
+        return Err(ModelError::ContactDetail);
     }
     // No hidden character either, as a question may hold none (review B2 M-1); after the name check,
     // so a name split by an invisible character is still refused as a name. The page sends a position
@@ -934,22 +982,40 @@ struct Usage {
     /// The UTC day (days since 1970-01-01) `agent_steps` counts, and the agent steps that day.
     agent_day: u64,
     agent_steps: u64,
+    /// The own-key route only: the UTC month `month_calls` counts (`civil::month_of_day`), and the calls in it.
+    #[serde(skip_serializing_if = "is_zero")]
+    month: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    month_calls: u64,
 }
-/// What one call reserves in the usage file before it is sent.
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+/// What one call reserves in the usage file before it is sent, on its UTC day.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spend {
-    /// Rewording: one call against the route's paid call cap.
-    Call,
+    /// Rewording: one call against the route's cap or monthly limit.
+    Call { day: u64 },
     /// An agent step: one call, and one of the route's agent steps for this UTC day.
     AgentStep { day: u64 },
+}
+impl Spend {
+    fn day(self) -> u64 {
+        match self {
+            Self::Call { day } | Self::AgentStep { day } => day,
+        }
+    }
 }
 /// Days since 1970-01-01, UTC.
 pub(crate) fn utc_day(unix_ms: u64) -> u64 {
     unix_ms / DAY_MS
 }
-/// One call's spend against the route's usage: refused when a cap is spent. Through ozzie.church
-/// (`hosted`) the lifetime `call_cap` doesn't apply: the account's monthly allowance and its honest
-/// pause are the limit there (owner, 2026-10-26 / 2026-11-14). The daily agent-step cap still does.
+/// One call's spend against the route's usage: refused when a cap is spent. The church's own key has a UTC
+/// monthly limit (`month_limit`, onboarding spec S8; it replaced the lifetime call cap there, which stopped a
+/// church's AI for good after a few dozen questions). The lifetime `call_cap` stays only on the managed route's
+/// direct path (debug builds, the owner's key). Through ozzie.church (`hosted`) neither applies: the account's
+/// monthly allowance and its honest pause are the limit there (owner, 2026-10-26 / 2026-11-14). The daily
+/// agent-step cap applies everywhere.
 fn spend_on(
     config: &RouteConfig,
     ledger: &mut Ledger,
@@ -958,8 +1024,20 @@ fn spend_on(
 ) -> Result<(), ModelError> {
     let route = config.route;
     let usage = ledger.usage(route);
-    if route.paid() && !hosted && usage.calls >= config.call_cap {
+    if route == Route::Managed && !hosted && usage.calls >= config.call_cap {
         return Err(ModelError::Budget);
+    }
+    let monthly = route == Route::Own && !hosted;
+    if monthly {
+        // A clock that steps back keeps counting the later month rather than starting afresh.
+        let month = crate::civil::month_of_day(spend.day());
+        if month > usage.month {
+            usage.month = month;
+            usage.month_calls = 0;
+        }
+        if usage.month_calls >= config.month_limit {
+            return Err(ModelError::MonthLimit);
+        }
     }
     if let Spend::AgentStep { day } = spend {
         // A clock that steps back keeps counting the later day rather than starting afresh.
@@ -973,6 +1051,9 @@ fn spend_on(
         usage.agent_steps += 1;
     }
     usage.calls += 1;
+    if monthly {
+        usage.month_calls += 1;
+    }
     Ok(())
 }
 fn reserve(
@@ -1067,12 +1148,24 @@ fn update_ledger(
     write_private(path, &bytes).map_err(|_| ModelError::Budget)
 }
 
+/// How a request's key travels, decided with the route's wire (`own_key::key_header`), never guessed from the request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyHeader {
+    /// `Authorization: Bearer`: every route but Anthropic's own Messages API, and Ozzie managed's device token.
+    Bearer,
+    /// Anthropic's own `x-api-key` header for a Console key, whatever its kind (`sk-ant-api`, `sk-ant-usr`,
+    /// `sk-ant-svc`): a bearer token is how Anthropic's sign-in tokens arrive, so a key is never sent that way (owner's
+    /// live test, 2026-11-18).
+    XApiKey,
+}
+
 // Separate client from every Planning Center client: its own builder, no shared state.
-pub(crate) trait ModelHttp {
+pub trait ModelHttp {
+    /// One POST. `key`: the key and the header it travels in.
     fn post(
         &self,
         url: &str,
-        key: Option<&str>,
+        key: Option<(&str, KeyHeader)>,
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError>;
@@ -1082,28 +1175,59 @@ pub(crate) trait ModelHttp {
         Err(ModelError::ProviderFailure)
     }
 }
-pub(crate) struct NativeModelHttp(reqwest::blocking::Client);
+/// How long one request on the route waits for its whole answer. A model on this Mac gets the check's first-question
+/// wait: an Ask's first step reads a new question there, which took up to 47 seconds for ~3,800 tokens on a 16 GB Mac
+/// (qwen3:8b, thinking off, 2026-11-18), well past the 45 seconds an AI company is given. That is the most one call
+/// waits there, a second try without the thinking setting included (`NativeModelHttp`'s deadline); an Ask's step
+/// waits no longer than its task has left (`agent::agent_step`, review M4).
+pub fn request_wait(route: Route) -> Duration {
+    match route {
+        Route::Local => crate::local_ai::ANSWER_WAIT,
+        Route::Managed | Route::Own => Duration::from_secs(45),
+    }
+}
+pub struct NativeModelHttp {
+    client: reqwest::blocking::Client,
+    /// When every request through this client gives up, and after which none is sent: a model on this Mac's one
+    /// call (and its task's time left), so asking again without the thinking setting never gets a wait of its own.
+    until: Option<Instant>,
+}
 impl NativeModelHttp {
     pub(crate) fn new(route: Route) -> Result<Self, ModelError> {
         // Plain http is only ever reachable for a validated loopback local model.
-        Self::build(route != Route::Local, Duration::from_secs(45))
+        let client = Self::build(route != Route::Local, request_wait(route))?;
+        Ok(if route == Route::Local {
+            client.within(request_wait(route))
+        } else {
+            client
+        })
+    }
+    /// The same client, giving up `left` from now at the latest, for every request through it together.
+    pub(crate) fn within(mut self, left: Duration) -> Self {
+        let end = Instant::now() + left;
+        self.until = Some(self.until.map_or(end, |until| until.min(end)));
+        self
     }
     /// The client for a request on `route`: the managed route's may reach a debug build's 127.0.0.1
     /// server for Ozzie managed (`HostedConfig::https_only`); every other route's is `new`'s.
     pub(crate) fn for_route(route: Route, hosted: &HostedConfig) -> Result<Self, ModelError> {
         if route == Route::Managed {
-            Self::build(hosted.https_only(), Duration::from_secs(45))
+            Self::build(hosted.https_only(), request_wait(route))
         } else {
             Self::new(route)
         }
+    }
+    /// One own-key check (own_key.rs): https only, and a shorter wait than a real answer's.
+    pub fn key_check() -> Result<Self, ModelError> {
+        Self::build(true, crate::own_key::CHECK_TIMEOUT)
     }
     /// Ozzie managed's connect, account and revoke requests.
     pub(crate) fn hosted(hosted: &HostedConfig, timeout: Duration) -> Result<Self, ModelError> {
         Self::build(hosted.https_only(), timeout)
     }
     fn build(https_only: bool, timeout: Duration) -> Result<Self, ModelError> {
-        Ok(Self(
-            reqwest::blocking::Client::builder()
+        Ok(Self {
+            client: reqwest::blocking::Client::builder()
                 .https_only(https_only)
                 .no_proxy()
                 .retry(reqwest::retry::never())
@@ -1113,7 +1237,8 @@ impl NativeModelHttp {
                 .user_agent("Ozzie (https://ozzie.church)")
                 .build()
                 .map_err(|_| ModelError::ProviderFailure)?,
-        ))
+            until: None,
+        })
     }
     fn read(
         response: reqwest::blocking::Response,
@@ -1134,27 +1259,42 @@ impl ModelHttp for NativeModelHttp {
     fn post(
         &self,
         url: &str,
-        key: Option<&str>,
+        key: Option<(&str, KeyHeader)>,
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
         let mut request = self
-            .0
+            .client
             .post(url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .body(body.to_vec());
+        // Past the deadline nothing is sent; before it, the request waits only for what is left.
+        if let Some(until) = self.until {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(ModelError::ProviderFailure);
+            }
+            request = request.timeout(left);
+        }
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
-        if let Some(key) = key {
-            request = request.bearer_auth(key);
+        match key {
+            Some((key, KeyHeader::XApiKey)) => {
+                let mut value = reqwest::header::HeaderValue::from_str(key)
+                    .map_err(|_| ModelError::ProviderFailure)?;
+                value.set_sensitive(true);
+                request = request.header(crate::anthropic::KEY_HEADER, value);
+            }
+            Some((key, KeyHeader::Bearer)) => request = request.bearer_auth(key),
+            None => {}
         }
         let response = request.send().map_err(|_| ModelError::ProviderFailure)?;
         Self::read(response)
     }
     fn get(&self, url: &str, key: Option<&str>) -> Result<(u16, Zeroizing<Vec<u8>>), ModelError> {
-        let mut request = self.0.get(url).header("Accept", "application/json");
+        let mut request = self.client.get(url).header("Accept", "application/json");
         if let Some(key) = key {
             request = request.bearer_auth(key);
         }
@@ -1229,6 +1369,13 @@ pub fn reword(
     check_model(config, names)?;
     let http = NativeModelHttp::for_route(config.route, &hosted)?;
     reword_with(config, ledger, request, keys, names, &http, &hosted)
+}
+/// When every request through a client gives up, if it does (agent_tests.rs).
+#[cfg(test)]
+impl NativeModelHttp {
+    pub(crate) fn deadline(&self) -> Option<Instant> {
+        self.until
+    }
 }
 /// The current build's `HostedConfig`; tests choose one with the `_with` form.
 #[cfg(test)]
@@ -1308,7 +1455,8 @@ fn complete_using(
         http,
         hosted,
     };
-    let value = exchange.send(Spend::Call, || Ok::<(), ModelError>(()))?;
+    let day = utc_day(crate::sunday_check::unix_ms());
+    let value = exchange.send(Spend::Call { day }, || Ok::<(), ModelError>(()))?;
     let text = value["choices"][0]["message"]["content"]
         .as_str()
         .filter(|text| {
@@ -1362,22 +1510,48 @@ impl Exchange<'_> {
         before_send()?;
         reserve(self.config, self.usage, spend, self.hosted)?;
         let tagged = [self.tags];
+        let versioned = crate::own_key::route_headers(self.config);
         let headers: &[(&str, &str)] = if self.config.route == Route::Managed && !self.hosted {
             &tagged
         } else {
-            &[]
+            &versioned
         };
-        let key_text = key.as_ref().map(|k| k.as_str());
-        let (status, bytes) = self.http.post(self.url, key_text, headers, self.body)?;
+        // ozzie.church takes the device token as a bearer token; a route's own key travels as its wire says.
+        let header = if self.hosted {
+            KeyHeader::Bearer
+        } else {
+            crate::own_key::key_header(self.config)
+        };
+        let key_text = key.as_ref().map(|k| (k.as_str(), header));
+        let (mut status, mut bytes) = self.http.post(self.url, key_text, headers, self.body)?;
+        // A model on this Mac whose app refuses the thinking setting is asked once more without it, within the same
+        // call (local_ai.rs); that model is asked without it from then on.
+        if self.config.route == Route::Local
+            && crate::local_ai::refused_thinking_setting(status, &bytes)
+            && let Some(body) = crate::local_ai::without_thinking_setting(
+                &self.config.base_url,
+                &self.config.model,
+                self.body,
+            )
+        {
+            (status, bytes) = self.http.post(self.url, key_text, headers, &body)?;
+        }
         drop(key);
         // Only these fixed markers are looked for; no provider text is ever returned.
         let refused_model = |bytes: &[u8]| {
             let text = String::from_utf8_lossy(bytes);
             text.contains("RestrictedModelsError") || text.contains("no_providers_available")
         };
+        let text = String::from_utf8_lossy(&bytes);
         let refused = match status {
             _ if self.hosted => hosted::refusal(status, &bytes),
             200 => None,
+            // The same markers as the key check (own_key::out_of_credit; review F4).
+            _ if crate::own_key::out_of_credit(status, &text) => Some(ModelError::NoCredit),
+            // Google's per-day free limit: until tomorrow, not "try again in a minute" (review L11).
+            429 if text.contains("RESOURCE_EXHAUSTED") && text.contains("PerDay") => {
+                Some(ModelError::DailyLimit)
+            }
             429 => Some(ModelError::RateLimited),
             _ if refused_model(&bytes) => Some(ModelError::ModelNotAllowed),
             401 | 403 => Some(ModelError::NotConfigured),
@@ -1387,8 +1561,12 @@ impl Exchange<'_> {
         if let Some(error) = refused {
             return Err(error.into());
         }
-        let value: Value =
+        let mut value: Value =
             serde_json::from_slice(&bytes).map_err(|_| ModelError::ProviderFailure)?;
+        // Claude's own Messages reply, read back as the Chat Completions reply every reader checks.
+        if !self.hosted && crate::own_key::messages_wire(self.config) {
+            value = crate::anthropic::from_messages(&value);
+        }
         // Owner 2026-11-14: a route that requires zero data retention also requires AI Gateway's
         // confirmation of it in the reply; without it the reply is refused and none of it is read.
         // ozzie.church passes the gateway's reply through unchanged and refuses the same way, so
@@ -1453,21 +1631,161 @@ pub fn load_config(dir: &Path) -> Option<RouteConfig> {
     config.endpoint().ok()?;
     Some(config)
 }
-/// Writes model.json, keeping any owner-set caps. Keys are never accepted here. A changed base URL
-/// changes `key_account` for an own provider, so a key saved for one host is never sent to another.
+/// The saved route as the app may send on it: a model on this Mac only at Ollama's or LM Studio's own address on
+/// 127.0.0.1, and only once "Check that it answers" passed (review L8). None otherwise, so nothing is sent.
+pub fn usable_config(dir: &Path) -> Option<RouteConfig> {
+    load_config(dir).filter(|config| {
+        config.route != Route::Local
+            || (config.checked_at_ms.is_some() && local_base_allowed(&config.base_url))
+    })
+}
+/// The two addresses a model on this Mac may have (local_ai.rs).
+pub fn local_base_allowed(base: &str) -> bool {
+    [crate::local_ai::OLLAMA, crate::local_ai::LM_STUDIO]
+        .iter()
+        .any(|origin| base == format!("{origin}/v1"))
+}
+/// Every choice of AI route made in this run of the app, counted per app data folder, in memory only (a check never
+/// outlives the app): a route saved (by the page, or by a check that passed), "No AI for now", the church's keys
+/// removed, Ozzie's AI signed out on this Mac. A check reads the count as it begins and switches the route only if it
+/// is unchanged when it ends, so a check the person walked away from never undoes what they chose since (review M-2).
+static ROUTE_CHOICES: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+/// One choice of route being made: every other choice waits until it is dropped, so a check's comparison and its save
+/// are never split by another. Every write or removal of model.json that chooses a route goes through one.
+pub(crate) struct RouteChoice(MutexGuard<'static, BTreeMap<PathBuf, u64>>);
+pub(crate) fn route_choice() -> RouteChoice {
+    RouteChoice(ROUTE_CHOICES.lock().unwrap_or_else(|e| e.into_inner()))
+}
+impl RouteChoice {
+    /// How many choices of route `dir` has seen.
+    pub(crate) fn generation(&self, dir: &Path) -> u64 {
+        self.0.get(dir).copied().unwrap_or(0)
+    }
+    /// One more choice made in `dir`, whether or not what it wrote could be kept: the person chose since.
+    pub(crate) fn made(&mut self, dir: &Path) {
+        let count = self.0.entry(dir.to_path_buf()).or_default();
+        *count = count.wrapping_add(1);
+    }
+    /// The route chosen: model.json written (`write_config`), and counted.
+    pub(crate) fn save(
+        &mut self,
+        dir: &Path,
+        config: RouteConfig,
+        checked_at_ms: Option<u64>,
+    ) -> Result<RouteConfig, ModelError> {
+        self.made(dir);
+        write_config(dir, config, checked_at_ms)
+    }
+    /// No route chosen: model.json removed, and counted.
+    pub(crate) fn clear(&mut self, dir: &Path) -> Result<(), ModelError> {
+        self.made(dir);
+        match std::fs::remove_file(dir.join(CONFIG_FILE)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                Err(ModelError::ProviderFailure)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+/// How many choices of AI route `dir` has seen in this run of the app. A check reads it as it begins.
+pub fn route_generation(dir: &Path) -> u64 {
+    route_choice().generation(dir)
+}
+/// A choice that ends what a check would switch to without choosing a route itself: the church's keys removed, Ozzie's
+/// AI signed out on this Mac.
+pub fn route_choice_made(dir: &Path) {
+    route_choice().made(dir);
+}
+/// Writes model.json, keeping any owner-set caps and the monthly limit. Keys are never accepted here. A changed
+/// base URL changes `key_account` for an own provider, so a key saved for one host is never sent to another. A local
+/// model's check stays only while the route, address and model are the ones that were checked.
 pub fn save_config(
     dir: &Path,
     route: Route,
     base_url: Option<&str>,
     model: Option<&str>,
 ) -> Result<RouteConfig, ModelError> {
-    let mut config = RouteConfig::new(route, base_url, model)?;
+    let config = RouteConfig::new(route, base_url, model)?;
+    route_choice().save(dir, config, None)
+}
+/// "Check that it answers" passed: the local route at this address and model, checked at `at_ms`, for a check that
+/// began when `route_generation` was `began`. None, with nothing written, when another choice was made since.
+pub fn save_local_checked(
+    dir: &Path,
+    base_url: &str,
+    model: &str,
+    at_ms: u64,
+    began: u64,
+) -> Result<Option<RouteConfig>, ModelError> {
+    let config = RouteConfig::new(Route::Local, Some(base_url), Some(model))?;
+    let mut choice = route_choice();
+    if choice.generation(dir) != began {
+        return Ok(None);
+    }
+    choice.save(dir, config, Some(at_ms)).map(Some)
+}
+fn write_config(
+    dir: &Path,
+    mut config: RouteConfig,
+    checked_at_ms: Option<u64>,
+) -> Result<RouteConfig, ModelError> {
     if let Some(previous) = load_config(dir) {
         config.call_cap = previous.call_cap;
         config.agent_steps_per_day = previous.agent_steps_per_day;
+        config.month_limit = previous.month_limit;
+        let same = previous.route == config.route
+            && previous.base_url == config.base_url
+            && previous.model == config.model;
+        if same && config.route == Route::Local {
+            config.checked_at_ms = previous.checked_at_ms;
+        }
     }
-    let bytes = serde_json::to_vec_pretty(&config).map_err(|_| ModelError::InvalidRequest)?;
-    write_private(&dir.join(CONFIG_FILE), &bytes).map_err(|_| ModelError::ProviderFailure)?;
+    if config.route == Route::Local && checked_at_ms.is_some() {
+        config.checked_at_ms = checked_at_ms;
+    }
+    put_config(dir, &config)?;
+    Ok(config)
+}
+fn put_config(dir: &Path, config: &RouteConfig) -> Result<(), ModelError> {
+    let bytes = serde_json::to_vec_pretty(config).map_err(|_| ModelError::InvalidRequest)?;
+    write_private(&dir.join(CONFIG_FILE), &bytes).map_err(|_| ModelError::ProviderFailure)
+}
+/// No route chosen ("Remove this key"): model.json is removed. The usage file stays, so this month's count holds.
+pub fn clear_config(dir: &Path) -> Result<(), ModelError> {
+    route_choice().clear(dir)
+}
+/// "Remove this model from this Mac": when the route chosen is a model on this Mac at Ollama's address and is one of
+/// `models`, no route is chosen any more (a choice, counted). True when it was cleared; any other route stays.
+pub fn clear_local_if(dir: &Path, models: &[String]) -> Result<bool, ModelError> {
+    let mut choice = route_choice();
+    let removed = load_config(dir).is_some_and(|config| {
+        config.route == Route::Local
+            && config.base_url == crate::local_ai::App::Ollama.base()
+            && models.iter().any(|m| *m == config.model)
+    });
+    if removed {
+        choice.clear(dir)?;
+    }
+    Ok(removed)
+}
+/// "No AI for now" (spec S6, from setup or Settings): no route is chosen, so no AI request goes anywhere. A model on
+/// this Mac or Ozzie's AI is switched off as surely as an own key. Nothing else changes: the church's own key stays in
+/// the Keychain until they choose "Remove my key from this Mac" (own_key.rs `remove_keys`), and Ozzie's AI's sign-in
+/// on this Mac stays until its own Disconnect (`managed_disconnect`).
+pub fn choose_no_ai(dir: &Path, keys: &dyn ModelKeys) -> Result<ModelStatus, ModelError> {
+    clear_config(dir)?;
+    Ok(status(dir, keys))
+}
+/// Settings' "Change the limit": the own-key route's AI requests a month, within MONTH_LIMITS.
+pub fn set_month_limit(dir: &Path, limit: u64) -> Result<RouteConfig, ModelError> {
+    if !MONTH_LIMITS.contains(&limit) {
+        return Err(ModelError::InvalidRequest);
+    }
+    // Not a choice of route, but no check's save may land between this read and this write.
+    let _choice = route_choice();
+    let mut config = load_config(dir).ok_or(ModelError::NotConfigured)?;
+    config.month_limit = limit;
+    put_config(dir, &config)?;
     Ok(config)
 }
 
@@ -1491,6 +1809,22 @@ pub struct ModelStatus {
     pub managed: &'static str,
     /// The church's plan and usage on ozzie.church, when connected and known (`hosted::attach`).
     pub account: Option<hosted::Account>,
+    /// The own route at a company Ozzie knows (own_key.rs presets): "openai", "anthropic" or "gemini".
+    pub provider: Option<&'static str>,
+    /// The own route's month: requests used, the limit, and the day it starts again.
+    pub month: Option<MonthView>,
+    /// The local route: when "Check that it answers" last passed (Unix ms); None until it has.
+    pub checked_at_ms: Option<u64>,
+    /// The local route is a catalogue model Ozzie no longer offers, or Ozzie's copy of one (providers.json `offered`:
+    /// the small model, withdrawn 2026-11-18). It keeps working; the page says so (review L-4).
+    pub not_offered: bool,
+}
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct MonthView {
+    pub used: u64,
+    pub limit: u64,
+    /// `YYYY-MM-01`, UTC.
+    pub resets_on: String,
 }
 pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
     status_for(dir, keys, cfg!(debug_assertions))
@@ -1498,6 +1832,33 @@ pub fn status(dir: &Path, keys: &dyn ModelKeys) -> ModelStatus {
 /// `debug`: a debug build, where the managed route may still go straight to AI Gateway with the
 /// owner's key when this Mac has no device token.
 pub(crate) fn status_for(dir: &Path, keys: &dyn ModelKeys, debug: bool) -> ModelStatus {
+    status_at(dir, keys, debug, crate::sunday_check::unix_ms())
+}
+/// The own route's month as of `now_ms`, from the usage file (an unreadable one counts as spent).
+fn month_view(dir: &Path, config: &RouteConfig, now_ms: u64) -> MonthView {
+    let day = utc_day(now_ms);
+    let month = crate::civil::month_of_day(day);
+    let used = {
+        let _lock = LEDGER.lock().unwrap_or_else(|e| e.into_inner());
+        match read_ledger(&dir.join(LEDGER_FILE)) {
+            Ok(mut ledger) => {
+                let own = ledger.usage(Route::Own);
+                if own.month == month {
+                    own.month_calls
+                } else {
+                    0
+                }
+            }
+            Err(_) => config.month_limit,
+        }
+    };
+    MonthView {
+        used,
+        limit: config.month_limit,
+        resets_on: crate::civil::next_month_start(day),
+    }
+}
+pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u64) -> ModelStatus {
     let Some(config) = load_config(dir) else {
         return ModelStatus {
             configured: false,
@@ -1507,6 +1868,10 @@ pub(crate) fn status_for(dir: &Path, keys: &dyn ModelKeys, debug: bool) -> Model
             key_account: None,
             managed: "not-connected",
             account: None,
+            provider: None,
+            month: None,
+            checked_at_ms: None,
+            not_offered: false,
         };
     };
     let host = config.host().unwrap_or_default();
@@ -1538,28 +1903,51 @@ pub(crate) fn status_for(dir: &Path, keys: &dyn ModelKeys, debug: bool) -> Model
                 "not-connected"
             },
             account: None,
+            provider: None,
+            month: None,
+            checked_at_ms: None,
+            not_offered: false,
         };
     }
-    let configured = key_for(&config, keys).is_ok();
+    let has_key = key_for(&config, keys).is_ok();
+    // Never "ready" for a local model before "Check that it answers" passed (spec S9).
+    let checked = config.route != Route::Local || config.checked_at_ms.is_some();
+    let month = (config.route == Route::Own).then(|| month_view(dir, &config, now_ms));
+    let spent = month.as_ref().is_some_and(|m| m.used >= m.limit);
     // Presence only: a key under the old unbound account is looked at, never used.
     let unbound = || matches!(keys.key(LEGACY_OWN_ACCOUNT), Ok(Some(key)) if usable_key(&key));
-    let setup = match (configured, config.route) {
+    let setup = match (has_key, config.route) {
+        (true, _) if !checked => "not-checked",
+        (true, _) if spent => "month-limit",
         (true, _) => "ready",
         (false, Route::Own) if unbound() => "own-key-not-bound",
         (false, _) => "no-key",
     };
-    let label = match config.route {
-        Route::Own => format!("Your AI provider at {host} ({})", config.model),
-        _ => format!("AI model on this Mac ({})", config.model),
+    let provider = crate::own_key::preset_for(&config);
+    let label = match (config.route, provider) {
+        (Route::Own, Some(preset)) => format!("{}, with your key ({})", preset.name, config.model),
+        (Route::Own, None) => format!("Your AI provider at {host} ({})", config.model),
+        // Ozzie's set-up copy is named as the model it is a copy of: the same model, given room (local_models.rs).
+        _ => format!(
+            "AI model on this Mac ({})",
+            crate::local_models::shown_name(&config.model)
+        ),
     };
     ModelStatus {
-        configured,
+        configured: has_key && checked,
         route: config.route.name(),
         label,
         setup,
         key_account: config.key_account(),
         managed: "not-connected",
         account: None,
+        provider: provider.map(|p| p.id.as_str()),
+        month,
+        checked_at_ms: config
+            .checked_at_ms
+            .filter(|_| config.route == Route::Local),
+        not_offered: config.route == Route::Local
+            && crate::local_models::no_longer_offered(&config.model),
     }
 }
 

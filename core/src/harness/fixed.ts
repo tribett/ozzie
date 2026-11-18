@@ -5,6 +5,7 @@
 //   vocabulary.json   the closed set of keys and fixed words a tool result may hold, the fact and draft ids,
 //                     the closed grammar of a final answer, the system message format and the procedure prompt.
 //   common-words.txt  ordinary English words, for the "capitalized only" name rule (names.ts).
+//   policy-local.txt  the policy an Ask step to a model on this Mac carries instead (native agent.rs step_body).
 // `?raw` makes Vite (the desktop build) and vitest import each file's exact text, as for the skill files.
 //
 // Because these texts are fixed and pinned on both sides, they are never name-scanned: a church member
@@ -12,6 +13,7 @@
 // every string in a tool result must be a fixed value, a placeholder label, an ISO time or date, or
 // (under a few keys) a sentence of fixed words (envelopeProblems below), so no source text can ride along.
 import commonWordsText from "./fixed/common-words.txt?raw";
+import localPolicyText from "./fixed/policy-local.txt?raw";
 import policyText from "./fixed/policy.txt?raw";
 import specsText from "./fixed/tool-specs.json?raw";
 import vocabularyText from "./fixed/vocabulary.json?raw";
@@ -44,6 +46,13 @@ const deepFreeze = <T>(value: T): T => {
 
 /** policy.txt without its final line break. */
 export const POLICY = policyText.replace(/\r?\n$/u, "");
+/**
+ * policy-local.txt without its final line break: on the wire to a model on this Mac, native agent_step puts it in place
+ * of POLICY in the Ask procedure's system message, after every check passed on the message as sent (agent.rs
+ * `step_body`, fixed.rs `local_ask_system`). The same procedure and rules, no example ids, and which lookup fits which
+ * question (measured 2026-11-18). Nothing here sends it.
+ */
+export const LOCAL_POLICY = localPolicyText.replace(/\r?\n$/u, "");
 export const TOOL_SPEC_LIST: readonly ToolSpec[] = deepFreeze(JSON.parse(specsText) as ToolSpec[]);
 export const VOCABULARY: Readonly<Vocabulary> = deepFreeze(JSON.parse(vocabularyText) as Vocabulary);
 /** The user message of a procedure task. */

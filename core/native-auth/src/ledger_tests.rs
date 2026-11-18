@@ -1143,3 +1143,38 @@ fn admission_order_never_wraps() {
     );
     assert_eq!(ledger.list(10).len(), 1);
 }
+
+#[test]
+fn review_m4_how_long_a_task_has_been_running_is_awake_time_from_its_move_to_running() {
+    static AWAKE: AtomicU64 = AtomicU64::new(5_000);
+    fn awake() -> u64 {
+        AWAKE.load(Ordering::SeqCst)
+    }
+    let dir = TempDir::new("running-for");
+    let ledger = open(&dir).with_awake(awake);
+    admit(&ledger, 1);
+    // Admitted is not running yet.
+    assert_eq!(ledger.running_for(&task(1)), None);
+    ledger.transition(&task(1), "running", None).unwrap();
+    assert_eq!(
+        ledger.running_for(&task(1)),
+        Some(std::time::Duration::ZERO)
+    );
+    // The ledger's own clock (the wall clock, which can jump) plays no part.
+    AWAKE.store(35_000, Ordering::SeqCst);
+    assert_eq!(
+        ledger.running_for(&task(1)),
+        Some(std::time::Duration::from_secs(30))
+    );
+    // Ended, unknown, or from an earlier launch (never seen running here): none.
+    ledger
+        .transition(&task(1), "failed", Some("timeout"))
+        .unwrap();
+    assert_eq!(ledger.running_for(&task(1)), None);
+    assert_eq!(ledger.running_for(&task(2)), None);
+    admit(&ledger, 3);
+    ledger.transition(&task(3), "running", None).unwrap();
+    drop(ledger);
+    let reopened = open(&dir).with_awake(awake);
+    assert_eq!(reopened.running_for(&task(3)), None);
+}

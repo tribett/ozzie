@@ -65,12 +65,12 @@ describe("Stop flagging this", () => {
     expect(stopText(role, nameOf)).toBe("Don't flag requests not yet accepted for Lyrics.");
   });
 
-  it("a missing Sunday lead is about the whole team", () => {
+  it("a missing lead is about the whole team", () => {
     const b = brief(nov22Capture(), leadRules);
     const lead = target(b, "lead-missing");
     expect(stopScopes(lead)).toEqual([{ team_id: TEAMS.nursery }]);
     const entry = stopEntry(lead, { team_id: TEAMS.nursery }, AT);
-    expect(stopText(entry, nameOf)).toBe("Don't flag a missing Sunday lead for the Nursery team.");
+    expect(stopText(entry, nameOf)).toBe("Don't flag a missing lead for the Nursery team.");
     expect(find(brief(nov22Capture(), withFeedback([entry], leadRules)), "lead-missing")).toBeUndefined();
   });
 
@@ -158,7 +158,7 @@ describe("Always do this", () => {
     expect(alwaysFor([entry], { ...pending, scope: { team_id: TEAMS.greeter, position: "Greeter", person_id: PEOPLE.riley } })).toBeNull();
     const lead = target(brief(nov22Capture(), leadRules), "lead-missing");
     expect(lead.action).toBe("prepare-leader-note");
-    expect(alwaysText(alwaysEntry(lead, AT), nameOf)).toBe("Always prepare a note to the team's leader about a missing Sunday lead for the Nursery team.");
+    expect(alwaysText(alwaysEntry(lead, AT), nameOf)).toBe("Always prepare a note to the team's leader about a missing lead for the Nursery team.");
     expect(target(brief(), "streak").action).toBeNull();
     expect(() => alwaysEntry(target(brief(), "streak"), AT)).toThrow();
   });
@@ -359,5 +359,36 @@ describe("keeping entries", () => {
   it("names a new kind of finding plainly until it has its own words", () => {
     expect(kindWords("kids-room-adults")).toBe("findings like this");
     expect(stopText({ kind: "kids-room-adults", scope: { team_id: "9", position: "Kids" }, labels: {} }, nameOf)).toBe("Don't flag findings like this for Kids.");
+  });
+});
+
+// Someone scheduled with a blockout over their serving time (fixture matrix C30-C37).
+describe("someone scheduled with a blockout", () => {
+  const blockedOut = (ends_at = "2026-11-23T04:59:59Z") => {
+    const capture = nov22Capture();
+    capture.reads.find(r => r.collection === "person_blockouts" && r.person_id === PEOPLE.greeterConfirmed)!.body = {
+      data: [{ type: "Blockout", id: "b1", attributes: { starts_at: "2026-11-22T05:00:00Z", ends_at, repeat_frequency: "no_repeat" } }], meta: { count: 1, total_count: 1 } };
+    return capture;
+  };
+
+  it("is about that person in that role, can be stopped for them or the role, and never sends a notice", () => {
+    const t = target(brief(blockedOut()), "blockout");
+    expect(t).toMatchObject({ kind: "blockout", tone: "look", scope: { team_id: TEAMS.greeter, position: "Greeter", person_id: PEOPLE.greeterConfirmed }, action: null });
+    expect(stopScopes(t)).toEqual([{ team_id: TEAMS.greeter, position: "Greeter", person_id: PEOPLE.greeterConfirmed }, { team_id: TEAMS.greeter, position: "Greeter" }]);
+    expect(stopText(stopEntry(t, stopScopes(t)[0]!, AT), nameOf)).toBe(`Don't flag blockouts during serving times for ${names[PEOPLE.greeterConfirmed]} as Greeter.`);
+    expect(find(brief(blockedOut(), withFeedback([stopEntry(t, stopScopes(t)[0]!, AT)])), "blockout")).toBeUndefined();
+    expect(canPromote(t)).toBe(false);
+    expect(canDemote(t)).toBe(false);
+  });
+
+  it("This isn't right hides it only while the blockout's facts stay the same", () => {
+    const entry = correctionEntry(target(brief(blockedOut()), "blockout"), "They moved it to Saturday", AT);
+    expect(find(brief(blockedOut(), withFeedback([entry])), "blockout")).toBeUndefined();
+    // Their serving rows changed (now pending as well as confirmed): it shows again.
+    const more = blockedOut();
+    (more.reads.find(r => r.collection === "team_members")!.body!.data as unknown[]).push({ type: "PlanPerson", id: "404",
+      attributes: { status: "U", team_position_name: "Usher", notification_sent_at: null },
+      relationships: { person: { data: { type: "Person", id: PEOPLE.greeterConfirmed } }, team: { data: { type: "Team", id: TEAMS.greeter } }, times: { data: [{ type: "PlanTime", id: "9001" }] } } });
+    expect(find(brief(more, withFeedback([entry])), "blockout")).toBeDefined();
   });
 });

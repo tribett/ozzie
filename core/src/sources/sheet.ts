@@ -1,5 +1,5 @@
 // A spreadsheet the leader added from this Mac (CSV or TSV): its bytes as text, then its header and rows, as the
-// "Lists & notes" page and a matched Sunday card show them. Only shown on this Mac, as the church's own words; never
+// "Church lists" page and a matched Sunday card show them. Only shown on this Mac, as the church's own words; never
 // part of a model request, a notice or the copy for other AI apps (core/test/sources/stays-on-this-mac.test.ts).
 //
 // Pure: no I/O. Runs in the page. Every header and cell is one plain line (text.ts); a cell that looks like a formula

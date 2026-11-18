@@ -1,4 +1,4 @@
-//! "Lists & notes": spreadsheet files the leader adds from this Mac (CSV, TSV or plain text), and private links to
+//! "Church lists": spreadsheet files the leader adds from this Mac (CSV, TSV or plain text), and private links to
 //! published sheets, shown only on this Mac as the church's own words. The leader chooses a file in Ozzie's own open panel; the page never names a path and
 //! never gets one back (it sees the file's name). Each read opens the file again from where it is, as card photos are
 //! opened (card_picker.rs `read_card_photo`): a regular file, not followed through a link, within the size limit, and
@@ -544,7 +544,7 @@ pub struct MatchInput {
     #[serde(default)]
     pub position_name: Option<String>,
 }
-/// What the leader set on the Lists & notes page, whole: the label, the column that names a team or role, the columns
+/// What the leader set on the Church lists page, whole: the label, the column that names a team or role, the columns
 /// shown on a Sunday card and the matches.
 #[derive(Debug, Clone)]
 pub struct SourceChange {
@@ -1574,7 +1574,7 @@ pub async fn church_source_read(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// What the leader set on the Lists & notes page for one list: its label, the column that names a team or role, the
+/// What the leader set on the Church lists page for one list: its label, the column that names a team or role, the
 /// columns shown on a Sunday card (at most 8) and the matches. Every field is made plain and checked here.
 #[tauri::command]
 pub async fn church_source_set(

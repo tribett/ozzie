@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { captureToCoverage, servingStreaks, type SundayRules } from "../src/sunday-capture.js";
 import { evaluateCoverage } from "../src/coverage.js";
-import { CHECKED, PEOPLE, TEAMS, nov22Capture } from "../src/fictional-sunday.js";
+import { CHECKED, PEOPLE, SERVICE, TEAMS, nov22Capture } from "../src/fictional-sunday.js";
 
 const NOW = "2026-11-20T15:05:00Z";
 /** Drew's repeating blockout is a deliberate "Worth a look"; remove it to test overall status paths. */
@@ -110,7 +110,42 @@ describe("Sunday capture to coverage", () => {
     const r = evaluate();
     expect(r.mapped.input.scopes.every(s => s.check_time === CHECKED)).toBe(true);
   });
+
+  it("gives the engine each scheduled person's own blockouts, so a confirmed person blocked out is found and the need stays Planning Center's", () => {
+    const capture = settled();
+    blockout(capture, PEOPLE.greeterConfirmed, ALL_DAY);
+    const r = evaluate(capture);
+    const greeter = r.mapped.input.positions.find(p => p.position_id === r.mapped.positions.find(x => x.name === "Greeter")!.position_id)!;
+    expect(greeter.scheduled).toEqual([{ assignment_id: "401", person_id: PEOPLE.greeterConfirmed, blockouts: { scope_id: `person:${PEOPLE.greeterConfirmed}`, value: [ALL_DAY] } }]);
+    expect(position(r, "Greeter").scheduled_blockouts).toEqual([{ assignment_id: "401", person_id: PEOPLE.greeterConfirmed, interval: SERVICE }]);
+    expect(position(r, "Greeter").remaining_need).toBe(1);
+    expect(position(r, "Nursery").scheduled_blockouts).toEqual([]);
+  });
+
+  it("a scheduled person's repeating blockout can't be checked, so it is never read as clear", () => {
+    const capture = settled();
+    blockout(capture, PEOPLE.lyricsPending, { ...ALL_DAY, repeat_frequency: "every_1_week" });
+    const r = evaluate(capture);
+    expect(position(r, "Lyrics").scheduled_blockouts).toEqual([]);
+    expect(r.result.issues).toContainEqual(expect.objectContaining({ code: "blockout-unverified", person_id: PEOPLE.lyricsPending }));
+  });
+
+  it("a scheduled person whose blockouts were never read is not checked for them", () => {
+    const capture = settled();
+    capture.reads = capture.reads.filter(x => !(x.collection === "person_blockouts" && x.person_id === PEOPLE.greeterConfirmed));
+    const r = evaluate(capture);
+    const greeter = r.mapped.input.positions.find(p => p.position_id === r.mapped.positions.find(x => x.name === "Greeter")!.position_id)!;
+    expect(greeter.scheduled).toEqual([]);
+    expect(r.result.status).toBe("findings");
+  });
 });
+
+const ALL_DAY = { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z" };
+/** One Planning Center blockout for a person in the fictional capture (replacing theirs). */
+function blockout(capture: ReturnType<typeof nov22Capture>, person: string, attributes: Record<string, unknown>) {
+  const read = capture.reads.find(x => x.collection === "person_blockouts" && x.person_id === person)!;
+  read.body = { data: [{ type: "Blockout", id: `b${person}`, attributes: { repeat_frequency: "no_repeat", ...attributes } }], meta: { count: 1, total_count: 1 } };
+}
 
 describe("Church rule: check in after N Sundays in a row", () => {
   it("flags only confirmed runs that reach the church's number", () => {

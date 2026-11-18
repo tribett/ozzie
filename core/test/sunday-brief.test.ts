@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildSundayBrief, leadKey, needKey, shownUncertainties, sundayShownCount, teamLeaders } from "../src/sunday-brief.js";
 import type { SundayCapture } from "../src/sunday-capture.js";
-import { nov22Capture, PEOPLE, TEAMS } from "../src/fictional-sunday.js";
+import { nov22Capture, PEOPLE, SERVICE, TEAMS } from "../src/fictional-sunday.js";
 import { fictionalOperations, withFictionalOperations } from "../src/fictional-operations.js";
 import { sundayOperations, type SundayOperations } from "../src/operations-capture.js";
 import { applyDecisions, decide } from "../src/sunday-decisions.js";
+import { wednesdayCapture, wednesdayWords } from "./fixtures/service-days/wednesday.js";
 
 const NOW = "2026-11-20T15:05:00Z";
 const rules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
@@ -155,6 +156,39 @@ describe("Sunday lead rule", () => {
     expect(lead.pending_leads).toEqual([PEOPLE.nurseryLeader]);
   });
 
+  // B-1 (2026-11-18): a scheduled lead's row attaches to every position of their team, so a pending lead on a team with
+  // two positions was listed as pending once per position, under the same id, and named with each position's name.
+  it("a pending scheduled lead on a team with two positions is one pending finding, named for the lead's own role", () => {
+    const withLead = (helper: boolean) => {
+      const capture = nov22Capture();
+      if (helper) rowsOf(capture, "needed_positions").push({ type: "NeededPosition", id: "303", attributes: { quantity: 1, team_position_name: "Nursery Helper" },
+        relationships: { team: { data: { type: "Team", id: TEAMS.nursery } }, time: { data: { type: "PlanTime", id: "9001" } } } });
+      rowsOf(capture, "team_members").push({ type: "PlanPerson", id: "404", attributes: { status: "U", team_position_name: "Nursery Lead", notification_sent_at: "2026-11-01T12:00:00Z" },
+        relationships: { person: { data: { type: "Person", id: PEOPLE.nurseryLeader } }, team: { data: { type: "Team", id: TEAMS.nursery } }, times: { data: [{ type: "PlanTime", id: "9001" }] } } });
+      return buildSundayBrief(capture, nurseryLead, NOW);
+    };
+    const brief = withLead(true);
+    const ids = brief.findings.map(f => f.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(brief.findings.filter(f => f.kind === "pending").map(f => [f.id, f.person_id, f.position!.name, f.notification])).toEqual([
+      ["pending:404", PEOPLE.nurseryLeader, "Nursery Lead", "sent"],
+      ["pending:403", PEOPLE.lyricsPending, "Lyrics", "unsent"],
+    ]);
+    // A second position on the team adds its own need, and nothing to Worth a look: the count Today and the sidebar show.
+    const one = sundayShownCount(applyDecisions(withLead(false), []), null), two = sundayShownCount(applyDecisions(brief, []), null);
+    expect(two).toEqual({ ...one, decisions: one.decisions + 1 });
+    // The pending lead is still a fact on the lead card, as before.
+    expect(brief.findings.find(f => f.kind === "lead-missing")!.pending_leads).toEqual([PEOPLE.nurseryLeader]);
+    expect(brief.findings.find(f => f.id === "pending:404")!.position!.interval).toEqual(SERVICE);
+    // A lead serving another time is named at their own time, not at the first position's of their team.
+    const capture = nov22Capture();
+    const later = { starts_at: "2026-11-22T17:00:00Z", ends_at: "2026-11-22T18:00:00Z" };
+    rowsOf(capture, "plan_times").push({ type: "PlanTime", id: "9002", attributes: { ...later, time_type: "service" }, relationships: {} });
+    rowsOf(capture, "team_members").push({ type: "PlanPerson", id: "404", attributes: { status: "U", team_position_name: "Nursery Lead", notification_sent_at: null },
+      relationships: { person: { data: { type: "Person", id: PEOPLE.nurseryLeader } }, team: { data: { type: "Team", id: TEAMS.nursery } }, times: { data: [{ type: "PlanTime", id: "9002" }] } } });
+    expect(buildSundayBrief(capture, nurseryLead, NOW).findings.find(f => f.id === "pending:404")!.position).toMatchObject({ name: "Nursery Lead", interval: later });
+  });
+
   it("a lead whose serving time can't be verified is Worth a look, never a confirmed lead", () => {
     const capture = nov22Capture();
     rowsOf(capture, "team_members").push({ type: "PlanPerson", id: "405", attributes: { status: "C", team_position_name: "Nursery Lead", notification_sent_at: null },
@@ -202,5 +236,134 @@ describe("Worth a look and What I didn't check", () => {
     const text = buildSundayBrief(nov22Capture(), rules, NOW).not_checked.join(" ");
     expect(text).toContain("Groups events weren't part of this check.");
     expect(text).not.toContain("rooms");
+  });
+});
+
+// Someone scheduled who has a blockout over their serving time (fixture matrix C30-C37): Worth a look, never a gap, and
+// Planning Center's own count of who is needed stays as it reads.
+describe("someone scheduled with a blockout at that time", () => {
+  const ALL_DAY = { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z" };
+  const blockouts = (capture: SundayCapture, person: string, ...attributes: Record<string, unknown>[]) => {
+    capture.reads.find(r => r.collection === "person_blockouts" && r.person_id === person)!.body = {
+      data: attributes.map((a, i) => ({ type: "Blockout", id: `b${person}-${i}`, attributes: { repeat_frequency: "no_repeat", ...a } })),
+      meta: { count: attributes.length, total_count: attributes.length } };
+    return capture;
+  };
+  /** Every role filled and nothing else to look at: the one path to "Everything Ozzie checked is covered". */
+  const covered = () => {
+    const capture = nov22Capture();
+    blockouts(capture, PEOPLE.drew);
+    capture.reads.find(r => r.collection === "needed_positions")!.body = { data: [], meta: { count: 0, total_count: 0 } };
+    const members = rowsOf(capture, "team_members");
+    members.splice(members.findIndex(m => m.id === "403"), 1);
+    for (const read of capture.reads.filter(r => r.collection === "team_position_assignments")) {
+      read.body!.data = (read.body!.data as Row[]).filter(a => [PEOPLE.greeterConfirmed, PEOPLE.nurseryConfirmed].includes((a.relationships.person as { data: { id: string } }).data.id));
+    }
+    return capture;
+  };
+  const blocked = (brief: ReturnType<typeof buildSundayBrief>) => brief.findings.filter(f => f.kind === "blockout");
+  /** No Church-rule check-ins, so a covered Sunday has nothing else on it. */
+  const quiet = { ...rules, checkInAfterSundaysInARow: 0 };
+
+  it("C30 a confirmed person on a fully covered role is one Worth a look finding, and the check no longer reads as all clear", () => {
+    expect(buildSundayBrief(covered(), quiet, NOW).status).toBe("checked-scope-clear");
+    const brief = buildSundayBrief(blockouts(covered(), PEOPLE.greeterConfirmed, ALL_DAY), quiet, NOW);
+    expect(brief.status).toBe("findings");
+    expect(brief.findings).toEqual([{
+      id: `blockout:${PEOPLE.greeterConfirmed}`, key: JSON.stringify(["blockout", PEOPLE.greeterConfirmed]), kind: "blockout", tone: "look",
+      position: { id: "position:1", team_id: TEAMS.greeter, name: "Greeter", interval: SERVICE }, person_id: PEOPLE.greeterConfirmed,
+      serving: [{ name: "Greeter", team_id: TEAMS.greeter, status: "confirmed", interval: SERVICE }],
+      why: [
+        "Planning Center Services has them confirmed for Greeter.",
+        "Planning Center has a blockout for them that overlaps that time. A blockout is when someone has told Planning Center they'll be away.",
+        "Planning Center still counts them as scheduled, so its count of who is still needed doesn't change, and Ozzie doesn't change it either.",
+        "This is a schedule fact, not a judgment about anyone.",
+      ],
+    }]);
+    // The role still reads as Planning Center reads it: nothing remaining, nothing pending.
+    expect(brief.positions.find(p => p.name === "Greeter")).toEqual({ team_id: TEAMS.greeter, name: "Greeter", remaining: 0, pending: 0, lead: "not-required" });
+    expect(sundayShownCount(applyDecisions(brief, []), null)).toEqual({ decisions: 0, looks: 1, resolved: 0 });
+  });
+
+  it("C30 an open role keeps Planning Center's own count beside it, and a pending person is named as pending as well", () => {
+    const capture = blockouts(blockouts(nov22Capture(), PEOPLE.greeterConfirmed, ALL_DAY), PEOPLE.lyricsPending, { starts_at: "2026-11-22T15:00:00Z", ends_at: "2026-11-22T17:00:00Z" });
+    const brief = buildSundayBrief(capture, rules, NOW);
+    const greeter = brief.findings.find(f => f.kind === "needs-people" && f.position!.name === "Greeter")!;
+    expect(greeter.remaining).toBe(1);
+    expect(greeter.why[0]).toBe("Planning Center reports 1 remaining request for Greeter.");
+    expect(blocked(brief).map(f => [f.person_id, f.serving!.map(s => s.status)])).toEqual([[PEOPLE.greeterConfirmed, ["confirmed"]], [PEOPLE.lyricsPending, ["pending"]]]);
+    expect(brief.findings.filter(f => f.kind === "pending").map(f => f.person_id)).toEqual([PEOPLE.lyricsPending]);
+    // After each role's own findings, before the Church-rule check-ins.
+    expect(brief.findings.map(f => f.kind)).toEqual(["needs-people", "needs-people", "pending", "blockout", "blockout", "streak"]);
+  });
+
+  it("C31-C33 a declined person, someone not on the plan and a blockout that doesn't overlap produce nothing", () => {
+    const declined = blockouts(nov22Capture(), PEOPLE.nurseryConfirmed, ALL_DAY);
+    rowsOf(declined, "team_members").find(m => m.id === "402")!.attributes.status = "D";
+    expect(blocked(buildSundayBrief(declined, rules, NOW))).toEqual([]);
+    // Riley could help with Greeter but isn't on the plan: the blockout only leaves them out of the people who could help.
+    const notOnPlan = buildSundayBrief(blockouts(nov22Capture(), PEOPLE.riley, ALL_DAY), rules, NOW);
+    expect(blocked(notOnPlan)).toEqual([]);
+    expect(notOnPlan.findings[0]!.people!.left_out.map(p => p.person_id)).toContain(PEOPLE.riley);
+    const before = blockouts(nov22Capture(), PEOPLE.greeterConfirmed, { starts_at: "2026-11-22T12:00:00Z", ends_at: "2026-11-22T14:30:00Z" });
+    expect(blocked(buildSundayBrief(before, rules, NOW))).toEqual([]);
+  });
+
+  it("C34/C37 two blockouts make one finding, and someone on two roles at once is one finding naming both", () => {
+    expect(blocked(buildSundayBrief(blockouts(covered(), PEOPLE.greeterConfirmed, ALL_DAY, { starts_at: "2026-11-22T14:00:00Z", ends_at: "2026-11-22T16:00:00Z" }), rules, NOW))).toHaveLength(1);
+    const capture = blockouts(covered(), PEOPLE.greeterConfirmed, ALL_DAY);
+    rowsOf(capture, "team_members").push({ type: "PlanPerson", id: "404", attributes: { status: "U", team_position_name: "Usher", notification_sent_at: null },
+      relationships: { person: { data: { type: "Person", id: PEOPLE.greeterConfirmed } }, team: { data: { type: "Team", id: TEAMS.greeter } }, times: { data: [{ type: "PlanTime", id: "9001" }] } } });
+    const found = blocked(buildSundayBrief(capture, rules, NOW));
+    expect(found).toHaveLength(1);
+    expect(found[0]!.serving).toEqual([
+      { name: "Greeter", team_id: TEAMS.greeter, status: "confirmed", interval: SERVICE },
+      { name: "Usher", team_id: TEAMS.greeter, status: "pending", interval: SERVICE },
+    ]);
+    expect(found[0]!.why.slice(0, 2)).toEqual(["Planning Center Services has them confirmed for Greeter.", "Planning Center Services has them pending for Usher."]);
+  });
+
+  it("C35 a scheduled person's blockout that can't be checked is named under What I didn't check, never as clear or as a finding", () => {
+    const brief = buildSundayBrief(blockouts(covered(), PEOPLE.greeterConfirmed, { ...ALL_DAY, repeat_frequency: "every_1_week" }), quiet, NOW);
+    expect(blocked(brief)).toEqual([]);
+    expect(brief.status).toBe("unverified");
+    expect(brief.not_checked).toContain("Blockouts for 1 scheduled person couldn't be checked for this service time.");
+    // The person and the reason stay out of the "couldn't be checked" card: nothing failed to read.
+    expect(brief.findings.some(f => f.kind === "worth-a-look")).toBe(false);
+  });
+
+  it("holds no name, and names the service by its own day", () => {
+    const capture = blockouts(nov22Capture(), PEOPLE.greeterConfirmed, ALL_DAY);
+    const text = JSON.stringify(buildSundayBrief(capture, rules, NOW));
+    for (const name of Object.values(capture.names)) expect(text).not.toContain(name);
+    const wed = wednesdayCapture();
+    const read = wed.reads.find(r => r.collection === "person_blockouts" && r.person_id === PEOPLE.greeterConfirmed)!;
+    read.body = { data: [{ type: "Blockout", id: "w1", attributes: { starts_at: "2026-11-25T05:00:00Z", ends_at: "2026-11-26T04:59:59Z", repeat_frequency: "no_repeat" } }], meta: { count: 1, total_count: 1 } };
+    const b = buildSundayBrief(wed, rules, wed.completed_at);
+    expect(blocked(b)).toHaveLength(1);
+    expect(blocked(b)[0]!.why.join(" ")).not.toMatch(/sunday/iu);
+  });
+});
+
+// Onboarding spec §5 (decision 18): a brief for a Wednesday plan carries Wednesday's words, and every fixed sentence in it
+// names the service by its day; nothing calls it Sunday.
+describe("a Wednesday plan", () => {
+  const wed = wednesdayCapture();
+  const leadRules = { ...rules, sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery Lead" }] };
+  const b = buildSundayBrief(wed, leadRules, wed.completed_at);
+
+  it("carries the day words of its service time in the church's zone", () => {
+    expect(b.day).toEqual(wednesdayWords());
+    expect(buildSundayBrief(nov22Capture(), rules, NOW).day).toMatchObject({ day: "Sunday", thisOne: "this Sunday" });
+  });
+
+  it("says Wednesday lead, this Wednesday and weeks in a row, and never Sunday", () => {
+    const why = b.findings.flatMap(f => f.why);
+    expect(why).toContain('Your Church rules ask for a scheduled Wednesday lead on this team (position "Nursery Lead").');
+    expect(why).toContain("Planning Center lists 1 team leader for this team. Leading the team isn't the same as being scheduled to lead this Wednesday.");
+    expect(why).toContain("Your Church rules say: check in with anyone scheduled 3 weeks in a row.");
+    expect(why).toContain("Planning Center shows them confirmed 3 weeks in a row (Greeter), ending this Wednesday.");
+    // Every sentence the brief holds for a person to read (field names like `sundays` are code, never shown).
+    expect([...why, ...b.not_checked, ...b.findings.flatMap(f => f.unread ?? []), b.plan.title ?? ""].join(" ")).not.toMatch(/sunday/iu);
   });
 });

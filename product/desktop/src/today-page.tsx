@@ -22,9 +22,12 @@ import { FindingFeedback, useFeedback, type FeedbackControls, type FeedbackSourc
 import { BriefingPreview, briefingPreviewTimes, SundayReadyBrief } from "./sunday-ready.js";
 import type { CalendarRead } from "../../../core/src/calendar/events.js";
 import { CalendarGroup } from "./calendar-today.js";
-import { AskedNote, type AskedLine } from "./sunday-page.js";
+import { AskedNote, CHECK_CONNECTION, CHECKING_LINE, STUCK_LINE, type AskedLine } from "./sunday-page.js";
+import { useDay, type DayWords } from "./day-words.js";
+import { DayName, dayName, eyeLine } from "./day-phrases.js";
+import { promise } from "./promises.js";
 
-/** What Ozzie keeps an eye on, for Today: it comes to the person here first. */
+/** Keeping watch, for Today: it comes to the person here first. */
 export interface TodayWatch {
   view: RunnerView; now: string;
   onAutomatic: () => void; onOpen: (page: "sunday" | "automatic" | "connection") => void;
@@ -86,18 +89,25 @@ function EmailCard({ finding, sources, titleId, age, feedback = null, children }
   </article>;
 }
 
-/** The plain title of an item, for the set-aside list. */
-function itemTitle(item: TodayItem, now: string): string {
+/** "your Wednesday", or "your service(s)" when the service isn't on one day (or none is chosen yet). */
+const yourService = (d: DayWords) => d.kind === "weekday" ? `your ${d.day}` : d.kind === "unknown" ? "your service" : "your services";
+/** The not-connected card's title (spec §2, after the failures table), named by the watched service's day. */
+export const connectTitle = (d: DayWords) => `Connect Planning Center to see ${yourService(d)}`;
+/** Its body: what connecting is, then the promise (promises.ts, never retyped). */
+export const connectBody = () => `Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and ${promise("connectAnd")}`;
+
+/** The plain title of an item, for the set-aside list. Named by the watched service's real day (spec §5). */
+function itemTitle(item: TodayItem, now: string, d: DayWords): string {
   const s = item.subject;
   switch (s.type) {
     case "email": return s.finding.title;
-    // Any kind of Sunday finding that needs a decision counts here, so the words don't assume positions.
-    case "sunday": return `Sunday has ${sundayCountText(s.decisions)}.`;
-    case "sunday-unchecked": return "Is Sunday covered?";
-    case "connect": return "Connect Planning Center to see your Sunday";
-    case "noticed": return noticedTitle(s.item, now);
+    // Any kind of finding that needs a decision counts here, so the words don't assume positions.
+    case "sunday": return `${DayName(d)} has ${sundayCountText(s.decisions)}.`;
+    case "sunday-unchecked": return d.question;
+    case "connect": return connectTitle(d);
+    case "noticed": return noticedTitle(s.item, now, d);
     case "watching": return s.responsibility.title;
-    case "regular": return "The regular Sunday check";
+    case "regular": return eyeLine(d);
     case "answers": return "Waiting for an answer in Planning Center";
   }
 }
@@ -106,16 +116,18 @@ const NO_NAMES: Record<string, string> = {};
 const NO_DECISIONS: readonly SundayDecision[] = [];
 const NO_ENTRIES: readonly FeedbackEntry[] = [];
 const NO_ASKED: readonly AskedLine[] = [];
+/** A saved check shown on Today, with the time it was made (the service page's own words for it). */
+export const savedLine = (iso: string) => `Saved copy of the check from ${new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.`;
 export const START_TITLE = "Ozzie isn't set to start with this Mac";
 export const START_BODY = "Ozzie can only check Planning Center while it is running, so after this Mac restarts nothing is checked until you open it. Start Ozzie with this Mac?";
 
 export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions = NO_DECISIONS, operations = null, watch = null, now: nowProp, zone: zoneProp, store = browserStore,
   feedback = null, example = false, church = null, calendar = null, regular = null, notConnected = null, asked = NO_ASKED, onSundayCard,
-  startQuestion = null }: {
+  startQuestion = null, finish = null, moment = null, waiting = null, checking = false, stuck = null }: {
   brief: SundayBrief | null; onSunday: () => void; names?: Record<string, string> | undefined; sundayDecisions?: readonly SundayDecision[];
   /** Rooms, follow-ups and group meetings for the same check, so the briefing says what the Sunday page says. */
   operations?: SundayOperations | null;
-  /** What Ozzie keeps an eye on and what it noticed; null where it isn't available. */
+  /** Keeping watch and what it noticed; null where it isn't available. */
   watch?: TodayWatch | null;
   /** This Mac's clock; set-aside items come back when it passes their time. */
   now?: string; zone?: string;
@@ -140,6 +152,10 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   asked?: readonly AskedLine[];
   /** Planning Center isn't connected and the example isn't on: Today says what to do next, with these two ways on. */
   notConnected?: { onConnect: () => void; onExample: () => void } | null;
+  /** The launch's check of this Mac's saved sign-in is under way: a quiet polite line, and never "not connected". */
+  checking?: boolean;
+  /** That check had no answer after 20 seconds: said, with "Check the connection" (review L6). */
+  stuck?: (() => void) | null;
   /** People forms, Check-Ins and Registrations from the same check (church-reads-view.tsx), after the three groups. */
   church?: ReactNode;
   /**
@@ -147,9 +163,19 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
    * example. Shown on this Mac only; null when none is connected.
    */
   calendar?: { reads: readonly CalendarRead[]; reading: boolean; onSettings?: () => void } | null;
-  /** The regular Sunday check (What runs automatically): shown under In progress once it can run. Null in the example. */
+  /** Ozzie's hourly look at the watched service (Keeping watch): under In progress once it can run. Null in the example. */
   regular?: RegularCheck | null;
+  /** "Finish setting up" (spec §4.1), at the top of Today above the three groups; App passes it while any item is open. */
+  finish?: ReactNode;
+  /** One line under it: a question at the moment it matters (spec §4.2), such as the phone notice. */
+  moment?: ReactNode;
+  /**
+   * No next plan of the watched service yet (spec §5.3, move-on.ts `waitingText`): said in place of the unchecked card,
+   * with no button. Null otherwise.
+   */
+  waiting?: string | null;
 }) {
+  const words = useDay();
   const now = nowProp ?? watch?.now ?? new Date().toISOString();
   const zone = zoneProp ?? macZone();
   const { controls, notice } = useFeedback(feedback, names);
@@ -186,9 +212,9 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     if (!decided) return null;
     const ops = operations && !operations.stale ? operations.result?.findings ?? [] : [];
     const lines = decisionLines(decided.items, { rooms: ops.filter(f => f.kind === "room-overlap" && f.certainty === "confirmed").length, followUps: ops.filter(f => f.kind !== "room-overlap").length },
-      brief?.time_zone ?? zone);
+      brief?.time_zone ?? zone, words);
     return { ...lines, looks: sundayShownCount(decided, operations).looks };
-  }, [decided, operations, brief?.time_zone, zone]);
+  }, [decided, operations, brief?.time_zone, zone, words]);
   const toCard = onSundayCard ?? (() => onSunday());
   const items = useMemo(() => todayItems({
     now, sunday, watch: watch?.view ?? null, firstSeen, regular, notConnected: Boolean(notConnected) && !example,
@@ -242,43 +268,47 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         {later}</EmailCard>;
       case "sunday": {
         // A Keep Sunday covered report about this Sunday is folded in here (today-groups.ts): when, what changed, notes ready.
-        const changes = s.noticed ? noticedChanges(s.noticed, names) : [];
+        const changes = s.noticed ? noticedChanges(s.noticed, names, words) : [];
         const notes = s.noticed ? pageNotes(s.noticed) : 0;
         return <article key={item.id} className="find" aria-labelledby={titleId}>
           <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />Needs a decision</span>
             {s.noticed?.overnight && <span className="badge b-muted"><Icon name="clock" small />Overnight</span>}
             <span className="find-where">Planning Center Services</span>{age && <span className="find-age">{age}</span>}</div>
-          <h3 id={titleId} className="find-title">{itemTitle(item, now)}</h3>
+          <h3 id={titleId} className="find-title">{itemTitle(item, now, words)}</h3>
           {/* Keep Sunday covered's write-up of its run leads the card, or says quietly why there is none (audit item 6). */}
           {s.noticed && <WriteUpBlock item={s.noticed} writeup={s.writeup} names={names} now={now} />}
           {named && named.named.length > 0 && <ul className="list today-decisions">{named.named.map((l, i) => <li key={l.key}>
             <span id={`${titleId}-d${i}`}>{l.text}</span>
-            <button type="button" className="btn btn-quiet btn-sm" aria-describedby={`${titleId}-d${i}`} onClick={() => toCard(l.key)}>{l.people ? "See who could help" : "Open on Sunday"}</button>
+            <button type="button" className="btn btn-quiet btn-sm" aria-describedby={`${titleId}-d${i}`} onClick={() => toCard(l.key)}>{l.people ? "See who could help" : `Open on ${dayName(words)}`}</button>
           </li>)}</ul>}
-          {named && named.more > 0 && <p className="small">And {named.more} more on Sunday.</p>}
-          {named && named.looks > 0 && <p className="small today-looks">Also {named.looks === 1 ? "1 thing" : `${named.looks} things`} worth a look on Sunday.</p>}
-          {s.noticed && <p className="find-body">Ozzie noticed this at {whenText(s.noticed.at, now)} while keeping an eye on Sunday.</p>}
+          {named && named.more > 0 && <p className="small">And {named.more} more on {dayName(words)}.</p>}
+          {named && named.looks > 0 && <p className="small today-looks">Also {named.looks === 1 ? "1 thing" : `${named.looks} things`} worth a look on {dayName(words)}.</p>}
+          {s.noticed && <p className="find-body">Ozzie noticed this at {whenText(s.noticed.at, now)} while keeping an eye on {dayName(words)}.</p>}
           {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
-          {notes > 0 && <p className="today-notes"><span className="badge b-ok"><Icon name="check" small />Notes ready</span><span>{notesReadyText(notes)}</span></p>}
+          {notes > 0 && <p className="today-notes"><span className="badge b-ok"><Icon name="check" small />Notes ready</span><span>{notesReadyText(notes, words)}</span></p>}
           {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}
-          <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open Sunday</button></div>
+          <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
           {later}
         </article>;
       }
-      case "sunday-unchecked": return <article key={item.id} className="find" aria-labelledby={titleId}>
-        <div className="find-top"><span className="badge b-muted"><Icon name="sun" small />Sunday</span><span className="find-where">Planning Center Services</span></div>
-        <h3 id={titleId} className="find-title">Is Sunday covered?</h3>
-        <p className="find-body">Sunday hasn't been checked yet.</p>
-        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Check Sunday</button></div>
+      // No next plan of the watched service yet (move-on.ts): said plainly, with nothing to press; Ozzie looks again each hour.
+      case "sunday-unchecked": return waiting ? <article key={item.id} className="find" aria-labelledby={titleId}>
+        <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for a plan</span><span className="find-where">Planning Center Services</span></div>
+        <h3 id={titleId} className="find-title">{waiting}</h3>
+      </article> : <article key={item.id} className="find" aria-labelledby={titleId}>
+        <div className="find-top"><span className="badge b-muted"><Icon name="sun" small />{words.page}</span><span className="find-where">Planning Center Services</span></div>
+        <h3 id={titleId} className="find-title">{words.question}</h3>
+        <p className="find-body">{DayName(words)} hasn't been checked yet.</p>
+        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Check {dayName(words)}</button></div>
         {later}
       </article>;
       case "connect": return notConnected && <article key={item.id} className="find today-connect" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-muted"><Icon name="link" small />Not connected yet</span><span className="find-where">Planning Center</span></div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now)}</h3>
-        <p className="find-body">Ozzie hasn't read anything from your church yet, so nothing on this page is about your church. Connecting is a sign-in in your browser, and Ozzie only reads: it changes nothing in Planning Center.</p>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words)}</h3>
+        <p className="find-body">{connectBody()}</p>
         <div className="find-next">
           <button type="button" className="btn btn-primary btn-sm" aria-describedby={titleId} onClick={notConnected.onConnect}>Connect Planning Center</button>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={notConnected.onExample}>See the fictional example</button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={notConnected.onExample}>See an example church first</button>
         </div>
       </article>;
       case "noticed": return watch && <NoticedCard key={item.id} item={s.item} view={watch.view} names={names} now={now} onOpen={open} titleId={titleId} age={age}
@@ -291,7 +321,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           <h3 id={titleId} className="find-title">{r.title}</h3>
           {watch && <p className="find-body">{watchLine(r, watch.view, now)}</p>}
           {s.notes.length > 0 && <ul className="list resp-problems">{s.notes.map(n => <li key={n.id}><Icon name="clock" small />
-            {n.overnight && <span className="badge b-muted">Overnight</span>}{noticedTitle(n, now)}</li>)}</ul>}
+            {n.overnight && <span className="badge b-muted">Overnight</span>}{noticedTitle(n, now, words)}</li>)}</ul>}
           {r.template === "morning-briefing" && <div className="find-next">
             <button type="button" className="btn btn-secondary btn-sm" aria-expanded={previewing === r.id} aria-controls={`${titleId}-preview`} aria-describedby={titleId}
               onClick={() => setPreviewing(previewing === r.id ? null : r.id)}>{previewing === r.id ? "Hide the preview" : "Preview this briefing"}</button></div>}
@@ -305,7 +335,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         return <article key={item.id} className="find today-watch" aria-labelledby={titleId}>
           <div className="find-top"><span className={`badge ${s.check.paused ? "b-muted" : "b-ok"}`}><Icon name="repeat" small />{s.check.paused ? "Paused" : "Always on"}</span>
             <span className="find-where">Planning Center Services</span></div>
-          <h3 id={titleId} className="find-title">The regular Sunday check</h3>
+          <h3 id={titleId} className="find-title">{eyeLine(words)}</h3>
           <p className="find-body">{regularLine(s.check, now, zone)}</p>
           {missed && <ul className="list resp-problems"><li><Icon name="clock" small />{missed}</li></ul>}
         </article>;
@@ -313,9 +343,9 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
       case "answers": return <article key={item.id} className="find" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for an answer</span>
           <span className="find-where">Planning Center Services</span>{age && <span className="find-age">{age}</span>}</div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now)}</h3>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words)}</h3>
         <p className="find-body">Planning Center shows a request was sent for {list(s.positions)} and hasn't been accepted yet.</p>
-        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open Sunday</button></div>
+        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
       </article>;
     }
   };
@@ -325,14 +355,14 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     return <section key={id} className={`today-group today-${id}`} aria-labelledby={`today-group-${id}`}>
       <h2 id={`today-group-${id}`} className="h3 today-group-h" tabIndex={-1} ref={el => { headings.current[id] = el; }}>
         {GROUPS[id].title}<span className="today-count">{countText(shown.length)}</span></h2>
-      {shown.length === 0 && <p className="today-empty">{id === "progress" ? progressEmptyText(regular, example) : GROUPS[id].empty}</p>}
+      {shown.length === 0 && <p className="today-empty">{id === "progress" ? progressEmptyText(regular, example, words) : GROUPS[id].empty}</p>}
       {shown.map(card)}
       {extra}
     </section>;
   };
 
   const sundayCalm = brief && sunday && sunday.decisions === 0 && <><p className="today-calm"><Icon name="sun" small />
-    <span>Nothing on Sunday needs a decision.</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>Open Sunday</button></p>
+    <span>Nothing on {dayName(words)} needs a decision.</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>Open {dayName(words)}</button></p>
     {/* With no Sunday card, what the leader said they'd send is said here instead. */}
     {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}</>;
   const progressMore = watch && <div className="today-more">
@@ -343,7 +373,15 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     <p className="eyebrow">{day(now, zone)} · {clock(now, zone)}</p>
     <h1 className="h1">What needs you today</h1>
     <p className="lede">{ledeText(grouped)}</p>
+    {/* A saved check on screen says so, with its real time; while the launch's check is under way, a quiet line says that. */}
+    {(checking || stuck || brief?.mode === "recording") && <p className="small today-checking">
+      {brief?.mode === "recording" && <span>{savedLine(brief.completed_at)} </span>}
+      {checking && <span role="status" aria-live="polite">{CHECKING_LINE}</span>}
+      {!checking && stuck && <><span role="status" aria-live="polite">{STUCK_LINE} </span>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={stuck}>{CHECK_CONNECTION}</button></>}</p>}
     <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
+    {finish}
+    {moment}
     {startQuestion && !example && <section className="find today-start" aria-labelledby="today-start-t">
       <div className="find-top"><span className="badge b-muted"><Icon name="repeat" small />Staying on</span></div>
       <h2 id="today-start-t" className="find-title">{START_TITLE}</h2>
@@ -362,7 +400,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     {church}
     {calendar && <CalendarGroup reads={calendar.reads} now={now} zone={zone} reading={calendar.reading} onSettings={calendar.onSettings} />}
 
-    {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now)} onBack={bringBack} />}
+    {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now, words)} onBack={bringBack} />}
 
     {/* After the work, so the work comes first; the written script stays folded until asked for. Nothing to brief before
         Planning Center is connected. */}

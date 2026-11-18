@@ -56,6 +56,21 @@ export function harnessData(options: DataOptions = {}): HarnessData {
   };
 }
 
+/**
+ * People already scheduled with blockouts in Planning Center: the confirmed greeter away all day, the pending lyrics
+ * volunteer away from 10:00, and the confirmed nursery volunteer with a weekly blockout Ozzie can't place on a date.
+ */
+export function withScheduledBlockouts(capture: SundayCapture): SundayCapture {
+  const blockout = (person: string, attributes: Record<string, unknown>) => {
+    capture.reads.find(r => r.collection === "person_blockouts" && r.person_id === person)!.body =
+      { data: [{ type: "Blockout", id: `b${person}`, attributes }], meta: { count: 1, total_count: 1 } };
+  };
+  blockout(PEOPLE.greeterConfirmed, { starts_at: "2026-11-22T05:00:00Z", ends_at: "2026-11-23T04:59:59Z", repeat_frequency: "no_repeat" });
+  blockout(PEOPLE.lyricsPending, { starts_at: "2026-11-22T15:00:00Z", ends_at: "2026-11-22T18:00:00Z", repeat_frequency: "no_repeat" });
+  blockout(PEOPLE.nurseryConfirmed, { starts_at: "2026-10-04T13:00:00Z", ends_at: "2026-10-04T17:00:00Z", repeat_frequency: "every_1_week" });
+  return capture;
+}
+
 /** The fictional Sunday with every name, position name, plan title and place name replaced by a canary. */
 export function canaryCapture(): SundayCapture {
   let text = JSON.stringify(nov22Capture());
@@ -90,6 +105,7 @@ export const FIXTURES: [string, () => HarnessData][] = [
   ["room bookings timed out", () => harnessData({ mode: "live", outcomes: { calendar_resource_bookings: "timeout" } })],
   ["room list and workflows failed", () => harnessData({ mode: "live", outcomes: { calendar_rooms: "failed", people_workflows: "failed", people_workflow_steps: "failed" } })],
   ["group reads denied", () => harnessData({ mode: "live", outcomes: { groups_person_memberships: "denied", groups_group_events: "denied" } })],
+  ["someone scheduled with a blockout", () => harnessData({ mode: "live", capture: withScheduledBlockouts(nov22Capture()) })],
   ["kids teams and background checks", () => harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()) })],
   ["kids teams, People not granted", () => harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()),
     outcomes: { people_background_checks: "not-requested" } })],

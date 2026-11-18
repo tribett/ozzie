@@ -16,10 +16,10 @@ import { FICTIONAL_ROOM, withFictionalOperations, withFictionalOperationsOff } f
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import {
-  agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, runtimeFor, StepFailure, stepFailure, StepNotes,
+  agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, retryDenied, runtimeFor, StepFailure, stepFailure, StepNotes,
   type Invoke,
 } from "../src/harness-bridge.js";
-import { ASK_FAILURES, BACKGROUND_HERE, CAN_DO_INSTEAD, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, CAN_DO_INSTEAD, ledgerDetail, taskLine } from "../src/harness-words.js";
 import { answer, BACKGROUND_IN_REQUEST, calls, draftTurns, everyRequest, fakeNative as fakeLedger, fictionalData, greeterTurns, payloadOf, row, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
@@ -51,7 +51,9 @@ describe("the model step over native agent_step", () => {
   });
 
   it("tells a spent allowance, today's allowance and an unavailable record apart in the Ask panel (review C9)", async () => {
-    for (const [native, text] of [["budget", ASK_FAILURES.allowance], ["daily-limit", ASK_FAILURES.today], ["ledger-unavailable", ASK_FAILURES.ledger],
+    // A day's limit says until when: midnight UTC on this Mac's clock when no account time is known (re-check Low).
+    const { dailyLimitEnds } = await import("../src/model.js");
+    for (const [native, text] of [["budget", ASK_FAILURES.allowance], ["daily-limit", ASK_FAILURES.todayUntil(dailyLimitEnds()!)], ["ledger-unavailable", ASK_FAILURES.ledger],
       ["denied", ASK_FAILURES.denied], ["invalid-task", ASK_FAILURES.invalid], ["limit", ASK_FAILURES.steps],
       // Ozzie managed's own refusals each say what happened (hosted review 2026-11-14), never "couldn't finish".
       ["rate-limited", ASK_FAILURES.slowDown], ["contact-detail", ASK_FAILURES.contact], ["provider-failure", ASK_FAILURES.unfinished]] as const) {
@@ -74,7 +76,31 @@ describe("the model step over native agent_step", () => {
     const turn = await askOzzie(h, "Who could cover Greeter?", { skills, notes });
     expect(turn).toEqual({ state: "problem", code: "limit", text: ASK_FAILURES.paused });
     expect(asked).toBe(1);
-    expect(ASK_FAILURES.paused).toBe("Your church's AI help is paused until the allowance resets or your church changes plan, so Ozzie didn't ask the AI. Checks, lists, Church rules and briefings keep working.");
+    // ozzie.church's 402 allowance-paused is a used month (until its date) or a pause for everyone (payments-go-live.md,
+    // "For the app"); the daily ceiling and too many requests at once are 429 rate-limited, said by slowDown.
+    // A subscription renews by itself, so never "nothing charges itself": nothing extra is charged.
+    expect(ASK_FAILURES.paused).toBe("Ozzie's AI is paused, so Ozzie didn't ask the AI: this month's answers are used, or Ozzie's AI is pausing for everyone for a while. It starts again by itself, and nothing extra is charged. Checks, lists, Church rules and briefings keep working.");
+    expect(ASK_FAILURES.paused).not.toMatch(/allowance resets|changes plan|charges itself/u);
+  });
+
+  it("says the own key's monthly pause, never \"couldn't be reached\", and never retries it (contract N5 month-limit)", async () => {
+    expect(stepFailure("month-limit")).toBe("limit");
+    const notes = new StepNotes();
+    let asked = 0;
+    const spent = fakeLedger(() => { asked += 1; return Promise.reject("month-limit"); });
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "ts", step: agentStep(spent.invoke, notes) });
+    const turn = await askOzzie(h, "Who could cover Greeter?", { skills, notes });
+    expect(turn).toMatchObject({ state: "problem", code: "limit" });
+    expect((turn as { text: string }).text).toMatch(/^AI has paused on this Mac until [A-Z][a-z]+ 1, as your monthly limit says\. Everything else in Ozzie still works\.$/u);
+    expect(asked).toBe(1);
+  });
+
+  it("says until when Ozzie's AI is paused when the account says, never \"in a minute\"", () => {
+    expect(askFailureText("limit", "allowance-paused", "tomorrow, 7:00 PM")).toBe("Ozzie's AI is paused until tomorrow, 7:00 PM, so Ozzie didn't ask the AI. Checks, lists, Church rules and briefings keep working.");
+    // The daily ceiling is daily-limit now (native re-check NM1): rate-limited is only "busy, try again in a minute".
+    expect(askFailureText("transport", "rate-limited", "tomorrow, 7:00 PM")).toBe(ASK_FAILURES.slowDown);
+    expect(askFailureText("transport", "rate-limited")).toBe(ASK_FAILURES.slowDown);
+    expect(askFailureText("limit", "allowance-paused", null)).toBe(ASK_FAILURES.paused);
   });
 
   it("sends the request as is and throws an object with the mapped code", async () => {
@@ -392,6 +418,19 @@ describe("Ask Ozzie as a harness task", () => {
     expect(ASK_FAILURES.unfinished).toBe("Ozzie couldn't finish that just now.");
   });
 
+  it("says plainly, on AI on this Mac only, that it misses more often and what helps (measured 2026-11-18)", async () => {
+    const run = async (turns: Turn[], local?: boolean) =>
+      askOzzie(harness(scripted(turns).model), "Who could cover Greeter?", { skills, ...(local === undefined ? {} : { local }) });
+    const unbacked = () => answer('{"answer":"facts","facts":["f4"]}');
+    expect(await run([unbacked], true)).toEqual({ state: "problem", code: "fidelity", text: `${ASK_FAILURES.fidelity} ${ASK_FAILURES.fidelityHere}` });
+    expect(ASK_FAILURES.fidelityHere).toBe("AI on this Mac misses more often than an AI company's. A key from an AI company, in Settings › AI help, gives steadier answers.");
+    // An AI company, Ozzie's AI, or a route not known: the sentence as it was.
+    for (const local of [false, undefined]) expect(await run([unbacked], local)).toEqual({ state: "problem", code: "fidelity", text: ASK_FAILURES.fidelity });
+    // Every other failure on this Mac keeps its own words.
+    expect(await run([() => new StepFailure("egress")], true)).toEqual({ state: "problem", code: "egress", text: ASK_FAILURES.egress });
+    expect(await run([() => new StepFailure("limit")], true)).toEqual({ state: "problem", code: "limit", text: ASK_FAILURES.steps });
+  });
+
   it("stops when the person cancels", async () => {
     const controller = new AbortController();
     const h = harness(() => new Promise(() => {}));
@@ -469,7 +508,7 @@ describe("Ask answers written on this Mac", () => {
       expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\. .* From Planning Center People, checked 10:00 AM on November 20\. Kept on this Mac; never sent to an AI\.$/u),
     ]);
     expect(a.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center People, checked .+; your Church rules$/u);
-    expect(a.steps).toEqual(["Looked at this Sunday's overview — all of it", "Looked at the open roles for Sunday — all of it", "Looked at background checks, kept on this Mac"]);
+    expect(a.steps).toEqual(["Looked at the overview of the service — all of it", "Looked at the open roles for the service — all of it", "Looked at background checks, kept on this Mac"]);
     expect(a.notCovered).toBe(false);
     expect(a.body).not.toMatch(/\[(?:Person|Role) \d+\]/u);
   });
@@ -507,7 +546,7 @@ describe("Ask answers written on this Mac", () => {
     ]);
     expect(turn.answer.added).toBe(true);
     expect(turn.answer.basedOn).toMatch(/Planning Center Services, checked .+Planning Center Calendar, checked .+Planning Center People, checked /u);
-    expect(turn.answer.steps).toEqual(["Looked at this Sunday's overview — all of it",
+    expect(turn.answer.steps).toEqual(["Looked at the overview of the service — all of it",
       "Looked at room bookings — all of it", "Looked at follow-ups without an owner — all of it", "Looked at background checks, kept on this Mac"]);
     expect(JSON.stringify(m.requests)).not.toMatch(/background/iu);
   });
@@ -755,3 +794,44 @@ afterAll(() => {
     }
   }
 });
+
+describe("review F7: a no-credit answer is never asked again", () => {
+  it("Ask sends exactly one request and says so; nothing retries it (the reviewer's mutation P3)", async () => {
+    const notes = new StepNotes();
+    let asked = 0;
+    const broke = fakeLedger(() => { asked += 1; return Promise.reject("no-credit"); });
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "ts", step: agentStep(broke.invoke, notes) });
+    const turn = await askOzzie(h, "Who could cover Greeter?", { skills, notes });
+    expect(turn).toMatchObject({ state: "problem", code: "limit", text: ASK_FAILURES.noCredit });
+    expect(asked).toBe(1);
+  });
+  it("retryDenied, the only retry, passes a no-credit refusal straight through", async () => {
+    let calls = 0;
+    await expect(retryDenied(async () => { calls += 1; throw "no-credit"; }, new AbortController().signal)).rejects.toBe("no-credit");
+    expect(calls).toBe(1);
+  });
+});
+
+describe("the church's own AI account out of credit in normal use (native no-credit, 2026-11-17)", () => {
+  it("is a limit, never retried, and says to add credit, in Ask and in rewording", async () => {
+    const { modelProblem } = await import("../src/model.js");
+    expect(stepFailure("no-credit")).toBe("limit");
+    expect(askFailureText("limit", "no-credit")).toBe("The AI company says your account has no credit left, or has reached a spending limit, so Ozzie didn't ask the AI. Add credit or raise the limit on their billing page, then ask again. Checks, lists, Church rules and briefings keep working.");
+    expect(modelProblem("no-credit")).toBe("The AI company says your account has no credit left, or has reached a spending limit. Add credit or raise the limit on their billing page, then try again. Your draft is unchanged.");
+  });
+});
+
+describe("contract 14: Gemini spent its whole answer thinking (thought-only)", () => {
+  it("Ask says so in its own words, as a failure that isn't a limit and isn't retried", async () => {
+    expect(stepFailure("thought-only")).toBe("transport");
+    expect(askFailureText("transport", "thought-only")).toBe("Gemini used up its answer before saying anything, so there is no answer this time. Ask again, or choose another company in Settings › AI help.");
+    const notes = new StepNotes();
+    let asked = 0;
+    const thinking = fakeLedger(() => { asked += 1; return Promise.reject("thought-only"); });
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "ts", step: agentStep(thinking.invoke, notes) });
+    const turn = await askOzzie(h, "Who could cover Greeter?", { skills, notes });
+    expect(turn).toMatchObject({ state: "problem", text: ASK_FAILURES.thoughtOnly });
+    expect(asked).toBe(1);
+  });
+});
+

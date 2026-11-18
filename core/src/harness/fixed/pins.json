@@ -1,5 +1,5 @@
 {
-  "about": "sha-256 (lower-case hex) of each bundled skill file and of the exact system message the harness sends for it (vocabulary.json system_message.format). Pinned by core/test/harness/fixed.test.ts; the native agent_step check can compare a request's system message against system_sha256 instead of name-scanning it.",
+  "about": "sha-256 (lower-case hex) of each bundled skill file and of the exact system message the harness sends for it (vocabulary.json system_message.format). Pinned by core/test/harness/fixed.test.ts; the native agent_step check can compare a request's system message against system_sha256 instead of name-scanning it. local_policy: policy-local.txt and the Ask system message with it in place of the policy, which only native agent_step sends, and only to a model on this Mac (fixed.rs local_ask_system); never a request's system message. Pinned on both sides (fixed.test.ts, fixed.rs).",
   "procedures": {
     "answer-from-what-was-read": {
       "file": "core/skills/answer-from-what-was-read.md",
@@ -31,5 +31,11 @@
       "file_sha256": "ddab77ca64917a410ef317478797e819e47e710fbdb4a5679cdeb1b3687ec458",
       "system_sha256": "14da15fd0a904b071eb49bd20c51b1c50bfb283979cc8943facecd604a7badec"
     }
+  },
+  "local_policy": {
+    "file": "core/src/harness/fixed/policy-local.txt",
+    "file_sha256": "0353e5852c9fd1a4fb27dc6147bbc8d1fb0b0bae8f60e3780f75c719b4a74862",
+    "procedure": "answer-from-what-was-read",
+    "system_sha256": "82724acfbbbb97dcfa51f5a7c172b3445a19a80f3d0dc61fef06cf882fa45a42"
   }
 }

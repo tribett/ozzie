@@ -10,7 +10,8 @@
 //!  - Ozzie's own words are pinned, not name-scanned (reviews 2026-11-14 A1 and B-S3; the shared
 //!    texts in core/src/harness/fixed/, compiled in by fixed.rs): the system message is exactly
 //!    the documented assembly for the task's bundled procedure (policy, "Procedure: ", title,
-//!    body); every tool spec is exactly its tool-specs.json entry, for a tool in
+//!    body), and on the wire to a model on this Mac an Ask's carries policy-local.txt in place of the
+//!    policy (`step_body`, `fixed::local_ask_system`); every tool spec is exactly its tool-specs.json entry, for a tool in
 //!    NATIVE_TOOL_ALLOWLIST (pinned to contract.ts by a test) and in that procedure, none twice;
 //!    a procedure task's user message is exactly the procedure prompt ("Run this procedure now. Answer only with the JSON object.");
 //!  - what varies is checked instead. An Ask task's user message is one question line under Ask's
@@ -132,6 +133,9 @@ pub const MAX_TOKENS: u32 = 700;
 pub const ENVELOPE_CHARS: usize = 6_000;
 /// The whole conversation in one step, tool specs included, serialized.
 pub const CONTEXT_CHARS: usize = 40_000;
+/// One task's whole run, in milliseconds: the page ends a task at this, so a step to a model on this Mac waits no longer
+/// than its task has left (review M4), and the model is free again for the person's next question.
+pub const RUN_MS: u64 = 90_000;
 // Native ceilings the contract leaves open. The tool specs are pinned to tool-specs.json, which a
 // test keeps within the description and property ceilings.
 pub const MAX_TOOLS: usize = NATIVE_TOOL_ALLOWLIST.len();
@@ -194,6 +198,12 @@ pub enum AgentError {
     NotConfigured,
     /// The route's paid call cap (model.json `call_cap`) is spent.
     Budget,
+    /// The church's own key: this month's AI requests (model.json `month_limit`) are spent.
+    MonthLimit,
+    /// The company says the church's account has no credit left.
+    NoCredit,
+    /// Gemini spent the step's whole answer thinking and gave no text and no tool call (review F1).
+    ThoughtOnly,
     /// Today's agent steps on this route (model.json `agent_steps_per_day`) are spent.
     DailyLimit,
     RateLimited,
@@ -222,6 +232,8 @@ impl From<ModelError> for AgentError {
         match error {
             ModelError::NotConfigured => Self::NotConfigured,
             ModelError::Budget => Self::Budget,
+            ModelError::MonthLimit => Self::MonthLimit,
+            ModelError::NoCredit => Self::NoCredit,
             ModelError::DailyLimit => Self::DailyLimit,
             ModelError::RateLimited => Self::RateLimited,
             ModelError::ProviderFailure => Self::ProviderFailure,
@@ -868,13 +880,113 @@ fn wire_message(message: &AgentMessage) -> Value {
         } => json!({"role": "tool", "tool_call_id": tool_call_id, "content": content}),
     }
 }
+// ---- Gemini's thought signatures ------------------------------------------------------------------------------------
+// Google: Gemini 3 models must get the thought signature of the first function call of each step back on the next
+// request, or it is a 400 (thought-signatures docs; on the OpenAI-style endpoint it sits at
+// `extra_content.google.thought_signature`, on the tool call, or on the message). It is opaque provider data: kept in
+// this process only, keyed by task and the id minted here, never returned to the page, logged or recorded in the
+// ledger, never read as text, and sent back only on the Gemini preset (Google's host), byte for byte.
+
+/// The longest signature kept; a reply with a longer one is refused.
+pub const MAX_SIGNATURE_BYTES: usize = 32_768;
+/// Google's documented value for a function call that has no signature to give back.
+pub const SKIP_SIGNATURE: &str = "skip_thought_signature_validator";
+const MAX_SIGNATURES: usize = 256;
+/// (task id, minted call id, signature), oldest first.
+static SIGNATURES: std::sync::Mutex<std::collections::VecDeque<(String, String, String)>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+fn gemini(config: &RouteConfig) -> bool {
+    crate::own_key::preset_for(config).is_some_and(|p| p.id == "gemini")
+}
+fn signature_of(holder: &Value) -> Option<&str> {
+    holder["extra_content"]["google"]["thought_signature"].as_str()
+}
+/// Keeps a Gemini reply's signatures for the calls minted from it: each call's own, else the message's on the first.
+/// A signature longer than MAX_SIGNATURE_BYTES refuses the reply.
+fn keep_signatures(
+    config: &RouteConfig,
+    value: &Value,
+    task: &str,
+    reply: &AgentStepReply,
+) -> Result<(), AgentError> {
+    if !gemini(config) || reply.tool_calls.is_empty() {
+        return Ok(());
+    }
+    let message = &value["choices"][0]["message"];
+    let raw = message["tool_calls"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let mut kept = SIGNATURES.lock().unwrap_or_else(|e| e.into_inner());
+    for (index, call) in reply.tool_calls.iter().enumerate() {
+        let signature = raw
+            .get(index)
+            .and_then(signature_of)
+            .or_else(|| (index == 0).then(|| signature_of(message)).flatten());
+        let Some(signature) = signature.filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if signature.len() > MAX_SIGNATURE_BYTES {
+            return Err(AgentError::ProviderFailure);
+        }
+        kept.retain(|(t, c, _)| !(t == task && *c == call.id));
+        kept.push_back((task.to_owned(), call.id.clone(), signature.to_owned()));
+        while kept.len() > MAX_SIGNATURES {
+            kept.pop_front();
+        }
+    }
+    Ok(())
+}
+/// A task ended (verified, failed or cancelled): its signatures go (review F7).
+pub fn forget_signatures(task: &str) {
+    SIGNATURES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(t, _, _)| t != task);
+}
+/// The AI route changed, a key was removed, or Ozzie's AI was disconnected: every signature goes (review F7).
+pub fn forget_all_signatures() {
+    SIGNATURES.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+fn signature_for(task: &str, call: &str) -> Option<String> {
+    SIGNATURES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(t, c, _)| t == task && c == call)
+        .map(|(_, _, signature)| signature.clone())
+}
+
 /// The exact Chat Completions body for one checked step. Zero data retention is required whenever
 /// the route needs it (`RouteConfig::zero_retention`); managed requests also disable hidden
 /// reasoning, as for rewording and Ask. `parallel_tool_calls` is left at the provider default
 /// (allowed) rather than sent: AI Gateway documents only `tools` and `tool_choice`. With no tools
-/// offered, neither is sent.
+/// offered, neither is sent. An Ask step to a model on this Mac carries the local route's policy
+/// (`fixed::local_ask_system`); every other step carries the system message exactly as checked.
 pub fn step_body(config: &RouteConfig, request: &AgentStepRequest) -> Value {
-    let messages: Vec<Value> = request.messages.iter().map(wire_message).collect();
+    let mut messages: Vec<Value> = request.messages.iter().map(wire_message).collect();
+    // A model on this Mac gets the Ask procedure with its own policy (fixed::local_ask_system, policy-local.txt): the
+    // same procedure and rules, no example ids to copy, and which lookup fits which question. Only the system message
+    // the checks above pinned as the Ask procedure's is replaced, and only by Ozzie's own pinned words.
+    if config.route == model::Route::Local
+        && let Some(AgentMessage::System { content }) = request.messages.first()
+        && let Some(local) = fixed::local_ask_system(content)
+        && let Some(first) = messages.first_mut()
+    {
+        first["content"] = json!(local);
+    }
+    // Gemini only: each assistant tool-call turn gets its first call's thought signature back (or Google's skip value).
+    if gemini(config) {
+        for (wire, message) in messages.iter_mut().zip(&request.messages) {
+            if let AgentMessage::Assistant { tool_calls, .. } = message
+                && let Some(first) = tool_calls.first()
+            {
+                let signature = signature_for(&request.task_id, &first.id)
+                    .unwrap_or_else(|| SKIP_SIGNATURE.to_owned());
+                wire["tool_calls"][0]["extra_content"] =
+                    json!({"google": {"thought_signature": signature}});
+            }
+        }
+    }
     let mut body = json!({
         "model": config.model,
         "messages": messages,
@@ -897,7 +1009,10 @@ pub fn step_body(config: &RouteConfig, request: &AgentStepRequest) -> Value {
             })
             .collect();
         body["tools"] = Value::Array(tools);
-        body["tool_choice"] = json!("auto");
+        // Ollama's OpenAI-style endpoint doesn't take tool_choice (its documentation); "auto" is the default anyway.
+        if config.route != model::Route::Local {
+            body["tool_choice"] = json!("auto");
+        }
     }
     if config.zero_retention() {
         body["providerOptions"] = json!({"gateway": {"zeroDataRetention": true}});
@@ -905,6 +1020,8 @@ pub fn step_body(config: &RouteConfig, request: &AgentStepRequest) -> Value {
     if config.route == model::Route::Managed {
         body["reasoning"] = json!({"enabled": false});
     }
+    // The church's own key at a company Ozzie knows: that company's request rules (providers.json).
+    crate::own_key::shape(config, &mut body);
     body
 }
 
@@ -1040,19 +1157,35 @@ fn read_reply(
 }
 
 /// A final reply in the closed answer form whose every id is one a tool message in this request
-/// holds (fact ids under `fact`, draft ids under `draft_id`, never under `asked_for`).
+/// holds (fact ids under `fact`, draft ids under `draft_id`, never under `asked_for`), and
+/// "nothing-needs-a-decision" only when this task looked at the overview and every overview it read
+/// counts none and keeps nothing on this Mac (the page's rule, verify.ts; review L-4).
 fn answer_ok(content: &str, request: &AgentStepRequest) -> bool {
     let Some(answer) = fixed::final_answer(content) else {
         debug_answer_shape(content, None);
         return false;
     };
     let mut known = BTreeSet::new();
+    let mut overviews = Vec::new();
     for message in &request.messages {
         if let AgentMessage::Tool { content, .. } = message
-            && let Some(fixed::ToolMessage::Envelope { ids, .. }) = fixed::tool_message(content)
+            && let Some(fixed::ToolMessage::Envelope { tool, ids, .. }) =
+                fixed::tool_message(content)
         {
             known.extend(ids);
+            if tool == "sunday.overview" {
+                overviews.push(serde_json::from_str::<Value>(content).unwrap_or(Value::Null));
+            }
         }
+    }
+    if answer.kind == "nothing-needs-a-decision"
+        && (overviews.is_empty()
+            || overviews.iter().any(|overview| {
+                overview["payload"]["needs_a_decision"].as_u64() != Some(0)
+                    || overview["payload"].get("kept_on_this_mac").is_some()
+            }))
+    {
+        return false;
     }
     let ok = answer
         .facts
@@ -1137,6 +1270,27 @@ fn outcome(reply: &Result<AgentStepReply, AgentError>) -> &'static str {
     }
 }
 
+/// How long a step of `task_id` may wait on `config`'s route: for a model on this Mac, what is left of the task's run
+/// (`RUN_MS`), at most the route's own wait; None on every other route, which waits as it always has. A model on this
+/// Mac works on one question at a time: a step that outlives its task would keep it busy while the person asks again.
+/// With no time left the step is refused (`provider-failure`) before anything is sent, spent or taken: a job's step
+/// asks this before its grant pays (src-tauri `always_on.rs`, review L-1).
+pub fn time_left(
+    config: &RouteConfig,
+    ledger: &TaskLedger,
+    task_id: &str,
+) -> Result<Option<std::time::Duration>, AgentError> {
+    if config.route != model::Route::Local {
+        return Ok(None);
+    }
+    let ran = ledger.running_for(task_id).ok_or(AgentError::InvalidTask)?;
+    let left = std::time::Duration::from_millis(RUN_MS).saturating_sub(ran);
+    if left.is_zero() {
+        return Err(AgentError::ProviderFailure);
+    }
+    Ok(Some(left.min(model::request_wait(model::Route::Local))))
+}
+
 /// Everything one step runs against.
 pub(crate) struct StepEnv<'a> {
     pub config: &'a RouteConfig,
@@ -1157,6 +1311,9 @@ struct Checked {
     calls_left: usize,
     /// To ozzie.church with the device token (`Target::Hosted`).
     hosted: bool,
+    /// A model on this Mac: what is left of the task's run (`RUN_MS`), the most this step waits, a second try
+    /// without the thinking setting included. None on every other route, which waits as it always has.
+    wait: Option<std::time::Duration>,
 }
 impl StepEnv<'_> {
     /// Every refusal that needs no key, budget, client or network, in one pass. Only once the
@@ -1170,6 +1327,7 @@ impl StepEnv<'_> {
         }
         let task = self.ledger.step_view(&request.task_id)?;
         check_step(request, self.names, &task)?;
+        let wait = time_left(self.config, self.ledger, &request.task_id)?;
         // Only now, with the request checked: whether the managed route goes through ozzie.church.
         let (url, body, hosted) = match model::target(self.config, self.keys, self.hosted)? {
             Target::Direct(direct) => {
@@ -1188,6 +1346,7 @@ impl StepEnv<'_> {
             body,
             calls_left: MAX_TOOL_CALLS.saturating_sub(minted),
             hosted,
+            wait,
         })
     }
     /// The key, the step taken in the ledger, the caps, the request, then the reply checked and
@@ -1222,7 +1381,18 @@ impl StepEnv<'_> {
         let reply = sent.and_then(|value| {
             // The call counted and its tokens were spent, whether or not the reply passes.
             model::record_tokens(self.usage, self.config.route, &value);
-            read_reply(&value, request, step, checked.calls_left, self.names)
+            let reply = read_reply(&value, request, step, checked.calls_left, self.names)?;
+            // Gemini counts its thinking as output: a reply cut off at the cap with nothing in it is its own failure,
+            // so the page can say so honestly (review F1).
+            if gemini(self.config)
+                && reply.finish == Finish::Length
+                && reply.content.is_empty()
+                && reply.tool_calls.is_empty()
+            {
+                return Err(AgentError::ThoughtOnly);
+            }
+            keep_signatures(self.config, &value, &request.task_id, &reply)?;
+            Ok(reply)
         });
         let minted = reply
             .as_ref()
@@ -1259,8 +1429,22 @@ pub fn agent_step(
     };
     // Everything that can refuse without a client does so first, once.
     let checked = env.check(request)?;
-    let http = NativeModelHttp::for_route(config.route, &hosted)?;
+    let http = step_client(config, &hosted, checked.wait)?;
     env.send(request, checked, &http)
+}
+/// The client a step goes through: the route's own, giving up within `wait` when one is given (a model on this Mac:
+/// what is left of the task's run, `StepEnv::check`), so a step never outlives its task (review M4). Every other
+/// route has no wait here and waits as it always has.
+pub(crate) fn step_client(
+    config: &RouteConfig,
+    hosted: &HostedConfig,
+    wait: Option<std::time::Duration>,
+) -> Result<NativeModelHttp, AgentError> {
+    let http = NativeModelHttp::for_route(config.route, hosted)?;
+    Ok(match wait {
+        Some(left) => http.within(left),
+        None => http,
+    })
 }
 #[cfg(test)]
 pub(crate) fn agent_step_using(

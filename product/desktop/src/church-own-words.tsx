@@ -1,7 +1,7 @@
 // Beside a Sunday card: the rows of the church's own lists that the leader matched to the card's team or position,
 // framed as the church's own words, not checked by Ozzie (core/src/sources/words.ts `listFrame`), and the title of any
 // section of the church's notes the leader pointed to from the cards for that team or that kind of finding, with a way
-// to open it on Lists & notes (`notesBeside`). App.tsx hands this to the Sunday page through its `beside` slot; the
+// to open it on Church lists (`notesBeside`). App.tsx hands this to the Sunday page through its `beside` slot; the
 // Sunday page imports none of it, so nothing here can reach a draft, a rewording or the copy for other AI apps. Only
 // the ticked columns, in the list's own order, and a section's title, never its text; no actions on a row.
 import { rowsFor } from "../../../core/src/sources/match.js";
@@ -10,12 +10,12 @@ import { listFrame, notesBeside } from "../../../core/src/sources/words.js";
 import type { ChurchSourcesState, NoteFocus } from "./church-sources.js";
 import "./church-lists.css";
 
-/** Rows shown for one list beside one card; the rest are on the Lists & notes page. */
+/** Rows shown for one list beside one card; the rest are on the Church lists page. */
 export const ROWS_BESIDE = 5;
-export const moreRows = (n: number) => `and ${n} more in Lists & notes`;
-/** The button that opens a section of notes on Lists & notes. */
+export const moreRows = (n: number) => `and ${n} more in Church lists`;
+/** The button that opens a section of notes on Church lists. */
 export const OPEN_NOTES = "Open";
-export const openLabel = (title: string) => `Open “${title}” on Lists & notes`;
+export const openLabel = (title: string) => `Open “${title}” on Church lists`;
 const UNTITLED = "Untitled section";
 
 /** A Sunday card as the page's slot gives it: the kind of finding, and its team and position when it has one. */
@@ -23,7 +23,7 @@ export interface SundayCard { kind?: string; team_id?: string; position_id?: str
 
 export function ChurchOwnWords({ state, card, onOpen, max = ROWS_BESIDE }: {
   state: Pick<ChurchSourcesState, "sources" | "reads" | "notes" | "noteReads">; card: SundayCard;
-  /** Opens Lists & notes: at a section of notes, or (null) where the whole list is. */
+  /** Opens Church lists: at a section of notes, or (null) where the whole list is. */
   onOpen?: ((target: NoteFocus | null) => void) | undefined; max?: number;
 }) {
   const position = card.team_id !== undefined && card.name !== undefined

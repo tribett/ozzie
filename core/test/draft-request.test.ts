@@ -65,13 +65,19 @@ describe("placeholder boundary", () => {
     const text = templateDraft(ctx, capture.names).text;
     expect(text).toContain(`for Greeter on ${new Date(greeter.position!.interval!.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}.`);
     expect(text).toContain("Would you be able to help?");
-    // No service time read: the Sunday's own date when it's known, otherwise just Sunday.
+    // No service time read: the service's own date when it's known, on whatever day it is, otherwise the next service.
     const untimed = { ...ctx, finding: { ...greeter, position: { ...greeter.position!, interval: null } } };
     expect(templateDraft({ ...untimed, sunday: "2026-11-29" }, capture.names).text).toContain("for Greeter on Sunday, November 29.");
-    expect(templateDraft(untimed, capture.names).text).toContain("for Greeter on Sunday.");
+    expect(templateDraft({ ...untimed, sunday: "2026-11-25" }, capture.names).text).toContain("for Greeter on Wednesday, November 25.");
+    expect(templateDraft(untimed, capture.names).text).toContain("for Greeter at the next service.");
     for (const draft of [text, templateDraft(untimed, capture.names).text, templateDraft({ ...untimed, sunday: "2026-11-29" }, capture.names).text]) {
       expect(draft).not.toMatch(/this week|this Sunday/u);
     }
+    // Decision 18: a Wednesday service, or one whose date isn't known, is never called Sunday.
+    const unplaced = { ...greeter };
+    delete unplaced.position;
+    for (const draft of [templateDraft(untimed, capture.names).text, templateDraft({ ...untimed, sunday: "2026-11-25" }, capture.names).text,
+      templateDraft({ ...untimed, finding: unplaced }, capture.names).text]) expect(draft).not.toMatch(/Sunday/u);
     // The date is no name and no placeholder: it goes for rewording like the time does.
     expect(buildRewordRequest(templateDraft({ ...untimed, sunday: "2026-11-29" }, capture.names), "warmer", capture.names).user).toContain("Sunday, November 29");
   });

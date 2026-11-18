@@ -1,5 +1,5 @@
 {
-  "about": "The closed grammar of the model's final reply (structured answers, review 2026-11-14 section C; vocabulary.json \"answer\"). Run by core/test/harness/compose.test.ts against core/src/harness/fixed.ts parseAnswer and by core/native-auth/src/agent_tests.rs against fixed.rs final_answer, so the webview and native read every answer the same way. Ids existing in the evidence is checked separately on each side.",
+  "about": "The closed grammar of the model's final reply (structured answers, review 2026-11-14 section C; vocabulary.json \"answer\"). Run by core/test/harness/compose.test.ts against core/src/harness/fixed.ts parseAnswer and by core/native-auth/src/agent_tests.rs against fixed.rs final_answer, so the webview and native read every answer the same way. What an answer may say beside its task's tool results: \"evidence\", run by core/test/harness/verify.test.ts and agent_tests.rs.",
   "valid": [
     { "text": "{\"answer\":\"facts\",\"facts\":[\"f3\",\"f7\"]}", "answer": "facts", "facts": ["f3", "f7"], "draft": null },
     { "text": "{\"answer\":\"not-covered\"}", "answer": "not-covered", "facts": [], "draft": null },
@@ -49,6 +49,29 @@
     "```json\n{\"answer\":\"not-covered\"}\n```\nAnything else?",
     "[{\"answer\":\"not-covered\"}]",
     "\"not-covered\"",
-    "{ \"answer\":\"not-covered\"}"
-  ]
+    "{ \"answer\":\"not-covered\"}",
+    "Okay, let's break this down. The user asked, \"Which roles still need people on Sunday?\" The tool returned one role that needs one more person, f2.\n\n{\"answer\":\"facts\",\"facts\":[\"f2\"]}",
+    "Okay, let's see. The user is asking who could cover [Role 1]. I called the tool and it listed [Person 1] and [Person 2]. So the answer should be the facts f3 and f4. Let me make sure",
+    "<think>\nOkay, the user wants the open roles.\n</think>\n{\"answer\":\"facts\",\"facts\":[\"f2\"]}"
+  ],
+  "evidence": {
+    "about": "An answer held to the tool results of its task (verify.ts verifyAnswer on the page, agent.rs answer_ok natively): every id is one a result holds, and \"nothing-needs-a-decision\" only when the task looked at this Sunday's overview and every overview it read counts none and keeps nothing on this Mac. Each case names its results, in order, from \"results\".",
+    "results": {
+      "overview-none": { "tool": "sunday.overview", "source": "Planning Center Services", "check_time": "2026-11-20T15:00:00Z", "completeness": "complete", "payload": { "fact": "f1", "mode": "live", "sunday": "2026-11-22", "reads": 20, "reads_not_completed": 0, "needs_a_decision": 0, "worth_a_look": 1, "findings": [] } },
+      "overview-one": { "tool": "sunday.overview", "source": "Planning Center Services", "check_time": "2026-11-20T15:00:00Z", "completeness": "complete", "payload": { "fact": "f2", "mode": "live", "sunday": "2026-11-22", "reads": 20, "reads_not_completed": 0, "needs_a_decision": 1, "worth_a_look": 1, "findings": [] } },
+      "overview-two": { "tool": "sunday.overview", "source": "Planning Center Services", "check_time": "2026-11-20T15:00:00Z", "completeness": "complete", "payload": { "fact": "f1", "mode": "live", "sunday": "2026-11-22", "reads": 20, "reads_not_completed": 0, "needs_a_decision": 2, "worth_a_look": 1, "findings": [] } },
+      "overview-none-kept": { "tool": "sunday.overview", "source": "Planning Center Services", "check_time": "2026-11-20T15:00:00Z", "completeness": "complete", "payload": { "fact": "f1", "mode": "live", "sunday": "2026-11-22", "reads": 20, "reads_not_completed": 0, "needs_a_decision": 0, "worth_a_look": 0, "kept_on_this_mac": "some findings are shown only in Ozzie on this Mac", "findings": [] } },
+      "who-could-help": { "tool": "sunday.who_could_help", "source": "Planning Center Services", "check_time": "2026-11-20T15:00:00Z", "completeness": "complete", "payload": { "fact": "f1", "asked_for": { "role": "[Role 1]" }, "times": [{ "fact": "f2", "role": "[Role 1]", "time": { "starts_at": "2026-11-22T09:30-05:00", "ends_at": "2026-11-22T10:30-05:00" }, "remaining": 1 }], "people": [{ "fact": "f3", "role": "[Role 1]", "person": "[Person 1]", "status": "no overlap found" }, { "fact": "f4", "role": "[Role 1]", "person": "[Person 2]", "status": "possible conflict" }] } }
+    },
+    "cases": [
+      { "why": "the overview counts none", "results": ["overview-none"], "answer": "{\"answer\":\"nothing-needs-a-decision\"}", "ok": true },
+      { "why": "the overview counts none, with its own fact", "results": ["overview-none"], "answer": "{\"answer\":\"nothing-needs-a-decision\",\"facts\":[\"f1\"]}", "ok": true },
+      { "why": "facts a lookup other than the overview holds", "results": ["who-could-help"], "answer": "{\"answer\":\"facts\",\"facts\":[\"f3\"]}", "ok": true },
+      { "why": "no lookup at all", "results": [], "answer": "{\"answer\":\"nothing-needs-a-decision\"}", "ok": false },
+      { "why": "one lookup that was not the overview (review of ec26ad4b..fbd3833c, L-4)", "results": ["who-could-help"], "answer": "{\"answer\":\"nothing-needs-a-decision\"}", "ok": false },
+      { "why": "the overview counts two", "results": ["overview-two"], "answer": "{\"answer\":\"nothing-needs-a-decision\"}", "ok": false },
+      { "why": "a later overview counts one", "results": ["overview-none", "overview-one"], "answer": "{\"answer\":\"nothing-needs-a-decision\"}", "ok": false },
+      { "why": "the overview keeps findings on this Mac", "results": ["overview-none-kept"], "answer": "{\"answer\":\"nothing-needs-a-decision\"}", "ok": false }
+    ]
+  }
 }

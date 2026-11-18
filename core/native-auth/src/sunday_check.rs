@@ -281,7 +281,11 @@ pub fn check_sunday(
         service_type_id,
         plan_id,
         kids_teams,
-        ChurchReads::default(),
+        // The reading code's own entries: everything the sign-in allows, as before. The app passes its switch.
+        ChurchReads {
+            operations: true,
+            ..ChurchReads::default()
+        },
         cancelled,
     )
 }
@@ -293,6 +297,11 @@ pub fn check_sunday(
 pub struct ChurchReads<'a> {
     pub forms: Option<&'a [String]>,
     pub checkins_event: Option<&'a str>,
+    /// Rooms and Calendar conflicts, People follow-ups (workflows, steps, cards) and the scheduled people's group
+    /// memberships and events: read only when the leader turned them on in Settings ("Also check rooms, follow-ups
+    /// and group events"), never just because the sign-in holds those scopes (first-run review H1: allowing People
+    /// to fill in To must not start them). Off by default.
+    pub operations: bool,
 }
 impl ChurchReads<'_> {
     fn valid(&self) -> bool {
@@ -368,6 +377,8 @@ impl Bounded {
 struct Check<'a> {
     auth: &'a AuthController,
     verified: VerifiedSource,
+    /// `ChurchReads::operations`: the rooms, follow-ups and group reads are made only when on.
+    operations: bool,
     service_type_id: &'a str,
     plan_id: &'a str,
     cancelled: &'a AtomicBool,
@@ -464,7 +475,9 @@ impl Check<'_> {
             .get(&None)
             .or_else(|| self.tripped.get(&endpoint))
             .copied();
-        if !collection.product().granted(self.verified.scopes()) {
+        if !collection.product().granted(self.verified.scopes())
+            || (operations_read(collection) && !self.operations)
+        {
             record.outcome = NOT_REQUESTED.into();
         } else if let Some(reason) = tripped {
             record.outcome = reason.into();
@@ -745,6 +758,22 @@ fn plan_window(reads: &[SundayRead]) -> Option<Window> {
 /// and Calendar's conflict records for each booked event, follow-up workflow steps and
 /// ready/snoozed cards, and the group meetings of people on this plan. Without a plan date,
 /// windowed reads (and the conflicts that follow bookings) are not attempted and do not appear.
+/// The reads `ChurchReads::operations` turns on: rooms and their bookings and conflicts, People follow-ups, and the
+/// scheduled people's group memberships and events. Background checks and forms have their own switches.
+fn operations_read(collection: Collection) -> bool {
+    matches!(
+        collection,
+        Collection::CalendarRooms
+            | Collection::CalendarResourceBookings
+            | Collection::CalendarEventConflicts
+            | Collection::PeopleWorkflows
+            | Collection::PeopleWorkflowSteps
+            | Collection::PeopleWorkflowReadyCards
+            | Collection::PeopleWorkflowSnoozedCards
+            | Collection::GroupsPersonMemberships
+            | Collection::GroupsGroupEvents
+    )
+}
 fn operations(
     check: &mut Check<'_>,
     people: &Bounded,
@@ -1015,7 +1044,11 @@ pub(crate) fn run(
         service_type_id,
         plan_id,
         kids_teams,
-        ChurchReads::default(),
+        // The reading code's own entries: everything the sign-in allows, as before. The app passes its switch.
+        ChurchReads {
+            operations: true,
+            ..ChurchReads::default()
+        },
         cancelled,
         http,
         clock,
@@ -1047,6 +1080,7 @@ pub(crate) fn run_with_church(
     let mut check = Check {
         auth,
         verified,
+        operations: church.operations,
         service_type_id,
         plan_id,
         cancelled,

@@ -535,9 +535,12 @@ name = "ozzie-native-auth"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "core-foundation",
+ "core-foundation-sys",
  "getrandom 0.3.4",
  "icu_normalizer",
  "icu_properties",
+ "libc",
  "reqwest",
  "security-framework",
  "serde",

@@ -94,17 +94,51 @@ pub enum Line {
     Checked,
     CouldntCheck,
     SundayAttention,
+    // The watched service's coverage, by its real day (onboarding spec §5.2, decision 18): nothing may call a
+    // non-Sunday service "Sunday". The page passes the day as a closed word (`attention`), never text.
+    MondayAttention,
+    TuesdayAttention,
+    WednesdayAttention,
+    ThursdayAttention,
+    FridayAttention,
+    SaturdayAttention,
+    WeekendAttention,
+    ServiceAttention,
     Test,
 }
 impl Line {
-    pub const ALL: [Line; 6] = [
+    pub const ALL: [Line; 14] = [
         Line::BriefingReady,
         Line::NeedsDecision,
         Line::Checked,
         Line::CouldntCheck,
         Line::SundayAttention,
+        Line::MondayAttention,
+        Line::TuesdayAttention,
+        Line::WednesdayAttention,
+        Line::ThursdayAttention,
+        Line::FridayAttention,
+        Line::SaturdayAttention,
+        Line::WeekendAttention,
+        Line::ServiceAttention,
         Line::Test,
     ];
+    /// The coverage line for the watched service's day: a weekday, "weekend" (times on Saturday and Sunday) or
+    /// "service" (any other spread, or not known). Anything else has none.
+    pub fn attention(day: &str) -> Option<Line> {
+        Some(match day {
+            "sunday" => Line::SundayAttention,
+            "monday" => Line::MondayAttention,
+            "tuesday" => Line::TuesdayAttention,
+            "wednesday" => Line::WednesdayAttention,
+            "thursday" => Line::ThursdayAttention,
+            "friday" => Line::FridayAttention,
+            "saturday" => Line::SaturdayAttention,
+            "weekend" => Line::WeekendAttention,
+            "service" => Line::ServiceAttention,
+            _ => return None,
+        })
+    }
     pub fn text(self) -> &'static str {
         match self {
             Line::BriefingReady => "Your morning briefing is ready.",
@@ -116,6 +150,26 @@ impl Line {
             }
             Line::CouldntCheck => "Ozzie couldn't finish a check. Open Ozzie to see what happened.",
             Line::SundayAttention => "Sunday coverage needs attention. Open Ozzie to see details.",
+            Line::MondayAttention => "Monday coverage needs attention. Open Ozzie to see details.",
+            Line::TuesdayAttention => {
+                "Tuesday coverage needs attention. Open Ozzie to see details."
+            }
+            Line::WednesdayAttention => {
+                "Wednesday coverage needs attention. Open Ozzie to see details."
+            }
+            Line::ThursdayAttention => {
+                "Thursday coverage needs attention. Open Ozzie to see details."
+            }
+            Line::FridayAttention => "Friday coverage needs attention. Open Ozzie to see details.",
+            Line::SaturdayAttention => {
+                "Saturday coverage needs attention. Open Ozzie to see details."
+            }
+            Line::WeekendAttention => {
+                "This weekend's coverage needs attention. Open Ozzie to see details."
+            }
+            Line::ServiceAttention => {
+                "Service coverage needs attention. Open Ozzie to see details."
+            }
             Line::Test => "A test notice from Ozzie. Notices will reach this phone like this one.",
         }
     }

@@ -6,6 +6,7 @@ import type { CandidateAssessment, PositionAssessment } from "./coverage.js";
 import { buildSundayBrief, leadKey, needKey, type Finding, type SundayBrief } from "./sunday-brief.js";
 import type { SundayCapture, SundayRules } from "./sunday-capture.js";
 import { kindWords } from "./finding-feedback.js";
+import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
 export interface PositionFacts {
   team_id: string; name: string; starts_at: string | null;
@@ -253,8 +254,13 @@ export function changeStillHolds(change: SundayChange, memory: SundayCheckMemory
 
 // Wording follows the Sunday page ("Greeter still needs one more person.").
 const people = (n: number) => n === 1 ? "one more person" : `${n} more people`;
-/** Plain-language sentence for one change. Names come only from the local resolver, at render time. */
-export function describeChange(change: SundayChange, nameOf: (personId: string) => string | undefined): string {
+/** The watched service's sidebar page at the start of a sentence: "The Wednesday page", "The “This weekend” page" (ask.ts `dayPage`). */
+const PageOf = (d: DayWords) => d.kind === "weekday" ? `The ${d.page} page` : `The “${d.page}” page`;
+/**
+ * Plain-language sentence for one change. Names come only from the local resolver, at render time. `d`: the watched
+ * service's day words, so a change names its real day and page (onboarding spec §5); the Sunday words otherwise.
+ */
+export function describeChange(change: SundayChange, nameOf: (personId: string) => string | undefined, d: DayWords = SUNDAY_WORDS): string {
   const name = change.person_id ? nameOf(change.person_id) : undefined;
   const Who = name ?? "Someone", who = name ?? "someone";
   const pos = change.position ?? "A position";
@@ -268,10 +274,10 @@ export function describeChange(change: SundayChange, nameOf: (personId: string) 
     case "need-increased": return `${pos} now needs ${people(change.to ?? 0)}, up from ${change.from}.`;
     case "need-decreased": return `${pos} now needs ${people(change.to ?? 0)}, down from ${change.from}.`;
     case "need-filled": return `${pos} no longer has an open request in Planning Center.`;
-    case "lead-missing": return `No one is confirmed to lead ${pos} this Sunday now.`;
-    case "lead-confirmed": return `Someone is confirmed to lead ${pos} this Sunday now.`;
+    case "lead-missing": return `No one is confirmed to lead ${pos} ${d.thisOne} now.`;
+    case "lead-confirmed": return `Someone is confirmed to lead ${pos} ${d.thisOne} now.`;
     case "suggestion-conflict": return `${Who} now has a possible conflict for ${pos}.`;
-    case "suggestion-left-out": return `${Who} is now left out for ${pos}. Sunday shows why.`;
+    case "suggestion-left-out": return `${Who} is now left out for ${pos}. ${PageOf(d)} shows why.`;
     case "coverage-unverified": return change.failed_reads
       ? `Some coverage couldn't be verified: ${change.failed_reads} Planning Center ${change.failed_reads === 1 ? "read" : "reads"} didn't complete.`
       : "Some coverage couldn't be verified in the latest check.";

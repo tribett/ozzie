@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { backgroundCheckTeamIds } from "../../../core/src/kids-rules.js";
 import { checkInsEvent, formIdsForCheck } from "../../../core/src/church-reads/rules.js";
+import { promise } from "./promises.js";
 
 export interface RecordingSummary { path_id: string; plan_id: string; completed_at: string }
 /** Setup's Sunday picker (native sunday_picker.rs). Names and titles are display text for this Mac only. */
@@ -78,14 +79,14 @@ export function choicesProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
   if (known.includes("sign-in-not-renewed")) {
     const later = "Try again in a moment, or enter the plan by hand.";
-    return notRenewed(known, "so your Sundays weren't listed", { again: "Sign in again in Settings, or enter the plan by hand.",
+    return notRenewed(known, "so your services weren't listed", { again: "Connect again in Settings, or enter the plan by hand.",
       reached: later, locked: later, denied: "Allow access when macOS asks, then try again, or enter the plan by hand.", unavailable: later, later });
   }
-  if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Then your upcoming Sundays are listed here.";
+  if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Then your upcoming services are listed here.";
   if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Try again in a minute, or enter the plan by hand.";
   if (known.includes("busy")) return "Ozzie is reading Planning Center for something else right now. Try again in a moment.";
   if (known.includes("denied")) return PICKER_REFUSED;
-  if (known.includes("organization")) return "The connected organization couldn't be verified, so nothing was read.";
+  if (known.includes("organization")) return ORGANIZATION_UNCONFIRMED;
   return "Planning Center couldn't be read just now. Try again, or enter the plan by hand.";
 }
 
@@ -96,15 +97,32 @@ export function choicesProblem(error: unknown): string {
  * who can give access and the next step.
  */
 export const REFUSED = {
-  summary: "Planning Center didn't let Ozzie read this Sunday.",
+  summary: "Planning Center didn't let Ozzie read this service's plan.",
   either: "It's one of these, and Ozzie can't tell which from here:",
-  login: "The Planning Center login you signed in with can't see this service type's plans. A Planning Center administrator at your church can give that login access to it in Planning Center Services.",
-  signIn: "That sign-in is no longer accepted. Signing in again fixes this.",
-  next: "Then sign in again, or choose a Sunday this login can see.",
-  signInButton: "Open Settings to sign in again",
-  chooseButton: "Open Settings to choose another Sunday",
+  login: "The Planning Center account you signed in with can't see this service's plans. A Planning Center administrator at your church can give that account access to it in Planning Center Services.",
+  signIn: "That sign-in is no longer accepted. Connecting again fixes this.",
+  next: "Then connect again, or choose a service this account can see.",
+  signInButton: "Open Settings to connect again",
+  chooseButton: "Open Settings to choose another service",
 } as const;
-export const PICKER_REFUSED = "Planning Center didn't let Ozzie list your church's plans. Either the login you signed in with can't see Planning Center Services, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access to Services; then sign in again. You can also enter a plan by hand.";
+/**
+ * "Copy a message for your administrator", beside each refusal above that says an administrator can give access
+ * (walk-through, 2026-11-18): what Ozzie is, that it only reads, the permission it needs and where it's changed, with no
+ * name, church, service or number in it. The permission and the way to it are Planning Center's own (its help page
+ * "Permissions in Services", read 2026-11-18): Viewer is the lowest level that sees plans the person isn't scheduled
+ * on, and an administrator sets it in Services under People, the person, Actions, Manage permissions, then Update.
+ */
+export const ADMIN_COPY = "Copy a message for your administrator";
+export const ADMIN_COPIED = "Copied. Paste it into an email or a message to your Planning Center administrator.";
+export const adminMessage = () => "Hi! I'd like to use Ozzie, an app on my Mac that reads our church's Planning Center Services to show me who's scheduled "
+  + `and what still needs people. ${promise("request")} Planning Center doesn't let my account see our service plans yet. Could you give my account the `
+  + "Viewer permission in Services? In Services, open People, choose my name, then Actions, then Manage permissions. Set People and Plans to Viewer, "
+  + "then choose Update. Thank you!";
+export const PICKER_REFUSED = "Planning Center didn't let Ozzie list your church's plans. Either the account you signed in with can't see Planning Center Services, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your account access to Services; then connect again. You can also enter a plan by hand.";
+/** A refused check in one line (the service page's other form, and Keeping watch), with its copy button. */
+export const CHECK_REFUSED = `${REFUSED.summary} Either the account you signed in with can't see this service's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your account access; then connect again under Settings, or choose another service.`;
+/** A connected church Planning Center couldn't confirm (organization diagnostics), said by what it is, never an id. */
+export const ORGANIZATION_UNCONFIRMED = "Ozzie couldn't confirm which church this Planning Center sign-in is for, so nothing was read.";
 /** Whether a failed check was a refused read (REFUSED), so the Sunday page can offer its next steps. */
 export const refusedRead = (error: unknown): boolean => {
   const known = JSON.stringify(error) ?? "";
@@ -116,15 +134,15 @@ export const refusedRead = (error: unknown): boolean => {
 export function sundayProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
   if (known.includes("sign-in-not-renewed")) {
-    return notRenewed(known, "so nothing was read", { again: "Sign in again in Settings.", reached: "Ozzie tries again at the next check.",
+    return notRenewed(known, "so nothing was read", { again: "Connect again in Settings.", reached: "Ozzie tries again at the next check.",
       locked: "Ozzie tries again at the next check.", denied: "Allow access when macOS asks, then check again.",
-      unavailable: "Check again in a moment; if it keeps happening, sign in again in Settings.", later: "Try again in a moment, or sign in again in Settings." });
+      unavailable: "Check again in a moment; if it keeps happening, connect again in Settings.", later: "Try again in a moment, or connect again in Settings." });
   }
   // Checking the saved sign-in before the check found none Ozzie can use (refused, or nothing to renew with).
-  if (known.includes('"invalid-token"')) return "Ozzie has no sign-in to Planning Center it can use, so nothing was read. Sign in again in Settings.";
-  if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return "Connect Planning Center first. Ozzie only reads; it changes nothing there.";
+  if (known.includes('"invalid-token"')) return "Ozzie has no sign-in to Planning Center it can use, so nothing was read. Connect again in Settings.";
+  if (known.includes("not-connected") || known.includes("missing-credentials") || known.includes("invalid-credentials")) return `Connect Planning Center first. ${promise("connectAnd")}`;
   if (known.includes("rate-limited")) return "Planning Center asked Ozzie to slow down. Wait a minute, then check again, or show the last saved check.";
-  if (known.includes("denied")) return `${REFUSED.summary} Either the login you signed in with can't see this service type's plans, or that sign-in is no longer accepted. A Planning Center administrator at your church can give your login access; then sign in again under Settings, or choose another Sunday.`;
-  if (known.includes("organization")) return "The connected organization couldn't be verified, so nothing was read.";
+  if (known.includes("denied")) return CHECK_REFUSED;
+  if (known.includes("organization")) return ORGANIZATION_UNCONFIRMED;
   return "Planning Center couldn't be checked just now. You can show the last saved check instead.";
 }

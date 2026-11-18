@@ -8,6 +8,15 @@ use std::sync::{
 use zeroize::Zeroizing;
 
 pub const REDIRECT_URI: &str = "http://127.0.0.1:42819/oauth/callback";
+/// An `error=` Planning Center sent back to the loopback: the person's refusal is `denied`; anything else ends
+/// the attempt as `cancelled`. Nothing is saved either way.
+fn browser_error(error: &str) -> AuthError {
+    if error == "access_denied" {
+        AuthError::Denied
+    } else {
+        AuthError::Cancelled
+    }
+}
 pub const ATTEMPT_LIFETIME_MS: u64 = 300_000;
 /// How long before a saved sign-in's access token runs out (Planning Center's last two hours) a read
 /// renews it first (`AuthController::renew_if_due`): longer than a whole Sunday check and its waits.
@@ -19,7 +28,11 @@ pub enum AuthError {
     StateMismatch,
     InvalidCallback,
     Expired,
+    /// Cancelled on this Mac (Cancel, Disconnect, quitting), or an error from Planning Center other than a refusal.
     Cancelled,
+    /// The person chose not to allow Ozzie in the browser (Planning Center's `error=access_denied`). Nothing is
+    /// saved; the attempt ends as `cancelled` with this problem (onboarding spec, Planning Center failures row 1).
+    Denied,
     OrganizationUnverified,
     ProviderFailure,
     InvalidToken,
@@ -1020,7 +1033,7 @@ impl AuthController {
                     } else {
                         match error {
                             AuthError::Expired => ConnectionState::Expired,
-                            AuthError::Cancelled => ConnectionState::Cancelled,
+                            AuthError::Cancelled | AuthError::Denied => ConnectionState::Cancelled,
                             _ => ConnectionState::Failed,
                         }
                     };
@@ -1028,8 +1041,10 @@ impl AuthController {
                 state.status.scopes = None;
                 state.status.problem = Some(error.clone());
                 state.status.organization_diagnostic = if self.check(generation, expires).is_err()
-                    || matches!(error, AuthError::Cancelled | AuthError::Expired)
-                {
+                    || matches!(
+                        error,
+                        AuthError::Cancelled | AuthError::Denied | AuthError::Expired
+                    ) {
                     None
                 } else {
                     diagnostic
@@ -1913,7 +1928,9 @@ impl AuthController {
         }
     }
     /// Cancels, waits up to DISCONNECT_WAIT for an in-flight read, then revokes and deletes.
-    /// `Busy` means nothing was revoked or deleted yet.
+    /// `Busy` means nothing was revoked or deleted yet. A delete the Keychain refuses after Planning
+    /// Center accepted the revoke ends disconnected all the same, with that store error as the
+    /// problem: the copy left on this Mac no longer works.
     pub fn disconnect(&self) -> Result<ConnectionStatus, AuthError> {
         self.disconnect_within(DISCONNECT_WAIT)
     }
@@ -1963,6 +1980,8 @@ impl AuthController {
         let generation = self.generation.load(Ordering::SeqCst);
         // Set when an unreadable saved sign-in named another church: it's removed, not revoked.
         let mut unrevoked = false;
+        // Set once Planning Center accepted the revoke: from then on the saved copy no longer works.
+        let mut revoked = false;
         let result = (|| {
             if read_private(
                 self.store.as_ref(),
@@ -2001,6 +2020,7 @@ impl AuthController {
                                 unrevoked = true;
                             } else if let Some((token, hint)) = old.revocable() {
                                 self.provider.revoke(&self.binding.client_id, token, hint)?;
+                                revoked = true;
                             }
                         }
                         None
@@ -2010,16 +2030,28 @@ impl AuthController {
                 if let Some(tokens) = tokens {
                     let (token, hint) = revocation(&tokens);
                     self.provider.revoke(&self.binding.client_id, token, hint)?;
+                    revoked = true;
                 }
             }
-            self.store
+            // A Keychain that won't remove the item after Planning Center accepted the revoke (seen
+            // on a Mac whose item this build may read and replace but not delete) leaves only a
+            // copy that no longer works: Ozzie is signed out, and the status says the copy stayed.
+            // With nothing signed out, a refused delete is the failure it always was.
+            let kept = match self
+                .store
                 .delete(&self.binding.workspace, &self.binding.organization)
-                .map_err(AuthError::Store)?;
+            {
+                Ok(()) => None,
+                Err(error) if revoked => Some(error),
+                Err(error) => return Err(AuthError::Store(error)),
+            };
             let mut state = self.lock()?;
-            state.nothing_stored = true;
+            state.nothing_stored = kept.is_none();
             state.status.state = ConnectionState::Disconnected;
             state.status.checked_at_ms = None;
-            state.status.problem = unrevoked.then_some(AuthError::OrganizationUnverified);
+            state.status.problem = kept
+                .map(AuthError::Store)
+                .or(unrevoked.then_some(AuthError::OrganizationUnverified));
             state.status.organization_diagnostic = None;
             Ok(state.status.clone())
         })();
@@ -2105,8 +2137,8 @@ impl AuthController {
         let mut diagnostic = None;
         let result = (|| {
             self.check_writer(generation, Some(attempt.expires), writer.as_ref())?;
-            if query.contains_key("error") {
-                return Err(AuthError::Cancelled);
+            if let Some(error) = query.get("error") {
+                return Err(browser_error(error));
             }
             let code = query.get("code").ok_or(AuthError::InvalidCallback)?;
             let grant =
@@ -2217,8 +2249,8 @@ impl AuthController {
         let mut diagnostic = None;
         let result = (|| {
             self.check(attempt.generation, Some(attempt.expires))?;
-            if query.contains_key("error") {
-                return Err(AuthError::Cancelled);
+            if let Some(error) = query.get("error") {
+                return Err(browser_error(error));
             }
             let code = query
                 .get("code")

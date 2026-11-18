@@ -405,6 +405,10 @@ struct Record {
     /// before replies were hashed; a task that is still running always has one per finished step.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     replies: Vec<String>,
+    /// Awake time (`awake_ms`) when this launch saw the task start running (`TaskLedger::running_for`). Never
+    /// written: a task from an earlier launch is never running here.
+    #[serde(skip)]
+    running_awake_ms: Option<u64>,
 }
 
 /// One task for What happened. `events` are contract.ts TaskEvents.
@@ -735,6 +739,9 @@ fn push_step_event(
 pub struct TaskLedger {
     inner: Mutex<Inner>,
     clock: fn() -> u64,
+    /// Awake time in milliseconds (`awake_ms`), for how long a task has been running: never the wall clock, which
+    /// can jump.
+    awake: fn() -> u64,
     compact_after: usize,
 }
 impl TaskLedger {
@@ -773,8 +780,15 @@ impl TaskLedger {
         Ok(Self {
             inner: Mutex::new(inner),
             clock,
+            awake: awake_ms,
             compact_after: compact_after.max(1),
         })
+    }
+    /// Tests: the awake clock `running_for` reads.
+    #[cfg(test)]
+    pub(crate) fn with_awake(mut self, awake: fn() -> u64) -> Self {
+        self.awake = awake;
+        self
     }
     fn lock(&self) -> MutexGuard<'_, Inner> {
         // A change edits a copy and commits it only after its line is on disk, so a panic elsewhere
@@ -829,6 +843,7 @@ impl TaskLedger {
             events: Vec::new(),
             minted: Vec::new(),
             replies: Vec::new(),
+            running_awake_ms: None,
         };
         push_event(&mut record, EventType::Admitted, String::new(), now);
         if !record_ok(&record) {
@@ -863,9 +878,13 @@ impl TaskLedger {
         if !failure_ok(to, code) || code == Some(FailureCode::Interrupted) {
             return Err(LedgerError::Invalid);
         }
+        let awake = (self.awake)();
         self.change(task_id, |record, now| {
             if !record.state.next().contains(&to) {
                 return Err(LedgerError::Transition);
+            }
+            if to == RunState::Running {
+                record.running_awake_ms = Some(awake);
             }
             record.state = to;
             record.failure = code;
@@ -890,6 +909,20 @@ impl TaskLedger {
             }
             push_step_event(record, kind, detail.to_owned(), now)
         })
+    }
+
+    /// How long a running task has been running in this launch, in awake time: from when it was moved to running
+    /// to now. None for a task that isn't running. The page starts the task's own clock a moment before it records
+    /// `running`, so this is never more than the time the task has really had (agent.rs `RUN_MS`, review M4).
+    pub fn running_for(&self, task_id: &str) -> Option<std::time::Duration> {
+        let inner = self.lock();
+        let record = &inner.tasks[inner.position(task_id).ok()?];
+        let since = record
+            .running_awake_ms
+            .filter(|_| record.state == RunState::Running)?;
+        Some(std::time::Duration::from_millis(
+            (self.awake)().saturating_sub(since),
+        ))
     }
 
     /// The task as agent.rs sees it before a step: running, with no step in flight, or refused.

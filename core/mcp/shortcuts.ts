@@ -111,6 +111,8 @@ interface Overview {
   pendingPeople: number;
   sent: number;
   unsent: number;
+  /** People scheduled with a blockout over their serving time (each once): worth a look, never an open spot. */
+  blockedOut: number;
   handled: number;
 }
 const MODES: ReadonlySet<string> = new Set(["live", "recording", "fictional"]);
@@ -134,6 +136,8 @@ function overviewOf(envelope: ToolEnvelope): Overview | null {
   const unsureKids = new Set(open.filter(f => kids(f) && f["tone"] === UNSURE).map(f => f["role"]).filter(r => !sureKids.has(r)));
   // Someone pending for two roles is one person; a pending row without a person label counts on its own.
   const people = new Set(pending.map((f, i) => typeof f["person"] === "string" && f["person"].startsWith("[") ? f["person"] : `row ${i}`));
+  const blocked = open.filter(f => f["kind"] === "scheduled with a blockout at this time");
+  const blockedOut = new Set(blocked.map((f, i) => typeof f["person"] === "string" && f["person"].startsWith("[") ? f["person"] : `row ${i}`));
   const leftOut = (count(p["left_out_for_length"]) ?? 0) > 0;
   return {
     mode: p["mode"] as Overview["mode"],
@@ -152,6 +156,7 @@ function overviewOf(envelope: ToolEnvelope): Overview | null {
     pendingPeople: people.size,
     sent: pending.filter(f => f["request"] === "request sent, no answer yet").length,
     unsent: pending.filter(f => f["request"] === "request not sent yet").length,
+    blockedOut: blockedOut.size,
     handled: handled.length,
   };
 }
@@ -188,6 +193,7 @@ function factLines(o: Overview, past: boolean): string[] {
     } else if (o.unsent) lines.push(capital(`${who}, and ${shows} ${the(o.unsent)} ${notSent(o.unsent)}.`));
     else lines.push(capital(`${who}.`));
   }
+  if (o.blockedOut) lines.push(`Worth a look: ${n(o.blockedOut, "person", "people")} scheduled ${verb(o.blockedOut, "has", "have", "had")} a blockout in Planning Center at their serving time.`);
   if (o.kidsUnsure) lines.push(`Worth a look: ${n(o.kidsUnsure, "kids team")} may ${past ? "have had" : "have"} fewer confirmed people than your Church rules ask.`);
   if (o.leadsUnsure) lines.push(`Worth a look: ${n(o.leadsUnsure, "team")} ${verb(o.leadsUnsure, "has", "have", "had")} a lead scheduled whose answer or serving time couldn't be confirmed.`);
   if (o.handled) lines.push(`You marked ${o.leftOut ? "at least " : ""}${o.handled} as handled yourself.`);

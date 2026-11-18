@@ -33,6 +33,8 @@ import { addDays, DAY_MS, weekdayOf } from "../../../core/src/harness/responsibi
 import { isTimeZone, localDate, localDay } from "../../../core/src/church-time.js";
 import type { NoticedItem, RunnerView, WriteUp } from "./responsibility-runner.js";
 import type { KeyValueStore } from "./proactive.js";
+import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
+import { eyeLine, keepTitle, pageRef } from "./day-phrases.js";
 
 export type GroupId = "attention" | "review" | "progress";
 export type ItemState = "needs-decision" | "needs-you" | "prepared" | "waiting-answer" | "under-way";
@@ -263,7 +265,7 @@ const at = (iso: string, now: string, zone: string) => localDate(iso, zoneOr(zon
 export function regularLine(c: RegularCheck, now: string, zone: string): string {
   const how = `Checks Planning Center ${every(c.intervalMinutes)} while Ozzie is open${c.runOnLaunch ? ", and when it opens" : ""}.`;
   const last = c.last ? ` Last checked ${at(c.last.at, now, zone)}${c.last.ok ? "" : ", but that check couldn't finish"}.` : " Not checked yet.";
-  const next = c.paused ? " Paused: nothing runs until you resume it in What runs automatically." : c.running ? " Checking now." : c.next ? ` Next check ${at(c.next, now, zone)}.` : "";
+  const next = c.paused ? " Paused: nothing runs until you resume it in Keeping watch." : c.running ? " Checking now." : c.next ? ` Next check ${at(c.next, now, zone)}.` : "";
   return `${how}${last}${next}`;
 }
 /** A scheduled check missed in the last day, said plainly with when, and when it looked again if it has. */
@@ -274,11 +276,14 @@ export function regularMissedText(c: RegularCheck, now: string, zone: string): s
   const after = c.last && ms(c.last.at) > ms(due) ? ` It checked again at ${at(c.last.at, now, zone)}.` : " It checks again when it can.";
   return `A check was due at ${at(due, now, zone)}${others}, but Ozzie wasn't running or this Mac was asleep.${after}`;
 }
-/** In progress with nothing in it: what would start something, never a pointer to Ask (audit item 4). */
-export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean): string {
+/**
+ * In progress with nothing in it: what would start something, never a pointer to Ask (audit item 4). Named by the
+ * watched service's real day (`d`, onboarding spec §5); the fictional example is a Sunday.
+ */
+export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean, d: DayWords = SUNDAY_WORDS): string {
   if (example) return "Nothing runs in the fictional example.";
-  if (regular && !regular.ready) return "Nothing runs yet. The regular Sunday check starts once Planning Center is connected and a Sunday is chosen; Keep Sunday covered and other jobs start when you set them up.";
-  return "Nothing is running. Keep Sunday covered and other jobs start when you set them up in What runs automatically.";
+  if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine(d)} once Planning Center is connected and a service is chosen; ${keepTitle(d)} and other jobs start when you set them up.`;
+  return `Nothing is running. ${keepTitle(d)} and other jobs start when you set them up in Keeping watch.`;
 }
 
 /** One decision Today names (audit item 17): its words, the Sunday card it opens, and whether that card lists people. */
@@ -293,12 +298,12 @@ const more = (n: number) => n === 1 ? "1 more person needed" : `${n} more people
  * team are clear for that time. Counts and role names only: never a person's name, never ranked or scored. Rooms and
  * follow-ups that need a decision are named by what they are. `named` is at most DECISIONS_NAMED; `more` the rest.
  */
-export function decisionLines(items: readonly Decided[], ops: { rooms: number; followUps: number }, zone: string): { named: DecisionLine[]; more: number } {
+export function decisionLines(items: readonly Decided[], ops: { rooms: number; followUps: number }, zone: string, d: DayWords = SUNDAY_WORDS): { named: DecisionLine[]; more: number } {
   const z = zoneOr(zone);
   const at = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: z });
   const lines: DecisionLine[] = items.filter(i => i.state !== "resolved" && i.finding.tone === "decision").map(({ finding: f }) => {
     const role = f.position?.name ?? "A role";
-    const when = f.position?.interval ? at(f.position.interval.starts_at) : "this Sunday";
+    const when = f.position?.interval ? at(f.position.interval.starts_at) : d.thisOne;
     switch (f.kind) {
       case "needs-people": {
         const clear = f.people?.suggestions.length ?? 0;
@@ -335,7 +340,7 @@ export const sundayCountText = (n: number) => `${n} ${n === 1 ? "thing" : "thing
 
 /** Notes ready on the Sunday page for a report folded into the Sunday card (less one an older version counted as the AI's). */
 export const pageNotes = (item: NoticedItem) => Math.max(0, (item.drafts ?? 0) - (item.drafted ? 1 : 0));
-export const notesReadyText = (n: number) => `Ozzie has ${n === 1 ? "a note" : `${n} notes`} ready for these on the Sunday page. Nothing has been sent.`;
+export const notesReadyText = (n: number, d: DayWords = SUNDAY_WORDS) => `Ozzie has ${n === 1 ? "a note" : `${n} notes`} ready for these on ${pageRef(d)}. Nothing has been sent.`;
 
 /** The line under the page title, from the counts alone. */
 export function ledeText(g: Pick<Grouped, "attention" | "review" | "progress">): string {

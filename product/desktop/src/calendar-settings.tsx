@@ -6,7 +6,7 @@
 // where it points, masked.
 import { useId, useState } from "react";
 import type { CalendarRead } from "../../../core/src/calendar/events.js";
-import { calendarsConnected, useCalendarState, type AppleCalendarChoice, type Calendars, type CalendarState } from "./calendars.js";
+import { calendarsConnected, LINK_PROBLEMS, useCalendarState, type AppleCalendarChoice, type Calendars, type CalendarState } from "./calendars.js";
 import { Icon } from "./icons.js";
 import "./calendars.css";
 
@@ -23,6 +23,12 @@ export const CALENDARS_HOW = [
   "A private link's address works like a password. Ozzie keeps it in this Mac's Keychain, never shows it again in full, sends no sign-in with it, and only reads from addresses on the internet that start with https:// or webcal://.",
   "Ozzie only reads. It has no way to add, change or delete anything on a calendar.",
 ] as const;
+
+/**
+ * "Forget all private calendar links?" Where the addresses were kept is said plainly; "Keychain" is said only under See
+ * how this works (onboarding spec §6), in CALENDARS_HOW.
+ */
+export const FORGET_LINKS_CONFIRM = "Forget all private calendar links? Ozzie deletes every private calendar address it kept on this Mac and starts a new, empty list. The calendars themselves don't change, and you can add links again afterwards.";
 
 /** When a calendar was last read, or why it couldn't be. */
 function lastRead(read: CalendarRead | undefined): string {
@@ -96,7 +102,7 @@ function LinkRow({ link, read, calendars }: { link: NonNullable<CalendarState["l
     <span className="cal-link-t">
       <span className="bold" id={`${id}-label`}>{link.label}</span>
       <span className="small">{link.shown}</span>
-      <span className="small">{link.missing ? "Its address is no longer in this Mac's Keychain. Remove it and add it again." : lastRead(read)}</span>
+      <span className="small">{link.missing ? LINK_PROBLEMS.missing : lastRead(read)}</span>
     </span>
     {!confirm && <button type="button" className="btn btn-quiet btn-sm" aria-describedby={`${id}-label`} onClick={() => setConfirm(true)}>Stop reading this calendar</button>}
     {confirm && <div className="decide" role="group" aria-labelledby={`${id}-q`}>
@@ -117,7 +123,7 @@ function ForgetAll({ calendars }: { calendars: Calendars }) {
   return <>
     {!confirm && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => setConfirm(true)}>Forget all private calendar links</button></div>}
     {confirm && <div className="decide" role="group" aria-labelledby="forget-links-q">
-      <p id="forget-links-q" className="find-body">Forget all private calendar links? Ozzie deletes every private calendar address it saved in this Mac's Keychain and starts a new, empty list. The calendars themselves don't change, and you can add links again afterwards.</p>
+      <p id="forget-links-q" className="find-body">{FORGET_LINKS_CONFIRM}</p>
       <div className="find-next">
         <button type="button" className="btn btn-primary btn-sm" onClick={() => { setConfirm(false); void calendars.forgetAllLinks().then(setProblem); }}>Yes, forget them all</button>
         <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(false)}>Keep them</button>
@@ -145,7 +151,7 @@ function LinksSection({ state, calendars }: { state: CalendarState; calendars: C
   };
   return <section className="find" aria-labelledby="links-title">
     <h3 id="links-title" className="settings-t">Private calendar links</h3>
-    <p className="find-body">Paste the private address of a Google, Outlook or iCloud calendar. Google calls it “Secret address in iCal format”; Outlook calls it the ICS link of a published calendar. The address works like a password, so Ozzie keeps it in this Mac's Keychain and shows only where it points.</p>
+    <p className="find-body">Paste the private address of a Google, Outlook or iCloud calendar. Google calls it “Secret address in iCal format”; Outlook calls it the ICS link of a published calendar. The address works like a password, so Ozzie keeps it safely on this Mac and shows only where it points.</p>
     {state.linksProblem && <p role="alert" className="problem">{state.linksProblem}</p>}
     {state.linksUnreadable && <ForgetAll calendars={calendars} />}
     {links.length > 0 && <ul className="cal-links">{links.map(l => <LinkRow key={l.id} link={l} calendars={calendars}
@@ -160,7 +166,7 @@ function LinksSection({ state, calendars }: { state: CalendarState; calendars: C
         <label htmlFor="cal-link-address" className="field-l">Private address</label>
         <input id="cal-link-address" className="input" type="password" value={address} autoComplete="off" spellCheck={false} placeholder="https://… or webcal://…"
           aria-describedby="cal-link-help" onChange={e => setAddress(e.target.value)} />
-        <p id="cal-link-help" className="input-help">Ozzie reads it once to check it's a calendar, then keeps it in this Mac's Keychain.</p>
+        <p id="cal-link-help" className="input-help">Ozzie reads it once to check it's a calendar, then keeps it safely on this Mac.</p>
       </div>
       <div className="row form-actions">
         <button type="submit" className="btn btn-secondary" disabled={adding || !label.trim() || !address.trim()}>{adding ? "Reading it…" : "Add this calendar"}</button>

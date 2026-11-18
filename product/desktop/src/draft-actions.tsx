@@ -11,8 +11,16 @@
 // fill in To. The page never receives the address or number: only whether To was filled in, or a closed code for why
 // not, which it says in its own words with the name it already shows. Notes for no one in particular (Ask's, Today's)
 // open as before, with To empty.
+//
+// Two questions are asked here at the moment they matter (onboarding spec §4.2). "Your name for the end of notes", above
+// the buttons of a note that still ends "[Your name]" while no name is set, on a surface that can put the name in
+// (`onSign`). And "Fill in who it's to?" (people-question.tsx), before a note for one person opens while the sign-in
+// doesn't include People. Only the answers are kept (moments.ts): never what happened to a note, which stays on this card.
 import { useId, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { cleanYourName, yourName, YOUR_NAME_MAX } from "./connection.js";
+import { moments as thisMac, nameMomentDue, peopleQuestionDue, type MomentsStore } from "./moments.js";
+import { PeopleQuestion, type PeopleAccess } from "./people-question.js";
 
 export type DraftApp = "mail" | "messages";
 export const DRAFT_APPS: readonly DraftApp[] = ["mail", "messages"];
@@ -41,8 +49,9 @@ export const openDraftToNatively: OpenDraftTo = (app, body, person) => invoke<un
 export const isPersonId = (v: unknown): v is string => typeof v === "string" && /^[1-9]\d{0,31}$/u.test(v);
 /**
  * Who a prepared note is for: the Planning Center id the check on screen holds for them, the name the page shows (or
- * "this person"), whether the saved sign-in includes People (where email addresses and phone numbers are kept), and
- * Settings, where signing in again with People is the leader's own click.
+ * "this person"), and whether the saved sign-in includes People (where email addresses and phone numbers are kept).
+ * Without People, the card asks "Fill in who it's to?" and signs in for it itself (people-question.tsx); `onAddPeople`
+ * (Settings) is no longer used by this card and stays only so pages that still pass it compile.
  */
 export interface Addressee { person: string; name: string; peopleGranted: boolean; onAddPeople?: (() => void) | undefined }
 
@@ -58,8 +67,14 @@ export const HAND_OFF_NOTE = "Opens a new message in this Mac's email app or Mes
 /** A note for one person on the Sunday page: when To is filled (native contact.rs `choose`: the only usable one, or the
  *  one marked primary), and that what's read is kept nowhere (review P, L8). */
 export const handOffToNote = (name: string) => `Opens a new message in this Mac's email app or Messages addressed to ${name} when Planning Center has one usable email address or mobile number for them, or marks one as primary. What's read is used only to fill in To: never kept and never sent to AI. Check it and send it yourself.`;
-/** Below a note opened with To empty because the sign-in doesn't include People: the leader's own way to add it. */
-export const ADD_PEOPLE = "Open Settings to sign in again with People";
+/** Below a note opened with To empty because the sign-in doesn't include People: the note's own way back to the People
+ *  question (the only way it's asked again once the person chose to open without an address). */
+export const FILL_IN = "Fill in who it's to";
+/** The name question above a note's buttons (spec §4.2). */
+export const NAME_LABEL = "Your name for the end of notes";
+export const NAME_HELP = "It goes in on this Mac after any AI rewording, so the AI never sees it.";
+export const USE_NAME = "Use this name";
+export const LEAVE_NAME = "Leave [Your name] for now";
 
 /** The app name in the Mac's reply, when it is one plain line; otherwise what kind of app it was ("your email app"). */
 export function openedIn(reply: unknown, app: DraftApp): string {
@@ -89,8 +104,8 @@ export function addressedText(h: HandOff, to: Pick<Addressee, "name" | "peopleGr
     case "more-than-one": return `Planning Center has more than one ${detail} for ${to.name} and doesn't mark exactly one as primary. ${empty}, for you to choose.`;
     case "child": return `Planning Center lists ${to.name} as a child, so To is left empty. The note opened in ${opened}.`;
     // Someone a check of the church in use handed the page since Ozzie opened (contact.rs NotInThisCheck).
-    case "not-in-this-check": return `Ozzie fills in To only for people a Sunday check of the church Ozzie is using has shown since Ozzie opened. ${empty}.`;
-    // A Sunday check or setup's plan picker was reading Planning Center (contact.rs BusyWithACheck).
+    case "not-in-this-check": return `Ozzie fills in To only for people a check of the church Ozzie is using has shown since Ozzie opened. ${empty}.`;
+    // A check or setup's plan picker was reading Planning Center (contact.rs BusyWithACheck).
     case "busy-with-a-check": return `Ozzie was reading Planning Center just then, so To was left empty. The note opened in ${opened}.`;
     case "busy-with-another-note": return `Ozzie was still filling in To for another note, so To was left empty. The note opened in ${opened}.`;
     // Native allows READS_PER_MINUTE (10) tries in the past minute, whether or not they reached Planning Center or filled
@@ -146,9 +161,11 @@ export async function handOffTo(app: DraftApp, text: string, person: string, ope
  * (`after`). With `split`, the two open buttons get a row of their own under the copy row, so four buttons never wrap
  * raggedly. What happened is said under the buttons; the note says how To is filled in (or that the leader fills it in)
  * and who sends. What happened stays on this card only: a reason such as "child" is a fact about a person, so it is
- * never kept, recorded or passed on (product/desktop/test/draft-actions.test.ts).
+ * never kept, recorded or passed on (product/desktop/test/draft-actions.test.ts). The two questions asked here keep
+ * only their answers (moments.ts).
  */
-export function DraftActions({ text, copy, after, small = false, split = false, describedBy, open = openDraftNatively, openTo = openDraftToNatively, to = null, initial = null }: {
+export function DraftActions({ text, copy, after, small = false, split = false, describedBy, open = openDraftNatively, openTo = openDraftToNatively, to = null, initial = null,
+  onSign, nameStore = yourName, memory = thisMac, people }: {
   /** Exactly the words "Copy draft" copies. */
   text: string; copy: ReactNode; after?: ReactNode; small?: boolean; split?: boolean; describedBy?: string | undefined;
   open?: OpenDraft | undefined;
@@ -156,28 +173,81 @@ export function DraftActions({ text, copy, after, small = false, split = false, 
   to?: Addressee | null | undefined; openTo?: OpenDraftTo | undefined;
   /** Start as if an open already happened (tests). */
   initial?: HandOff | null;
+  /**
+   * Puts a name in place of "[Your name]" in the words this card shows and copies. Given, the card asks "Your name for
+   * the end of notes" while the note still ends "[Your name]" and no name is set; without it, the surface signs notes
+   * its own way and nothing is asked here.
+   */
+  onSign?: ((name: string) => void) | undefined;
+  /** Where the name is kept on this Mac (Settings' own; tests pass theirs). */
+  nameStore?: { get(): string; set(name: string): void } | undefined;
+  /** Where the answers to the two questions are kept (tests pass their own). */
+  memory?: MomentsStore | undefined;
+  /** The People sign-in the question starts and how often it looks (tests pass a fake and 0). */
+  people?: { access?: PeopleAccess | undefined; pollMs?: number | undefined } | undefined;
 }) {
   const [last, setLast] = useState<HandOff | null>(initial);
   const [busy, setBusy] = useState(false);
   const noteId = useId();
+  const nameId = useId();
+  // The name question: shown once per note while due; answered or left, it goes.
+  const [typed, setTyped] = useState("");
+  const [nameDone, setNameDone] = useState(false);
+  const askName = Boolean(onSign) && !nameDone && nameMomentDue(memory.get(), Boolean(nameStore.get()), text);
+  // The People question: the app the person pressed, while the sheet is open. Once People is added here, this card
+  // treats it as granted until the page's own status says so too.
+  const [asking, setAsking] = useState<DraftApp | null>(null);
+  const [peopleNow, setPeopleNow] = useState(false);
+  const toNow: Addressee | null = to ? (peopleNow ? { ...to, peopleGranted: true } : to) : null;
   const shown = last && last.text === text ? last : null;
-  const go = async (app: DraftApp) => {
+  const send = async (app: DraftApp, addressed = true) => {
     if (busy) return;
     setBusy(true);
-    try { setLast(await (to ? handOffTo(app, text, to.person, openTo, open) : handOff(app, text, open))); } finally { setBusy(false); }
+    try {
+      if (toNow && !addressed) {
+        // Opened by choice without an address: said as To empty because the sign-in lacks People, with the way back.
+        const h = await handOff(app, text, open);
+        setLast(h.result === "opened" ? { ...h, result: "unaddressed", reason: "not-allowed" } : h);
+      } else setLast(await (toNow ? handOffTo(app, text, toNow.person, openTo, open) : handOff(app, text, open)));
+    } finally { setBusy(false); }
+  };
+  const go = (app: DraftApp) => {
+    if (toNow && isPersonId(toNow.person) && peopleQuestionDue(memory.get(), toNow.peopleGranted)) { setAsking(app); return; }
+    void send(app, !toNow || toNow.peopleGranted);
+  };
+  const useName = () => {
+    const name = cleanYourName(typed);
+    if (!name) return;
+    nameStore.set(name);
+    onSign?.(name);
+    setNameDone(true);
   };
   const describe = describedBy ? `${noteId} ${describedBy}` : noteId;
   const opens = DRAFT_APPS.map(app => <button key={app} type="button" className={`btn btn-secondary${small ? " btn-sm" : ""}`} aria-describedby={describe}
-    onClick={() => { void go(app); }}>{openLabel(app)}</button>);
+    onClick={() => go(app)}>{openLabel(app)}</button>);
   return <div className="draft-actions">
+    {askName && <form className="name-moment" onSubmit={e => { e.preventDefault(); useName(); }}>
+      <label className="field-l" htmlFor={nameId}>{NAME_LABEL}</label>
+      <input id={nameId} className="input" value={typed} maxLength={YOUR_NAME_MAX} autoComplete="name" spellCheck={false} placeholder="Your name"
+        aria-describedby={`${nameId}-help`} onChange={e => setTyped(e.target.value)} />
+      <p id={`${nameId}-help`} className="input-help">{NAME_HELP}</p>
+      <div className="finish-acts">
+        <button type="submit" className="btn btn-secondary btn-sm" disabled={!cleanYourName(typed)}>{USE_NAME}</button>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={() => { memory.leaveName(); setNameDone(true); }}>{LEAVE_NAME}</button>
+      </div>
+    </form>}
     {split
       ? <><div className="find-next">{copy}{after}</div><div className="find-next draft-open">{opens}</div></>
       : <div className="find-next">{copy}{opens}{after}</div>}
     <p className="small draft-opened" role="status" aria-live="polite">{!shown ? "" : shown.result === "opened" ? handOffText(shown)
-      : shown.result === "addressed" || shown.result === "unaddressed" ? addressedText(shown, to ?? { name: "this person", peopleGranted: true }) : ""}</p>
-    {shown && needsPeople(shown, to) && to?.onAddPeople && <div className="find-next">
-      <button type="button" className="btn btn-secondary btn-sm" onClick={to.onAddPeople}>{ADD_PEOPLE}</button></div>}
+      : shown.result === "addressed" || shown.result === "unaddressed" ? addressedText(shown, toNow ?? { name: "this person", peopleGranted: true }) : ""}</p>
+    {shown && needsPeople(shown, toNow) && <div className="find-next">
+      <button type="button" className="btn btn-quiet btn-sm" onClick={() => setAsking(shown.app)}>{FILL_IN}</button></div>}
     {shown && (shown.result === "too-long" || shown.result === "not-opened" || shown.result === "failed") && <p role="alert" className="problem">{handOffText(shown)}</p>}
+    {asking && toNow && <PeopleQuestion name={toNow.name} access={people?.access} pollMs={people?.pollMs}
+      onClose={() => setAsking(null)}
+      onWithout={() => { memory.declinePeople(); setAsking(null); void send(asking, false); }}
+      onAddressed={() => { setPeopleNow(true); setAsking(null); void send(asking, true); }} />}
     <p className="small draft-note" id={noteId}>{to ? handOffToNote(to.name) : HAND_OFF_NOTE}</p>
   </div>;
 }

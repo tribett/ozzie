@@ -40,6 +40,12 @@ pub fn page_from_link(link: &str) -> Option<&'static str> {
         .map(|(_, page)| *page)
 }
 
+/// "Go back to Ozzie" on the browser's page after a sign-in or Ozzie's AI's connect (onboarding spec S4). Accepted
+/// whether or not Siri and Shortcuts is on; it only brings the window forward, names no page and carries nothing.
+pub fn is_connected_link(link: &str) -> bool {
+    matches!(link, "ozzie://connected" | "ozzie://connected/")
+}
+
 /// The page a link names, by the link's text as it arrives (`page_from_link`).
 pub fn page_from_url(url: &tauri::Url) -> Option<&'static str> {
     page_from_link(url.as_str())
@@ -54,6 +60,9 @@ pub struct OpenedPage(Mutex<Option<&'static str>>);
 pub fn on_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     if let tauri::RunEvent::Opened { urls } = event {
+        if urls.iter().any(|url| is_connected_link(url.as_str())) {
+            crate::always_on::show_main(app);
+        }
         let Some(page) = urls.iter().rev().find_map(page_from_url) else {
             return;
         };
@@ -189,6 +198,39 @@ pub fn siri_actions_bundled() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_way_back_from_the_browser_is_always_accepted_names_no_page_and_carries_nothing() {
+        use super::{is_connected_link, page_from_link};
+        assert!(is_connected_link("ozzie://connected"));
+        assert!(is_connected_link("ozzie://connected/"));
+        // It opens no page, so nothing it carries could choose one.
+        assert_eq!(page_from_link("ozzie://connected"), None);
+        for other in [
+            "ozzie://connected?church=1001",
+            "ozzie://connected#today",
+            "ozzie://connected/sunday",
+            "ozzie://user@connected",
+            "ozzie://Connected",
+            "ozzie://connected:8080",
+            "https://connected",
+            "ozzie://today",
+        ] {
+            assert!(!is_connected_link(other), "{other}");
+        }
+        // Accepted before the Siri and Shortcuts switch is looked at.
+        let source = include_str!("shortcuts.rs");
+        let accepted = source
+            .find("if urls.iter().any(|url| is_connected_link(url.as_str()))")
+            .unwrap();
+        let switch = source.find("shortcuts_check::is_on(&dir)").unwrap();
+        assert!(accepted < switch);
+        // The browser page links here.
+        assert_eq!(
+            ozzie_native_auth::callback::BACK_TO_OZZIE,
+            "ozzie://connected"
+        );
+    }
+
     use super::*;
 
     /// Info.plist CFBundleURLSchemes.

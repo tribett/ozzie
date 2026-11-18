@@ -407,7 +407,7 @@ day by its usual setting).
 
 ## Lists and notes you add
 
-Off until you add one, on the Lists & notes page. A church often keeps its own
+Off until you add one, on the Church lists page. A church often keeps its own
 lists outside Planning Center, such as who holds which keys. Ozzie can show
 one beside the Sunday cards it belongs with (`core/src/sources/`,
 `product/desktop/src-tauri/src/church_sources.rs`). Lists and notes you add
@@ -416,8 +416,9 @@ Siri, or put in any notice.
 
 - **What is read:** a spreadsheet saved as CSV or tab-separated text, up to
   2 MB, that you choose in Ozzie's own open panel. Ozzie reads it again from
-  where it is when you open Sunday or Lists & notes (the first time after Ozzie
-  starts, then at most once an hour) and when you press "Read again", never
+  where it is when you open your service's page or Church lists (the first
+  time after Ozzie starts, then at most once an hour) and when you press "Read
+  again", never
   with the window closed or hidden, and never changes it. It doesn't read a
   file in your Library folder, except in iCloud Drive, in an app's Documents
   folder in iCloud (where Numbers and TextEdit save) and in the cloud drives
@@ -429,9 +430,9 @@ Siri, or put in any notice.
   to web). Anyone with that link can read the sheet, so it is kept only in your
   Mac's Keychain (`church.ozzie.source-links.v1`), never in a file or a log;
   the page holds it only while you paste it, and afterwards shows only its
-  host. It reads the link when you add it, when you open Sunday or Lists &
-  notes (the first time after Ozzie starts, then at most once an hour while
-  Ozzie stays open), and when you ask; it never reads it with the window
+  host. It reads the link when you add it, when you open your service's page
+  or Church lists (the first time after Ozzie starts, then at most once an
+  hour while Ozzie stays open), and when you ask; it never reads it with the window
   closed or hidden. Each read is one HTTPS GET for the sheet
   (`core/native-auth/src/sheet_link.rs`): https on port 443 to a name that
   resolves only to public addresses, connected only to those, at most three
@@ -450,10 +451,10 @@ Siri, or put in any notice.
   choose in Ozzie's own open panel, read from where it is like a list's file
   (the same places refused). The panel offers plain text, Markdown and PDF
   files: a PDF is refused with a sentence saying how to save it as plain text,
-  and a Word or Pages file can't be chosen there (Lists & notes says how to
+  and a Word or Pages file can't be chosen there (Church lists says how to
   save one as plain text, and one renamed to .txt is refused with a sentence
   saying so). Ozzie splits notes into sections at each `#` heading, or at
-  blank lines in a file with no headings. It shows them on Lists & notes with a
+  blank lines in a file with no headings. It shows them on Church lists with a
   find box. Notes are shown as written, except that hidden format characters
   are removed, tabs and other control characters become spaces, and a line
   over 2,000 characters or a file over 20,000 lines is cut, which the notes
@@ -463,9 +464,9 @@ Siri, or put in any notice.
   line is shown, a heading longer than a title included (the title is cut; the
   heading is shown whole above the section). You can point to a section from
   the Sunday cards for one team (by its Planning Center id) or about one kind
-  of finding, with a way to open it here from those cards. Beside a Sunday
-  card it shows only the title of a section you pointed there (numbered when
-  titles repeat), as your church's own notes, not checked by Ozzie. Ozzie never follows notes
+  of finding, with a way to open it here from those cards. Beside a card on
+  your service's page it shows only the title of a section you pointed there
+  (numbered when titles repeat), as your church's own notes, not checked by Ozzie. Ozzie never follows notes
   and never compares their words with Planning Center or with anyone's name;
   the find box searches them on this Mac. If the notes change so that a
   different number of sections share a title you pointed to, Ozzie shows a
@@ -475,7 +476,7 @@ Siri, or put in any notice.
   team or position with the same name; a suggestion counts only after you
   choose "Use this match". Ozzie never compares the names in a list with
   people in Planning Center, and nothing in a list changes a finding.
-- **Shown as your church's own words:** on Lists & notes in the file's own
+- **Shown as your church's own words:** on Church lists in the file's own
   order, and beside a matched Sunday card under "From your church's list '…'
   (not checked by Ozzie)", only the columns you tick. No row has a button:
   nothing is copied, exported or drafted from it.
@@ -494,7 +495,7 @@ Siri, or put in any notice.
   in the Keychain. "Remove this list" or "Remove these notes" forgets one (a
   link's address too), and "Forget all lists and notes" forgets them all and
   deletes every link's address from the Keychain. If the Keychain doesn't
-  answer then, the addresses are removed the next time Lists & notes or Sunday
+  answer then, the addresses are removed the next time Church lists or Sunday
   is opened and it does, and they never count toward the 8 links. The files
   and sheets themselves don't change.
 
@@ -567,43 +568,53 @@ Room bookings, follow-ups, group events and background checks are a
 separate opt-in. They ask Planning Center for Calendar, People and Groups
 access, which Ozzie still uses for reading only.
 
-## Use your own AI key or a local model
+## Use AI: none, your own, or Ozzie's
 
-Under **Settings**, choose one of:
+Ozzie works without any AI: the checks, the findings and the notes are plain
+code. AI is one more choice, offered after you have seen your own service, and
+changeable any time under **Settings › AI help**:
 
-- **A model on this Mac.** Ozzie talks to `http://127.0.0.1:11434/v1`, the
-  default address of [Ollama](https://ollama.com), with the model `llama3.2`
-  (run `ollama pull llama3.2` first). Requests stay on this Mac.
-- **Your own AI provider.** Any OpenAI-compatible service over HTTPS. Enter its
-  address and model name, then add your key to the Keychain yourself, under an
-  account named for the provider's host (with `:port` when the address names
-  one). Settings shows the exact command for your address, for example:
+- **No AI.** Free. Everything except rewording a note, Ask Ozzie and "who
+  could help" keeps working.
+- **AI on this Mac.** Free, and nothing leaves this Mac. Ozzie looks for
+  [Ollama](https://ollama.com) at `127.0.0.1:11434` and LM Studio at
+  `127.0.0.1:1234`, lists the models it finds there, and suggests a model size
+  that suits this Mac's memory. It talks to no other local address.
+- **A key from an AI company.** Ozzie charges nothing; you pay the company
+  directly. Choose the company, follow the short guide, copy your key, and
+  press the button in Ozzie: the key is read once from the clipboard by the
+  native side of the app (or typed into a native secure field), checked with
+  one small request to that company, and saved in this Mac's Keychain. It
+  never reaches the app's web view, a file, a log or a command line, and a key
+  saved for one address is never sent to another. Ozzie lists a company only
+  after a real key has been tested against it for that version
+  (`core/native-auth/src/providers.json`, `verified_live`). **Another AI
+  company** takes any OpenAI-compatible HTTPS address and model name, and asks
+  you to confirm the host before anything is read. Text that looks like some
+  other service's secret is refused before it is sent anywhere. When the
+  address is Vercel AI Gateway (`ai-gateway.vercel.sh`), every request requires
+  zero data retention and a reply that doesn't confirm it is refused
+  (`core/native-auth/src/model.rs`, `retention_confirmed`).
+- **Ozzie's AI.** A paid plan from ozzie.church, described below.
 
-  ```sh
-  security add-generic-password -U -s church.ozzie.model.v1 -a "own-provider:api.example.com" -w
-  ```
+Whichever you choose, the same placeholder rules and native name check apply:
+the AI is sent stand-ins like `[Volunteer A]` instead of the names Ozzie read
+from Planning Center, and Ozzie puts the names back on this Mac. A name you
+type yourself into a question or a note is not replaced.
 
-  The `-w` flag with no value makes `security` ask for the key at a hidden
-  prompt, so it is never on a command line or in your shell history. The key
-  never reaches the app's web view, and a key saved for one address is never
-  sent to another. A key saved under the older plain account `own-provider`
-  is tied to no address and is not used; save it again under the new name.
-  When the address is Vercel AI Gateway (`ai-gateway.vercel.sh`), every
-  request requires zero data retention and a reply that doesn't confirm it is
-  refused (`core/native-auth/src/model.rs`, `retention_confirmed`).
+## Ozzie's AI (the paid plan)
 
-Whichever you choose, the same placeholder rules and native name check apply.
-
-## Managed service
-
-A separate, paid managed service for Ozzie (ozzie.church, invite-only for
-now) provides a hosted AI route that requires zero data retention on every
-request, along with accounts, setup and support. The **Ozzie managed** choice
-in Settings connects this Mac to an account in your browser; the app keeps the
-connection's token in the Keychain. The app refuses any reply on that route
-that lacks the AI provider's zero data retention confirmation. Everything in
-this repository works without the service, and every safety check lives here,
-in the open code.
+Ozzie is free and open source. The one thing ozzie.church sells is AI that
+needs no setup: a hosted route that requires zero data retention on every
+request, with a monthly allowance of answers. The current plan and price are
+on [ozzie.church/pricing](https://ozzie.church/pricing); the app shows the
+offer only while sign-ups are open, and says so plainly when they are not.
+There is no trial, because the free ways above are the way to try Ozzie. You
+pay and manage the plan in your browser (Stripe takes the payment; Ozzie never
+sees a card), and the app keeps only the connection's token in the Keychain.
+The app refuses any reply on that route that lacks the AI provider's zero data
+retention confirmation. Everything in this repository works without the plan,
+and every safety check lives here, in the open code.
 
 ## Repository layout
 

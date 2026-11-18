@@ -35,7 +35,7 @@ export function quitWords({ cards, checks }: QuitAsk): { title: string; lines: s
   const lines = [
     ...(cards > 0 ? [`You have ${cards === 1 ? "1 visitor card that isn't" : `${cards} visitor cards that aren't`} saved anywhere. Quitting discards ${cards === 1 ? "it" : "them"}.`] : []),
     ...(checks ? ["Checks and notices stop until you open Ozzie again."] : []),
-    "Closing the window instead keeps Ozzie running in the menu bar.",
+    "Closing the window instead keeps Ozzie running, as the small Ozzie picture at the top of your screen.",
   ];
   return {
     title: cards > 0 && !checks ? `Quit and discard ${cards === 1 ? "the card" : "the cards"}?` : "Quit Ozzie?",

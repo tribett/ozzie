@@ -210,9 +210,9 @@ describe("the review page", () => {
     const first = html.indexOf("Look at these first");
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThan(html.indexOf("card-1-name"));
-    expect(html).toContain("Card 1: “Riley Thornbury” has the same name as Riley Thornbury in this Sunday&#x27;s check. Worth a look: only the name matches, which doesn&#x27;t show it&#x27;s the same person. Ozzie won&#x27;t combine them. Check Planning Center before adding anyone.");
+    expect(html).toContain("Card 1: “Riley Thornbury” has the same name as Riley Thornbury in the latest check. Worth a look: only the name matches, which doesn&#x27;t show it&#x27;s the same person. Ozzie won&#x27;t combine them. Check Planning Center before adding anyone.");
     // On the card itself: worth a look, and a name alone is not enough to say it's the same person.
-    expect(html).toMatch(/Worth a look<\/span> Possible match: Riley Thornbury in this Sunday&#x27;s check has the same name\. Only the name matches, and a name alone doesn&#x27;t show it&#x27;s the same person\. Ozzie won&#x27;t combine them\./);
+    expect(html).toMatch(/Worth a look<\/span> Possible match: Riley Thornbury in the latest check has the same name\. Only the name matches, and a name alone doesn&#x27;t show it&#x27;s the same person\. Ozzie won&#x27;t combine them\./);
     expect(html).toContain("Card 2: the phone and email are hard to read.");
     expect(html).toContain("Looks right — keep the unclear parts marked");
     expect(html.match(/Needs a person to check/g)!.length).toBe(2 + 8);

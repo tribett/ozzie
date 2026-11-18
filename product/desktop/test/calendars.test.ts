@@ -11,7 +11,7 @@ import { allowed, CALENDAR_COMMANDS, calendarsConnected, createCalendars, LINK_P
 import { buildHarnessData } from "../src/harness-bridge.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { CalendarGroup, dayLabel, timeOnDay } from "../src/calendar-today.js";
-import { CALENDARS_HOW, CalendarSettings } from "../src/calendar-settings.js";
+import { CALENDARS_HOW, CalendarSettings, FORGET_LINKS_CONFIRM } from "../src/calendar-settings.js";
 import { TodayPage } from "../src/today-page.js";
 
 const zone = "America/New_York";
@@ -404,6 +404,23 @@ describe("Settings: Calendars", () => {
     expect(html).not.toContain("fictional%40example.org");
     expect(html).toContain("type=\"password\"");
     expect(words).toContain("Add this calendar");
+  });
+
+  it("says a private link's address is kept safely on this Mac, with Keychain only under See how this works (spec §6; walk-through, 2026-11-18)", async () => {
+    const outsideHowItWorks = (html: string) => text(html.replace(/<details\b[^>]*>\s*<summary>(?:(?!<\/summary>)[\s\S])*See how this works<\/summary>[\s\S]*?<\/details>/gu, " "));
+    const added = await settings({}, c => c.addLink("Church office", SECRET));
+    const missing = await settings({ calendar_links: [{ id: LINK_ID, label: "Church office", shown: "calendar.google.com/•••", missing: true }] });
+    const unreadable = await settings({ calendar_links: () => Promise.reject("list-unreadable") });
+    for (const html of [added, missing, unreadable]) expect(outsideHowItWorks(html)).not.toMatch(/Keychain/u);
+    expect(text(added)).toContain("The address works like a password, so Ozzie keeps it safely on this Mac and shows only where it points.");
+    expect(text(added)).toContain("Ozzie reads it once to check it's a calendar, then keeps it safely on this Mac.");
+    expect(text(missing)).toContain("Ozzie no longer has its address on this Mac. Remove it and add it again.");
+    expect(LINK_PROBLEMS.missing).toBe("Ozzie no longer has its address on this Mac. Remove it and add it again.");
+    expect(text(unreadable)).toContain("The addresses are still kept safely on this Mac, and nothing was removed.");
+    expect(FORGET_LINKS_CONFIRM).toBe("Forget all private calendar links? Ozzie deletes every private calendar address it kept on this Mac and starts a new, empty list. The calendars themselves don't change, and you can add links again afterwards.");
+    expect(FORGET_LINKS_CONFIRM).not.toMatch(/Keychain/u);
+    // The fold still says exactly where: this Mac's Keychain.
+    expect(text(added)).toContain("A private link's address works like a password. Ozzie keeps it in this Mac's Keychain,");
   });
 
   it("uses plain words: no product-internal terms, and buttons that say what happens", async () => {

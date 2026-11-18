@@ -3,7 +3,7 @@
 // Names stay in `capture.names`; nothing in this module copies them into output.
 import type {
   Completeness, CoverageCandidate, CoverageInput, CoveragePosition, CoverageScope,
-  Observation, ServingAssignment, ServingInterval,
+  Observation, ScheduledPerson, ServingAssignment, ServingInterval,
 } from "./coverage.js";
 import type { FeedbackEntry } from "./finding-feedback.js";
 
@@ -228,6 +228,13 @@ export function captureToCoverage(capture: SundayCapture, rules: SundayRules, no
     const leadPosition = leadNames.get(s.team);
     const leadRows = leadPosition ? members.filter(m => relId(m, "team") === s.team && m.attributes?.team_position_name === leadPosition) : [];
     const assignments = [...s.members, ...leadRows].map(assignmentOf);
+    // Who each scheduled row is, with their own blockouts, when the check read them (it reads everyone on the plan first).
+    const scheduled: ScheduledPerson[] = [...s.members, ...leadRows].flatMap(m => {
+      const person = relId(m, "person");
+      if (!person || !(grouped.get(`person:${person}`) ?? []).some(r => r.collection === "person_blockouts")) return [];
+      const facts = personFacts(person);
+      return [{ assignment_id: m.id, person_id: person, blockouts: { scope_id: facts.scope, value: facts.blockouts } }];
+    });
     const already = new Set(s.members.flatMap(m => relId(m, "person") ?? []));
     const teamScope = `team:${s.team}`;
     const positionNames = new Map(includedOf(teamScope, "team_position_assignments")
@@ -254,7 +261,7 @@ export function captureToCoverage(capture: SundayCapture, rules: SundayRules, no
         ? { mapping: "required", assignment_ids: leadRows.map(r => r.id) }
         : { mapping: "not-required", assignment_ids: [] } },
       assignments: { scope_id: "team_members", value: assignments },
-      candidates,
+      candidates, scheduled,
     });
     labels.push({ position_id, team_id: s.team, name: s.name, interval });
   }

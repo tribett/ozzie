@@ -1,5 +1,5 @@
 // "Preview this briefing" (owner decision 2026-11-15): what the morning briefing will include on its next run, from
-// Ozzie's last check, so Thursday's Sunday Ready brief can be shown on any day. Nothing is read or sent to make it.
+// Ozzie's last check, so Thursday's "Ready for Sunday" brief can be shown on any day. Nothing is read or sent to make it.
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -9,6 +9,8 @@ import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { defaultPlan, TEMPLATES, type Responsibility } from "../../../core/src/harness/responsibilities.js";
 import type { RunnerView } from "../src/responsibility-runner.js";
+import { DayProvider } from "../src/day-words.js";
+import { wednesdayCapture, wednesdayWords } from "../../../core/test/fixtures/service-days/wednesday.js";
 
 const ZONE = "America/New_York";
 const MON = "2026-11-23T15:00:00.000Z"; // Monday 10:00 AM in New York
@@ -45,8 +47,8 @@ describe("Preview this briefing", () => {
     })));
     expect(t).toContain("Next briefing: Tue, Nov 24");
     expect(t).toContain("Thursday's briefing, Thu, Nov 26");
-    expect(t).toContain("also includes the full Sunday Ready brief. From Ozzie's last check, it would say:");
-    expect(t).toContain("Sunday Ready");
+    expect(t).toContain("also includes the full “Ready for Sunday” brief. From Ozzie's last check, it would say:");
+    expect(t).toContain("Ready for Sunday · November 22, 2026");
     expect(t).toContain("Needs a decision");
     expect(t).toContain("Nothing was read or sent to make it.");
     expect(t).not.toMatch(FORBIDDEN);
@@ -57,8 +59,8 @@ describe("Preview this briefing", () => {
       ...briefingPreviewTimes(briefing(), WED_NIGHT, "UTC"), brief, names: capture.names, onSunday: () => undefined,
     })));
     expect(t).toContain("Next briefing: Thu, Nov 26");
-    expect(t).toContain("It's Thursday's, so it includes the full Sunday Ready brief:");
-    expect(t).toContain("Sunday Ready");
+    expect(t).toContain("It's Thursday's, so it includes the full “Ready for Sunday” brief:");
+    expect(t).toContain("Ready for Sunday · November 22, 2026");
   });
 
   it("without a check yet, says the Sunday Ready brief isn't here rather than inventing one", () => {
@@ -91,6 +93,18 @@ describe("Preview this briefing", () => {
       .toBe("Pat Example has no current background check on file.");
   });
 
+  it("says someone scheduled with a blockout in the Sunday page's words, on this Mac only, never as an open role", () => {
+    const base = brief.findings[0]!;
+    const interval = { starts_at: "2026-11-29T14:30:00Z", ends_at: "2026-11-29T15:30:00Z" };
+    const position = { id: "p", team_id: "t", name: "Greeter", interval };
+    const one = { ...base, kind: "blockout", tone: "look", position, person_id: "9", serving: [{ name: "Greeter", team_id: "t", status: "confirmed", interval }], why: ["rule"] } as never;
+    expect(sundayReadyLine(one, { "9": "Pat Example" })).toBe("Pat Example is scheduled for Greeter and has a blockout in Planning Center at that time. Planning Center still counts them.");
+    expect(sundayReadyLine(one, {})).toBe("Someone on the team is scheduled for Greeter and has a blockout in Planning Center at that time. Planning Center still counts them.");
+    const two = { ...base, kind: "blockout", tone: "look", position, person_id: "9", why: ["rule"], serving: [{ name: "Greeter", team_id: "t", status: "confirmed", interval },
+      { name: "Usher", team_id: "t", status: "pending", interval: { starts_at: "2026-11-29T16:30:00Z", ends_at: "2026-11-29T17:30:00Z" } }] } as never;
+    expect(sundayReadyLine(two, { "9": "Pat Example" })).toBe("Pat Example is scheduled for Greeter and Usher and has a blockout in Planning Center at those times. Planning Center still counts them.");
+  });
+
   it("keeps the fictional email example off Today once a real Planning Center connection exists", () => {
     const today = (example: boolean) => text(renderToStaticMarkup(React.createElement(TodayPage, { brief, onSunday: () => undefined, names: capture.names, now: MON, zone: ZONE, example })));
     expect(today(true)).toContain("Tonight's orientation needs a location decision.");
@@ -104,3 +118,27 @@ describe("Preview this briefing", () => {
   });
 });
 
+
+// Onboarding spec §5 (decision 18): the brief is named by the service's real day, never "Sunday" for a Wednesday.
+describe("Preview this briefing for a Wednesday service", () => {
+  const wed = wednesdayCapture();
+  const wedBrief = buildSundayBrief(wed, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, wed.completed_at, true);
+  const inWednesday = (brief: ReturnType<typeof buildSundayBrief> | null) => text(renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() },
+    React.createElement(BriefingPreview, { ...briefingPreviewTimes(briefing(), MON, "UTC"), brief, names: wed.names, onSunday: () => undefined }))));
+
+  it("says Ready for Wednesday, before Wednesday and Open Wednesday to decide, and never Sunday", () => {
+    const t = inWednesday(wedBrief);
+    expect(t).toContain("It brings together what still needs you before Wednesday");
+    expect(t).toContain("also includes the full “Ready for Wednesday” brief.");
+    expect(t).toContain("Ready for Wednesday · November 25, 2026");
+    expect(t).toContain("Avery Brightwater is scheduled 3 weeks in a row.");
+    expect(t).toContain("Open Wednesday to decide");
+    expect(t).not.toMatch(/sunday/iu);
+  });
+
+  it("without a check yet, says Wednesday hasn't been checked and points to the Wednesday page", () => {
+    const t = inWednesday(null);
+    expect(t).toContain("Wednesday hasn't been checked yet, so this brief isn't here. Check it on the Wednesday page.");
+    expect(t).not.toMatch(/sunday/iu);
+  });
+});

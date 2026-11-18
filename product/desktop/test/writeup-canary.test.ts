@@ -128,9 +128,9 @@ describe("a job's write-up stays where it is kept", () => {
     // Nothing sets the shown status any other way.
     expect(app.match(/setShownStatus\(/gu)).toHaveLength(1);
     // The status poll, the scheduler, the launch check, and Settings and setup.
-    expect(app).toMatch(/connection\.status\(\)\.then\(v => \{ if \(alive\) setStatus\(v\); \}\)/u);
+    expect(app).toMatch(/connection\.status\(\)\.then\(v => \{ if \(alive\) \{ setStatus\(v\); setStatusRead\(true\); \} \}\)/u);
     expect(app).toMatch(/onStatus: setStatus,/u);
-    expect(app).toMatch(/setStatus\(verified\);/u);
+    expect(app).toMatch(/setStatus\(known\);/u);
     expect(app.match(/onStatus=\{setStatus\}/gu)).toHaveLength(2);
     expect(app).not.toMatch(/onStatus=\{(?!setStatus\})/u);
     // What leaves Ozzie, or that the harness and sharing code read, never imports the runner's view of it.

@@ -1,4 +1,4 @@
-// The church's own notes on Lists & notes: a plain text or Markdown file the leader adds from this Mac (a child safety
+// The church's own notes on Church lists: a plain text or Markdown file the leader adds from this Mac (a child safety
 // policy, what to do on a snow day), shown in sections, with a find box. Nothing here renders Markdown: a `#` heading
 // only starts a section and names it, and every line (a link or an image's text included) is shown as the text it is.
 // Every line of every section is drawn, a heading as written too when its title had to be cut or tidied (review V, H1);
@@ -25,7 +25,7 @@ import { Icon } from "./icons.js";
 export { TOO_MANY_POINTERS };
 export const NOTES_TITLE = "Notes";
 /** The one sentence before the button (audit item 26); how notes are split and saved is folded under HOW_NOTES. */
-export const NOTES_BODY = "Add your church's own notes, such as a child safety policy, to read and search them here and point to a section from the Sunday cards you choose.";
+export const NOTES_BODY = "Add your church's own notes, such as a child safety policy, to read and search them here and point to a section from the cards you choose.";
 export const HOW_NOTES = "How to save notes";
 export const NOTES_SECTIONS = "Ozzie shows notes in sections, with a find box: a new section starts at each # heading, or, in a file with no headings, at each blank line.";
 export const AS_WRITTEN = "Notes are shown as written, except that hidden format characters are removed, tabs and other control characters become spaces, and a line over 2,000 characters or a file over 20,000 lines is cut, which the notes then say.";
@@ -37,8 +37,8 @@ export const FIND_NOTES = "Find in these notes";
 export const FIND_HELP = "The find box searches these notes on this Mac. Ozzie never compares their words with Planning Center or with anyone's name.";
 export const NOTHING_IN_NOTES = "Nothing in these notes matches that.";
 export const MORE_PLACES = `Ozzie marked the first ${MAX_HITS.toLocaleString("en-US")} places. Type more to narrow them.`;
-export const ATTACH_LABEL = "Point to this section from Sunday";
-export const NOT_ON_SUNDAY = "Not on Sunday";
+export const ATTACH_LABEL = "Point to this section from cards";
+export const NOT_ON_SUNDAY = "Not on any card";
 export const TEAM_CARDS = "Cards for a team";
 export const KIND_CARDS = "Cards about";
 export const KEEP_CHOICE = "Keep this choice (a team not in this check)";
@@ -52,10 +52,10 @@ export const FORGET_POINTER = "Forget this choice";
 export const removeNotesConfirm = (label: string) => `Remove “${label}” from Ozzie? Ozzie forgets these notes and where you pointed to them. The file stays where it is on this Mac.`;
 export const sectionsShown = (shown: number, all: number) => `Showing the first ${shown} of ${all.toLocaleString("en-US")} sections.`;
 /** A section once pointed to from Sunday that is no longer in the file (review V, L3). */
-export const goneNotice = (name: string) => `“${name}” was shown on Sunday, but it is no longer in these notes. If a section with that title comes back, Ozzie shows it there again.`;
+export const goneNotice = (name: string) => `“${name}” was shown on cards, but it is no longer in these notes. If a section with that title comes back, Ozzie shows it there again.`;
 /** A pointed title now shared by a different number of sections (audit item 30): Ozzie stops showing it on Sunday rather than guess. */
 export const changedNotice = (title: string, count: number) =>
-  `These notes changed: there ${count === 1 ? "is now 1 section" : `are now ${count.toLocaleString("en-US")} sections`} called “${title}”. Choose again, so Sunday shows the one you mean.`;
+  `These notes changed: there ${count === 1 ? "is now 1 section" : `are now ${count.toLocaleString("en-US")} sections`} called “${title}”. Choose again, so the cards show the one you mean.`;
 /** What the page lays out at once, as for a list's table (church-lists-page.tsx); "Show more" lays out more. */
 export const SHOWN_SECTIONS = 200;
 export const SHOWN_CHARACTERS = 150_000;
@@ -295,7 +295,7 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
   </section>;
 }
 
-/** The Notes part of Lists & notes: adding notes, and each one's card. */
+/** The Notes part of Church lists: adding notes, and each one's card. */
 export function ChurchNotes({ sources, state, positions }: {
   sources: ChurchSources; state: ChurchSourcesState; positions: readonly PositionLabel[];
 }) {

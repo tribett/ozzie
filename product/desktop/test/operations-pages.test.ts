@@ -28,7 +28,8 @@ function sunday(capture: SundayCapture, r = rules) {
 }
 const settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" };
 const status = (scopes?: ConnectionStatus["scopes"]): ConnectionStatus => ({ state: "connected", organization: "1001", checked_at_ms: 1, source: "native", problem: null, ...(scopes ? { scopes } : {}) });
-const connectionPage = (s: ConnectionStatus | null) => text(renderToStaticMarkup(React.createElement(ConnectionPage, { status: s, settings, onSettings: () => {}, onStatus: () => {} })));
+const connectionPage = (s: ConnectionStatus | null, operationsReads: boolean | null = null) =>
+  text(renderToStaticMarkup(React.createElement(ConnectionPage, { status: s, settings, onSettings: () => {}, onStatus: () => {}, operationsReads })));
 
 describe("Sunday page: rooms, follow-ups and group meetings from the example capture", () => {
   it("shows the real mapper's results with local names and labels, and what wasn't checked", () => {
@@ -98,7 +99,7 @@ describe("Church rules: rooms", () => {
   });
   it("says where rooms come from before any are read", () => {
     const t = text(renderToStaticMarkup(React.createElement(RulesPage, { rules, onChange: () => undefined, positions: [] })));
-    expect(t).toContain("Your rooms show here after a Sunday check that includes rooms. Turn that on in Settings.");
+    expect(t).toContain("Your rooms show here after a check that includes rooms. Turn that on in Settings.");
   });
 });
 
@@ -112,13 +113,30 @@ describe("Settings: opt in to rooms, follow-ups and group events", () => {
     expect(t).toContain("Granted: Services only.");
     expect(t.replaceAll("Sign in", "")).not.toMatch(FORBIDDEN);
   });
-  it("shows the granted set only once the connection is checked", () => {
-    expect(grantedCopy(status("services-and-operations"))).toBe("Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.");
+  it("shows the granted set only once the connection is checked, and whether the reads are on (native's switch)", () => {
+    expect(grantedCopy(status("services-and-operations"), true)).toBe("Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.");
+    // Granted for To on a note, but never turned on here: nothing more is read (first-run review H1, native 2159c645).
+    expect(grantedCopy(status("services-and-operations"), false)).toBe("Granted: Services, Calendar, People and Groups. Rooms, follow-ups and group events are off until you turn them on here.");
     expect(grantedCopy(status())).toBe("What's granted shows here once the connection has been checked.");
     expect(grantedCopy(null)).toBe("What's granted shows here once the connection has been checked.");
-    const on = connectionPage(status("services-and-operations"));
-    expect(on).toContain("Sign in again with Services only");
+    const on = connectionPage(status("services-and-operations"), true);
+    expect(on).toContain("Turn off rooms, follow-ups and group events");
+    expect(on).toContain("Connect again with Services only");
     expect(on).not.toContain("Also check rooms, follow-ups and group events");
+    // Granted (from the People question) but off: turning it on needs no new sign-in, and says so.
+    const off = connectionPage(status("services-and-operations"), false);
+    expect(off).toContain("Also check rooms, follow-ups and group events");
+    expect(off).toContain("Your connection already includes Calendar, People and Groups, so turning this on needs no new sign-in.");
+  });
+
+  it("turning it on or off is native's switch, and a new sign-in turns it on only once Planning Center granted the access", async () => {
+    const { setOperationsReadsAfter } = await import("../src/connection-page.js");
+    const calls: boolean[] = [];
+    const set = async (on: boolean) => { calls.push(on); return on; };
+    expect(await setOperationsReadsAfter(status("services-and-operations"), true, set)).toBe(true);
+    expect(await setOperationsReadsAfter(status("services"), true, set)).toBeNull();
+    expect(await setOperationsReadsAfter(status("services-and-operations"), false, set)).toBe(false);
+    expect(calls).toEqual([true, false]);
   });
   it("reconnects with operations only when asked; the default call is unchanged", async () => {
     invoke.mockResolvedValue(status());
@@ -136,7 +154,7 @@ describe("What happened: the new reads", () => {
     for (const collection of OPERATIONS_COLLECTIONS) expect(activityLabel(collection)).not.toBe(collection);
     expect(activityOutcome("not-requested")).toBe("Not asked — turned off in Settings");
     const t = text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: withFictionalOperationsOff(nov22Capture()) })));
-    expect(t).toContain("Read room bookings for this Sunday");
+    expect(t).toContain("Read room bookings for the service's day");
     expect(t).toContain("Read one person's groups");
     expect(t).toContain("Not asked — turned off in Settings");
     expect(t).not.toMatch(/calendar_|people_workflow|groups_/);

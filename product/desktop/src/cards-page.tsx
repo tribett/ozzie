@@ -257,13 +257,13 @@ async function writeClipboard(text: string): Promise<boolean> {
 
 const joined = (items: string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
-/** What to look at first: possible matches with people already in this Sunday's check, repeated names, and unclear readings. */
+/** What to look at first: possible matches with people already in the latest check, repeated names, and unclear readings. */
 export function lookFirst(cards: readonly CardView[], people: Readonly<Record<string, string>>, source: Sources = {}): { card: number; text: string }[] {
   const out: { card: number; text: string }[] = [];
   for (const card of cards) {
     const name = card.fields.name.text.trim();
     const matches = name ? possibleMatches(name, people).map(id => people[id]!) : [];
-    if (matches.length) out.push({ card: card.id, text: `${card.label}: “${name}” has the same name as ${joined([...new Set(matches)])} in this Sunday's check. Worth a look: only the name matches, which doesn't show it's the same person. Ozzie won't combine them. Check Planning Center before adding anyone.` });
+    if (matches.length) out.push({ card: card.id, text: `${card.label}: “${name}” has the same name as ${joined([...new Set(matches)])} in the latest check. Worth a look: only the name matches, which doesn't show it's the same person. Ozzie won't combine them. Check Planning Center before adding anyone.` });
   }
   for (const group of sameNameCards(cards.map(c => ({ id: c.id, name: c.fields.name.text })))) {
     out.push({ card: group[0]!, text: `Cards ${joined(group.map(String))} have the same name. They may be the same person.` });
@@ -332,8 +332,8 @@ export function cardsAt(at: CardsAt, inUse: string | null, open: boolean): Cards
 }
 /** A check on screen, as the cards may use it: whose church it is, and the names it read. */
 export type ShownCheck = { organization: string; names: Readonly<Record<string, string>> };
-export const MATCHES_NEED_CHURCH = "Connect Planning Center to see possible matches with this Sunday's check.";
-export const MATCHES_NEED_CHECK = "Possible matches appear once Ozzie has checked this Sunday for the church it's using.";
+export const MATCHES_NEED_CHURCH = "Connect Planning Center to see possible matches with the people in the latest check.";
+export const MATCHES_NEED_CHECK = "Possible matches appear once Ozzie has run a check for the church it's using.";
 export const MATCHES_NEED_SIGN_IN = "Sign in to Planning Center again in Settings to see possible matches.";
 export const MATCHES_NOT_IN_EXAMPLE = "While the example is on, no names are offered as possible matches: its people are made up.";
 const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
@@ -634,7 +634,7 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
       </div>
       {unlabeled && <p className="small">This Mac read this card but found no printed labels like “Name:”, so it filled nothing in. Put the lines it read where they belong, or type what you see.</p>}
       {matches.length > 0 && <p className="panel-info"><Icon name="user" small />
-        <span><span className="badge b-look"><Icon name="eye" small />Worth a look</span> Possible match: {joined(matches)} in this Sunday's check {matches.length === 1 ? "has" : "have"} the same name. Only the name matches, and a name alone doesn't show it's the same person. Ozzie won't combine them.</span></p>}
+        <span><span className="badge b-look"><Icon name="eye" small />Worth a look</span> Possible match: {joined(matches)} in the latest check {matches.length === 1 ? "has" : "have"} the same name. Only the name matches, and a name alone doesn't show it's the same person. Ozzie won't combine them.</span></p>}
       {fields.map(field => {
         const value = card.fields[field];
         const hard = value.state === "unclear" || value.state === "not-readable";

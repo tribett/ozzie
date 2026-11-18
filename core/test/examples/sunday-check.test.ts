@@ -39,7 +39,7 @@ describe("the Sunday check example", () => {
     expect(text).toContain("1. Greeter still needs one more person at the 9:30 AM service. One person on the team could help with no overlap found, and one with a possible conflict. One person's availability couldn't be checked.\n"
       + "   Why I flagged this:\n   - Planning Center reports 1 remaining request for Greeter.\n");
     expect(lines).toContain("4. Follow-up needs an owner: Welcome follow-up (fictional), step \"Call a first-time guest\". Choose who will handle this follow-up in your church tools.");
-    expect(lines).toContain("3. Avery Brightwater has been scheduled 3 Sundays in a row. Your Church rules suggest a quick check-in.");
+    expect(lines).toContain("3. Avery Brightwater has been scheduled 3 weeks in a row. Your Church rules suggest a quick check-in.");
     expect(lines.at(-2)).toBe("- Whether someone is willing to serve isn't something Planning Center records.");
   });
 

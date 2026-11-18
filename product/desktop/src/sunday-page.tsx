@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutCounted, blockoutRoles, blockoutTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { FollowUpFinding, OperationsResult, RoomFinding } from "../../../core/src/operations-findings/index.js";
@@ -11,16 +11,23 @@ import {
   applyDecisions, changeText, decide, decisionsStorageKey, loadDecisions, REASON_MAX, saveDecisions, withDecision, withoutDecision,
   type DecidedItem, type DecisionChoice, type DecisionHistory, type SundayDecision,
 } from "../../../core/src/sunday-decisions.js";
-import { model, modelProblem } from "./model.js";
+import { model, modelProblem, REWORD_NEEDS_AI } from "./model.js";
+import { ChooseAiButton } from "./ai-line.js";
+import { NEEDS_AI } from "./ai-words.js";
 import { alwaysFor, briefTarget, canCorrect, canDemote, canPromote, followUpTarget, groupTarget, roomTarget, stopScopes, type FeedbackTarget } from "../../../core/src/finding-feedback.js";
 import { canRemind, reminderDraft, restoreReminder } from "../../../core/src/reminder-draft.js";
 import { FeedbackState, FindingFeedback, HIDDEN_BY_YOU, SetAside, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
-import { signNote, yourName, YOUR_NAME_MAX } from "./connection.js";
+import { signNote, yourName } from "./connection.js";
 import { DraftActions, isPersonId, type Addressee, type OpenDraft, type OpenDraftTo } from "./draft-actions.js";
-import { REFUSED } from "./sunday-source.js";
+import { CHECK_REFUSED, REFUSED } from "./sunday-source.js";
+import { CopyForAdministrator } from "./planning-center-forms.js";
+import { promise } from "./promises.js";
 import { NOT_OPENED, OPEN_PERSON, OPEN_PLAN, type PlanningCenterPage } from "./planning-center-pages.js";
 import { activityLabel, TaskAccount } from "./activity-page.js";
-import { aiText } from "./harness-words.js";
+import { aiText, procedureTitle } from "./harness-words.js";
+import { ProcedureBody } from "./procedure-text.js";
+import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
+import { DayName, dayName } from "./day-phrases.js";
 import {
   LOOK_DRAFT, LOOK_FAILED, LOOK_NOT_COVERED, LOOK_NOT_LOOKED, LOOK_NOTE, LOOK_NOTHING, lookShortened, type AskTurn, type Look, type PeopleLabel,
 } from "./harness-bridge.js";
@@ -38,12 +45,17 @@ export interface AskedSlot { lines: readonly AskedLine[]; onMark: (finding: Find
 type NoteMark = { line: AskedLine | null; onMark: () => void } | null;
 const markFor = (asked: AskedSlot | null | undefined, finding: Finding, person: string | undefined): NoteMark =>
   asked && person ? { line: asked.lines.find(l => l.key === finding.key && l.person_id === person) ?? null, onMark: () => asked.onMark(finding, person) } : null;
-const PLACEHOLDER = "[Your name]";
 export const LOOKS_GOOD = "Looks good — I'll send it";
-export const LOOKS_GOOD_HELP = "Marks it on this Mac so the Sunday page and Today show you said you'd ask. Nothing is sent and Planning Center doesn't change.";
-export const UNSIGNED = "This note still ends “[Your name]”. Add the name your notes are signed with, and Ozzie puts it in.";
-export const UNSIGNED_HELP = "Kept on this Mac, as Settings' Your name for notes. It goes in after any AI rewording, so it's never sent to an AI.";
-export const SIGN = "Sign it with this name";
+export const LOOKS_GOOD_HELP = "Marks it on this Mac so this page and Today show you said you'd ask. Nothing is sent and Planning Center doesn't change.";
+/** Under a note Ozzie drafted (spec §6), claiming only what is true: the names Ozzie reads are replaced (re-check NM4). */
+/** On the example church's page: where the way to one's own church is (the band's button). */
+export const SET_UP_LINE = "To see your own church, press Set up my church at the top.";
+/** While the launch's check of a saved sign-in is under way (Today, the service page and the sidebar say it). */
+export const CHECKING_LINE = "Checking Planning Center…";
+/** The launch's check of a saved sign-in had no answer after 20 seconds (review L6): said with "Check the connection". */
+export const STUCK_LINE = "Ozzie couldn't check Planning Center just now.";
+export const CHECK_CONNECTION = "Check the connection";
+export const DRAFT_FOOTER = "Ozzie never sends messages. The AI sees stand-ins like [Volunteer A] instead of the names Ozzie reads from Planning Center.";
 
 /** Opens a Planning Center page by id (planning-center-pages.ts): App passes it for a real check, never the example. */
 export type OpenPlanningCenter = (page: PlanningCenterPage, id: string) => Promise<boolean>;
@@ -75,7 +87,8 @@ export function addresseeFor(person: string | undefined, names: Names, people: P
 }
 const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-const when = (i: ServingInterval | null) => i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} at ${clock(i.starts_at)}` : "this Sunday";
+/** When a card's time is: its service time, or the watched service by its real day ("this Wednesday") when it has none. */
+const when = (i: ServingInterval | null, d: DayWords) => i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} at ${clock(i.starts_at)}` : d.thisOne;
 const plainReasons: [RegExp, string][] = [
   [/^Recorded team membership.*/, "On this team in Planning Center. No blockout or other schedule overlaps this time."],
   [/^Possible conflict: source records an unanswered sent request\./, "Has an unanswered request for another role at this time."],
@@ -96,14 +109,22 @@ const plain = (reasons: string[]) => [...new Set(reasons.map(r => plainReasons.f
 const unranked = (people: BriefPerson[], names: Names) => [...people].sort((a, b) => nameOf(names, a.person_id).localeCompare(nameOf(names, b.person_id)));
 const alphabetical = (ids: string[], names: Names) => [...ids].sort((a, b) => nameOf(names, a).localeCompare(nameOf(names, b)));
 
-const CHOICE_TEXT: Record<DecisionChoice, { button: string; question: string; example: string; save: string; done: (role: string) => string; earlier: string }> = {
-  "covered-outside": { button: "Covered outside Planning Center", question: "Who or what is covering it?", example: "A few words, for example: a parent from the class is covering", save: "Mark it covered for this Sunday",
-    done: role => `${role}: covered outside Planning Center.`, earlier: "covered outside Planning Center" },
-  "not-needed": { button: "Not needed this Sunday", question: "Why isn't it needed this Sunday?", example: "A few words, for example: one service this week, so one greeter is enough", save: "Mark it not needed this Sunday",
-    done: role => `${role} isn't needed this Sunday.`, earlier: "not needed this Sunday" },
-  "lead-expected": { button: "Yes, that's expected", question: "Why is that expected?", example: "A few words, for example: the team leads itself on fifth Sundays", save: "Mark it expected for this Sunday",
-    done: role => `${role}: no scheduled lead expected this Sunday.`, earlier: "no scheduled lead expected" },
-};
+type ChoiceText = { button: string; question: string; example: string; save: string; done: (role: string) => string; earlier: string };
+/**
+ * The words of each one-service decision, for the watched service's real day ("for this Wednesday", "this weekend";
+ * onboarding spec §5.2). The lead example keeps "fifth Sundays": it's an example of a Church rule, not the service.
+ */
+export function choiceText(d: DayWords = SUNDAY_WORDS): Record<DecisionChoice, ChoiceText> {
+  const one = d.thisOne;
+  return {
+    "covered-outside": { button: "Covered outside Planning Center", question: "Who or what is covering it?", example: "A few words, for example: a parent from the class is covering", save: `Mark it covered for ${one}`,
+      done: role => `${role}: covered outside Planning Center.`, earlier: "covered outside Planning Center" },
+    "not-needed": { button: `Not needed ${one}`, question: `Why isn't it needed ${one}?`, example: "A few words, for example: one service this week, so one greeter is enough", save: `Mark it not needed ${one}`,
+      done: role => `${role} isn't needed ${one}.`, earlier: `not needed ${one}` },
+    "lead-expected": { button: "Yes, that's expected", question: "Why is that expected?", example: "A few words, for example: the team leads itself on fifth Sundays", save: `Mark it expected for ${one}`,
+      done: role => `${role}: no scheduled lead expected ${one}.`, earlier: "no scheduled lead expected" },
+  };
+}
 
 /** Decisions for the Sunday on screen, kept on this Mac per organization and plan. */
 export function useSundayDecisions(capture: SundayCapture | null, brief: SundayBrief | null): [SundayDecision[], (next: SundayDecision[]) => void] {
@@ -128,6 +149,7 @@ export const READS_FOR: Readonly<Record<string, readonly string[]>> = Object.fre
   pending: ["plan_times", "team_members"], streak: ["plan", "team_members", "person_schedules"],
   "lead-missing": ["plan_times", "team_members", "team_leaders"], "lead-unverified": ["plan_times", "team_members", "team_leaders"],
   "too-few-confirmed": ["plan_times", "team_members"], "background-check": ["plan_times", "team_members", "people_background_checks"],
+  blockout: ["plan_times", "team_members", "person_schedules", "person_blockouts"],
   rooms: ["plan", "organization", "calendar_rooms", "calendar_resource_bookings", "calendar_conflicts"],
   "follow-ups": ["people_workflows", "people_workflow_steps", "people_workflow_ready_cards", "people_workflow_snoozed_cards"],
   "group-meetings": ["plan", "plan_times", "team_members", "organization", "groups_person_memberships", "groups_group_events"],
@@ -313,11 +335,13 @@ export function lookEnded(look: Look): string {
  */
 export function WhoCouldHelpCard({ turn, finding, names }: { turn: AskTurn; finding: Finding; names: Names }) {
   const [how, setHow] = useState(false);
+  const d = useDay();
   const role = finding.position?.name ?? "this role";
   if (turn.state !== "answered") {
-    const said = turn.state === "no-model" ? "Ask Ozzie needs an AI model. Set one up under Settings." : turn.text;
+    const said = turn.state === "no-model" ? NEEDS_AI.look : turn.text;
     return <div className="ai-look-note small" role={turn.state === "problem" ? "alert" : undefined}><p>{said}</p>
-      {!/The list above is unchanged\./u.test(said) && <p>{LOOK_KEEPS}</p>}</div>;
+      {!/The list above is unchanged\./u.test(said) && <p>{LOOK_KEEPS}</p>}
+      {turn.state === "no-model" && <ChooseAiButton />}</div>;
   }
   const a = turn.answer;
   const look: Look = a.look ?? { kind: "nothing", looked: false, shortened: 0 };
@@ -339,7 +363,7 @@ export function WhoCouldHelpCard({ turn, finding, names }: { turn: AskTurn; find
     <p className="ask-based"><Icon name="check" small />{a.basedOn}</p>
     <button type="button" className="btn btn-quiet btn-sm ask-how" aria-expanded={how} onClick={() => setHow(!how)}><Icon name="info" small />See how this works</button>
     {how && <div className="ask-how-body stack-tight">
-      {a.procedure && <><p className="bold">Ozzie followed this procedure: {a.procedure.title}</p><div className="procedure-body">{a.procedure.body}</div></>}
+      {a.procedure && <><p className="bold">Ozzie followed this procedure: {procedureTitle(a.procedure.title, d) ?? a.procedure.title}</p><ProcedureBody body={a.procedure.body} /></>}
       <TaskAccount account={{ started: `You asked Ozzie to look at who could help with ${role}.`, looked: a.steps, ai: aiText("skill", "who-could-help", a.aiSteps, true),
         ended: lookEnded(look) }} />
       <p className="small">The AI saw labels such as [Person 1] and [Role 1], never the names Ozzie read; Ozzie put the names back on this Mac. It only chose which facts to show, and Ozzie wrote every line here. Nothing was sent to anyone, and nothing in Planning Center changed.</p>
@@ -393,12 +417,14 @@ export function Draft({ finding, person, names, sender, sunday, canReword, onClo
       const next = acceptModelReply(reply, version, names);
       setVersion(next); setBody(restoreDraft(next, ctx, names, sender)); setEdited(false); setReworded(choice);
     } catch (error) {
-      setProblem(error instanceof Error && /draft|name|Ozzie/.test(error.message) ? error.message : modelProblem(error));
+      if (error instanceof Error && /draft|name|Ozzie/.test(error.message)) setProblem(error.message);
+      // A pause of Ozzie's AI says until when, from the account (review: never "try again in a minute" during a pause).
+      else setProblem(modelProblem(error, await model.status().then(st => st.account, () => null)));
     } finally { setWorking(null); }
   };
   return <DraftBox label="Draft note" to={nameOf(names, person)} addressee={addresseeFor(person, names, people)} body={body} onBody={b => { setBody(b); setEdited(true); setReworded(null); }} onClose={onClose}
     onSign={name => setBody(b => signNote(b, name))} mark={mark}
-    footer="Ozzie never sends messages. The AI sees placeholders like [Volunteer A] instead of the names Ozzie read from Planning Center.">
+    footer={DRAFT_FOOTER}>
     {canReword && <div className="find-next reword">
       <span className="find-next-l">Ask Ozzie to reword it</span>
       {(Object.keys(REWORDINGS) as Rewording[]).map(choice => <button key={choice} type="button" className="chip" disabled={working !== null} onClick={() => { void reword(choice); }}>
@@ -408,6 +434,7 @@ export function Draft({ finding, person, names, sender, sunday, canReword, onClo
     {canReword && edited && <p className="small">Rewording starts from Ozzie's last version. Your own changes stay on this Mac and are never sent.</p>}
     {/* Calm, not red (audit item 29): the note is unchanged and nothing broke; the words say what happened. */}
     {problem && <div role="status" className="panel-info reword-note"><Icon name="info" small /><p>{problem}</p></div>}
+    {problem === REWORD_NEEDS_AI && <ChooseAiButton />}
   </DraftBox>;
 }
 
@@ -432,16 +459,9 @@ export function DraftBox({ label, to, addressee = null, body, onBody, onClose, f
 }) {
   const [editing, setEditing] = useState(startEditing);
   const [copied, setCopied] = useState(false);
-  const [name, setName] = useState("");
   const editId = useId();
-  const nameId = useId();
-  // Said before it's copied or opened (audit item 18): a note that would go out signed "[Your name]".
-  const unsigned = body.includes(PLACEHOLDER);
-  const sign = () => {
-    (signName ?? yourName).set(name);
-    if (onSign) onSign(name); else onBody(signNote(body, name));
-    setName("");
-  };
+  // The name goes into the words shown (DraftActions keeps it on this Mac, as Settings' Your name for notes).
+  const sign = (name: string) => { if (onSign) onSign(name); else onBody(signNote(body, name)); };
   return <div className="draft" role="region" aria-label={label}>
     <div className="row draft-head"><span className="badge b-draft">Draft only. Nothing has been sent.</span><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close the draft" onClick={onClose}><Icon name="x" /></button></div>
@@ -451,20 +471,8 @@ export function DraftBox({ label, to, addressee = null, body, onBody, onClose, f
         {/* Opened by "Change the wording", so the words to change get the focus. */}
         <textarea id={editId} className="draft-edit" value={body} onChange={e => { onBody(e.target.value); setCopied(false); }} rows={9} autoFocus /></>
       : <div className="draft-body">{body.split("\n\n").map((para, i) => <p key={i}>{para}</p>)}</div>}
-    {unsigned && <form className="panel-info draft-unsigned" onSubmit={e => { e.preventDefault(); if (name.trim()) sign(); }}>
-      <Icon name="info" small />
-      <div className="stack-tight">
-        <p>{UNSIGNED}</p>
-        <label className="field-l" htmlFor={nameId}>Your name for notes</label>
-        <div className="row">
-          <input id={nameId} className="input own-name" value={name} maxLength={YOUR_NAME_MAX} autoComplete="name" spellCheck={false} aria-describedby={`${nameId}-help`}
-            onChange={e => setName(e.target.value)} />
-          <button type="submit" className="btn btn-secondary btn-sm" disabled={!name.trim()}>{SIGN}</button>
-        </div>
-        <p id={`${nameId}-help`} className="input-help">{UNSIGNED_HELP}</p>
-      </div>
-    </form>}
-    <DraftActions text={body} open={open} openTo={openTo} to={addressee} split
+    {/* The note's last line is [Your name] until the leader's name is set: asked once, here, under the note (spec §4.2). */}
+    <DraftActions text={body} open={open} openTo={openTo} to={addressee} split onSign={sign} {...(signName ? { nameStore: { get: () => "", set: signName.set } } : {})}
       copy={<button type="button" className="btn btn-primary" onClick={() => { void navigator.clipboard?.writeText(body).then(() => setCopied(true)); }}>
         {copied ? "Copied — send it yourself" : "Copy draft"}</button>}
       after={<button type="button" className="btn btn-secondary" onClick={() => setEditing(!editing)}>{editing ? "Done changing" : "Change the wording"}</button>} />
@@ -489,10 +497,13 @@ export function LeaderNote({ finding, leader, names, sender, sunday = null, onCl
 }
 
 /** A reminder to someone whose request has no answer yet. Written on this Mac in placeholder form and never offered for AI rewording. */
-export function ReminderNote({ finding, names, sender, onClose, people = null, mark = null }: {
+export function ReminderNote({ finding, names, sender, sunday = null, onClose, people = null, mark = null }: {
   finding: Finding; names: Names; sender: string; onClose: () => void; people?: PeopleAccess | null; mark?: NoteMark;
+  /** The plan's local date (YYYY-MM-DD), for a role with no service time. */
+  sunday?: string | null;
 }) {
-  const [body, setBody] = useState(() => restoreReminder(reminderDraft(finding), finding, names, sender));
+  // The plan's own date when the role has no service time, never a fixed day (review H4).
+  const [body, setBody] = useState(() => restoreReminder(reminderDraft(finding, sunday), finding, names, sender));
   return <DraftBox label="Draft reminder" to={nameOf(names, finding.person_id)} addressee={addresseeFor(finding.person_id, names, people)} body={body} onBody={setBody} onClose={onClose} mark={mark}
     footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
 }
@@ -509,7 +520,8 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
   const id = useId();
   const [reason, setReason] = useState("");
   const [problem, setProblem] = useState("");
-  const text = CHOICE_TEXT[choice];
+  const d = useDay();
+  const text = choiceText(d)[choice];
   return <form className="decide" onSubmit={e => {
     e.preventDefault();
     try { onSave(reason); } catch (error) { setProblem(error instanceof Error ? error.message : "That couldn't be saved."); }
@@ -517,7 +529,7 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
     <label className="field-l" htmlFor={id}>{text.question}</label>
     <input id={id} className="input" value={reason} maxLength={REASON_MAX} autoFocus placeholder={text.example}
       onChange={e => { setReason(e.target.value); setProblem(""); }} />
-    <p className="input-help">Kept on this Mac. It applies to this Sunday only, and this comes back if Planning Center changes.</p>
+    <p className="input-help">Kept on this Mac. It applies to {d.thisOne} only, and this comes back if Planning Center changes.</p>
     {problem && <p role="alert" className="problem">{problem}</p>}
     <div className="find-next">
       <button type="submit" className="btn btn-primary btn-sm" disabled={!reason.trim()}>{text.save}</button>
@@ -527,9 +539,10 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
 }
 
 function Earlier({ decision }: { decision: SundayDecision }) {
+  const text = choiceText(useDay());
   return <ul className="list earlier">
     {[...decision.earlier, decision].map(d => <li key={d.decided_at + d.reason}><Icon name="history" small />
-      <span>Earlier, you said {CHOICE_TEXT[d.choice].earlier} ({time(d.decided_at)}): “{d.reason}”</span></li>)}
+      <span>Earlier, you said {text[d.choice].earlier} ({time(d.decided_at)}): “{d.reason}”</span></li>)}
   </ul>;
 }
 
@@ -544,8 +557,8 @@ function showTitle(title: HTMLElement, pane: HTMLElement | null) {
   title.focus({ preventScroll: true });
 }
 /** "Only 1 confirmed person in Nursery at 9:30 AM." Services has no age: people, never "adults". */
-export function fewConfirmedTitle(f: Finding): string {
-  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? `at ${clock(f.position!.interval.starts_at)}` : "this Sunday";
+export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS): string {
+  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? `at ${clock(f.position!.interval.starts_at)}` : d.thisOne;
   return c === 0 ? `No confirmed people in ${f.position!.name} ${at}.` : `Only ${count(c, "confirmed person", "confirmed people")} in ${f.position!.name} ${at}.`;
 }
 /** Pending is never confirmed, and an unsent request is never called asked. */
@@ -559,10 +572,10 @@ export function fewConfirmedBody(f: Finding): string {
     f.tone === "look" ? "Planning Center doesn't show which service time some confirmed people serve, so this count may be low." : "",
   ].filter(Boolean).join(" ");
 }
-/** Nothing about a check beyond whether one is current on file, or when it runs out relative to Sunday. */
-export function backgroundTitle(name: string, check: Finding["check"]): string {
-  return check === "expires-before-sunday" ? `${name}'s background check on file expires before Sunday.`
-    : check === "expires-on-sunday" ? `${name}'s background check on file expires on Sunday.`
+/** Nothing about a check beyond whether one is current on file, or when it runs out relative to the service's day. */
+export function backgroundTitle(name: string, check: Finding["check"], d: DayWords = SUNDAY_WORDS): string {
+  return check === "expires-before-sunday" ? `${name}'s background check on file expires before ${dayName(d)}.`
+    : check === "expires-on-sunday" ? `${name}'s background check on file expires on ${dayName(d)}.`
       : `${name} has no current background check on file.`;
 }
 
@@ -590,6 +603,8 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   beside?: Beside | undefined;
 }) {
   const { finding } = item;
+  const d = useDay();
+  const CHOICE_TEXT = choiceText(d);
   const target = briefTarget(finding, occurrence.id, occurrence.label);
   // "Always do this": the note a Church rule asks Ozzie to prepare is ready when the card opens.
   const always = feedback && alwaysFor(feedback.entries, target);
@@ -612,7 +627,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   const tag = item.state === "reopened"
     ? <span className="badge b-attn"><Icon name="flag" small />This needs attention again</span>
     : <span className={`badge ${decision ? "b-attn" : "b-look"}`}><Icon name={decision ? "flag" : "eye"} small />{decision ? "Needs a decision" : "Worth a look"}</span>;
-  const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval)}</span> : null;
+  const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval, d)}</span> : null;
   let title: string, body: string | null = null;
   switch (finding.kind) {
     case "needs-people":
@@ -627,12 +642,12 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       body = finding.notification === "sent" ? "The request was sent; there's no answer yet." : "Planning Center shows the request hasn't been sent yet. Is that expected?";
       break;
     case "streak":
-      title = `${nameOf(names, finding.person_id)} is scheduled ${finding.sundays} Sundays in a row.`;
+      title = `${nameOf(names, finding.person_id)} is scheduled ${finding.sundays} weeks in a row.`;
       body = "Your Church rules suggest a quick check-in. This is about care, not performance.";
       break;
     case "lead-missing":
-      title = `No one is scheduled to lead ${finding.position!.name} this Sunday.`;
-      body = finding.leaders?.length ? "I found the team's leader in Planning Center, but no one scheduled to lead this Sunday. Is that expected?"
+      title = `No one is scheduled to lead ${finding.position!.name} ${d.thisOne}.`;
+      body = finding.leaders?.length ? `I found the team's leader in Planning Center, but no one scheduled to lead ${d.thisOne}. Is that expected?`
         : finding.leaders ? "Your Church rules ask for a scheduled lead, and Planning Center doesn't list a team leader. Is that expected?"
           : "Your Church rules ask for a scheduled lead. The team's leaders couldn't be read. Is that expected?";
       break;
@@ -641,18 +656,25 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       body = "Planning Center has someone scheduled to lead, but their answer or serving time couldn't be confirmed, so I'm not counting it as covered.";
       break;
     case "too-few-confirmed":
-      title = fewConfirmedTitle(finding);
+      title = fewConfirmedTitle(finding, d);
       body = fewConfirmedBody(finding);
       break;
     case "background-check":
-      title = backgroundTitle(nameOf(names, finding.person_id), finding.check);
-      body = `Scheduled for ${finding.position!.name} ${finding.position!.interval ? `at ${clock(finding.position!.interval.starts_at)}` : "this Sunday"}. Your Church rules ask for a current background check before serving with kids.${
+      title = backgroundTitle(nameOf(names, finding.person_id), finding.check, d);
+      body = `Scheduled for ${finding.position!.name} ${finding.position!.interval ? `at ${clock(finding.position!.interval.starts_at)}` : d.thisOne}. Your Church rules ask for a current background check before serving with kids.${
         finding.tone === "look" && finding.check === "none-current" ? " Planning Center showed no current background checks for anyone on your kids teams; your Planning Center login may not be able to see them." : ""}`;
       break;
+    case "blockout": {
+      // Planning Center's own count stands: they're still counted, so no role reads as open (sunday-brief.ts).
+      const one = blockoutTime(finding), many = (finding.serving?.length ?? 0) > 1;
+      title = `${nameOf(names, finding.person_id)} is scheduled for ${blockoutRoles(finding)}${one ? ` at ${clock(one.starts_at)}` : ""} and has a blockout in Planning Center at ${one ? "that time" : "those times"}.`;
+      body = `Planning Center still counts them as ${blockoutCounted(finding)}, so ${many ? "they aren't open spots" : "it isn't an open spot"}. Only they can say whether they'll be there.`;
+      break;
+    }
     default:
-      title = finding.stale ? "This check is out of date." : "Part of this Sunday couldn't be checked.";
+      title = finding.stale ? "This check is out of date." : `Part of ${d.thisOne} couldn't be checked.`;
       body = finding.stale ? `It was read ${checkedAt ? time(checkedAt) : "earlier"}, more than 30 minutes ago. Check Planning Center again before relying on it.`
-        : "Ozzie won't call Sunday covered until every part is read.";
+        : `Ozzie won't call ${dayName(d)} covered until every part is read.`;
   }
   // For this Sunday only (under More choices): an open role covered another way, or not needed.
   const sundayOnly: DecisionChoice[] = finding.kind === "needs-people" ? ["covered-outside", "not-needed"] : [];
@@ -687,7 +709,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       {canRemind(finding) && !reminding && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReminding(true)}>Prepare a reminder</button>}
       {more && <MoreChoices>
         {sundayOnly.length > 0 && !choosing && <div className="find-next">
-          <span className="find-next-l">For this Sunday only:</span>
+          <span className="find-next-l">For {d.thisOne} only:</span>
           {sundayOnly.map(c => <button key={c} type="button" className="btn btn-secondary btn-sm" onClick={() => setChoosing(c)}>{CHOICE_TEXT[c].button}</button>)}
         </div>}
         {choosing && choosing !== "lead-expected" && decisionForm}
@@ -705,7 +727,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
     {/* State, not a choice (review F, L-5): how soon Ozzie tells, and why a note opened by itself, next to that note and in
         view with More choices closed. */}
     <FeedbackState target={target} feedback={feedback} />
-    {reminding && <ReminderNote finding={finding} names={names} sender={sender} onClose={() => setReminding(false)} people={people} mark={markFor(asked, finding, finding.person_id)} />}
+    {reminding && <ReminderNote finding={finding} names={names} sender={sender} sunday={sunday} onClose={() => setReminding(false)} people={people} mark={markFor(asked, finding, finding.person_id)} />}
     {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} sunday={sunday} onClose={() => setLeaderFor(null)} people={people}
       mark={markFor(asked, finding, leaderFor)} />}
     {/* A mark shows once: in the note open for that person, else on their row in the people shown, else here on the card. */}
@@ -719,9 +741,11 @@ const remainingText = (n: number) => `Planning Center still shows ${n === 1 ? "1
 
 function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedAt: string | null; onUndo: () => void }) {
   const d = item.decision!, f = item.finding;
+  const words = useDay();
+  const CHOICE_TEXT = choiceText(words);
   return <article className="find is-resolved">
-    <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — this Sunday only</span>
-      {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval)}</span>}</div>
+    <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — {words.thisOne} only</span>
+      {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words)}</span>}</div>
     <h3 className="find-title">{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
     <p className="find-quote">“{d.reason}”</p>
     <p className="find-body">You decided this {time(d.decided_at)}. {f.kind === "needs-people" ? remainingText(f.remaining ?? 0) : "Planning Center still shows no confirmed lead; Ozzie hasn't changed anything there."}</p>
@@ -734,7 +758,9 @@ function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedA
 
 function HistoryCard({ entry, onRemove }: { entry: DecisionHistory; onRemove: () => void }) {
   const d = entry.decision;
-  const where = <span className="find-where">{d.subject.name} · {when(d.subject.interval)}</span>;
+  const words = useDay();
+  const CHOICE_TEXT = choiceText(words);
+  const where = <span className="find-where">{d.subject.name} · {when(d.subject.interval, words)}</span>;
   if (entry.status === "source-confirmed") return <article className="find is-resolved">
     <div className="find-top"><span className="badge b-ok"><Icon name="check" small />Confirmed in Planning Center</span>{where}</div>
     <h3 className="find-title">{d.kind === "lead-missing" ? `Planning Center now shows a confirmed lead for ${d.subject.name}.` : `${d.subject.name} is now filled in Planning Center.`}</h3>
@@ -746,7 +772,7 @@ function HistoryCard({ entry, onRemove }: { entry: DecisionHistory; onRemove: ()
     : entry.status === "not-listed" ? `Planning Center no longer lists ${d.subject.name} on this plan.`
       : `This couldn't be rechecked in Planning Center, so it stands as your decision, not as confirmed coverage.`;
   return <article className="find is-resolved">
-    <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — this Sunday only</span>
+    <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — {words.thisOne} only</span>
       {entry.status === "couldnt-recheck" && <span className="badge b-look"><Icon name="eye" small />Worth a look</span>}{where}</div>
     <h3 className="find-title">{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
     <p className="find-quote">“{d.reason}”</p>
@@ -796,6 +822,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
   feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const { labels, result } = operations;
+  const words = useDay();
   if (operations.stale) return <section className="stack" aria-label="Rooms and follow-ups">
     <h2 className="h3">Rooms and follow-ups</h2>
     <article className="find is-look">
@@ -822,7 +849,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     ];
     return <article className={`find${confirmed ? "" : " is-look"}`} key={f.finding_id}>
       <div className="find-top"><span className={`badge ${confirmed ? "b-attn" : "b-look"}`}><Icon name={confirmed ? "flag" : "eye"} small />{f.label}</span>
-        <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap)}</span></div>
+        <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap, words)}</span></div>
       <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap)}.</h3>
       {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original)}) and {label(b.booking_id, "another booking")} ({span(b.original)}) overlap
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
@@ -859,16 +886,17 @@ function GroupMeetingCard({ item, names, defaultOpen = false, feedback = null, o
   item: GroupMeeting; names: Names; defaultOpen?: boolean; feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const words = useDay();
   const roles = [...new Set(item.serving.map(s => s.position ?? "their role"))].join(", ");
   const serving = [...new Set(item.serving.map(s => `${s.status} for ${s.position ?? "a role"}`))].join(" and ");
   const why = [
-    ...item.meetings.map(m => `Planning Center Groups lists them in a group that meets ${span(m)} this Sunday.`),
+    ...item.meetings.map(m => `Planning Center Groups lists them in a group that meets ${span(m)} ${words.thisOne}.`),
     ...item.serving.map(s => `Planning Center Services has them ${s.status} for ${s.position ?? "a role"}, ${span(s.interval)}.`),
     "This is a schedule fact. Which one they go to is theirs to decide.",
   ];
   return <article className="find is-look">
     <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
-      {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval)}</span>}</div>
+      {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval, words)}</span>}</div>
     <h3 className="find-title">{nameOf(names, item.person_id)} has a group meeting at the same time.</h3>
     <p className="find-body">Their group meets {item.meetings.map(span).join(" and ")}, while they're {serving}.</p>
     <FeedbackChoices target={groupTarget(item, occurrence)} feedback={feedback} />
@@ -902,6 +930,7 @@ export function Refused({ onSettings }: { onSettings?: (() => void) | undefined 
       <p className="bold">{REFUSED.summary}</p>
       <p>{REFUSED.either}</p>
       <ul className="list">{[REFUSED.login, REFUSED.signIn].map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>
+      <CopyForAdministrator />
       <p>{REFUSED.next}</p>
       {onSettings && <div className="find-next">
         <button type="button" className="btn btn-secondary btn-sm" onClick={onSettings}>{REFUSED.signInButton}</button>
@@ -914,10 +943,14 @@ export function Refused({ onSettings }: { onSettings?: (() => void) | undefined 
 export function SundayPage(props: {
   brief: SundayBrief | null; names: Names; busy: boolean; problem: string; sender: string;
   connected: boolean; hasRecording: boolean; configured: boolean; canReword: boolean;
+  /** The launch's check of this Mac's saved sign-in is under way: say so quietly, and never "connect" (0.3.0 live). */
+  checking?: boolean;
+  /** That check had no answer after 20 seconds: say so, with a way to check again, and never "connect" (review L6). */
+  stuck?: (() => void) | null;
   decisions: SundayDecision[]; onDecisions: (next: SundayDecision[]) => void;
   operations: SundayOperations | null;
   onCheck: () => void; onRecording: () => void; onExample: () => void; onLaterExample?: (() => void) | undefined;
-  /** Opens Settings, where Planning Center is connected and the Sunday chosen. */
+  /** Opens Settings, where Planning Center is connected and the service chosen. */
   onSettings?: (() => void) | undefined;
   /** The last check was refused by Planning Center (sunday-source.ts `refusedRead`): the problem says which access and what next. */
   refused?: boolean;
@@ -938,12 +971,20 @@ export function SundayPage(props: {
   whoCouldHelp?: WhoCouldHelp | undefined;
   /** What the person tells Ozzie on finding cards, kept with the Church rules. */
   feedback?: FeedbackSource | null;
+  /**
+   * Worth a look cards App adds for this service (the kids-team question, spec §4.2), after the open cards. Rendered only
+   * when given.
+   */
+  worthALook?: ReactNode;
+  /** Opens first run where it fits (connect, or choose the service); the example's line points to its band instead. */
+  onSetUp?: (() => void) | undefined;
   /** Last Sunday in Check-Ins against the kids rules (church-reads-view.tsx), when Check-Ins was part of the check. */
   church?: ReactNode;
   /** Shown on an open card for its team or position: App passes the church's own lists here (church-own-words.tsx). */
   beside?: Beside | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
+  const d = useDay();
   // "Your name for notes" from Settings, put in on this Mac after any rewording; [Your name] when none is set.
   const sender = props.sender.trim() || yourName.get();
   const { controls, notice } = useFeedback(props.feedback, names);
@@ -971,12 +1012,12 @@ export function SundayPage(props: {
   const onDecide = (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) =>
     onDecisions(withDecision(decisions, decide(finding, choice, reason, new Date().toISOString(), previous)));
   return <div className="col">
-    <p className="eyebrow">{brief?.plan.dates ?? "This Sunday"}</p>
-    <h1 className="h1">Is Sunday covered?</h1>
+    <p className="eyebrow">{brief?.plan.dates ?? d.date ?? DayName(d)}</p>
+    <h1 className="h1">{d.question}</h1>
     {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />Saved copy of the check from {time(brief.completed_at)}. This is not a current check.</p>}
     {/* The fictional example's band is across the top of every page (App.tsx ExampleBand); the line below still says it. */}
     {brief && <p className="lede">
-      {brief.stale ? "This check is out of date, so it isn't a current picture. " : incomplete ? "Part of this Sunday couldn't be checked, so this isn't a full picture. " : ""}
+      {brief.stale ? "This check is out of date, so it isn't a current picture. " : incomplete ? `Part of ${d.thisOne} couldn't be checked, so this isn't a full picture. ` : ""}
       {brief.status === "checked-scope-clear" ? "Everything Ozzie checked is covered. " :
         `${counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision` : incomplete ? "Nothing in what was read needs a decision" : "Nothing needs a decision"}${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `}
       {counts.resolved > 0 && `You resolved ${counts.resolved} yourself. `}
@@ -984,34 +1025,42 @@ export function SundayPage(props: {
       {setAside.length > 0 && `You hid ${setAside.length === 1 ? "one finding" : `${setAside.length} findings`}: ${setAside.length === 1 ? "it's" : "they're"} under “${HIDDEN_BY_YOU}” at the end of this page, where you can bring ${setAside.length === 1 ? "it" : "them"} back. `}
       {brief.plan.title && <span className="muted">{brief.plan.title}.</span>}
     </p>}
-    {!brief && <p className="lede">Sunday hasn't been checked yet. Check Planning Center now, or look around the fictional example first.</p>}
+    {!brief && <p className="lede">{DayName(d)} hasn't been checked yet. Check Planning Center now, or look around the fictional example first.</p>}
     {/* Always says what this is: a live read, the saved copy of a check, or the fictional example. */}
     {brief && <p className="checkline evidence"><Icon name="check" small />{brief.mode === "fictional" ? "Fictional example data" : brief.mode === "recording" ? "Saved copy of a check of Planning Center Services" : "Live read from Planning Center Services"} · {brief.sources.reads} reads · {stamp}{brief.sources.failed.length ? ` · ${brief.sources.failed.length} didn't complete` : ""}</p>}
-    <div className="row" role="group" aria-label="What Sunday shows: a live check, the last saved check or the fictional example">
+    <div className="row" role="group" aria-label="What this page shows: a live check, the last saved check or the fictional example">
       <button type="button" className="btn btn-primary" disabled={props.busy || !props.connected || !props.configured} onClick={props.onCheck}>
         {props.busy ? <><Icon name="spinner" small spin />Checking Planning Center…</> : "Check Planning Center now"}</button>
       {props.hasRecording && <button type="button" className="btn btn-secondary" disabled={props.busy} onClick={props.onRecording}>Show the last saved check</button>}
       {!brief && <button type="button" className="btn btn-quiet" onClick={props.onExample}>See a fictional example</button>}
       {brief?.mode === "fictional" && props.onLaterExample && <button type="button" className="btn btn-quiet" onClick={props.onLaterExample}>See a later fictional check</button>}
     </div>
-    {(!props.connected || !props.configured) && <p className="small row">
-      <span>{!props.connected ? "Connect Planning Center under Settings to check a real Sunday. Ozzie only reads; it changes nothing there." : "Choose which Sunday to check under Settings."}</span>
-      {props.onSettings && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSettings}>Open Settings</button>}</p>}
+    {/* The example's band already offers "Set up my church", so the page points there rather than to Settings (review L6). */}
+    {brief?.mode === "fictional" && props.onSetUp ? <p className="small row"><span>{SET_UP_LINE}</span></p>
+      : props.checking ? <p className="small" role="status" aria-live="polite">{CHECKING_LINE}</p>
+      : props.stuck ? <p className="small row"><span role="status" aria-live="polite">{STUCK_LINE}</span>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={props.stuck}>{CHECK_CONNECTION}</button></p>
+      : (!props.connected || !props.configured) && <p className="small row">
+        <span>{!props.connected ? `Connect Planning Center to check your own service. ${promise("connectAnd")}` : "Choose which service Ozzie watches."}</span>
+        {(props.onSetUp ?? props.onSettings) && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSetUp ?? props.onSettings}>
+          {props.onSetUp ? !props.connected ? "Connect Planning Center" : "Choose a service" : "Open Settings"}</button>}</p>}
     {props.problem && !props.refused && <p role="alert" className="problem">{props.problem}</p>}
+    {props.problem === CHECK_REFUSED && !props.refused && <CopyForAdministrator />}
     {props.problem && props.refused && <Refused onSettings={props.onSettings} />}
     {brief && <section className="stack" aria-labelledby="sunday-open-title">
-      <h2 id="sunday-open-title" className="sr-only">Open for this Sunday</h2>
+      <h2 id="sunday-open-title" className="sr-only">Open for {d.thisOne}</h2>
       {notice}
       {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword} onDecide={onDecide} whoCouldHelp={props.whoCouldHelp}
         asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter} planId={brief.plan.id} titleRef={titleRef(i.finding.key)}
         feedback={controls} occurrence={occurrence} beside={props.beside} people={brief.mode === "fictional" ? null : props.people} />)}
+      {props.worthALook}
       {brief.findings.length === 0 && <p className="lede">{brief.hidden?.length ? "Nothing open in what was read, apart from what your Church rules set aside below."
         : "No open needs, pending requests or Church-rule check-ins in what was read."}</p>}
       {brief.findings.length > 0 && open.length === 0 && <p className="lede">Everything left is something you resolved yourself, below.</p>}
     </section>}
     {(resolved.length > 0 || history.length > 0) && <section className="stack" aria-label="Resolved by you">
       <h2 className="h3">Resolved by you</h2>
-      <p className="small">Your own decisions for this Sunday only. They aren't coverage in Planning Center, and they come back here if something there changes.</p>
+      <p className="small">Your own decisions for {d.thisOne} only. They aren't coverage in Planning Center, and they come back here if something there changes.</p>
       {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => onDecisions(withoutDecision(decisions, i.finding.key))} />)}
       {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => onDecisions(withoutDecision(decisions, h.decision.key))} />)}
     </section>}

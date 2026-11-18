@@ -25,6 +25,7 @@ fn church_check(
         auth,
         script,
         ChurchReads {
+            operations: true,
             forms,
             checkins_event: None,
         },
@@ -694,6 +695,7 @@ fn a_chosen_check_ins_event_is_the_only_one_read_and_must_be_listed() {
         &connected("services+check-ins"),
         &script,
         ChurchReads {
+            operations: true,
             forms: None,
             checkins_event: Some("621"),
         },
@@ -716,6 +718,7 @@ fn a_chosen_check_ins_event_is_the_only_one_read_and_must_be_listed() {
         &connected("services+check-ins"),
         &script,
         ChurchReads {
+            operations: true,
             forms: None,
             checkins_event: Some("699"),
         },
@@ -731,6 +734,7 @@ fn a_chosen_check_ins_event_is_the_only_one_read_and_must_be_listed() {
                 &connected("services+check-ins"),
                 &script,
                 ChurchReads {
+                    operations: true,
                     forms: None,
                     checkins_event: Some(bad),
                 },
@@ -750,6 +754,7 @@ fn a_recording_with_a_chosen_event_keeps_only_that_events_reads() {
         &connected("services+check-ins"),
         &script,
         ChurchReads {
+            operations: true,
             forms: None,
             checkins_event: Some("621"),
         },
@@ -763,4 +768,55 @@ fn a_recording_with_a_chosen_event_keeps_only_that_events_reads() {
         .unwrap();
     capture.reads[rooms].checkins_event_id = Some("620".into());
     assert!(!valid_capture(&capture));
+}
+
+#[test]
+fn review_first_run_h1_a_people_grant_reads_no_rooms_follow_ups_or_groups_until_settings_turn_them_on()
+ {
+    let operations = |url: &String| {
+        url.contains("/calendar/v2") || url.contains("/workflows") || url.contains("/groups/v2")
+    };
+    // People allowed from a note (the sign-in now holds Calendar, People and Groups), the Settings switch off.
+    let script = check_ins_script();
+    let (capture, _) = church_check_with(
+        &connected("services-and-operations"),
+        &script,
+        ChurchReads::default(),
+    )
+    .unwrap();
+    assert!(
+        script.seen().iter().all(|url| !operations(url)),
+        "{:?}",
+        script.seen()
+    );
+    for collection in [
+        "calendar_rooms",
+        "people_workflows",
+        "groups_person_memberships",
+    ] {
+        assert!(
+            capture
+                .reads
+                .iter()
+                .filter(|r| r.collection == collection)
+                .all(|r| r.outcome == NOT_REQUESTED),
+            "{collection}"
+        );
+    }
+    // Turned on in Settings: they are read.
+    let script = check_ins_script();
+    church_check_with(
+        &connected("services-and-operations"),
+        &script,
+        ChurchReads {
+            operations: true,
+            ..ChurchReads::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        script.seen().iter().any(|url| url.contains("/calendar/v2")),
+        "{:?}",
+        script.seen()
+    );
 }

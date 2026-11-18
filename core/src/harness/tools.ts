@@ -28,7 +28,7 @@ import { LIVE_CHECK_VALID_MS, type SundayCapture, type SundayRules } from "../su
 import { backgroundChecksOn, forModels } from "../kids-rules.js";
 import { applyDecisions, type DecidedItem, type DecisionChoice, type SundayDecision } from "../sunday-decisions.js";
 import { HARNESS_LIMITS, NATIVE_TOOL_ALLOWLIST, type Completeness, type ToolEnvelope, type ToolName, type ToolSpec } from "./contract.js";
-import { envelopeProblems, sentenceFits, TOOL_SPEC_LIST } from "./fixed.js";
+import { envelopeProblems, isIsoTime, sentenceFits, TOOL_SPEC_LIST } from "./fixed.js";
 import { HarnessSession, kindOf, YOUR_NAME, type LabelKind } from "./session.js";
 
 /** What the tools read. Built by the app from its last check; names and place names stay on this Mac. */
@@ -150,7 +150,7 @@ const cautious = (a: Status, b: Status): Status => STATUS.indexOf(a) >= STATUS.i
 const KIND: Record<Exclude<Finding["kind"], "background-check">, string> = {
   "needs-people": "needs people", "lead-missing": "no scheduled lead", "lead-unverified": "lead couldn't be confirmed",
   pending: "pending", streak: "check-in suggested", "worth-a-look": "part of the check couldn't be verified",
-  "too-few-confirmed": "fewer confirmed than the church rules ask",
+  "too-few-confirmed": "fewer confirmed than the church rules ask", blockout: "scheduled with a blockout at this time",
 };
 /** A finding's kind in fixed words. A background check never gets here (forModels); if one did, the tool fails closed. */
 const kindWord = (kind: Finding["kind"]): string => {
@@ -331,6 +331,9 @@ export class HarnessTools {
         // Counts only: who is confirmed or pending stays on this Mac.
         case "too-few-confirmed": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), confirmed: f.confirmed?.length ?? 0,
           needed: f.needed ?? NOT_KNOWN, asked_no_answer: f.asked?.length ?? 0, request_not_sent: f.not_sent?.length ?? 0, ages: AGES }); break;
+        // Each role as Planning Center still counts the person on it (as groups.clashes): never an open role.
+        case "blockout": Object.assign(base, { person: this.#person(f.person_id),
+          serving: (f.serving ?? []).map(s => ({ role: this.#roleOf(s.name, s.team_id), status: s.status, time: span(s.interval, zone) })) }); break;
       }
       return { ...base, ...this.#decision(decided.get(f.id)) };
     });
@@ -534,15 +537,18 @@ export class HarnessTools {
    * draft. The asked-for person and role are echoed under `asked_for`, and neither they nor the draft count as evidence.
    */
   #draft(person: string, role: string): Result {
-    const { zone } = this.#services();
+    const { brief, zone } = this.#services();
     const asked_for = { person, role };
     const finding = this.#needsFor(role).find(f => this.#listed(f).some(p => p.person === person));
     if (!finding) return this.#servicesResult({ asked_for, status: "no draft prepared", reason: "not listed for an open need of this role" });
     const start = localIso(finding.position?.interval?.starts_at, zone);
+    // When: the service time, else the plan's own church-local date, else nothing; never a fixed "this Sunday", since the
+    // service may be on any day (onboarding spec §5, decision 18). The vocabulary has no words for "the next service".
+    const date = brief.plan.date && isIsoTime(brief.plan.date) ? brief.plan.date : null;
     // Ozzie's own wording (as draft-request.ts), in labels and an ISO time; restored to the first name, the time in words and the sender on this Mac.
     const draft = [
       `Hi ${person},`,
-      `We still need someone for ${role}${start ? ` at ${start}` : " this Sunday"}. Would you be able to help?`,
+      `We still need someone for ${role}${start ? ` at ${start}` : date ? ` on ${date}` : ""}. Would you be able to help?`,
       "It's completely fine to say no. Just let me know either way so we can plan.",
       `Thank you,\n${YOUR_NAME}`,
     ].join("\n\n");

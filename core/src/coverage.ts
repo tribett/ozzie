@@ -23,6 +23,11 @@ export interface CoverageCandidate {
   blockouts: Observation<ServingInterval[] | null>;
   assignments: Observation<ServingAssignment[]>;
 }
+/** Who one of a position's assignments is, with that person's own recorded blockouts (null: couldn't be verified). */
+export interface ScheduledPerson {
+  assignment_id: string; person_id: string;
+  blockouts: Observation<ServingInterval[] | null>;
+}
 export interface CoveragePosition {
   position_id: string; team_id: string;
   interval: ServingInterval | null;
@@ -30,6 +35,8 @@ export interface CoveragePosition {
   lead: Observation<LeadRequirement>;
   assignments: Observation<ServingAssignment[]>;
   candidates: CoverageCandidate[];
+  /** The people behind `assignments`, for their blockouts. Absent: none supplied, so no scheduled blockout is checked. */
+  scheduled?: ScheduledPerson[];
 }
 export interface CoverageInput {
   evaluated_at: string;
@@ -51,6 +58,11 @@ export interface PositionAssessment {
   remaining_need: number | null;
   lead: "not-required" | "confirmed" | "missing" | "unverified";
   pending_assignment_ids: string[];
+  /**
+   * Confirmed or pending people here whose own recorded blockout overlaps their serving time, with the first time it
+   * overlaps, in the source's order. Worth a look: Planning Center still counts them, so remaining_need never changes.
+   */
+  scheduled_blockouts: { assignment_id: string; person_id: string; interval: ServingInterval }[];
   candidates: CandidateAssessment[];
 }
 export interface CoverageResult {
@@ -94,6 +106,20 @@ function duplicateAssignmentIds(assignments: ServingAssignment[]): Set<string> {
     seen.add(assignment.assignment_id);
   }
   return duplicates;
+}
+
+/** Two times overlap when each starts before the other ends; one ending as the other starts doesn't. */
+const overlaps = (a: [number, number], b: [number, number]) => a[0] < b[1] && b[0] < a[1];
+
+/**
+ * Each recorded blockout against one serving time, in source order: whether it overlaps, or "unverified" when its times
+ * (or the serving time) couldn't be verified. The one blockout rule, for people who could help and people already scheduled.
+ */
+function blockoutMatches(blockouts: ServingInterval[], target: [number, number] | null): ("overlap" | "clear" | "unverified")[] {
+  return blockouts.map(blockout => {
+    const bounds = interval(blockout);
+    return !bounds || !target ? "unverified" : overlaps(bounds, target) ? "overlap" : "clear";
+  });
 }
 
 function covers(assignment: ServingAssignment, target: [number, number]): boolean {
@@ -170,11 +196,10 @@ export function evaluateCoverage(input: CoverageInput): CoverageResult {
     if (!usable(person.blockouts, position.position_id) || person.blockouts.value === null) {
       unknown = true; reasons.push("Blockouts couldn't be verified.");
     } else {
-      for (const blockout of person.blockouts.value) {
-        const bounds = interval(blockout);
-        if (!bounds || !target) {
+      for (const match of blockoutMatches(person.blockouts.value, target)) {
+        if (match === "unverified") {
           unknown = true; reasons.push("Blockout times couldn't be verified.");
-        } else if (bounds[0] < target[1] && target[0] < bounds[1]) {
+        } else if (match === "overlap") {
           excluded = true; reasons.push("Recorded overlapping blockout.");
         }
       }
@@ -195,7 +220,7 @@ export function evaluateCoverage(input: CoverageInput): CoverageResult {
           const bounds = interval(time);
           if (!bounds || !target) {
             unknown = true; reasons.push("Serving times couldn't be verified.");
-          } else if (bounds[0] < target[1] && target[0] < bounds[1]) {
+          } else if (overlaps(bounds, target)) {
             if (assignment.status === "C") {
               excluded = true; reasons.push("Confirmed overlapping serving assignment.");
             } else {
@@ -216,6 +241,27 @@ export function evaluateCoverage(input: CoverageInput): CoverageResult {
       reasons: reasons.length ? reasons : ["Recorded team membership, role eligibility and availability; no overlapping serving assignment in checked scope. Willingness is not established."],
     };
   };
+  // People already scheduled (C or U) against their own serving times, with the candidates' blockout rule. Declined,
+  // cancelled and unresolved rows are left to the checks above; a blockout that couldn't be checked is never clear.
+  const assessScheduledBlockouts = (position: CoveragePosition): PositionAssessment["scheduled_blockouts"] => {
+    if (!position.scheduled?.length || !usableScopes.has(position.assignments.scope_id)) return [];
+    const found: PositionAssessment["scheduled_blockouts"] = [];
+    const duplicates = duplicateAssignmentIds(position.assignments.value);
+    for (const assignment of position.assignments.value) {
+      if ((assignment.status !== "C" && assignment.status !== "U") || duplicates.has(assignment.assignment_id) || unresolvedAssignment(assignment)) continue;
+      const person = position.scheduled.find(s => s.assignment_id === assignment.assignment_id);
+      if (!person || !usable(person.blockouts, position.position_id)) continue;
+      const blockouts = person.blockouts.value;
+      const times = assignment.intervals.map(t => ({ time: t, matches: blockouts === null ? ["unverified" as const] : blockoutMatches(blockouts, interval(t)) }));
+      const hit = times.find(t => t.matches.includes("overlap"));
+      if (hit) found.push({ assignment_id: assignment.assignment_id, person_id: person.person_id, interval: { ...hit.time } });
+      else if (times.some(t => t.matches.includes("unverified"))) {
+        report("blockout-unverified", "Worth a look: a scheduled person's blockouts couldn't be checked against their serving time.",
+          person.blockouts.scope_id, position.position_id, person.person_id);
+      }
+    }
+    return found;
+  };
   const positions: PositionAssessment[] = input.positions.map(position => {
     if (!interval(position.interval)) report("time-unverified", "Some coverage couldn't be verified: required serving interval is missing or ambiguous.", null, position.position_id);
     const quantity = position.remaining_need.value;
@@ -233,12 +279,14 @@ export function evaluateCoverage(input: CoverageInput): CoverageResult {
       remaining_need: validNeed ? quantity : null,
       lead: assessLead(position),
       pending_assignment_ids: usable(position.assignments, position.position_id) ? position.assignments.value.filter(a => a.status === "U").map(a => a.assignment_id) : [],
+      scheduled_blockouts: assessScheduledBlockouts(position),
       candidates: position.candidates.map(c => assessCandidate(c, position)),
     };
   });
   return {
     evaluated_at: input.evaluated_at, scopes: input.scopes.map(scope => ({ ...scope })),
-    status: issues.length ? "unverified" : positions.some(p => (p.remaining_need ?? 0) > 0 || p.pending_assignment_ids.length || p.lead === "missing" || p.candidates.some(c => c.disposition === "possible-conflict")) ? "findings" : "checked-scope-clear",
+    status: issues.length ? "unverified" : positions.some(p => (p.remaining_need ?? 0) > 0 || p.pending_assignment_ids.length || p.scheduled_blockouts.length ||
+      p.lead === "missing" || p.candidates.some(c => c.disposition === "possible-conflict")) ? "findings" : "checked-scope-clear",
     positions, issues,
   };
 }

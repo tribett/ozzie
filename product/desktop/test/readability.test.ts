@@ -141,8 +141,8 @@ describe("Settings is findable (audit item 27)", () => {
     const nav = /<nav class="settings-index" aria-labelledby="settings-index-title"><h2 id="settings-index-title" class="eyebrow">On this page<\/h2><ul>(.*?)<\/ul><\/nav>/u.exec(html);
     expect(nav).not.toBeNull();
     const links = [...nav![1]!.matchAll(/<a href="#([^"]+)">.*?<\/svg>([^<]+)<\/a>/gu)].map(m => [m[1]!, m[2]!.replaceAll("&amp;", "&")] as const);
-    expect(links.map(([, label]) => label)).toEqual(["Planning Center and which Sunday", "Your name on notes", "AI help", "What Ozzie runs and notices",
-      "Calendars", "Lists and notes", "Other AI apps, Spotlight and Shortcuts", "Saved checks", "Guided setup"]);
+    expect(links.map(([, label]) => label)).toEqual(["Planning Center and which service Ozzie watches", "Your name on notes", "AI help", "What Ozzie runs and notices",
+      "Calendars", "Church lists", "Other AI apps, Spotlight and Shortcuts", "Saved checks", "Check my setup"]);
     // Each link's target is a heading on the page, after the index, in the same order as the links.
     const at = links.map(([id]) => html.search(new RegExp(`<h[23] id="${id}"`, "u")));
     expect(at.every(i => i > (nav!.index ?? 0))).toBe(true);
@@ -161,9 +161,10 @@ describe("Settings is findable (audit item 27)", () => {
 
   it("moves within the page pane by each section's own element, never with scrollIntoView or a look-up in the page, and gives it the keyboard focus", () => {
     const src = readFileSync(new URL("../src/connection-page.tsx", import.meta.url), "utf8");
-    const go = src.slice(src.indexOf("  const go = (id: string) => {"), src.indexOf("  const candidates ="));
+    // `align` puts a section in place (also again while Settings opened at one settles, review L6); `go` then focuses it.
+    const go = src.slice(src.indexOf("  const align = (id: string) => {"), src.indexOf("  const candidates ="));
     expect(go).toContain("pane.scrollTop += place.getBoundingClientRect().top - pane.getBoundingClientRect().top - 16;");
-    expect(go).toContain("place.focus({ preventScroll: true });");
+    expect(go).toContain("const go = (id: string) => align(id)?.focus({ preventScroll: true });");
     // Lists and notes stay on this Mac: Settings reads nothing off the page (core/test/sources/stays-on-this-mac.test.ts).
     expect(src).not.toMatch(/\.scrollIntoView\(|querySelector|getElementById|\.closest\(/u);
     // Every heading the index moves to can take the focus.
@@ -173,7 +174,7 @@ describe("Settings is findable (audit item 27)", () => {
 
   it("groups the phone notice under what Ozzie runs and notices, and Siri and Shortcuts beside other AI apps", () => {
     const t = text(html);
-    expect(t).toMatch(/What Ozzie runs and notices Automatic checks .* A notice on your phone Calendars/u);
+    expect(t).toMatch(/What Ozzie runs and notices Keeping watch .* A notice on your phone Calendars/u);
     expect(t).toMatch(/Other AI apps, Spotlight and Shortcuts Other AI apps /u);
     expect(text(renderToStaticMarkup(React.createElement(SiriShortcutsSection, { on: false, onChange: () => {}, problem: null, path: null, actions: false }))))
       .toMatch(/^ Siri and Shortcuts /u);
@@ -232,7 +233,8 @@ describe("readable text, targets and zoom in the CSS (audit item 22)", () => {
     const box = app.slice(app.indexOf('<div id="side-nav" className="side-pages">'), app.indexOf('className="btn btn-secondary ask-entry"'));
     expect(app).toContain('aria-expanded={menu} aria-controls="side-nav"');
     expect(box).toContain('<nav className="nav" aria-label="Pages">');
-    expect(box).toMatch(/<div className="side-foot">\s*<p className="quiet-note">.*Reads only\. Names Ozzie reads stay on this Mac\.<\/span><\/p>\s*<p className="small side-org">\{churchLine\}<\/p>/u);
+    // The promise line comes from promises.ts (onboarding spec §0.2); the AI line follows the church (§4.4).
+    expect(box).toMatch(/<div className="side-foot">\s*<p className="quiet-note">.*\{promise\("readsShort"\)\} The names Ozzie reads stay on this Mac\.<\/span><\/p>\s*<p className="small side-org">\{churchLine\}<\/p>\s*\{\/\*[^*]*\*\/\}\s*\{askShown && <div className="small side-ai"><AiLine /u);
     expect(app).toContain('<p className="small side-bar-org">{churchLine}</p>');
     const narrow = styles.slice(styles.search(/@media \(max-width: 760px\) \{\s*\.oz \.shell, /u));
     const block = narrow.slice(0, narrow.indexOf("\n}\n"));

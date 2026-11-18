@@ -36,4 +36,18 @@ describe("a reminder for a request with no answer yet", () => {
     expect(restored).not.toContain("Larkspur");
     expect(restoreReminder(draft, f, {}, "")).toMatch(/^Hi there,[\s\S]*\[Your name\]$/u);
   });
+
+  it("names the service's own time or date, whatever day it is, and never calls it Sunday otherwise (decision 18)", () => {
+    const f = pendingIn(sent());
+    const at = new Date(f.position!.interval!.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+    expect(reminderDraft(f).text).toContain(`serve as [Role] on ${at}.`);
+    // No service time read: the service's own date when it's known, otherwise the next service.
+    const untimed = { ...f, position: { ...f.position!, interval: null } };
+    expect(reminderDraft(untimed, "2026-11-25").text).toContain("serve as [Role] on Wednesday, November 25.");
+    expect(reminderDraft(untimed, "2026-11-22").text).toContain("serve as [Role] on Sunday, November 22.");
+    expect(reminderDraft(untimed).text).toContain("serve as [Role] at the next service.");
+    for (const text of [reminderDraft(untimed, "2026-11-25").text, reminderDraft(untimed).text, reminderDraft(untimed, "not a date").text]) {
+      expect(text).not.toMatch(/Sunday|this week/u);
+    }
+  });
 });

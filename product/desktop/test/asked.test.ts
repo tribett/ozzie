@@ -6,10 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { askedMark, askedMemory, askedText, holding, placeIn } from "../src/asked.js";
-import { DraftBox, LOOKS_GOOD, SIGN, UNSIGNED, type AskedLine } from "../src/sunday-page.js";
-import { SetupFlow } from "../src/setup-flow.js";
+import { DraftBox, LOOKS_GOOD, type AskedLine } from "../src/sunday-page.js";
+import { NAME_HELP, NAME_LABEL } from "../src/draft-actions.js";
+import { FirstRun } from "../src/setup-flow.js";
 import { TodayPage } from "../src/today-page.js";
-import { DEFAULT_PREFS } from "../src/proactive.js";
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sunday.js";
 import { ALL, code, imports, names as namesCommand, NATIVE_COMMANDS, OFF_THE_PAGE_APIS, reach, source } from "../../../core/test/stays-on-this-mac-imports.js";
@@ -74,20 +74,22 @@ describe("the note card: signed before it goes, and the mark is a separate click
   const box = (over: Partial<React.ComponentProps<typeof DraftBox>> = {}) => renderToStaticMarkup(React.createElement(DraftBox, {
     label: "Draft note", to: "Riley", body: "Hi Riley,\n\nCould you help?\n\nThank you,\n[Your name]", onBody: () => {}, onClose: () => {}, footer: "Ozzie never sends messages.", ...over,
   }));
-  it("says before it's copied or opened that the note still ends “[Your name]”, with a way to sign it right there", () => {
-    const html = box();
+  it("asks for the name the note ends with before it's copied or opened, once, under the note (spec §4.2, audit item 18)", () => {
+    const html = box({ signName: { set: () => {} } });
     const t = text(html);
-    expect(t).toContain(UNSIGNED);
-    expect(t.indexOf(UNSIGNED)).toBeLessThan(t.indexOf("Copy draft"));
-    expect(html).toContain(`>${SIGN}</button>`);
-    expect(t).toContain("Kept on this Mac, as Settings' Your name for notes. It goes in after any AI rewording, so it's never sent to an AI.");
-    expect(text(box({ body: "Hi Riley,\n\nThank you,\nPat" }))).not.toContain(UNSIGNED);
+    expect(t).toContain(NAME_LABEL);
+    expect(t).toContain(NAME_HELP);
+    expect(t.indexOf(NAME_LABEL)).toBeLessThan(t.indexOf("Copy draft"));
+    expect(t).toContain("Use this name");
+    expect(t).toContain("Leave [Your name] for now");
+    // A note already signed asks nothing.
+    expect(text(box({ body: "Hi Riley,\n\nThank you,\nPat", signName: { set: () => {} } }))).not.toContain(NAME_LABEL);
   });
 
   it("offers Looks good — I'll send it only where a note is for one person, and shows the mark with Undo once made", () => {
     expect(box()).not.toContain(LOOKS_GOOD);
     const offer = text(box({ mark: { line: null, onMark: () => {} } }));
-    expect(offer).toContain(`${LOOKS_GOOD} Marks it on this Mac so the Sunday page and Today show you said you'd ask. Nothing is sent and Planning Center doesn't change.`);
+    expect(offer).toContain(`${LOOKS_GOOD} Marks it on this Mac so this page and Today show you said you'd ask. Nothing is sent and Planning Center doesn't change.`);
     const line: AskedLine = { key: "k", person_id: "511", text: "On Mon, Nov 16 you said you'd ask Riley about Greeter.", undo: () => {} };
     const made = text(box({ mark: { line, onMark: () => {} } }));
     expect(made).toContain("On Mon, Nov 16 you said you'd ask Riley about Greeter. Undo");
@@ -113,13 +115,13 @@ describe("the note card: signed before it goes, and the mark is a separate click
 });
 
 describe("where the name is asked for and the mark is shown", () => {
-  it("setup asks for the name for notes on its first step, optional", () => {
-    const t = text(renderToStaticMarkup(React.createElement(SetupFlow, {
-      status: null, settings: { clientId: "", organization: "", serviceTypeId: "", planId: "" }, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS,
-      onModel() {}, onClose() {}, onExample() {}, onAutomatic() {}, nameStore: { get: () => "", set: () => {} },
+  it("first run doesn't ask for the name for notes: it's asked when the first note is prepared (spec §4.2)", () => {
+    const t = text(renderToStaticMarkup(React.createElement(FirstRun, {
+      status: null, settings: { clientId: "", organization: "", serviceTypeId: "", planId: "" }, onSettings() {}, onStatus() {}, start: "first",
+      read: () => new Promise<never>(() => {}), result: null, rules: false, intervalMinutes: 60, nowMs: 0, onExample() {}, onLeave() {}, onDeferred() {}, builtIn: true,
     })));
-    expect(t).toContain("Your name for notes (optional)");
-    expect(t.indexOf("Your name for notes")).toBeLessThan(t.indexOf("Next: connect Planning Center"));
+    expect(t).not.toContain("Your name");
+    expect(t).toContain("Connect Planning Center");
   });
 
   it("Today says it on the Sunday card, with Undo", () => {

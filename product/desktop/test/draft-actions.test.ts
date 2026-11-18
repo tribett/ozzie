@@ -19,8 +19,8 @@ vi.mock("../src/draft-actions.js", async importOriginal => {
 });
 
 import {
-  ADD_PEOPLE, addressedText, DraftActions, handOff, handOffText, handOffTo, handOffToNote, HAND_OFF_NOTE, NO_RECIPIENT, openDraftNatively, openDraftToNatively, openLabel,
-  type Addressee, type DraftApp, type HandOff,
+  addressedText, DraftActions, handOff, handOffText, handOffTo, handOffToNote, HAND_OFF_NOTE, NO_RECIPIENT, openDraftNatively, openDraftToNatively, openLabel,
+  FILL_IN, LEAVE_NAME, NAME_HELP, NAME_LABEL, USE_NAME, type Addressee, type DraftApp, type HandOff,
 } from "../src/draft-actions.js";
 import { addresseeFor, DraftBox, LeaderNote, ReminderNote } from "../src/sunday-page.js";
 import { DraftCard } from "../src/ask-panel.js";
@@ -270,7 +270,8 @@ describe("a note for one person opens addressed when Planning Center has one det
     // Native: someone a check since Ozzie opened linked through the plan's people, team positions or chosen forms; a team
     // leader named only as leader isn't, so the sentence says which people count.
     // Of the church in use only (review G); a team's leader the check names counts too (native, after review G L-e).
-    expect(said(h("mail", "unaddressed", "not-in-this-check"))).toBe("Ozzie fills in To only for people a Sunday check of the church Ozzie is using has shown since Ozzie opened. The note opened in Mail with To empty.");
+    // Any check of the church in use, whatever day its service is on (onboarding spec §5): never "a Sunday check".
+    expect(said(h("mail", "unaddressed", "not-in-this-check"))).toBe("Ozzie fills in To only for people a check of the church Ozzie is using has shown since Ozzie opened. The note opened in Mail with To empty.");
     // A Sunday check or setup's plan picker was reading (contact.rs BusyWithACheck): not always a check.
     expect(said(h("mail", "unaddressed", "busy-with-a-check"))).toBe("Ozzie was reading Planning Center just then, so To was left empty. The note opened in Mail.");
     expect(said(h("messages", "unaddressed", "busy-with-another-note"))).toBe("Ozzie was still filling in To for another note, so To was left empty. The note opened in Messages.");
@@ -292,21 +293,38 @@ describe("a note for one person opens addressed when Planning Center has one det
     }
   });
 
-  it("shows the result as a calm status, and offers adding People only when the sign-in lacks it, on the leader's click", () => {
+  it("shows the result as a calm status, and offers \"Fill in who it's to\" only when the sign-in lacks People", () => {
     const shown = (initial: HandOff, who: Addressee = to) => render(React.createElement(DraftActions, { text: NOTE, copy: null, to: who, initial }));
     const addressed = shown({ app: "mail", result: "addressed", text: NOTE, in: "Mail" });
     expect(addressed).toContain('role="status" aria-live="polite">Opened in Mail, addressed to Riley Thornbury. Check it and send it yourself.</p>');
     expect(addressed).not.toContain('role="alert"');
     expect(text(addressed)).toContain(handOffToNote("Riley Thornbury"));
     expect(text(addressed)).not.toContain(HAND_OFF_NOTE);
-    let added = 0;
-    const missing = shown({ app: "mail", result: "unaddressed", reason: "not-allowed", text: NOTE, in: "Mail" }, { ...to, peopleGranted: false, onAddPeople: () => { added++; } });
-    expect(missing).toContain(`>${ADD_PEOPLE}</button>`);
-    expect(added).toBe(0);
-    expect(shown({ app: "mail", result: "unaddressed", reason: "not-allowed", text: NOTE, in: "Mail" }, { ...to, onAddPeople: () => {} })).not.toContain(ADD_PEOPLE);
-    expect(shown({ app: "mail", result: "unaddressed", reason: "child", text: NOTE, in: "Mail" })).not.toContain(ADD_PEOPLE);
+    const fillIn = `>${FILL_IN.replace("'", "&#x27;")}</button>`;
+    // The note's own link back to the People question (onboarding spec §4.2), a quiet one; Settings is no longer needed.
+    const missing = shown({ app: "mail", result: "unaddressed", reason: "not-allowed", text: NOTE, in: "Mail" }, { ...to, peopleGranted: false });
+    expect(missing).toContain(`<button type="button" class="btn btn-quiet btn-sm"${fillIn}`);
+    expect(missing).not.toContain("Open Settings");
+    expect(shown({ app: "mail", result: "unaddressed", reason: "not-allowed", text: NOTE, in: "Mail" })).not.toContain(fillIn);
+    expect(shown({ app: "mail", result: "unaddressed", reason: "child", text: NOTE, in: "Mail" }, { ...to, peopleGranted: false })).not.toContain(fillIn);
     // A changed draft starts fresh, as before.
     expect(render(React.createElement(DraftActions, { text: `${NOTE}!`, copy: null, to, initial: { app: "mail", result: "addressed", text: NOTE, in: "Mail" } }))).toContain('aria-live="polite"></p>');
+  });
+
+  it("asks \"Your name for the end of notes\" above the buttons only on a surface that can sign the note, while it ends [Your name] and no name is set", () => {
+    const unsigned = "Hi Riley,\n\nCould you help?\n\nThank you,\n[Your name]";
+    const none = { get: () => "", set: () => {} };
+    const memory = { get: () => ({ name: null, people: null, kids: {}, phone: null, noticeSent: false }), leaveName() {}, declinePeople() {}, answerKids() {}, answerPhone() {}, noticeSent() {} };
+    const html = render(React.createElement(DraftActions, { text: unsigned, copy: "COPY", onSign: () => {}, nameStore: none, memory }));
+    expect(text(html)).toMatch(new RegExp(`^ ?${NAME_LABEL} ${NAME_HELP} ${USE_NAME} ${LEAVE_NAME.replace(/[[\]]/gu, "\\$&")} COPY Open in Mail`, "u"));
+    expect(html).toContain('placeholder="Your name"');
+    expect(html).toContain(`<button type="submit" class="btn btn-secondary btn-sm" disabled="">${USE_NAME}</button>`);
+    // Not asked: a surface that signs its own way, a name already set, a signed note, or "Leave" chosen before.
+    expect(render(React.createElement(DraftActions, { text: unsigned, copy: null, nameStore: none, memory }))).not.toContain(NAME_LABEL);
+    expect(render(React.createElement(DraftActions, { text: unsigned, copy: null, onSign: () => {}, nameStore: { get: () => "Pat", set: () => {} }, memory }))).not.toContain(NAME_LABEL);
+    expect(render(React.createElement(DraftActions, { text: NOTE, copy: null, onSign: () => {}, nameStore: none, memory }))).not.toContain(NAME_LABEL);
+    expect(render(React.createElement(DraftActions, { text: unsigned, copy: null, onSign: () => {}, nameStore: none, memory: { ...memory, get: () => ({ ...memory.get(), name: "left" as const }) } })))
+      .not.toContain(NAME_LABEL);
   });
 
   it("is addressed only by the id the finding holds: the person a note asks, the team's leader, or who a reminder is for; never in the example", () => {
@@ -339,6 +357,9 @@ describe("what happened to a note stays on its card (audit item 19, review Y)", 
     for (const p of ["product/desktop/src/harness-bridge.ts", "product/desktop/src/share-check.ts", "product/desktop/src/siri-shortcuts.ts", "product/desktop/src/phone-notice.ts",
       "product/desktop/src/proactive.ts", "product/desktop/src/background.ts", "product/desktop/src/model.ts"]) expect(reached, p).not.toContain(p);
     expect(own).not.toMatch(/localStorage|sessionStorage|console\./u);
+    // The two questions asked on the card keep only their answers (moments.ts): what happened to a note never reaches it.
+    expect(reached).toContain("product/desktop/src/moments.ts");
+    expect(code("product/desktop/src/moments.ts")).not.toMatch(/["'`](?:child|addressed|unaddressed|opened)["'`]|reason/u);
   });
 
   it("a note for one person opens with that person's id only: the To line and the address come from the same id", async () => {

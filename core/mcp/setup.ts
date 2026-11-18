@@ -38,7 +38,7 @@ export const shellWord = (word: string): string => `'${word.replaceAll("'", "'\\
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
 /** The shape Claude, Cursor, LM Studio and most other apps read. */
 const listed = (path: string): string => json({ mcpServers: { [SETUP_NAME]: { command: path, args: [] } } });
-const ASK = "\"What still needs attention for Sunday in Ozzie?\"";
+const ASK = "\"What still needs attention in Ozzie's last check?\"";
 
 export const SETUP_APPS: readonly SetupApp[] = [
   {

@@ -1,12 +1,14 @@
-// Lists & notes: spreadsheets the church keeps (who holds which keys, a snack rota), added from this Mac or from a
+// Church lists: spreadsheets the church keeps (who holds which keys, a snack rota), added from this Mac or from a
 // private link to a published sheet, and shown as the church's own words. The leader names each list, says which column names a team or role, matches its values to
 // Planning Center teams and positions (Ozzie only suggests a same-named position; a suggestion counts once the leader
-// uses it) and ticks the columns shown beside a matched Sunday card. The whole list is shown here in the file's own
+// uses it) and ticks the columns shown beside a matched card. The whole list is shown here in the file's own
 // order, with a find box. No row has an action: nothing is copied, exported, drafted or mailed from here.
 //
 // What is read lives in memory in church-sources.ts; native code keeps the files' places, the links' addresses (in the
 // Keychain) and the leader's matches. A link's card shows only where it points, masked.
 // Nothing here goes to AI help, other AI apps, Siri, a notice or the briefing (core/test/sources/stays-on-this-mac.test.ts).
+// So this page imports nothing the sending side does, the day words included: its sentences name no day, and never
+// "Sunday" for a service on another day (onboarding spec §5.1).
 import { memo, useId, useMemo, useState } from "react";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { MAX_COLUMNS, type Sheet } from "../../../core/src/sources/sheet.js";
@@ -20,11 +22,11 @@ import { ChurchNotes } from "./church-notes.js";
 import { Icon } from "./icons.js";
 import "./church-lists.css";
 
-export const LISTS_TITLE = "Lists & notes";
+export const LISTS_TITLE = "Church lists";
 /** The one sentence before the first button (audit item 26); how to save a list is folded under HOW_LISTS. */
-export const LISTS_BODY = "Add a list your church keeps, such as who holds which keys, and Ozzie shows its rows beside the Sunday cards you match it to.";
+export const LISTS_BODY = "Add a list your church keeps, such as who holds which keys, and Ozzie shows its rows beside the cards you match it to.";
 export const HOW_LISTS = "How to save a list";
-export const LISTS_STAYS = "Your lists and notes stay on this Mac. Ozzie reads each one from its file or link when you add it, when you open Sunday or this page (the first time after Ozzie starts, then at most once an hour), and when you ask, never with the window closed or hidden, and never changes it. They aren't sent to AI help, shared with other AI apps or Siri, or put in any notice.";
+export const LISTS_STAYS = "Your lists and notes stay on this Mac. Ozzie reads each one from its file or link when you add it, when you open your service's page or this page (the first time after Ozzie starts, then at most once an hour), and when you ask, never with the window closed or hidden, and never changes it. They aren't sent to AI help, shared with other AI apps or Siri, or put in any notice.";
 export const LIST_FRAME = "This is your church's own list. Ozzie shows it as written and doesn't check it.";
 export const ADD_LIST = "Add a list from this Mac";
 export const ADD_LINK = LINK_TITLE;
@@ -35,9 +37,9 @@ export const SAVE_NAME = "Save the name";
 export const COLUMN_QUESTION = "Which column names the team or role?";
 export const COLUMN_HELP = "Ozzie matches the values in that column to Planning Center teams and positions, only as you choose. Choosing another column clears these matches.";
 export const MATCH_HELP = "A suggestion counts only once you choose “Use this match”. Ozzie never compares names in your list with people in Planning Center.";
-export const NEEDS_CHECK = "Check a Sunday first to see its teams and positions to match.";
-export const SHOW_QUESTION = `Which columns to show beside a matched Sunday card (up to ${MAX_TICKED})`;
-export const SHOW_NONE = "None yet: a matched Sunday card shows nothing from this list until you tick at least one.";
+export const NEEDS_CHECK = "Run a check first to see the teams and positions to match.";
+export const SHOW_QUESTION = `Which columns to show beside a matched card (up to ${MAX_TICKED})`;
+export const SHOW_NONE = "None yet: a matched card shows nothing from this list until you tick at least one.";
 export const FIND_LABEL = "Find in this list";
 export const NOT_READ = "Not read yet since Ozzie opened.";
 /** Before a link's masked address, until it has been read. */

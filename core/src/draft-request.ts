@@ -12,7 +12,7 @@ import type { Finding } from "./sunday-brief.js";
 
 export const REWORDINGS = { warmer: "Make it warmer.", shorter: "Make it shorter.", casual: "Make it more casual.", formal: "Make it a little more formal." } as const;
 export type Rewording = keyof typeof REWORDINGS;
-/** `sunday`: the church-local date (YYYY-MM-DD) of the Sunday checked, named when the service time wasn't read. */
+/** `sunday`: the church-local date (YYYY-MM-DD) of the service checked, on whatever day it is, named when the service time wasn't read. */
 export interface DraftContext { finding: Finding; person_id: string; sunday?: string | null }
 export interface DraftModelRequest { system: string; user: string; max_tokens: number }
 /** Text in placeholder form that this module produced. Leader-typed text cannot become one. */
@@ -76,14 +76,15 @@ const roleUnfit = (name: string) =>
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 /**
- * When the role is, in a note's words: the service time Planning Center gave ("Sunday, November 29 at 9:30 AM"),
- * else the Sunday's own date ("Sunday, November 29"), else just "Sunday". Never relative to today.
+ * When the role is, in a note's words, after the role: the service time Planning Center gave ("on Wednesday, November 25
+ * at 7:00 PM"), else the service's own church-local date ("on Wednesday, November 25"), else "at the next service".
+ * Never relative to today, and never a fixed Sunday: the service may be on any day (onboarding spec §5, decision 18).
  */
-export function serviceWhen(finding: Finding, sunday?: string | null): string {
+export function serviceOn(finding: Finding, date?: string | null): string {
   const interval = finding.position?.interval;
-  if (interval) return new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
-  const day = sunday && DATE.test(sunday) ? new Date(`${sunday}T12:00:00Z`) : null;
-  return day && !Number.isNaN(day.getTime()) ? day.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }) : "Sunday";
+  if (interval) return `on ${new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+  const day = date && DATE.test(date) ? new Date(`${date}T12:00:00Z`) : null;
+  return day && !Number.isNaN(day.getTime()) ? `on ${day.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}` : "at the next service";
 }
 
 /** Controls, format, private-use, default-ignorable and line-separator characters and the blank braille pattern. */
@@ -108,7 +109,7 @@ export function hiddenInNote(note: string): boolean {
 }
 /** Ozzie's own first wording, already in placeholder form. */
 export function templateDraft(ctx: DraftContext, names: Record<string, string>): PlaceholderDraft {
-  const original = ctx.finding.position?.name ?? "a Sunday role";
+  const original = ctx.finding.position?.name ?? "a role";
   // [Role] is restored to the exact role name on this Mac. A position named with background-check wording ("Security
   // Screening") or holding a hidden character ("Security⠀Screening") is sent as [Role] too, so the note can still be
   // reworded: the native and ozzie.church checks refuse both (owner decision 2026-11-14; reviews B L4, B2 M-1). So is
@@ -118,7 +119,7 @@ export function templateDraft(ctx: DraftContext, names: Record<string, string>):
   return mint([
     "Hi [Volunteer A],",
     // The service's own date, never "this week" or "this Sunday": the note may go out weeks before it.
-    `We still need one more person for ${role} on ${serviceWhen(ctx.finding, ctx.sunday)}. Would you be able to help?`,
+    `We still need one more person for ${role} ${serviceOn(ctx.finding, ctx.sunday)}. Would you be able to help?`,
     "It's completely fine to say no. Just let me know either way so we can plan.",
     "Thank you,\n[Your name]",
   ].join("\n\n"), { sent: role, original });

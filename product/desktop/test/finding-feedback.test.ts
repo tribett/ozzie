@@ -141,7 +141,7 @@ describe("what the person's entries do on the Sunday page", () => {
     const streak = briefOf().findings.find(f => f.kind === "streak")!;
     const entry: FeedbackEntry = { type: "stop", id: "s", kind: "streak", at: AT, scope: { person_id: streak.person_id! }, labels: {} };
     const t = text(page(briefOf(nov22Capture(), [entry]), [entry]));
-    expect(t).not.toContain(`${names[streak.person_id!]} is scheduled 3 Sundays in a row.`);
+    expect(t).not.toContain(`${names[streak.person_id!]} is scheduled 3 weeks in a row.`);
     // The leader hid it, so the page says so, not that a rule did (audit item 4).
     expect(t).toContain("You hid one finding: it's under “Hidden by you” at the end of this page, where you can bring it back.");
     expect(t).toContain("Hidden by you");
@@ -252,11 +252,11 @@ describe("Today", () => {
     expect(today([entry])).toContain("Sunday has 1 thing to decide.");
   });
 
-  it("the Sunday Ready brief lists everything open, what wasn't checked and when it was read", () => {
+  it("the Ready for Sunday brief lists everything open, what wasn't checked and when it was read", () => {
     const b = briefOf();
     const decisions = [decide(b.findings.find(f => f.kind === "needs-people" && f.position!.name === "Nursery")!, "not-needed", "Only two babies", AT)];
     const t = text(renderToStaticMarkup(React.createElement(SundayReadyBrief, { brief: b, decisions, operations: fictionalOperations(), names, onSunday: () => undefined })));
-    expect(t).toContain("Sunday Ready");
+    expect(t).toContain("Ready for Sunday");
     expect(t).toContain("Needs a decision Greeter still needs one more person.");
     expect(t).not.toContain("Nursery still needs");
     expect(t).toContain("You resolved 1 yourself.");

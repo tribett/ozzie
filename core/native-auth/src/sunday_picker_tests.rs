@@ -527,3 +527,296 @@ fn waiting_retries_only_busy_and_stops_at_its_bound_or_a_cancel() {
     );
     assert_eq!(WAIT_FOR_CONTROLLER, Duration::from_secs(10));
 }
+
+// ---- First run picks the service itself (onboarding spec S5a, decisions 12 and 18) -----------------------------
+
+const API: &str = "https://api.planningcenteronline.com/services/v2";
+/// Answers several URLs, each with one raw page or error, and records every URL asked for.
+struct Pages {
+    answers: std::collections::BTreeMap<String, Result<Value, SourceError>>,
+    seen: Mutex<Vec<String>>,
+}
+impl Pages {
+    fn new(answers: Vec<(String, Result<Value, SourceError>)>) -> Self {
+        Self {
+            answers: answers.into_iter().collect(),
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+impl SourceHttp for Pages {
+    fn read(&self, request: &SourceRequest, access: &str) -> Result<SourcePage, SourceError> {
+        assert_eq!(access, SECRET);
+        let url = request.url();
+        self.seen.lock().unwrap().push(url.clone());
+        let raw = self
+            .answers
+            .get(&url)
+            .unwrap_or_else(|| panic!("an unexpected read: {url}"))
+            .clone()?;
+        project_page(
+            request,
+            &serde_json::to_vec(&raw).unwrap(),
+            &Default::default(),
+        )
+    }
+}
+fn plans_url(service_type: &str) -> String {
+    format!(
+        "{API}/service_types/{service_type}/plans?filter=future&order=sort_date&per_page=12&offset=0"
+    )
+}
+fn times_url(service_type: &str, plan: &str) -> String {
+    format!("{API}/service_types/{service_type}/plans/{plan}/plan_times?per_page=25&offset=0")
+}
+fn types_of(rows: &[(&str, &str)]) -> Value {
+    let data: Vec<Value> = rows
+        .iter()
+        .map(|(id, name)| json!({"type": "ServiceType", "id": id, "attributes": {"name": name, "archived_at": null, "deleted_at": null}}))
+        .collect();
+    json!({"data": data, "meta": {"count": rows.len(), "total_count": rows.len(), "parent": {"type": "Organization", "id": "1001"}}})
+}
+fn plans_of(service_type: &str, rows: &[(&str, &str)]) -> Value {
+    let data: Vec<Value> = rows
+        .iter()
+        .map(|(id, sort_date)| json!({"type": "Plan", "id": id, "attributes": {"sort_date": sort_date, "dates": "fictional dates", "title": null, "series_title": null},
+            "relationships": {"service_type": {"data": {"type": "ServiceType", "id": service_type}}}}))
+        .collect();
+    json!({"data": data, "meta": {"count": rows.len(), "total_count": rows.len(), "parent": {"type": "ServiceType", "id": service_type}}})
+}
+fn times_of(plan: &str, rows: &[(&str, &str)]) -> Value {
+    let data: Vec<Value> = rows
+        .iter()
+        .enumerate()
+        .map(|(n, (starts, kind))| json!({"type": "PlanTime", "id": format!("7{n}"), "attributes": {"starts_at": starts, "ends_at": starts, "time_type": kind, "name": "secret-canary"}}))
+        .collect();
+    json!({"data": data, "meta": {"count": rows.len(), "total_count": rows.len(), "parent": {"type": "Plan", "id": plan}}})
+}
+fn organization() -> Value {
+    json!({"data": {"type": "Organization", "id": "1001", "attributes": {"time_zone": "America/Chicago", "name": "secret-canary", "ccli": "secret-canary"}}})
+}
+
+#[test]
+fn one_service_type_with_an_upcoming_plan_is_picked_with_its_real_day_and_service_times() {
+    let (auth, _) = controller("1001");
+    let pages = Pages::new(vec![
+        (TYPES.into(), Ok(types_of(&[("1500", "Sunday Morning")]))),
+        (
+            plans_url("1500"),
+            Ok(plans_of(
+                "1500",
+                &[
+                    ("92902300", "2026-11-29T09:00:00Z"),
+                    ("92902197", "2026-11-22T09:00:00Z"),
+                ],
+            )),
+        ),
+        // Two service times and a rehearsal: one plan, one row, the rehearsal left out.
+        (
+            times_url("1500", "92902197"),
+            Ok(times_of(
+                "92902197",
+                &[
+                    ("2026-11-22T17:00:00Z", "service"),
+                    ("2026-11-22T13:30:00Z", "rehearsal"),
+                    ("2026-11-22T15:00:00Z", "service"),
+                ],
+            )),
+        ),
+        (API.to_string(), Ok(organization())),
+    ]);
+    let pick = pick_service_using(&auth, &AtomicBool::new(false), &pages).unwrap();
+    assert_eq!(pick.services.len(), 1);
+    let next = pick.services[0].next.as_ref().unwrap();
+    assert_eq!(
+        (next.id.as_str(), next.date.as_str(), next.weekday),
+        ("92902197", "2026-11-22", "sunday")
+    );
+    assert_eq!(next.times, ["2026-11-22T15:00:00Z", "2026-11-22T17:00:00Z"]);
+    assert!(next.times_read);
+    assert_eq!(pick.time_zone.as_deref(), Some("America/Chicago"));
+    assert!(!pick.more);
+    // Nothing but ids, Planning Center's names, dates and times reaches the page.
+    let json = serde_json::to_string(&pick).unwrap();
+    assert!(!json.contains("secret-canary") && !json.contains(SECRET));
+    // Read-only GETs on the allow-listed paths, nothing else.
+    for url in pages.seen() {
+        assert!(url.starts_with(API), "{url}");
+    }
+}
+
+#[test]
+fn several_service_types_are_listed_soonest_first_with_the_ones_with_nothing_planned_last() {
+    let (auth, _) = controller("1001");
+    let pages = Pages::new(vec![
+        (
+            TYPES.into(),
+            Ok(types_of(&[
+                ("1500", "Sunday Morning"),
+                ("1501", "Youth Night"),
+                ("1502", "Saturday Evening"),
+                ("1503", "Christmas Eve"),
+            ])),
+        ),
+        (
+            plans_url("1500"),
+            Ok(plans_of("1500", &[("92902197", "2026-11-22T09:00:00Z")])),
+        ),
+        (
+            plans_url("1501"),
+            Ok(plans_of("1501", &[("93000001", "2026-11-18T18:30:00Z")])),
+        ),
+        // Same weekend as Sunday Morning: a tie by day keeps the time, then Planning Center's order.
+        (
+            plans_url("1502"),
+            Ok(plans_of("1502", &[("93000002", "2026-11-21T17:00:00Z")])),
+        ),
+        (plans_url("1503"), Ok(plans_of("1503", &[]))),
+        (
+            times_url("1500", "92902197"),
+            Ok(times_of("92902197", &[("2026-11-22T15:00:00Z", "service")])),
+        ),
+        // A plan whose times can't be read still lists, with its sort_date to go by.
+        (
+            times_url("1501", "93000001"),
+            Err(SourceError::ProviderFailure),
+        ),
+        (
+            times_url("1502", "93000002"),
+            Ok(times_of("93000002", &[("2026-11-21T23:00:00Z", "service")])),
+        ),
+        (API.to_string(), Ok(organization())),
+    ]);
+    let pick = pick_service_using(&auth, &AtomicBool::new(false), &pages).unwrap();
+    let order: Vec<(&str, Option<&str>)> = pick
+        .services
+        .iter()
+        .map(|s| (s.id.as_str(), s.next.as_ref().map(|n| n.weekday)))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("1501", Some("wednesday")),
+            ("1502", Some("saturday")),
+            ("1500", Some("sunday")),
+            ("1503", None)
+        ]
+    );
+    let youth = pick.services[0].next.as_ref().unwrap();
+    assert!(!youth.times_read && youth.times.is_empty());
+    assert_eq!(pick.services[3].problem, None);
+    // A type whose plans couldn't be read says so on its own row; the rest still list.
+    let pages = Pages::new(vec![
+        (
+            TYPES.into(),
+            Ok(types_of(&[
+                ("1500", "Sunday Morning"),
+                ("1501", "Youth Night"),
+            ])),
+        ),
+        (
+            plans_url("1500"),
+            Ok(plans_of("1500", &[("92902197", "2026-11-22T09:00:00Z")])),
+        ),
+        (plans_url("1501"), Err(SourceError::Denied)),
+        (times_url("1500", "92902197"), Ok(times_of("92902197", &[]))),
+        (API.to_string(), Err(SourceError::ProviderFailure)),
+    ]);
+    let pick = pick_service_using(&auth, &AtomicBool::new(false), &pages).unwrap();
+    assert_eq!(pick.services[1].problem, Some("denied"));
+    assert!(pick.services[1].next.is_none());
+    assert_eq!(
+        pick.time_zone, None,
+        "no time zone: the page says the day from sort_date"
+    );
+}
+
+#[test]
+fn no_upcoming_plan_anywhere_lists_every_type_with_nothing_planned_and_a_refusal_ends_the_read() {
+    let (auth, _) = controller("1001");
+    let pages = Pages::new(vec![
+        (
+            TYPES.into(),
+            Ok(types_of(&[
+                ("1500", "Sunday Morning"),
+                ("1501", "Youth Night"),
+                ("1502", "Saturday Evening"),
+            ])),
+        ),
+        (plans_url("1500"), Ok(plans_of("1500", &[]))),
+        // An undated plan has no day to check.
+        (
+            plans_url("1501"),
+            Ok(
+                json!({"data": [{"type": "Plan", "id": "92902400", "attributes": {"sort_date": null, "dates": "No dates", "title": "Someday"},
+                    "relationships": {"service_type": {"data": {"type": "ServiceType", "id": "1501"}}}}],
+                    "meta": {"count": 1, "total_count": 1, "parent": {"type": "ServiceType", "id": "1501"}}}),
+            ),
+        ),
+        (plans_url("1502"), Ok(plans_of("1502", &[]))),
+    ]);
+    let pick = pick_service_using(&auth, &AtomicBool::new(false), &pages).unwrap();
+    let rows: Vec<_> = pick
+        .services
+        .iter()
+        .map(|s| (s.next.is_some(), s.problem))
+        .collect();
+    assert_eq!(rows, [(false, None); 3]);
+    assert_eq!(
+        pick.services
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        ["1500", "1501", "1502"]
+    );
+    assert_eq!(pick.time_zone, None);
+    // Services refused outright (spec row 7): the whole read says so.
+    let pages = Pages::new(vec![(TYPES.into(), Err(SourceError::Denied))]);
+    assert_eq!(
+        pick_service_using(&auth, &AtomicBool::new(false), &pages).err(),
+        Some(SourceError::Denied)
+    );
+}
+
+#[test]
+fn after_a_plan_has_passed_the_same_service_types_next_plan_is_found_whatever_its_day() {
+    let (auth, _) = controller("1001");
+    let pages = Pages::new(vec![
+        (
+            plans_url("1501"),
+            Ok(plans_of(
+                "1501",
+                &[
+                    ("93000001", "2026-11-18T18:30:00Z"),
+                    ("93000003", "2026-11-25T18:30:00Z"),
+                    ("93000004", "2026-12-02T18:30:00Z"),
+                ],
+            )),
+        ),
+        (
+            times_url("1501", "93000003"),
+            Ok(times_of("93000003", &[("2026-11-26T00:30:00Z", "service")])),
+        ),
+    ]);
+    // Wednesday the 18th has passed: next Wednesday, not next Sunday.
+    let next = next_plan_using(&auth, "1501", "2026-11-18", &AtomicBool::new(false), &pages)
+        .unwrap()
+        .unwrap();
+    assert_eq!((next.id.as_str(), next.weekday), ("93000003", "wednesday"));
+    assert_eq!(next.times, ["2026-11-26T00:30:00Z"]);
+    // Nothing planned after it yet: none, and Ozzie waits for the next plan.
+    let next =
+        next_plan_using(&auth, "1501", "2026-12-02", &AtomicBool::new(false), &pages).unwrap();
+    assert!(next.is_none());
+    for bad in ["", "2026-11-31", "2026-11-18T00:00:00Z", "next week"] {
+        assert_eq!(
+            next_plan_using(&auth, "1501", bad, &AtomicBool::new(false), &pages).err(),
+            Some(SourceError::InvalidRequest),
+            "{bad}"
+        );
+    }
+    assert!(next_plan_using(&auth, "../1", "2026-11-18", &AtomicBool::new(false), &pages).is_err());
+}

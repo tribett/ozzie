@@ -409,10 +409,12 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(Object.values(spent.runner.view().writeups)).toEqual([expect.objectContaining({ kind: "none", why: "spent" })]);
     expect(spent.prepare).not.toHaveBeenCalled();
     // A "limit" is the allowance only when native said so; otherwise it is the run's own (review G).
-    for (const [code, why, allowance] of [["fidelity", "unverified", false], ["limit", "run-limit", false], ["limit", "spent", true], ["transport", "unavailable", false],
-      ["egress", "unavailable", false]] as const) {
+    for (const [code, why, allowance, noCredit] of [["fidelity", "unverified", false, false], ["limit", "run-limit", false, false], ["limit", "spent", true, false],
+      ["transport", "unavailable", false, false], ["egress", "unavailable", false, false],
+      // Review F5: the AI company's account out of credit is its own case, never "ran past what one run may use".
+      ["limit", "no-credit", false, true]] as const) {
       const h = setup({ modelReady: true });
-      h.prepare.mockResolvedValue({ status: "failed", code, writeup: null, ai_steps: 1, ...(allowance ? { allowance } : {}) });
+      h.prepare.mockResolvedValue({ status: "failed", code, writeup: null, ai_steps: 1, ...(allowance ? { allowance } : {}), ...(noCredit ? { noCredit } : {}) });
       await h.start(sunday());
       expect(Object.values(h.runner.view().writeups), code).toEqual([expect.objectContaining({ kind: "none", why })]);
       expect(Object.values(h.runner.view().writeups)[0]!.lines).toBeUndefined();
@@ -522,9 +524,10 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     await expect(step({ task_id: "task-1" } as never, new AbortController().signal)).rejects.toMatchObject({ code: "limit" });
     expect(notes.take("task-1")).toBe("daily-limit");
     // App's prepare hook passes this on: the allowance codes, and only those.
-    expect(["budget", "daily-limit", "allowance-paused"].every(allowanceSpent)).toBe(true);
-    expect(["limit", "egress", "provider-failure", undefined].some(allowanceSpent)).toBe(false);
-    expect(readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8")).toMatch(/const native = stepNotes\.take\([^)]*\);[^]*?allowance: allowanceSpent\(native\)/u);
+    // The own key's month (contract N5 month-limit) is a spent allowance too, never "couldn't be reached".
+    expect(["budget", "daily-limit", "allowance-paused", "month-limit"].every(allowanceSpent)).toBe(true);
+    expect(["limit", "egress", "provider-failure", "no-credit", undefined].some(allowanceSpent)).toBe(false);
+    expect(readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8")).toMatch(/const native = stepNotes\.take\([^)]*\);[^]*?allowance: allowanceSpent\(native\), noCredit: native === "no-credit"/u);
   });
 
   it("decides and sends the notice before the write-up is asked for, and a pause during the write-up leaves the check and its notice standing (review H, L14)", async () => {
@@ -898,7 +901,7 @@ describe("the settled briefing defaults (owner decision, October 26)", () => {
     await h.start(defaultPlan("morning-briefing", THU, ET));
     const thursday = h.runner.view().noticed[0]!;
     expect(thursday).toMatchObject({ kind: "briefing", sunday_ready: true });
-    expect(noticedTitle(thursday, THU)).toBe("Your morning briefing is ready. Today it includes the full Sunday Ready brief.");
+    expect(noticedTitle(thursday, THU)).toBe("Your morning briefing is ready. Today it includes the full “Ready for Sunday” brief.");
     h.set("2026-11-20T12:00:00.000Z"); // Friday 7:00 AM in New York
     await h.runner.tick();
     const friday = h.runner.view().noticed[0]!;

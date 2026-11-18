@@ -24,7 +24,7 @@ export const ADD_TO_CLAUDE = "Add Ozzie to Claude";
 // second question to confirm; then it starts the helper.
 export const ADD_BODY = "Ozzie hands Claude a small setup file. Claude shows what it will add and asks you to install it; nothing is added until you agree there.";
 export const ADD_WARNING = "Claude also warns that it hasn't verified the file and that anything installed this way can reach everything on your Mac. It says that about every file of this kind. What Claude starts is the part of Ozzie that reads Ozzie's copy and nothing else.";
-export const ADD_OPENED = "Ozzie handed Claude its setup file. In Claude, choose Install, then Install again to confirm. Then ask Claude, for example, \"What still needs attention for Sunday in Ozzie?\" If nothing appears in Claude, set it up by hand below.";
+export const ADD_OPENED = "Ozzie handed Claude its setup file. In Claude, choose Install, then Install again to confirm. Then ask Claude, for example, \"What still needs attention in Ozzie's last check?\" If nothing appears in Claude, set it up by hand below.";
 export const ADD_BY_HAND = "Set it up by hand instead";
 export const SETUP_MOVED = "If you move Ozzie to another folder, come back here and set it up again.";
 /** What the person is told when "Add Ozzie to Claude" couldn't finish, by native's code (share_bundle.rs). */

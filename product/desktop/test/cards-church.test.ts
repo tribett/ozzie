@@ -144,7 +144,7 @@ describe("names offered beside visitor cards as possible matches (review G)", ()
     expect(dom.seen()).toContain(NAME);
     expect(dom.seen()).not.toContain(RILEY);
     expect(dom.seen()).toContain(MATCHES_NEED_CHURCH);
-    expect(MATCHES_NEED_CHURCH).toBe("Connect Planning Center to see possible matches with this Sunday's check.");
+    expect(MATCHES_NEED_CHURCH).toBe("Connect Planning Center to see possible matches with the people in the latest check.");
     await m.unmount();
   });
 
@@ -189,7 +189,7 @@ describe("names offered beside visitor cards as possible matches (review G)", ()
     expect(dom.seen()).toContain(NAME);
     expect(dom.seen()).not.toContain(RILEY);
     expect(dom.seen()).toContain(MATCHES_NEED_CHECK);
-    expect(MATCHES_NEED_CHECK).toBe("Possible matches appear once Ozzie has checked this Sunday for the church it's using.");
+    expect(MATCHES_NEED_CHECK).toBe("Possible matches appear once Ozzie has run a check for the church it's using.");
     await m.show("2002", B);
     expect(dom.seen()).not.toContain(RILEY);
     expect(dom.seen()).not.toContain(MATCHES_NEED_CHECK);
@@ -232,7 +232,7 @@ describe("Disconnect with visitor cards open", () => {
 
   it("asks first, and only discards the cards when the leader chooses to disconnect", async () => {
     const b = await button(2);
-    await b.press("Disconnect and revoke access");
+    await b.press("Disconnect Planning Center");
     expect(b.calls).toEqual([]);
     expect(dom.seen()).toContain(DISCONNECT_CARDS_ASK(2));
     expect(DISCONNECT_CARDS_ASK(2)).toBe("You have 2 visitor cards open. Disconnecting discards them.");
@@ -241,7 +241,7 @@ describe("Disconnect with visitor cards open", () => {
     await b.press(DISCONNECT_KEEP);
     expect(b.calls).toEqual([]);
     expect(dom.seen()).not.toContain(DISCONNECT_CARDS_ASK(2));
-    await b.press("Disconnect and revoke access");
+    await b.press("Disconnect Planning Center");
     await b.press(DISCONNECT_DISCARD(2));
     // The cards end only once Planning Center is disconnected (review G, L-d).
     expect(b.calls).toEqual(["disconnect", "discard"]);
@@ -252,7 +252,7 @@ describe("Disconnect with visitor cards open", () => {
   it("keeps the cards, and says so, when the disconnect didn't happen", async () => {
     for (const after of [null, "connected"] as const) {
       const b = await button(2, after);
-      await b.press("Disconnect and revoke access");
+      await b.press("Disconnect Planning Center");
       await b.press(DISCONNECT_DISCARD(2));
       expect(b.calls, String(after)).toEqual(["disconnect"]);
       expect(dom.seen()).toContain(DISCONNECT_FAILED);
@@ -263,7 +263,7 @@ describe("Disconnect with visitor cards open", () => {
 
   it("with no cards open, disconnects at once, as before", async () => {
     const b = await button(0);
-    await b.press("Disconnect and revoke access");
+    await b.press("Disconnect Planning Center");
     expect(b.calls).toEqual(["disconnect"]);
     expect(dom.seen()).not.toContain("visitor card");
     await b.unmount();

@@ -73,7 +73,7 @@ describe("church-added lists and notes never reach a model, a notice, Siri or th
     const core = ALL.filter(p => p.startsWith("core/src/sources/"));
     expect(core).toEqual(expect.arrayContaining(["core/src/sources/text.ts", "core/src/sources/sheet.ts", "core/src/sources/match.ts", "core/src/sources/notes.ts", "core/src/sources/words.ts", "core/src/sources/types.ts"]));
     expect([...reach("core/src/sources/match.ts", false)]).toEqual(expect.arrayContaining(["core/src/sources/text.ts", "core/src/sources/sheet.ts", "core/src/sources/types.ts"]));
-    // The app that shows the Lists & notes page reaches it.
+    // The app that shows the Church lists page reaches it.
     expect([...reach(APP)]).toContain("product/desktop/src/church-lists-page.tsx");
     // Every page-side module there is today is counted as church-sources code, the private link's form among them, and
     // the app reaches each one (so none is dead code the checks below would pass by default).
@@ -169,7 +169,7 @@ describe("church-added lists and notes never reach a model, a notice, Siri or th
     // An effect with no dependency list runs on every render (the clock re-renders the page every second).
     const noDeps = ALL.filter(PAGE_SIDE).flatMap(p => effectsOf(p).filter(e => e.deps === null).map(e => `${p}:${e.line}`));
     expect(noDeps).toEqual([]);
-    // Effects that call a read, in the page side and in App.tsx (which wires it): coming to Sunday or Lists & notes, and
+    // Effects that call a read, in the page side and in App.tsx (which wires it): coming to Sunday or Church lists, and
     // the calendars' own two. A new one fails here until it is looked at and added.
     const reading = [...ALL.filter(PAGE_SIDE), APP].flatMap(p => effectsOf(p).filter(e => e.reads).map(e => `${p}: ${e.deps}`));
     expect(reading).toEqual([`${APP}: [calendars]`, `${APP}: [page, visible, calendars, now]`, `${APP}: [page, visible, churchSources]`]);

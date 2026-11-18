@@ -3,15 +3,15 @@
 // renders and hands around. The file's name, its label, a column header, a cell, the value the leader matched to a
 // Planning Center position, a person's name in it and a line that tries to give instructions each hold a unique
 // marker, and so do the link's label, a cell of the sheet it read and its matched value; the lists are read and matched
-// the way the Lists & notes page does it (church-sources.ts, with a stand-in for native code). The link's address holds
+// the way the Church lists page does it (church-sources.ts, with a stand-in for native code). The link's address holds
 // a marker too, which may appear nowhere at all but the one call that hands it to native code. So do the church's
 // notes: the file's name, a section's heading, its body and a line that tries to give instructions; one section is
-// pointed to from a team's Sunday cards and another from a kind of finding, as the Lists & notes page does it.
+// pointed to from a team's Sunday cards and another from a kind of finding, as the Church lists page does it.
 //
 // The checks that carry weight here (review S, L1): on the Sunday page the markers appear only inside the "church's own
 // words" box beside a matched card, and the page outside the box is exactly what it is with no list at all; the Sunday
 // brief, Church rules, what Ask is given and anything the page stores are the same with the list as without it; and
-// App.tsx and sunday-page.tsx are held, line by line, to passing list state only to the Lists & notes page and that box.
+// App.tsx and sunday-page.tsx are held, line by line, to passing list state only to the Church lists page and that box.
 //
 // It also runs every way something leaves Ozzie (Ask through the real harness for a question and a drafted note,
 // rewording a note, the copy for other AI apps and the copy Siri answers from, both notices on this Mac and the phone
@@ -151,7 +151,7 @@ describe("a church's list at run time", async () => {
   const data = buildHarnessData({ capture, fictional: true, rules, decisions: [], status: null, configured: false, now });
   const skills = await bundledSkills();
 
-  // The list, read and matched as the Lists & notes page does it: the leader chooses the column, the columns to show,
+  // The list, read and matched as the Church lists page does it: the leader chooses the column, the columns to show,
   // a team position for the marked value, and uses Ozzie's same-name suggestion for "Nursery".
   const fake = fakeNative();
   const sources = createChurchSources({ invoke: fake.invoke, now: () => now });
@@ -184,7 +184,7 @@ describe("a church's list at run time", async () => {
     expect(leaks([state.sources, sheet, linkRead, state.notes, notesRead])).toEqual(ALL_MARKERS);
     // What native code was asked: only church_* commands, and never a path.
     expect(fake.calls.every(([c]) => c.startsWith("church_"))).toBe(true);
-    // The Lists & notes page shows all of it, the file names included, the marked section opened as from Sunday.
+    // The Church lists page shows all of it, the file names included, the marked section opened as from Sunday.
     sources.focus({ id: "notes1", section: 0 });
     const page = renderToStaticMarkup(React.createElement(ChurchListsPage, { sources, positions }));
     sources.focus(null);
@@ -294,20 +294,20 @@ describe("a church's list at run time", async () => {
   });
 });
 
-describe("App passes list state only to the Lists & notes page and the box beside a Sunday card", () => {
+describe("App passes list state only to the Church lists page and the box beside a Sunday card", () => {
   const code = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8").split("\n").filter(l => !/^\s*(?:\/\/|\*|\/\*\*)/u.test(l));
 
-  it("App: the controller, reading when Sunday or Lists & notes is in front, the page, and the slot", () => {
+  it("App: the controller, reading when Sunday or Church lists is in front, the page, and the slot", () => {
     const allowed = [
       /^import \{ createChurchSources, useChurchSources \} from "\.\/church-sources\.js";$/u,
       /^import \{ ChurchListsPage \} from "\.\/church-lists-page\.js";$/u,
       /^import \{ ChurchOwnWords \} from "\.\/church-own-words\.js";$/u,
       /^ {2}const \[churchSources\] = useState\(\(\) => createChurchSources\(\)\);$/u,
       /^ {2}const sourcesState = useChurchSources\(churchSources\);$/u,
-      // Read when Sunday or Lists & notes is opened or the window comes forward, never on the clock's tick: a private
+      // Read when Sunday or Church lists is opened or the window comes forward, never on the clock's tick: a private
       // link's read is a request to the internet, made only when the leader opens one of those pages.
       /^ {2}useEffect\(\(\) => \{ if \(\(page === "sunday" \|\| page === "lists"\) && visible\) void churchSources\.readIfOld\(\); \}, \[page, visible, churchSources\]\);$/u,
-      // The box's Open (a section of notes, or the whole list) opens Lists & notes there.
+      // The box's Open (a section of notes, or the whole list) opens Church lists there.
       /^ {10}beside=\{card => <ChurchOwnWords state=\{sourcesState\} card=\{card\} onOpen=\{target => \{ churchSources\.focus\(target\); setPage\("lists"\); \}\} \/>\} \/>\}$/u,
       /^ {8}\{page === "lists" && <ChurchListsPage sources=\{churchSources\} positions=\{positions\} \/>\}$/u,
     ];

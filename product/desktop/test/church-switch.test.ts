@@ -3,8 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ConnectionPage } from "../src/connection-page.js";
-import { SetupFlow } from "../src/setup-flow.js";
-import { DEFAULT_PREFS } from "../src/proactive.js";
+import { FirstRun } from "../src/setup-flow.js";
 import { SwitchQuestionPanel, SwitchWaiting, StillSignedIn, answeredCopy } from "../src/planning-center-forms.js";
 import {
   attemptCopy, churchLabel, churchList, churchName, churchShort, connectionProblem, declinedCopy, followInUse, leftBehindActions, leftBehindCopy,
@@ -40,7 +39,7 @@ describe("Switch Ozzie to this church?", () => {
     // Review S2, N1: Planning Center stops accepting it; it isn't only this Mac.
     expect(shown).toContain("Switching checks Fictional Hope Chapel's sign-in with Planning Center first. Then Planning Center stops accepting Ozzie's sign-in for Fictional Grace Church (organization 1001), and it's removed from this Mac. Your church's information in Planning Center doesn't change.");
     expect(shown).toContain("Saved copies of Fictional Grace Church's checks stay on this Mac. Ozzie shows them only while it uses Fictional Grace Church.");
-    expect(shown).toContain("What runs automatically stays set up. Ozzie checks Fictional Hope Chapel on its schedule once you choose which of its Sundays to check.");
+    expect(shown).toContain("What runs automatically stays set up. Ozzie checks Fictional Hope Chapel on its schedule once you choose which of its services to check.");
     expect(shown).toContain("Keeping Fictional Grace Church checks its sign-in with Planning Center first. Then Planning Center stops accepting the new sign-in for Fictional Hope Chapel, and it's removed from this Mac.");
     const html = page(stillOn1001());
     expect(html).toContain('<button type="button" class="btn btn-primary btn-sm">Switch Ozzie to Fictional Hope Chapel</button>');
@@ -63,7 +62,7 @@ describe("Switch Ozzie to this church?", () => {
     expect(html).not.toContain("Switch Ozzie to");
     expect(switchProblem("sign-in-instead", found)).toBe("Ozzie doesn't switch to a sign-in it found. To use organization 6006, choose Sign in to organization 6006 instead.");
     expect(answeredCopy({ decision: "sign-in", question: found, stake: { from: false, to: false } }, false)).toBe(
-      "Ozzie still uses Fictional Grace Church (organization 1001). Sign in to organization 6006; once you have, Ozzie asks before it stops using Fictional Grace Church.");
+      "Ozzie still uses Fictional Grace Church. Sign in to organization 6006; once you have, Ozzie asks before it stops using Fictional Grace Church.");
   });
   it("with visitor cards open, says first that switching discards them, on the page and in setup (review P, L4)", () => {
     // The cards are kept per church (cards-page.tsx `workspace`): a switch ends them, so the question says so first.
@@ -78,17 +77,26 @@ describe("Switch Ozzie to this church?", () => {
     expect(shown).toContain("You have 2 visitor cards open. Switching churches discards them.");
     expect(text(page(stillOn1001()))).not.toContain("visitor card");
   });
+  it("never calls the new church's services Sundays: they may be on any day (decision 18, onboarding spec §5.1)", () => {
+    for (const stake of [{ from: true, to: false }, { from: true, to: true }, { from: false, to: true }, { from: false, to: false }]) {
+      for (const q of [asked, found]) {
+        const copy = switchCopy(q, stake, 2);
+        expect([copy.title, copy.lead, ...copy.effects, ...copy.actions.map(a => a.label)].join(" ")).not.toMatch(/Sunday/u);
+      }
+    }
+    expect(connectionProblem({ authentication: "not-revoked" })).toBe("A check is still stopping, so access hasn't been revoked yet. Try disconnecting again in a moment.");
+  });
   it("says truthfully what happens to Church rules set for a church's own teams and rooms", () => {
     const set = switchCopy(asked, { from: true, to: false }).effects;
-    expect(set).toContain("Church rules for Fictional Grace Church's teams and rooms (kids teams, background checks, Sunday leads, room rules and what you told Ozzie about its findings) stay with Fictional Grace Church and don't apply to Fictional Hope Chapel. You can set them for Fictional Hope Chapel in Church rules.");
+    expect(set).toContain("Church rules for Fictional Grace Church's teams and rooms (kids teams, background checks, scheduled leads, room rules and what you told Ozzie about its findings) stay with Fictional Grace Church and don't apply to Fictional Hope Chapel. You can set them for Fictional Hope Chapel in Church rules.");
     expect(switchCopy(asked, { from: true, to: true }).effects.join(" ")).toContain("The ones you set for Fictional Hope Chapel before come back.");
     expect(switchCopy(asked, { from: false, to: true }).effects).toContain("Church rules you set for Fictional Hope Chapel's teams and rooms before come back.");
     expect(switchCopy(asked).effects.join(" ")).not.toContain("Church rules");
     expect(answeredCopy({ decision: "switch", question: asked, stake: { from: true, to: false } }, false)).toBe(
-      "Ozzie now uses Fictional Hope Chapel (organization 2002). Choose which of its Sundays to check below. Church rules for Fictional Grace Church's teams and rooms are kept for that church. You can set Fictional Hope Chapel's in Church rules.");
+      "Ozzie now uses Fictional Hope Chapel. Choose which of its services Ozzie watches below. Church rules for Fictional Grace Church's teams and rooms are kept for that church. You can set Fictional Hope Chapel's in Church rules.");
     expect(answeredCopy({ decision: "stay", question: asked, stake: { from: false, to: false } }, false)).toBe(
-      "Ozzie still uses Fictional Grace Church (organization 1001). Planning Center no longer accepts the sign-in for Fictional Hope Chapel, and it's removed from this Mac.");
-    expect(answeredCopy({ decision: "stay", question: asked, stake: { from: false, to: false } }, true)).toBe("Ozzie still uses Fictional Grace Church (organization 1001).");
+      "Ozzie still uses Fictional Grace Church. Planning Center no longer accepts the sign-in for Fictional Hope Chapel, and it's removed from this Mac.");
+    expect(answeredCopy({ decision: "stay", question: asked, stake: { from: false, to: false } }, true)).toBe("Ozzie still uses Fictional Grace Church.");
   });
   it("keeps numbers where there's no name, and numbers in the buttons when both names are the same", () => {
     const copy = switchCopy(unnamed);
@@ -105,33 +113,31 @@ describe("Switch Ozzie to this church?", () => {
     const html = page(stillOn1001());
     expect(html).toMatch(/<button class="btn btn-secondary" disabled="">Connect Planning Center<\/button>/);
     expect(html).toMatch(/<button class="btn btn-secondary" disabled="">Also check rooms, follow-ups and group events<\/button>/);
-    expect(html).not.toContain("Disconnect and revoke access");
+    expect(html).not.toContain("Disconnect Planning Center");
     expect(html).toMatch(/<input id="[^"]+-org" inputMode="numeric" autoComplete="off" spellCheck="false" disabled="" value="1001"\/>/);
-    expect(html).toMatch(/<button class="btn btn-secondary">Check saved connection<\/button>/);
+    // It says what it does: a check of the saved sign-in (0.3.0 live click-through: "Try again" beside "Connect again").
+    expect(html).toMatch(/<button class="btn btn-secondary">Check the connection<\/button>/);
+    expect(html).not.toContain(">Try again<");
     expect(page(stillOn1001({ state: "checking" }))).not.toContain("Cancel sign-in");
     expect(page(on1001({ state: "checking" }))).toContain("Cancel sign-in");
     const before = page(on1001({ state: "connected", checked_at_ms: 1_000, organization_name: "Fictional Grace Church" }));
     expect(before).not.toContain("Switch Ozzie to");
-    expect(before).toContain("Disconnect and revoke access");
-    expect(text(before)).toContain("Connected. Planning Center confirmed Fictional Grace Church (organization 1001) at");
+    expect(before).toContain("Disconnect Planning Center");
+    expect(text(before)).toContain("Connected. Planning Center confirmed Fictional Grace Church at");
     // The Connected line shows a name only as display text (review S2, M1).
     expect(text(page(on1001({ state: "connected", checked_at_ms: 1_000, organization_name: "\u202eGrace\u200b" }))))
-      .toContain("Planning Center confirmed Grace (organization 1001)");
+      .toContain("Planning Center confirmed Grace at");
     expect(text(page(on1001({ state: "connected", checked_at_ms: 1_000, organization_name: "\u200b" }))))
       .toContain("Planning Center confirmed organization 1001 at");
   });
-  it("is asked in guided setup too", () => {
-    const html = renderToStaticMarkup(React.createElement(SetupFlow, {
-      status: stillOn1001(), settings, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS, onModel() {}, onClose() {}, onExample() {}, onAutomatic() {},
-      initial: "connect",
+  it("is asked in first run too", () => {
+    const firstRun = (cards: number) => renderToStaticMarkup(React.createElement(FirstRun, {
+      status: stillOn1001(), settings, onSettings() {}, onStatus() {}, start: "service", read: () => new Promise<never>(() => {}), result: null, rules: false,
+      intervalMinutes: 60, nowMs: 0, onExample() {}, onLeave() {}, onDeferred() {}, builtIn: true, cards,
     }));
-    expect(text(html)).toContain("Switch Ozzie to Fictional Hope Chapel?");
-    // With visitor cards open, setup's question says what switching does to them, as Settings does (review P, L4).
-    const withCards = renderToStaticMarkup(React.createElement(SetupFlow, {
-      status: stillOn1001(), settings, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS, onModel() {}, onClose() {}, onExample() {}, onAutomatic() {},
-      initial: "connect", cards: 1,
-    }));
-    expect(text(withCards)).toContain("You have 1 visitor card open. Switching churches discards it.");
+    expect(text(firstRun(0))).toContain("Switch Ozzie to Fictional Hope Chapel?");
+    // With visitor cards open, first run's question says what switching does to them, as Settings does (review P, L4).
+    expect(text(firstRun(1))).toContain("You have 1 visitor card open. Switching churches discards it.");
   });
   it("uses only plain words, and never calls the tool a person", () => {
     for (const q of [asked, unnamed, found, { ...asked, fresh: false, others: ["1001", "3003"] }]) {
@@ -147,7 +153,8 @@ describe("Switch Ozzie to this church?", () => {
       }
     }
     const banner = text(renderToStaticMarkup(React.createElement(SwitchWaiting, { question: asked, onOpen: () => {} })));
-    expect(banner).toContain("Ozzie is still using Fictional Grace Church (organization 1001). A sign-in for Fictional Hope Chapel (organization 2002) is waiting for you to choose which church Ozzie uses.");
+    // The church's name where it's known, the number only when two churches share a name (onboarding spec §6).
+    expect(banner).toContain("Ozzie is still using Fictional Grace Church. A sign-in for Fictional Hope Chapel is waiting for you to choose which church Ozzie uses.");
     expect(banner).not.toMatch(forbidden);
   });
   it("disables both answers while one is being carried out", () => {
@@ -366,14 +373,10 @@ describe("a sign-in that didn't connect while a church was in use (review S4, M1
     expect(html).toContain('<p role="alert" class="problem">You signed in to a different Planning Center organization than the one in Ozzie&#x27;s settings.');
     expect(text(html)).toContain("check the organization ID under Advanced. Nothing new was saved. Ozzie still uses Fictional Grace Church (organization 1001).");
   });
-  it("Sign in to X instead, left to expire: in Settings and in guided setup", () => {
+  it("Sign in to X instead, left to expire: said in Settings", () => {
+    // First run no longer has a sign-in form of its own for a church in use; Settings is where this attempt is started and said.
     const line = "Sign-in expired before it finished. Ozzie still uses Fictional Grace Church (organization 1001).";
     expect(text(page(restored({ state: "expired" })))).toContain(line);
-    const setup = renderToStaticMarkup(React.createElement(SetupFlow, {
-      status: restored({ state: "expired" }), settings, onSettings() {}, onStatus() {}, prefs: DEFAULT_PREFS, onModel() {}, onClose() {}, onExample() {},
-      onAutomatic() {}, initial: "connect",
-    }));
-    expect(text(setup)).toContain(line);
   });
   it("goes once native code clears it (a new sign-in or check started), and is shown only for an ended sign-in", () => {
     expect(text(page(on1001({ in_use: grace })))).toContain("A connection is saved on this Mac but hasn't been checked yet.");

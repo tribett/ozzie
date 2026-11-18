@@ -1,4 +1,4 @@
-// What Ozzie keeps an eye on, run on this Mac (owner, 2026-11-14: an always-on helper). The native
+// Keeping watch, run on this Mac (owner, 2026-11-14: an always-on helper). The native
 // store (responsibilities.rs) holds each responsibility and decides whether a run may happen; this
 // controller decides WHEN to ask (core/src/harness/responsibilities.ts dueNow), runs the work, and
 // surfaces what it found:
@@ -172,13 +172,15 @@ export interface Prepared {
   status: "verified" | "failed" | "cancelled"; code: FailureCode | null; writeup: Written | null; ai_steps: number;
   /** A "limit" that was an AI help allowance (the route's cap, today's steps, the church's managed allowance), not the run's own. */
   allowance?: boolean;
+  /** The AI company says the church's account has no credit left (native no-credit), not the run's own limit (review F5). */
+  noCredit?: boolean;
 }
 /**
  * Why a run has no write-up: AI help off, AI help's allowance used for now, the answer ran past what one run may use
  * (review G), the answer didn't check out, or it couldn't be prepared. "off" and "stopped" (paused during the write-up)
  * are never kept, so a card says nothing for them.
  */
-export type NoWriteup = "off" | "spent" | "run-limit" | "unverified" | "unavailable" | "stopped";
+export type NoWriteup = "off" | "spent" | "no-credit" | "run-limit" | "unverified" | "unavailable" | "stopped";
 /** One run's write-up as kept with it on this Mac (header): people as Planning Center ids; other names as Planning Center has them. */
 export interface WriteUp extends Partial<Written> {
   /** The noticed item it belongs to (its id), its job, run, the church it was read from, and when. */
@@ -192,10 +194,10 @@ export interface WriteUp extends Partial<Written> {
 /** How many write-ups each job keeps. */
 export const WRITEUPS_KEPT_PER_JOB = 5;
 const WRITEUPS_KEPT = 40;
-/** Whether a native refusal was an AI help allowance (the route's cap, today's steps, the church's managed allowance). */
-export const allowanceSpent = (native: string | undefined) => native === "budget" || native === "daily-limit" || native === "allowance-paused";
-const whyNot = (code: FailureCode | null, allowance = false): NoWriteup =>
-  code === "fidelity" ? "unverified" : code === "limit" ? allowance ? "spent" : "run-limit" : code === "no-model" ? "off" : "unavailable";
+/** Whether a native refusal was an AI help allowance (the route's cap, today's steps, the church's managed allowance, the own key's month). */
+export const allowanceSpent = (native: string | undefined) => native === "budget" || native === "daily-limit" || native === "allowance-paused" || native === "month-limit";
+const whyNot = (code: FailureCode | null, allowance = false, noCredit = false): NoWriteup =>
+  code === "fidelity" ? "unverified" : code === "limit" ? noCredit ? "no-credit" : allowance ? "spent" : "run-limit" : code === "no-model" ? "off" : "unavailable";
 
 export interface RunnerContext {
   /** A saved connection and a chosen Sunday (proactiveReadiness "ready"). */
@@ -824,7 +826,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (!why) {
         try { ready = await guard(hooks.prepare(r, grant, capture, abort.signal, trigger)); }
         catch (error) { if (error !== CANCELLED && !abort.signal.aborted) ready = null; else why = "stopped"; }
-        why ??= !ready ? "unavailable" : ready.status === "verified" && ready.writeup ? null : whyNot(ready.code, ready.allowance);
+        why ??= !ready ? "unavailable" : ready.status === "verified" && ready.writeup ? null : whyNot(ready.code, ready.allowance, ready.noCredit);
       }
       const about = { item: item.id, responsibility_id: r.id, run_id: grant.run_id, organization: capture.organization, at: item.at };
       if (why !== "off" && why !== "stopped") {

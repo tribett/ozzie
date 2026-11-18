@@ -1,0 +1,143 @@
+/* The AI screens (onboarding spec §3 S6–S10, §0.1): one calm column, at most 640px; titles 28px in the display face;
+   body 16px, small print 15px, nothing under 14px. Buttons 44px; cards, model rows and quiet links have a 44px target.
+   One primary per screen, full width under 480px; stacked under 760px. Light and dark from Hearth's tokens; Increase
+   contrast and Reduce motion respected. Used the same in first run and in Settings. */
+.oz .ai { width: 100%; max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.oz .ai-first { padding: 24px 0 48px; }
+.oz .ai-eyebrow { font: 700 var(--t-xs)/1.3 var(--f-ui); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+.oz .ai-title { font: 500 28px/1.25 var(--f-display); letter-spacing: -.005em; color: var(--ink); text-wrap: balance; }
+.oz .ai-title:focus { outline: none; }
+.oz .ai-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 4px; }
+.oz .ai-body { font: 400 var(--t-md)/1.55 var(--f-ui); color: var(--ink-2); max-width: 34em; }
+.oz .ai-small { font: 400 var(--t-sm)/1.5 var(--f-ui); color: var(--ink-3); max-width: 34em; }
+.oz .ai-head { display: flex; flex-direction: column; gap: 10px; }
+
+/* Choices: each card is one button, its title and one cost line (VoiceOver reads both). Nothing is chosen to begin with. */
+.oz .ai-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+/* The edge is --control at 1.5px so a card reads as a button (review M7, WCAG 1.4.11): 3.78:1 against the page and 4.01:1
+   against the card in light, 4.48:1 and 4.12:1 in dark. A card that can't be chosen keeps a faint edge and stays focusable
+   (aria-disabled) so its reason is heard. */
+.oz .ai-card { width: 100%; min-height: var(--h-btn); display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 16px 18px;
+  text-align: left; border-radius: 12px; border: 1.5px solid var(--control); background: var(--surface); color: var(--ink); cursor: pointer;
+  font: 400 var(--t-md)/1.4 var(--f-ui); transition: background .12s ease-out, border-color .12s ease-out; }
+.oz .ai-card:hover { background: var(--stone-tint); }
+.oz .ai-card:is(:disabled, [aria-disabled="true"]) { cursor: default; background: var(--sunken); border-color: var(--line-strong); }
+.oz .ai-card:is(:disabled, [aria-disabled="true"]) .ai-card-t { color: var(--ink-2); }
+.oz .ai-card-t { font: 600 var(--t-lg)/1.3 var(--f-ui); color: var(--ink); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.oz .ai-card-d { font: 400 var(--t-sm)/1.5 var(--f-ui); color: var(--ink-2); }
+.oz .ai-tag { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-ink);
+  font: 600 var(--t-xs)/1.4 var(--f-ui); }
+.oz .ai-tag-muted { background: var(--sunken); color: var(--ink-2); }
+.oz .ai-more { border-top: 1px solid var(--line); padding-top: 8px; }
+.oz .ai-more > summary { display: inline-flex; align-items: center; gap: 6px; min-height: var(--h-btn); cursor: pointer; font: 600 var(--t-md)/1.2 var(--f-ui);
+  color: var(--accent-ink); list-style: none; }
+.oz .ai-more > summary::-webkit-details-marker { display: none; }
+.oz .ai-more[open] > summary .ic { transform: rotate(90deg); }
+.oz .ai-more > .ai-cards { margin-top: 8px; }
+
+/* Model rows on S9: a pressed row is the one chosen; a row too big for this Mac is greyed and can't be chosen. */
+.oz .ai-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.oz .ai-row { width: 100%; min-height: var(--h-btn); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 16px; text-align: left;
+  border-radius: 10px; border: 1.5px solid var(--control); background: var(--surface); color: var(--ink); cursor: pointer; font: 500 var(--t-md)/1.35 var(--f-ui); }
+.oz .ai-row:hover { background: var(--stone-tint); }
+.oz .ai-row[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--accent-tint); color: var(--accent-ink); }
+.oz .ai-row:disabled { cursor: default; background: var(--sunken); color: var(--ink-3); border-color: var(--line); }
+/* The person's own models, under the three Ozzie can set up. */
+.oz .ai-sub { font-weight: 600; color: var(--ink); }
+/* A download under way: the step said politely, a real bar with how much came, and that closing the window is fine. The
+   bar's edge is --control (3:1 against the page, as the rows'); its fill is the accent. No animation, so nothing moves
+   that isn't a byte. */
+.oz .ai-download { display: flex; flex-direction: column; gap: 8px; }
+.oz .ai-progress { -webkit-appearance: none; appearance: none; width: 100%; height: 12px; border-radius: 999px; border: 1.5px solid var(--control);
+  background: var(--sunken); overflow: hidden; }
+.oz .ai-progress::-webkit-progress-bar { background: var(--sunken); border-radius: 999px; }
+.oz .ai-progress::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+.oz .ai-progress::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+
+/* Steps, each with its own button. */
+.oz .ai-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 16px; counter-reset: ai-step; }
+.oz .ai-steps > li { display: grid; grid-template-columns: 32px 1fr; gap: 4px 12px; align-items: start; counter-increment: ai-step; }
+.oz .ai-steps > li::before { content: counter(ai-step); display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent-tint); color: var(--accent-ink); font: 700 var(--t-sm)/1 var(--f-ui); }
+.oz .ai-steps > li > div { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.oz .ai-steps p { font: 400 var(--t-md)/1.5 var(--f-ui); color: var(--ink); max-width: 34em; }
+/* S8b's drawings of each company page, the button to press circled (as S3's drawing of Planning Center's page). */
+.oz .ai-draw { width: 100%; max-width: 300px; height: auto; }
+.oz .ai-draw-page { fill: var(--surface); stroke: var(--line-strong); }
+.oz .ai-draw-bar { fill: var(--sunken); }
+.oz .ai-draw-dot { fill: var(--line-strong); }
+.oz .ai-draw-h { font: 600 var(--t-md) var(--f-ui); fill: var(--ink); }
+.oz .ai-draw-lines { fill: var(--stone-tint); }
+.oz .ai-draw-btn { fill: var(--accent); }
+.oz .ai-draw-btn-t { font: 600 var(--t-sm) var(--f-ui); fill: var(--on-accent); }
+.oz .ai-draw-ring { fill: none; stroke: var(--attn); stroke-width: 3; }
+
+.oz .ai-checks { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.oz .ai-checks li { display: flex; gap: 12px; align-items: flex-start; font: 400 var(--t-md)/1.5 var(--f-ui); color: var(--ink); }
+.oz .ai-checks .ic { color: var(--accent); flex: none; margin-top: 3px; }
+.oz .ai-price { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; border-radius: 12px; background: var(--sunken); }
+.oz .ai-price-t { font: 700 var(--t-lg)/1.3 var(--f-ui); color: var(--ink); }
+.oz .ai-price-d { font: 400 var(--t-md)/1.5 var(--f-ui); color: var(--ink-2); }
+
+/* What happened: a quiet success line, or an error panel with what to try. */
+.oz .ai-ok { display: flex; gap: 10px; align-items: flex-start; padding: 14px 16px; border-radius: 12px; background: var(--accent-tint); color: var(--accent-ink);
+  font: 500 var(--t-md)/1.5 var(--f-ui); }
+.oz .ai-ok .ic { flex: none; margin-top: 3px; }
+.oz .ai-ok > div { display: flex; flex-direction: column; gap: 4px; }
+.oz .ai-problem { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px 16px; border-radius: 12px; background: var(--attn-tint);
+  color: var(--ink); font: 400 var(--t-md)/1.5 var(--f-ui); }
+.oz .ai-status { font: 400 var(--t-md)/1.5 var(--f-ui); color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
+.oz .ai-status:empty { display: none; }
+
+.oz .ai-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.oz .ai-primary { min-width: 240px; }
+/* A quiet link: text only, with a full 44px target. */
+.oz .ai-link { background: none; border: 0; padding: 0 4px; min-height: var(--h-btn); font: 600 var(--t-md)/1.2 var(--f-ui); color: var(--accent-ink);
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: pointer; align-self: flex-start; }
+.oz .ai-link:hover { text-decoration-thickness: 2px; }
+.oz .ai-link:disabled { color: var(--ink-3); cursor: default; }
+.oz .ai-fields { display: flex; flex-direction: column; gap: 12px; }
+.oz .ai-fields .input { width: 100%; max-width: 480px; }
+
+/* Settings: the AI in use, then what it needs. */
+.oz .ai-now { display: flex; flex-direction: column; gap: 14px; }
+
+/* The AI line under the sidebar's promise, and small in the Ask panel's header. */
+.oz .ai-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font: 400 var(--t-sm)/1.4 var(--f-ui); color: var(--ink-2); }
+.oz .ai-line.is-small { font-size: var(--t-xs); }
+.oz .ai-line .ai-link { font-size: var(--t-sm); padding: 0 2px; }
+.oz .ai-line.is-small .ai-link { font-size: var(--t-xs); }
+.oz .ai-line-trouble { color: var(--attn); font-weight: 600; }
+
+/* A sheet over the window: Escape or its own button closes it. */
+.oz .ai-sheet-back { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(20, 18, 14, .45); }
+.oz .ai-sheet { width: 100%; max-width: 560px; max-height: calc(100vh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 24px;
+  border-radius: 14px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); box-shadow: 0 18px 50px rgba(0, 0, 0, .25); }
+.oz .ai-sheet-title { font: 500 28px/1.25 var(--f-display); color: var(--ink); }
+.oz .ai-sheet-title:focus { outline: none; }
+.oz .ai-sheet-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 4px; }
+.oz .ai-sheet h3 { font: 600 var(--t-md)/1.4 var(--f-ui); color: var(--ink); }
+.oz .ai-pre { white-space: pre-wrap; font: 400 var(--t-sm)/1.55 var(--f-ui); color: var(--ink); background: var(--sunken); padding: 12px 14px; border-radius: 10px; }
+
+/* Narrow window or large text: everything stacks, nothing scrolls sideways. */
+@media (max-width: 759px) {
+  .oz .ai-actions { flex-direction: column; align-items: stretch; }
+  .oz .ai-actions > .ai-link { align-self: flex-start; }
+  .oz .ai-steps > li { grid-template-columns: 1fr; }
+  .oz .ai-steps > li::before { margin-bottom: 4px; }
+}
+@media (max-width: 479px) {
+  .oz .ai-primary { width: 100%; min-width: 0; }
+  .oz .ai-sheet { padding: 18px 16px; }
+}
+@media (prefers-contrast: more) {
+  .oz :is(.ai-ok, .ai-problem, .ai-price) { border: 2px solid var(--line-strong); }
+  .oz :is(.ai-card, .ai-row, .ai-progress) { border: 2px solid var(--ink-2); }
+  .oz .ai-row[aria-pressed="true"] { border-width: 3px; }
+  .oz :is(.ai-small, .ai-body, .ai-card-d, .ai-line) { color: var(--ink); }
+  .oz :is(.ai-title, .ai-sheet-title):focus-visible { outline-width: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oz :is(.ai-card, .ai-row, .ai-more > summary .ic) { transition: none; }
+  .oz .ai .spin { animation: none; }
+}

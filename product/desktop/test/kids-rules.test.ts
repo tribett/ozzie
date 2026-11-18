@@ -49,7 +49,7 @@ describe("Church rules: Kids teams", () => {
     expect(t).toContain("never its details");
     expect(t).toContain("It needs People in your Planning Center connection");
     expect(t).not.toMatch(FORBIDDEN);
-    expect(text(renderToStaticMarkup(React.createElement(KidsTeamsRules, { rules: base, onChange: () => undefined, teams: [] })))).toContain("Check a Sunday first to see its teams.");
+    expect(text(renderToStaticMarkup(React.createElement(KidsTeamsRules, { rules: base, onChange: () => undefined, teams: [] })))).toContain("Check Sunday first to see its teams.");
   });
 });
 
@@ -59,7 +59,7 @@ describe("Church rules: kids teams beyond the last check, and at most ten (revie
     const rules = withKidsTeam(base, "7599999", 2, "Toddlers");
     const el = KidsTeamsRules({ rules, onChange: r => { latest = r; }, teams: [[TEAMS.nursery, ["Nursery"]]] });
     const t = text(renderToStaticMarkup(el));
-    expect(t).toContain("Toddlers team Not on the Sunday checked last. 2 confirmed at each time. Unmark this team");
+    expect(t).toContain("Toddlers team Not on the service checked last. 2 confirmed at each time. Unmark this team");
     // Pressing it unmarks the team.
     const find = (node: React.ReactNode): React.ReactElement<{ onClick?: () => void; children?: React.ReactNode }> | null => {
       if (!React.isValidElement(node)) return Array.isArray(node) ? node.map(find).find(Boolean) ?? null : null;

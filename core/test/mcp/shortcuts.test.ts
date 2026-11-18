@@ -11,7 +11,7 @@ import { HarnessSession } from "../../src/harness/session.js";
 import { HarnessTools, type HarnessData } from "../../src/harness/tools.js";
 import { sharedCheckText, sharedEnvelopes, type SharedTask } from "../../mcp/snapshot.js";
 import { NO_CHECK, OFF, QUESTIONS, SHORTCUT_TOOLS, shortcutsAnswer, shortcutsEnvelopes, UNKNOWN_QUESTION } from "../../mcp/shortcuts.js";
-import { FIXTURES, FRESH, harnessData, KIDS_RULES, LEAD_RULES, sourceStrings } from "../harness/fixtures.js";
+import { FIXTURES, FRESH, harnessData, KIDS_RULES, LEAD_RULES, sourceStrings, withScheduledBlockouts } from "../harness/fixtures.js";
 import { decide } from "../../src/sunday-decisions.js";
 import { CHECKED, nov22Capture, PEOPLE, withFictionalBackgroundChecks } from "../../src/fictional-sunday.js";
 
@@ -237,6 +237,19 @@ describe("the answer to \"sunday\"", () => {
     expect(ask(unsure, FRESH)).not.toMatch(/teams? (?:doesn't|don't) have a confirmed lead/u);
   });
 
+  it("says people scheduled with a blockout at their serving time as worth a look, each once, never as an open spot", async () => {
+    const { text, envelopes } = await copyFor(harnessData({ mode: "live", capture: withScheduledBlockouts(nov22Capture()) }));
+    // The open spots are Planning Center's own, as without the blockouts.
+    expect(ask(text, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. "
+      + "Worth a look: 2 people scheduled have a blockout in Planning Center at their serving time. Checked in Planning Center today at 10:00 AM.");
+    expect(ask(text, "2026-11-20T16:00:00Z")).toContain("Worth a look: 2 people scheduled had a blockout in Planning Center at their serving time.");
+    const handled = edited(envelopes[0]!, p => {
+      const findings = p["findings"] as Record<string, unknown>[];
+      findings.splice(findings.findIndex(f => f["kind"] === "scheduled with a blockout at this time"), 1);
+    });
+    expect(ask(handled, FRESH)).toContain("Worth a look: 1 person scheduled has a blockout in Planning Center at their serving time.");
+  });
+
   it("counts a kids team short for certain at one time and unsure at another once, as the fact (review K2 N1)", async () => {
     const data = harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()) });
     const { envelopes } = await copyFor(data);
@@ -267,6 +280,7 @@ const OWN_WORDS = new Set(`
   ozzie's was for which passed next chosen
   pending person is are was were with request sent no least list long full more whose answer or serving time
   later mac's clock tell current could can't it there's there shows showed none of count behind
+  scheduled blockout in their
   monday tuesday wednesday thursday friday saturday
   january february march april may june july august september october november december
 `.split(/\s+/u).filter(Boolean));
