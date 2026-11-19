@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { blockoutCounted, blockoutRoles, blockoutTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
@@ -289,16 +289,41 @@ function FoldedPeople({ all, row, none = null }: { all: readonly Listed[]; row: 
   </>;
 }
 
-function PeopleList({ finding, names, onDraft, asked = null, openPc = null }: {
-  finding: Finding; names: Names; onDraft: (person: string) => void; asked?: AskedSlot | null | undefined; openPc?: OpenPlanningCenter | null | undefined;
+/**
+ * A note's button (a person's row, the team's leader, a reminder): it says whether its note is open, as See who could
+ * help does, and a second press closes it ("Prepare a note" becomes "Close the note").
+ */
+export const PREPARE_NOTE = "Prepare a note";
+export const PREPARE_REMINDER = "Prepare a reminder";
+export const closeLabel = (prepare: string) => prepare.replace(/^Prepare a /u, "Close the ");
+/** Keeps each note button's element under a key ("person:<id>", "leader:<id>", "reminder"), so a note's X can go back to it. */
+type Opener = (key: string) => (el: HTMLButtonElement | null) => void;
+
+/**
+ * An open role's people. A note to one of them opens right under their row, before the next person (click-through,
+ * 2026-11-19: under the whole list it was off screen and the button seemed to do nothing). Hidden, the list stays in
+ * the page, so a note being written there is kept until the people are shown again.
+ */
+function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null, openPc = null }: {
+  finding: Finding; names: Names; onNote: (person: string) => void; opener: Opener; hidden: boolean;
+  /** The open note, for the person it's to (one at a time per card). */
+  note: { person: string; draft: ReactNode } | null;
+  asked?: AskedSlot | null | undefined; openPc?: OpenPlanningCenter | null | undefined;
 }) {
-  const row = (x: Listed) => <PersonRow key={x.person.person_id} listed={x} names={names}
-    action={x.canDraft && <button type="button" className="btn btn-secondary btn-sm push" onClick={() => onDraft(x.person.person_id)}>Prepare a note</button>}>
-    {openPc && <div className="person-pc"><OpenInPlanningCenter open={openPc} page="person" id={x.person.person_id} label={OPEN_PERSON}
-      name={nameOf(names, x.person.person_id)} /></div>}
-    {asked?.lines.filter(l => l.key === finding.key && l.person_id === x.person.person_id).map(l => <AskedNote key={l.key + l.person_id} line={l} />)}
-  </PersonRow>;
-  return <div className="stack people">
+  const row = (x: Listed) => {
+    const id = x.person.person_id, open = note?.person === id;
+    return <Fragment key={id}>
+      <PersonRow listed={x} names={names}
+        action={x.canDraft && <button type="button" className="btn btn-secondary btn-sm push" aria-expanded={open} ref={opener(`person:${id}`)}
+          onClick={() => onNote(id)}>{open ? closeLabel(PREPARE_NOTE) : PREPARE_NOTE}</button>}>
+        {openPc && <div className="person-pc"><OpenInPlanningCenter open={openPc} page="person" id={id} label={OPEN_PERSON} name={nameOf(names, id)} /></div>}
+        {/* A mark shows once: in their open note, which follows this row, else here. */}
+        {!open && asked?.lines.filter(l => l.key === finding.key && l.person_id === id).map(l => <AskedNote key={l.key + l.person_id} line={l} />)}
+      </PersonRow>
+      {open && note?.draft}
+    </Fragment>;
+  };
+  return <div className="stack people" hidden={hidden}>
     <p className="small">People on this team in Planning Center. Grouped by what Ozzie found, alphabetical within each group, not ranked. Whether someone is willing is theirs to say.</p>
     <FoldedPeople all={listedPeople(finding, names)} row={row} none={<p className="find-body">{noOneText(finding)}</p>} />
   </div>;
@@ -399,8 +424,9 @@ export function AskedNote({ line }: { line: AskedLine }) {
 const REWORD_LABEL: Record<Rewording, string> = { warmer: "Warmer", shorter: "Shorter", casual: "More casual", formal: "More formal" };
 
 /** A note asking one person on the team (exported for tests): its To line and its addressee come from the same id. */
-export function Draft({ finding, person, names, sender, sunday, canReword, onClose, people = null, mark = null }: {
+export function Draft({ finding, person, names, sender, sunday, canReword, onClose, people = null, mark = null, show }: {
   finding: Finding; person: string; names: Names; sender: string; sunday: string | null; canReword: boolean; onClose: () => void; people?: PeopleAccess | null; mark?: NoteMark;
+  show?: ShowNote | undefined;
 }) {
   const ctx = { finding, person_id: person, sunday };
   const [version, setVersion] = useState<PlaceholderDraft>(() => templateDraft(ctx, names));
@@ -423,7 +449,7 @@ export function Draft({ finding, person, names, sender, sunday, canReword, onClo
     } finally { setWorking(null); }
   };
   return <DraftBox label="Draft note" to={nameOf(names, person)} addressee={addresseeFor(person, names, people)} body={body} onBody={b => { setBody(b); setEdited(true); setReworded(null); }} onClose={onClose}
-    onSign={name => setBody(b => signNote(b, name))} mark={mark}
+    onSign={name => setBody(b => signNote(b, name))} mark={mark} show={show}
     footer={DRAFT_FOOTER}>
     {canReword && <div className="find-next reword">
       <span className="find-next-l">Ask Ozzie to reword it</span>
@@ -438,12 +464,17 @@ export function Draft({ finding, person, names, sender, sunday, canReword, onClo
   </DraftBox>;
 }
 
+/** Called once as a note its button opened appears, with the note's element (FindingCard: showNote). */
+type ShowNote = (note: HTMLElement) => void;
+
 /**
  * The shared draft frame: never a send button. Copy it, open it unsent in Mail or Messages for the person to send, or
  * change the wording.
  */
-export function DraftBox({ label, to, addressee = null, body, onBody, onClose, footer, children, startEditing = false, open, openTo, onSign, mark = null, signName }: {
+export function DraftBox({ label, to, addressee = null, body, onBody, onClose, footer, children, startEditing = false, open, openTo, onSign, mark = null, signName, show }: {
   label: string; to?: string; body: string; onBody: (b: string) => void; onClose: () => void; footer: string; children?: ReactNode;
+  /** Opened by its button just now (never by a Church rule as the card opened): brought into view and focused as it appears. */
+  show?: ShowNote | undefined;
   /** Who the note is for, by the id the finding holds: Open in Mail or Messages then fills in To when it can. */
   addressee?: Addressee | null;
   /** Puts the leader's name in place of [Your name] (default: in the words shown); offered while the note still has it. */
@@ -460,9 +491,12 @@ export function DraftBox({ label, to, addressee = null, body, onBody, onClose, f
   const [editing, setEditing] = useState(startEditing);
   const [copied, setCopied] = useState(false);
   const editId = useId();
+  const box = useRef<HTMLDivElement>(null);
+  // Only as it appears: a note that stays open never takes the focus back.
+  useLayoutEffect(() => { if (show && box.current) show(box.current); }, []);
   // The name goes into the words shown (DraftActions keeps it on this Mac, as Settings' Your name for notes).
   const sign = (name: string) => { if (onSign) onSign(name); else onBody(signNote(body, name)); };
-  return <div className="draft" role="region" aria-label={label}>
+  return <div className="draft" role="region" aria-label={label} tabIndex={-1} ref={box}>
     <div className="row draft-head"><span className="badge b-draft">Draft only. Nothing has been sent.</span><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close the draft" onClick={onClose}><Icon name="x" /></button></div>
     {to && <p className="small draft-to">To {to}</p>}
@@ -486,33 +520,42 @@ export function DraftBox({ label, to, addressee = null, body, onBody, onClose, f
 }
 
 /** A note to the team's leader. Written on this Mac in placeholder form and never offered for AI rewording. */
-export function LeaderNote({ finding, leader, names, sender, sunday = null, onClose, people = null, mark = null }: {
+export function LeaderNote({ finding, leader, names, sender, sunday = null, onClose, people = null, mark = null, show }: {
   finding: Finding; leader: string; names: Names; sender: string; sunday?: string | null; onClose: () => void; people?: PeopleAccess | null; mark?: NoteMark;
+  show?: ShowNote | undefined;
 }) {
   const ctx = { finding, leader_id: leader, sunday };
   const [body, setBody] = useState(() => restoreEscalation(escalationDraft(ctx), ctx, names, sender));
   return <DraftBox label="Draft note to the team's leader" to={Object.hasOwn(names, leader) && names[leader] ? `${names[leader]} (team leader in Planning Center)` : "the team's leader in Planning Center"}
-    addressee={addresseeFor(leader, names, people)} body={body} onBody={setBody} onClose={onClose} mark={mark}
+    addressee={addresseeFor(leader, names, people)} body={body} onBody={setBody} onClose={onClose} mark={mark} show={show}
     footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
 }
 
 /** A reminder to someone whose request has no answer yet. Written on this Mac in placeholder form and never offered for AI rewording. */
-export function ReminderNote({ finding, names, sender, sunday = null, onClose, people = null, mark = null }: {
+export function ReminderNote({ finding, names, sender, sunday = null, onClose, people = null, mark = null, show }: {
   finding: Finding; names: Names; sender: string; onClose: () => void; people?: PeopleAccess | null; mark?: NoteMark;
   /** The plan's local date (YYYY-MM-DD), for a role with no service time. */
   sunday?: string | null;
+  show?: ShowNote | undefined;
 }) {
   // The plan's own date when the role has no service time, never a fixed day (review H4).
   const [body, setBody] = useState(() => restoreReminder(reminderDraft(finding, sunday), finding, names, sender));
   return <DraftBox label="Draft reminder" to={nameOf(names, finding.person_id)} addressee={addresseeFor(finding.person_id, names, people)} body={body} onBody={setBody} onClose={onClose} mark={mark}
-    footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
+    show={show} footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
 }
 
-function LeaderButtons({ finding, names, label, onPick }: { finding: Finding; names: Names; label: string; onPick: (leader: string) => void }) {
+function LeaderButtons({ finding, names, label, open, opener, onPick }: {
+  finding: Finding; names: Names; label: string; onPick: (leader: string) => void;
+  /** The leader whose note is open, if any: that button says so and closes it. */
+  open: string | null; opener: Opener;
+}) {
   const leaders = alphabetical(finding.leaders ?? [], names);
   if (!canEscalate(finding)) return null;
-  return <>{leaders.map(l => <button key={l} type="button" className="btn btn-secondary btn-sm" onClick={() => onPick(l)}>
-    {leaders.length === 1 ? label : `${label}: ${nameOf(names, l)}`}</button>)}</>;
+  return <>{leaders.map(l => {
+    const words = leaders.length === 1 ? label : `${label}: ${nameOf(names, l)}`;
+    return <button key={l} type="button" className="btn btn-secondary btn-sm" aria-expanded={open === l} ref={opener(`leader:${l}`)} onClick={() => onPick(l)}>
+      {open === l ? closeLabel(words) : words}</button>;
+  })}</>;
 }
 
 /** A short reason, required, for a Sunday-only decision. */
@@ -556,6 +599,22 @@ function showTitle(title: HTMLElement, pane: HTMLElement | null) {
   if (pane) pane.scrollTop += title.getBoundingClientRect().top - pane.getBoundingClientRect().top - 16;
   title.focus({ preventScroll: true });
 }
+/** The Mac's Reduce motion, read when a note opens: styles.css stills the page's own motion, but not a scroll asked for here. */
+const reduceMotion = () => { try { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+/**
+ * A note its button just opened (click-through, 2026-11-19): into view, then the keyboard focus, so VoiceOver reads it
+ * where it opened. Like showTitle it scrolls only the page pane App gives, and only as far as it must: the note's end
+ * into view, but never its top out of it, so the button pressed stays in view when the note fits. Smooth, unless this
+ * Mac asks for reduced motion. With no pane, focusing it is the browser's own way into view.
+ */
+export function showNote(note: HTMLElement, pane: HTMLElement | null, still = reduceMotion()) {
+  if (!pane) { note.focus(); return; }
+  const n = note.getBoundingClientRect(), p = pane.getBoundingClientRect();
+  const toTop = n.top - p.top - 16, toEnd = n.bottom - p.bottom + 16;
+  const by = toTop < 0 ? toTop : toEnd > 0 ? Math.min(toEnd, toTop) : 0;
+  if (by) pane.scrollBy({ top: by, behavior: still ? "auto" : "smooth" });
+  note.focus({ preventScroll: true });
+}
 /** "Only 1 confirmed person in Nursery at 9:30 AM." Services has no age: people, never "adults". */
 export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS): string {
   const c = f.confirmed?.length ?? 0, at = f.position!.interval ? `at ${clock(f.position!.interval.starts_at)}` : d.thisOne;
@@ -589,9 +648,11 @@ export interface Occurrence { id: string; label: string | null }
 export type Beside = (p: { kind: string; team_id?: string; position_id?: string; name?: string }) => ReactNode;
 
 function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDecide, whoCouldHelp, feedback = null, occurrence, beside, people = null, asked = null,
-  openPc = null, planId = null, titleRef }: {
+  openPc = null, planId = null, titleRef, pane }: {
   item: DecidedItem; names: Names; checkedAt: string | null; sender: string; sunday: string | null; canReword: boolean; people?: PeopleAccess | null | undefined;
   asked?: AskedSlot | null | undefined;
+  /** The page pane App scrolls, so a note opened by its button is brought into view by scrolling only it. */
+  pane?: RefObject<HTMLElement | null> | undefined;
   /** "Open in Planning Center" for this plan and the people on the card (audit item 25); none in the example. */
   openPc?: OpenPlanningCenter | null | undefined; planId?: string | null | undefined;
   /** The title's element, so Today can open Sunday at this card. */
@@ -622,7 +683,27 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   const hasPeople = listsPeople(finding);
   const listed = finding.people ? [...finding.people.suggestions, ...finding.people.conflicts, ...finding.people.unverified] : [];
   const onRow = (person: string) => finding.kind === "needs-people" && hasPeople && open && listed.some(x => x.person_id === person);
-  const inOpenNote = (person: string) => person === draftFor || person === leaderFor || (reminding && person === finding.person_id);
+  // A note to one person sits under their row whenever the list shows them (hidden with the list, and kept), otherwise
+  // under the card's buttons.
+  const underRow = Boolean(draftFor && hasPeople && listed.some(x => x.person_id === draftFor));
+  const inOpenNote = (person: string) => (person === draftFor && (open || !underRow)) || person === leaderFor || (reminding && person === finding.person_id);
+  // Each note's button, so the note's X gives the focus back to it; and the note last opened by a press, which alone is
+  // brought into view and focused as it appears (a note a Church rule opened with the card leaves the focus where it is).
+  const openers = useRef(new Map<string, HTMLButtonElement>());
+  const opener: Opener = key => el => { if (el) openers.current.set(key, el); else openers.current.delete(key); };
+  const [pressed, setPressed] = useState<string | null>(null);
+  const show = (key: string): ShowNote | undefined => pressed === key ? note => showNote(note, pane?.current ?? null) : undefined;
+  const closed = (key: string, close: () => void) => () => { openers.current.get(key)?.focus(); close(); };
+  // One note open at a time to the team: a person's or the leader's, as before. A second press closes it.
+  const notePerson = (person: string) => {
+    if (draftFor === person) { setDraftFor(null); return; }
+    setDraftFor(person); setLeaderFor(null); setPressed(`person:${person}`);
+  };
+  const noteLeader = (leader: string) => {
+    if (leaderFor === leader) { setLeaderFor(null); return; }
+    setLeaderFor(leader); setDraftFor(null); setPressed(`leader:${leader}`);
+  };
+  const remind = () => { if (reminding) setReminding(false); else { setReminding(true); setPressed("reminder"); } };
   const decision = finding.tone === "decision";
   const tag = item.state === "reopened"
     ? <span className="badge b-attn"><Icon name="flag" small />This needs attention again</span>
@@ -681,8 +762,10 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   const decisionForm = choosing && <DecisionForm key={choosing} choice={choosing} onCancel={() => setChoosing(null)}
     onSave={reason => { onDecide(finding, choosing, reason, item.decision); setChoosing(null); }} />;
   const pcPlan = openPc && planId && !finding.source ? <OpenInPlanningCenter open={openPc} page="plan" id={planId} label={OPEN_PLAN} /> : null;
-  const main = (finding.kind === "needs-people" && (hasPeople || canEscalate(finding))) || finding.kind === "lead-missing" || (canRemind(finding) && !reminding);
+  const main = (finding.kind === "needs-people" && (hasPeople || canEscalate(finding))) || finding.kind === "lead-missing" || canRemind(finding);
   const more = sundayOnly.length > 0 || Boolean(pcPlan) || feedbackShows(target, feedback);
+  const personNote = draftFor && <Draft key={draftFor} finding={finding} person={draftFor} names={names} sender={sender} sunday={sunday} canReword={canReword}
+    onClose={closed(`person:${draftFor}`, () => setDraftFor(null))} people={people} mark={markFor(asked, finding, draftFor)} show={show(`person:${draftFor}`)} />;
   return <article className={`find${finding.tone === "look" && item.state === "open" ? " is-look" : ""}${item.state === "reopened" ? " is-reopened" : ""}`}>
     <div className="find-top">{tag}{where}</div>
     <h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}</h3>
@@ -703,10 +786,11 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
         reminder. For this Sunday only, telling Ozzie about the card and Planning Center wait in the fold. */}
     {(main || more) && <div className="find-next card-actions">
       {finding.kind === "needs-people" && hasPeople && <button type="button" className="btn btn-secondary btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide people" : "See who could help"}</button>}
-      {finding.kind === "needs-people" && <LeaderButtons finding={finding} names={names} label="Prepare a note to the team's leader" onPick={l => { setLeaderFor(l); setDraftFor(null); }} />}
+      {finding.kind === "needs-people" && <LeaderButtons finding={finding} names={names} label="Prepare a note to the team's leader" open={leaderFor} opener={opener} onPick={noteLeader} />}
       {finding.kind === "lead-missing" && !choosing && <button type="button" className="btn btn-sm btn-primary" onClick={() => setChoosing("lead-expected")}>{CHOICE_TEXT["lead-expected"].button}</button>}
-      {finding.kind === "lead-missing" && <LeaderButtons finding={finding} names={names} label="Prepare a note to the leader" onPick={setLeaderFor} />}
-      {canRemind(finding) && !reminding && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setReminding(true)}>Prepare a reminder</button>}
+      {finding.kind === "lead-missing" && <LeaderButtons finding={finding} names={names} label="Prepare a note to the leader" open={leaderFor} opener={opener} onPick={noteLeader} />}
+      {canRemind(finding) && <button type="button" className="btn btn-secondary btn-sm" aria-expanded={reminding} ref={opener("reminder")} onClick={remind}>
+        {reminding ? closeLabel(PREPARE_REMINDER) : PREPARE_REMINDER}</button>}
       {more && <MoreChoices>
         {sundayOnly.length > 0 && !choosing && <div className="find-next">
           <span className="find-next-l">For {d.thisOne} only:</span>
@@ -718,18 +802,22 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       </MoreChoices>}
     </div>}
     {choosing === "lead-expected" && decisionForm}
-    {finding.kind === "needs-people" && <>
-      {hasPeople && open && <PeopleList finding={finding} names={names} onDraft={p => { setDraftFor(p); setLeaderFor(null); }} asked={asked} openPc={openPc} />}
-      {hasPeople && open && whoCouldHelp && <AiLook finding={finding} names={names} look={whoCouldHelp} />}
-      {draftFor && <Draft key={draftFor} finding={finding} person={draftFor} names={names} sender={sender} sunday={sunday} canReword={canReword} onClose={() => setDraftFor(null)} people={people}
-        mark={markFor(asked, finding, draftFor)} />}
-    </>}
     {/* State, not a choice (review F, L-5): how soon Ozzie tells, and why a note opened by itself, next to that note and in
         view with More choices closed. */}
     <FeedbackState target={target} feedback={feedback} />
-    {reminding && <ReminderNote finding={finding} names={names} sender={sender} sunday={sunday} onClose={() => setReminding(false)} people={people} mark={markFor(asked, finding, finding.person_id)} />}
-    {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} sunday={sunday} onClose={() => setLeaderFor(null)} people={people}
-      mark={markFor(asked, finding, leaderFor)} />}
+    {/* A note opens where it was asked for (click-through, 2026-11-19): a reminder or a note to the leader right under the
+        card's buttons, a note to one person right under their row. */}
+    {reminding && <ReminderNote finding={finding} names={names} sender={sender} sunday={sunday} onClose={closed("reminder", () => setReminding(false))} people={people}
+      mark={markFor(asked, finding, finding.person_id)} show={show("reminder")} />}
+    {leaderFor && <LeaderNote key={leaderFor} finding={finding} leader={leaderFor} names={names} sender={sender} sunday={sunday} onClose={closed(`leader:${leaderFor}`, () => setLeaderFor(null))}
+      people={people} mark={markFor(asked, finding, leaderFor)} show={show(`leader:${leaderFor}`)} />}
+    {finding.kind === "needs-people" && <>
+      {/* Someone no longer on the list (a later check) keeps their note, here, rather than losing it. */}
+      {personNote && !underRow && personNote}
+      {hasPeople && <PeopleList finding={finding} names={names} hidden={!open} note={underRow && draftFor ? { person: draftFor, draft: personNote } : null} onNote={notePerson}
+        opener={opener} asked={asked} openPc={openPc} />}
+      {hasPeople && open && whoCouldHelp && <AiLook finding={finding} names={names} look={whoCouldHelp} />}
+    </>}
     {/* A mark shows once: in the note open for that person, else on their row in the people shown, else here on the card. */}
     {asked?.lines.filter(l => l.key === finding.key && !onRow(l.person_id) && !inOpenNote(l.person_id)).map(l => <AskedNote key={l.person_id} line={l} />)}
     {beside?.({ kind: finding.kind, ...(finding.position ? { team_id: finding.position.team_id, position_id: finding.position.id, name: finding.position.name } : {}) })}
@@ -1011,6 +1099,7 @@ export function SundayPage(props: {
   const sender = props.sender.trim() || yourName.get();
   const { controls, notice } = useFeedback(props.feedback, names);
   const occurrence: Occurrence = { id: brief?.plan.id ?? "", label: brief?.plan.dates ?? null };
+  const planTitle = brief?.plan.title?.trim() || null;
   const setAside = [...(brief?.hidden ?? []).map(h => h.entry), ...(props.operations?.hidden ?? []).map(h => h.entry)];
   const stamp = useMemo(() => brief ? time(brief.checked_at ?? brief.completed_at) : null, [brief]);
   const view = useMemo(() => brief ? applyDecisions(brief, decisions) : null, [brief, decisions]);
@@ -1034,7 +1123,9 @@ export function SundayPage(props: {
   const onDecide = (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) =>
     onDecisions(withDecision(decisions, decide(finding, choice, reason, new Date().toISOString(), previous)));
   return <div className="col">
-    <p className="eyebrow">{brief?.plan.dates ?? d.date ?? DayName(d)}</p>
+    {/* The plan's own title from Planning Center, after its date as the plan picker shows it (click-through, 2026-11-19:
+        added to the lede, it read as a sentence of its own). In its own case, and wrapped whole when long. */}
+    <p className="eyebrow">{brief?.plan.dates ?? d.date ?? DayName(d)}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
     <h1 className="h1">{d.question}</h1>
     {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />Saved copy of the check from {time(brief.completed_at)}. This is not a current check.</p>}
     {/* The fictional example's band is across the top of every page (App.tsx ExampleBand); the line below still says it. */}
@@ -1045,7 +1136,6 @@ export function SundayPage(props: {
       {counts.resolved > 0 && `You resolved ${counts.resolved} yourself. `}
       {/* Only the leader hides a finding ("This isn't right", "Stop flagging this"), so it says so, and where it can come back. */}
       {setAside.length > 0 && `You hid ${setAside.length === 1 ? "one finding" : `${setAside.length} findings`}: ${setAside.length === 1 ? "it's" : "they're"} under “${HIDDEN_BY_YOU}” at the end of this page, where you can bring ${setAside.length === 1 ? "it" : "them"} back. `}
-      {brief.plan.title && <span className="muted">{brief.plan.title}.</span>}
     </p>}
     {!brief && <p className="lede">{DayName(d)} hasn't been checked yet. Check Planning Center now, or look around the fictional example first.</p>}
     {/* Always says what this is: a live read, the saved copy of a check, or the fictional example. */}
@@ -1074,7 +1164,7 @@ export function SundayPage(props: {
       <h2 id="sunday-open-title" className="sr-only">Open for {d.thisOne}</h2>
       {notice}
       {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword} onDecide={onDecide} whoCouldHelp={props.whoCouldHelp}
-        asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter} planId={brief.plan.id} titleRef={titleRef(i.finding.key)}
+        asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter} planId={brief.plan.id} titleRef={titleRef(i.finding.key)} pane={props.pane}
         feedback={controls} occurrence={occurrence} beside={props.beside} people={brief.mode === "fictional" ? null : props.people} />)}
       {props.worthALook}
       {brief.findings.length === 0 && <p className="lede">{brief.hidden?.length ? "Nothing open in what was read, apart from what your Church rules set aside below."

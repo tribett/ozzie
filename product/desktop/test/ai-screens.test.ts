@@ -19,7 +19,7 @@ import type { OllamaEnd, OllamaPhase, OllamaRefusal } from "../src/onboarding-br
 import { ActivityPage } from "../src/activity-page.js";
 import { modelProblem, monthLimitText, NO_PLAN_TEXT, pausedLine, untilWhen, type ManagedAccount, type ModelStatus } from "../src/model.js";
 import { parseKeyResult, parseOllamaHistory, parseOllamaProgress, parseProviders } from "../src/onboarding-bridge.js";
-import { AiChoice } from "../src/ai-choice.js";
+import { AiChoice, AiFlow } from "../src/ai-choice.js";
 import { AiLine } from "../src/ai-line.js";
 import { MacEndedLine } from "../src/ai-this-mac.js";
 import { DayProvider, UNKNOWN_WORDS, type DayWords } from "../src/day-words.js";
@@ -2041,6 +2041,285 @@ describe("S10: Ozzie's AI", () => {
     await unmount!(); unmount = null;
     await mountSettingsOzzie({ open: false, reason: "closed" });
     expect(seen()).toContain("Ozzie's AI isn't open for sign-up yet. The free ways work today.");
+  });
+});
+
+// Live in 0.3.3, 2026-11-19: a subscriber chose AI on this Mac to try it, then Ozzie's AI again, and was shown the price and
+// "Pay $19 a month in my browser". Choosing a way never ends this Mac's connection (native keeps the device token on every
+// route; hosted_tests.rs pins it), and native's status reads the connection and the account whatever way is in use: here
+// the fake gives that status, with fictional accounts.
+describe("S10: a Mac that still holds its connection to Ozzie's AI (live, 2026-11-19)", () => {
+  const PAID = { plan: "personal", allowance_steps: 1500, used_steps: 375, period_ends: "2026-12-18T00:00:00Z", warning: null, checked_at_ms: 0, offline: false, answers_left: 300 };
+  const ENDED = { ...PAID, plan: "none", allowance_steps: 0, plan_reason: "cancelled" };
+  const LOCAL = { configured: true, route: "local", label: "AI model on this Mac (qwen3:8b)", setup: "ready", managed: "connected", account: PAID, local_app: "ollama", checked_at_ms: 1 };
+  const MANAGED = { configured: true, route: "managed", label: "x", setup: "ready", managed: "connected", account: PAID };
+  const NO_ROUTE = { configured: false, route: "none", label: "No AI model set up", setup: "no-route", managed: "connected", account: PAID };
+  const ozzieCard = () => buttons().find(b => /ai-card/u.test(b.getAttribute?.("class") ?? "") && b.textContent.startsWith("Ozzie's AI"))!;
+  /** Every word of the sales screen and its browser trip: none of them is said to a Mac that holds the connection. */
+  const PITCH = ["$19", "Pay ", "Stripe", "Personal ·", "sign in with your email", "Ready to use, nothing to set up", "in my browser"];
+  /** Nothing on the way back goes to the browser, connects, disconnects or asks for a payment. */
+  const NO_TRIP = ["managed_connect", "managed_connect_reopen", "managed_connect_cancel", "managed_disconnect", "open_help_page"];
+  const mountSettingsWith = async (replies: Record<string, unknown>) => {
+    const fake = fakeNative(replies);
+    native.invoke = fake.invoke as never;
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(dom.root as unknown as Element);
+    await act(async () => { root.render(React.createElement(AiSettings, { onChange() {} })); });
+    await settle();
+    unmount = async () => { await act(async () => { root.unmount(); }); };
+    return fake;
+  };
+
+  it("back from AI on this Mac, the card says this Mac has Ozzie's AI, and using it again only switches the route back: no price, no browser", async () => {
+    for (const mode of ["first-run", "settings"] as const) {
+      let route: Record<string, unknown> = LOCAL;
+      const s = await mount(base({ model_status: () => route, set_model_route: (a: Record<string, unknown>) => { if (a.route === "managed") route = MANAGED; return route; } }), mode);
+      // The card says so in plain words in place of the price; AI on this Mac's card is the one in use.
+      expect(ozzieCard().textContent).toBe("Ozzie's AIYou already have Ozzie's AI on this Mac.");
+      expect(ozzieCard().getAttribute?.("aria-disabled") ?? null).toBeNull();
+      expect(seen()).toContain("Your church's own AIIn use now");
+      await press("Ozzie's AI");
+      expect(seen()).toContain("You already have Ozzie's AI on this Mac. Switching back to it charges nothing.");
+      for (const word of PITCH) expect(seen(), `${mode} ${word}`).not.toContain(word);
+      expect(button("Back")).not.toBeNull();
+      expect(button("Not now")).not.toBeNull();
+      allFullSize();
+      await press("Use Ozzie's AI again");
+      // Only the route, saved on this Mac: Ozzie's AI again, on the connection it held.
+      expect(s.calls.filter(c => c.command === "set_model_route").map(c => c.args)).toEqual([{ route: "managed", baseUrl: null, model: null }]);
+      for (const never of NO_TRIP) expect(s.calls.some(c => c.command === never), never).toBe(false);
+      expect(s.onModel).toHaveBeenCalledWith(true);
+      // The account's own line, never the offer's whole month (only true just after paying).
+      expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
+      expect(seen()).toContain("About 300 answers left this month. They start again on December 18.");
+      expect(seen()).not.toContain("About 400 answers");
+      await press(mode === "settings" ? "Back to Settings" : "Next: open Sunday");
+      expect(s.onDone).toHaveBeenCalledWith("chosen");
+      await unmount!(); unmount = null;
+    }
+  });
+
+  it("Settings: switching away and back through the screens keeps the connection and ends on Ozzie's AI, with a way to disconnect it meanwhile", async () => {
+    // Ozzie's AI in use, then No AI for now (native keeps the connection), then Ozzie's AI again.
+    let route: Record<string, unknown> = MANAGED;
+    const s = await mountSettingsWith({ model_status: () => route, set_no_ai: () => { route = NO_ROUTE; return route; },
+      set_model_route: (a: Record<string, unknown>) => { if (a.route === "managed") route = MANAGED; return route; }, managed_offer: OFFER_OPEN, open_help_page: null });
+    expect(seen()).toContain("AI: Ozzie's AI");
+    // While Ozzie's AI is in use, its own Disconnect this Mac is the way, as before: no second one.
+    expect(button("Disconnect this Mac")!.textContent).toBe("Disconnect this Mac");
+    expect(button("Disconnect this Mac from Ozzie's AI")).toBeNull();
+    await press("Change");
+    await press("No AI for now");
+    expect(seen()).toContain("AI: none");
+    expect(seen()).toContain("This Mac is still connected to Ozzie's AI. To use it again, choose Change, then Ozzie's AI.");
+    expect(button("Disconnect this Mac from Ozzie's AI")).not.toBeNull();
+    await press("Change");
+    expect(ozzieCard().textContent).toBe("Ozzie's AIYou already have Ozzie's AI on this Mac.");
+    await press("Ozzie's AI");
+    for (const word of PITCH) expect(seen(), word).not.toContain(word);
+    await press("Use Ozzie's AI again");
+    await press("Back to Settings");
+    expect(seen()).toContain("AI: Ozzie's AI");
+    expect(seen()).toContain("About 300 answers left this month. They start again on December 18.");
+    expect(seen()).not.toContain("This Mac is still connected to Ozzie's AI.");
+    for (const never of NO_TRIP.filter(c => c !== "open_help_page")) expect(s.calls.some(c => c.command === never), never).toBe(false);
+  });
+
+  it("with Ozzie's AI in use, its card and screen say this Mac has it and offer keeping it, never the price", async () => {
+    const s = await mount(base({ model_status: MANAGED, set_model_route: MANAGED }), "settings");
+    expect(ozzieCard().textContent).toBe("Ozzie's AIIn use nowYou already have Ozzie's AI on this Mac.");
+    await press("Ozzie's AI");
+    expect(seen()).toContain("You already have Ozzie's AI on this Mac.");
+    expect(seen()).not.toContain("Switching back");
+    for (const word of PITCH) expect(seen(), word).not.toContain(word);
+    await press("Keep using Ozzie's AI");
+    expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
+    for (const never of NO_TRIP) expect(s.calls.some(c => c.command === never), never).toBe(false);
+  });
+
+  it("a held connection can be used again while sign-up is closed or can't be checked: nothing is bought on the way", async () => {
+    for (const offer of [{ open: false, reason: "closed" }, { open: false, reason: "unreachable" }]) {
+      let route: Record<string, unknown> = LOCAL;
+      const s = await mount(base({ managed_offer: offer, model_status: () => route, set_model_route: () => (route = MANAGED) }), "settings");
+      expect(ozzieCard().getAttribute?.("aria-disabled") ?? null).toBeNull();
+      expect(ozzieCard().textContent).toBe("Ozzie's AIYou already have Ozzie's AI on this Mac.");
+      await press("Ozzie's AI");
+      await press("Use Ozzie's AI again");
+      expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
+      expect(s.calls.some(c => c.command === "managed_connect")).toBe(false);
+      await unmount!(); unmount = null;
+    }
+  });
+
+  it("an account Ozzie couldn't read just now: used again, and says the numbers couldn't be checked", async () => {
+    const unread = { ...LOCAL, account: null };
+    let route: Record<string, unknown> = unread;
+    await mount(base({ model_status: () => route, set_model_route: () => (route = { ...MANAGED, account: null }) }), "settings");
+    expect(ozzieCard().textContent).toBe("Ozzie's AIYou already have Ozzie's AI on this Mac.");
+    await press("Ozzie's AI");
+    await press("Use Ozzie's AI again");
+    expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
+    expect(seen()).toContain("This Mac is connected. Ozzie couldn't check this month's answers just now.");
+  });
+
+  it("a new customer, or an account whose plan has ended, still sees the price and Pay exactly as before", async () => {
+    const fresh = { configured: true, route: "local", label: "AI model on this Mac (qwen3:8b)", setup: "ready", managed: "not-connected", account: null };
+    for (const model_status of [undefined, fresh, { ...LOCAL, account: ENDED }]) {
+      const s = await mount(base({ ...(model_status ? { model_status } : {}), managed_connect: PAID, set_model_route: MANAGED }), "first-run");
+      expect(ozzieCard().textContent).toBe("Ozzie's AIReady to use, nothing to set up. $19 a month for about 400 answers. Cancel any time.");
+      await press("Ozzie's AI");
+      expect(seen()).toContain("AI that's ready to use, with nothing to set up.");
+      expect(seen()).toContain("Personal · $19 a month");
+      expect(seen()).toContain("You'll sign in with your email (no password) and pay on Stripe's page. Paying means you agree to the terms.");
+      expect(seen()).not.toContain("You already have Ozzie's AI");
+      expect(button("Use Ozzie's AI again")).toBeNull();
+      await press("Pay $19 a month in my browser");
+      expect(s.calls.find(c => c.command === "managed_connect")?.args).toEqual({ plan: "personal" });
+      await unmount!(); unmount = null;
+    }
+    // With no connection, sign-up closed still means the card can't be chosen.
+    await mount(base({ managed_offer: { open: false, reason: "closed" }, model_status: fresh }));
+    expect(ozzieCard().getAttribute?.("aria-disabled")).toBe("true");
+  });
+
+  it("a connection ozzie.church refused leads to connecting again, never the price, even while sign-up is closed", async () => {
+    const refused = { ...LOCAL, managed: "reconnect", account: null };
+    for (const offer of [OFFER_OPEN, { open: false, reason: "closed" }, { open: false, reason: "unreachable" }]) {
+      const s = await mount(base({ managed_offer: offer, model_status: refused, managed_connect: PAID, set_model_route: MANAGED }), "settings");
+      expect(ozzieCard().textContent).toBe("Ozzie's AIThis Mac's connection has ended. Connect it again; a plan you already have isn't charged again.");
+      expect(ozzieCard().getAttribute?.("aria-disabled") ?? null).toBeNull();
+      await press("Ozzie's AI");
+      expect(seen()).toContain(OZZIE.reconnect);
+      for (const word of ["$19", "Pay ", "Stripe"]) expect(seen(), word).not.toContain(word);
+      await press("Connect this Mac again in my browser");
+      // The same paid connect as before: the website charges nothing for an account that already has a plan.
+      expect(s.calls.find(c => c.command === "managed_connect")?.args).toEqual({ plan: "personal" });
+      await unmount!(); unmount = null;
+    }
+  });
+
+  it("a connection or plan that ended since the screen opened is said, never as on, and the way in use stays (review M1)", async () => {
+    const refused = { configured: true, route: "local", label: "AI model on this Mac (qwen3:8b)", setup: "ready", managed: "reconnect", account: null };
+    for (const [after, says] of [[refused, OZZIE.reconnect], [{ ...LOCAL, account: ENDED }, "Personal · $19 a month"]] as const) {
+      // Held when the screen opened; by the press, the reading says otherwise: the route is never touched.
+      let current: Record<string, unknown> = LOCAL;
+      const s = await mount(base({ model_status: () => current, set_model_route: MANAGED }), "settings");
+      await press("Ozzie's AI");
+      current = after;
+      await press("Use Ozzie's AI again");
+      expect(s.calls.some(c => c.command === "set_model_route"), says).toBe(false);
+      expect(s.onModel).not.toHaveBeenCalled();
+      expect(seen()).not.toContain("Ozzie's AI is in use on this Mac.");
+      expect(seen()).toContain(says);
+      expect(s.calls.some(c => c.command === "managed_connect")).toBe(false);
+      await unmount!(); unmount = null;
+    }
+    // The moment between the reading and the save: the saved route's own status is checked too.
+    let s = await mount(base({ model_status: LOCAL, set_model_route: { configured: false, route: "managed", label: "x", setup: "reconnect", managed: "reconnect", account: null } }), "settings");
+    await press("Ozzie's AI");
+    await press("Use Ozzie's AI again");
+    expect(seen()).not.toContain("Ozzie's AI is in use on this Mac.");
+    expect(seen()).toContain(OZZIE.reconnect);
+    expect(button("Connect this Mac again in my browser")).not.toBeNull();
+    await unmount!(); unmount = null;
+    s = await mount(base({ model_status: LOCAL, set_model_route: { ...MANAGED, account: ENDED } }), "settings");
+    await press("Ozzie's AI");
+    await press("Use Ozzie's AI again");
+    expect(seen()).not.toContain("Ozzie's AI is in use on this Mac.");
+    expect(seen()).toContain("Personal · $19 a month");
+    expect(s.calls.some(c => c.command === "managed_connect")).toBe(false);
+  });
+
+  it("until the AI status is read, neither the card nor the screen shows the price or Pay (review M3)", async () => {
+    let release: (s: unknown) => void = () => {};
+    const pending = new Promise(r => { release = r; });
+    const s = await mount(base({ model_status: () => pending, set_model_route: MANAGED }), "settings");
+    expect(ozzieCard().textContent).toBe("Ozzie's AIChecking whether it's open for sign-up…");
+    expect(ozzieCard().getAttribute?.("aria-disabled")).toBe("true");
+    // ("Pay an AI company…" is the church's own AI card's line.)
+    for (const word of ["$19", "Pay $"]) expect(seen(), word).not.toContain(word);
+    const { act } = await import("react");
+    await act(async () => { release(LOCAL); });
+    await settle();
+    expect(ozzieCard().textContent).toBe("Ozzie's AIYou already have Ozzie's AI on this Mac.");
+    await unmount!(); unmount = null;
+    // S10 opened straight from Settings (its Check, Start Ozzie's AI) before the reading: Back and Not now only.
+    const later = new Promise(() => {});
+    const fake = fakeNative({ ...base(), model_status: () => later });
+    native.invoke = fake.invoke as never;
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(dom.root as unknown as Element);
+    await act(async () => { root.render(React.createElement(AiFlow, { mode: "settings", onModel() {}, onDone() {}, bridge: fake.bridge, start: { at: "ozzie" } })); });
+    await settle();
+    unmount = async () => { await act(async () => { root.unmount(); }); };
+    expect(seen()).toContain("Checking whether it's open for sign-up…");
+    for (const word of ["$19", "Pay ", "Stripe", "AI that's ready to use"]) expect(seen(), word).not.toContain(word);
+    expect(buttons().map(b => b.textContent)).toEqual(["Back", "Not now"]);
+    expect(s.calls.some(c => c.command === "managed_connect")).toBe(false);
+  });
+
+  it("says a paused plan before the press and after it, calmly, never as part of the success (review L3)", async () => {
+    const PAUSED = { ...PAID, used_steps: 1500, warning: "paused", answers_left: 0 };
+    await mount(base({ model_status: { ...LOCAL, account: PAUSED }, set_model_route: { ...MANAGED, account: PAUSED } }), "settings");
+    expect(ozzieCard().textContent).toBe("Ozzie's AIYou already have Ozzie's AI on this Mac.");
+    await press("Ozzie's AI");
+    const pausedLine = "Ozzie's AI is paused until December 18: this month's answers are used. Everything else in Ozzie still works.";
+    expect(seen()).toContain(pausedLine);
+    await press("Use Ozzie's AI again");
+    expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
+    const notice = nodes().find(n => n.getAttribute?.("class") === "ai-problem" && n.textContent.includes(pausedLine));
+    expect(notice?.getAttribute?.("role")).toBe("status");
+  });
+
+  it("waits visibly while the press reads the status and saves the route, and can't be pressed twice (review L5)", async () => {
+    let save: (s: unknown) => void = () => {};
+    const s = await mount(base({ model_status: LOCAL, set_model_route: () => new Promise(r => { save = r; }) }), "settings");
+    await press("Ozzie's AI");
+    await press("Use Ozzie's AI again");
+    expect(seen()).toContain("Checking this Mac's connection to Ozzie's AI…");
+    expect(isDisabled(button("Use Ozzie's AI again")!)).toBe(true);
+    const { act } = await import("react");
+    await act(async () => { save(MANAGED); });
+    await settle();
+    expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
+    expect(s.calls.filter(c => c.command === "set_model_route")).toHaveLength(1);
+  });
+
+  it("Settings: Disconnect this Mac from Ozzie's AI, while another way is in use, ends the connection there and says the plan isn't cancelled (review M2)", async () => {
+    const gone = { ...LOCAL, managed: "not-connected", account: null };
+    let held = true;
+    const s = await mountSettingsWith({ model_status: () => held ? LOCAL : gone, managed_disconnect: () => { held = false; return gone; }, open_help_page: null });
+    expect(seen()).toContain("AI: on this Mac (qwen3:8b)");
+    expect(seen()).toContain("This Mac is still connected to Ozzie's AI. To use it again, choose Change, then Ozzie's AI.");
+    await press("Disconnect this Mac from Ozzie's AI");
+    expect(s.calls.filter(c => c.command === "managed_disconnect")).toHaveLength(1);
+    expect(seen()).toContain("This Mac is disconnected from Ozzie's AI. Your plan isn't cancelled: to stop paying for it, choose See my plan.");
+    expect(seen()).not.toContain("This Mac is still connected to Ozzie's AI.");
+    expect(button("Disconnect this Mac from Ozzie's AI")).toBeNull();
+    await press("See my plan");
+    expect(s.calls.at(-1)).toEqual({ command: "open_help_page", args: { page: "ozzie-account" } });
+    // The way in use is untouched.
+    expect(seen()).toContain("AI: on this Mac (qwen3:8b)");
+    expect(s.calls.some(c => c.command === "set_model_route" || c.command === "set_no_ai")).toBe(false);
+    await unmount!(); unmount = null;
+    // An account with no plan: the plain line, no plan to stop, and never "use it again" before (review L4).
+    held = true;
+    const noPlan = { ...LOCAL, account: ENDED };
+    await mountSettingsWith({ model_status: () => held ? noPlan : gone, managed_disconnect: () => { held = false; return gone; } });
+    expect(seen()).not.toContain("To use it again");
+    await press("Disconnect this Mac from Ozzie's AI");
+    expect(seen()).toContain("This Mac is disconnected from Ozzie's AI.");
+    expect(seen()).not.toContain("Your plan isn't cancelled");
+    expect(button("See my plan")).toBeNull();
+  });
+
+  it("has words for each of these, none forbidden", () => {
+    for (const w of [CHOICE.ozzieHeld, CHOICE.ozzieReconnect, OZZIE.held, OZZIE.heldFree, OZZIE.useAgain, OZZIE.keepUsing, OZZIE.switching, OZZIE.usingNow, OZZIE.heldSettings,
+      OZZIE.disconnectHeld, OZZIE.disconnected, OZZIE.disconnectedPlan]) {
+      expect(w).not.toMatch(FORBIDDEN);
+      expect(w).not.toMatch(/\$|Pay\b|Stripe/u);
+    }
   });
 });
 

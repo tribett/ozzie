@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { DecisionForm, DraftBox, LeaderNote, OperationsSection, SundayPage } from "../src/sunday-page.js";
+import { DayProvider } from "../src/day-words.js";
+import { wednesdayCapture, wednesdayWords, WEDNESDAY_TITLE } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { RulesPage } from "../src/rules-page.js";
 import { buildSundayBrief, teamLeaders, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
@@ -291,6 +294,61 @@ describe("one count for what the page shows, and what it is showing", () => {
     const resolved = html.slice(html.indexOf('aria-label="Resolved by you"'));
     expect(resolved).toContain('class="badge b-you"');
     expect(resolved).not.toMatch(/b-ok|b-confirm|panel-ok/u);
+  });
+});
+
+describe("the plan's own title is beside its date, never glued to the count (click-through, 2026-11-19)", () => {
+  const live = buildSundayBrief(nov22Capture(), rules, nov22Capture().completed_at);
+  const head = (html: string) => /^<div class="col"><p class="eyebrow">(.*?)<\/p><h1 class="h1">([^<]+)<\/h1>/u.exec(html);
+  const lede = (html: string) => text(/<p class="lede">(.*?)<\/p>/u.exec(html)![1]!).trim();
+  const titled = (title: string | null) => ({ ...live, plan: { ...live.plan, title } });
+
+  it("the eyebrow names the date, then the plan; the count leads the page alone", () => {
+    const html = page(live);
+    const m = head(html);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe('November 22, 2026 · <span class="eyebrow-plan">Ozzie Demo — Main Sunday (fictional)</span>');
+    expect(m![2]).toBe("Is Sunday covered?");
+    expect(lede(html)).toMatch(/^\d+ things need a decision and \d+ are worth a look\.$/u);
+    // Said once on the page, and still the page's only h1.
+    expect(text(html).match(/Ozzie Demo — Main Sunday \(fictional\)/gu)).toHaveLength(1);
+    expect(html.match(/<h1\b/gu)).toHaveLength(1);
+  });
+
+  it("a plan with no title shows the date alone", () => {
+    for (const title of [null, "", "   "]) {
+      const html = page(titled(title));
+      expect(head(html)![1], JSON.stringify(title)).toBe("November 22, 2026");
+      expect(html).not.toContain("eyebrow-plan");
+    }
+  });
+
+  it("a very long title is there whole, for VoiceOver too, and wraps rather than running off the page", () => {
+    const long = `${"Advent ".repeat(20)}${"Candlelight".repeat(12)} — Lessons and Carols`;
+    const html = page(titled(long));
+    expect(head(html)![1]).toBe(`November 22, 2026 · <span class="eyebrow-plan">${long}</span>`);
+    expect(lede(html)).not.toContain("Advent");
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.oz \.eyebrow-plan \{[^}]*overflow-wrap: anywhere;[^}]*\}/u);
+    // In its own case: the eyebrow's capitals are for the date.
+    expect(css).toMatch(/\.oz \.eyebrow-plan \{[^}]*text-transform: none;[^}]*\}/u);
+  });
+
+  it("a Wednesday plan, the example and a service not checked yet are headed the same way", () => {
+    const wed = buildSundayBrief(wednesdayCapture(), rules, wednesdayCapture().completed_at);
+    const html = renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() }, React.createElement(SundayPage, {
+      brief: wed, names: wednesdayCapture().names, busy: false, problem: "", sender: "Pat", connected: true, hasRecording: false, configured: true,
+      canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+    })));
+    expect(head(html)![1]).toBe(`November 25, 2026 · <span class="eyebrow-plan">${WEDNESDAY_TITLE}</span>`);
+    expect(head(html)![2]).toBe("Is Wednesday covered?");
+    expect(lede(html)).not.toContain(WEDNESDAY_TITLE);
+    expect(head(page(brief()))![1]).toBe('November 22, 2026 · <span class="eyebrow-plan">Ozzie Demo — Main Sunday (fictional)</span>');
+    const unchecked = renderToStaticMarkup(React.createElement(SundayPage, {
+      brief: null, names: {}, busy: false, problem: "", sender: "", connected: true, hasRecording: false, configured: true,
+      canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+    }));
+    expect(head(unchecked)![1]).toBe("Sunday");
   });
 });
 

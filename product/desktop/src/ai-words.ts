@@ -66,6 +66,14 @@ export const CHOICE = {
   /** The offer couldn't be read: Ozzie doesn't say sign-up is closed (review L9). */
   ozzieUnreachable: "Can't check just now. The free ways work today.",
   ozzieLooking: "Checking whether it's open for sign-up…",
+  /**
+   * Card 1 when this Mac still holds its connection to Ozzie's AI (native keeps it when another way is chosen; only
+   * Disconnect ends it) and the account isn't known to be without a plan: never the price to someone who has it
+   * (live, 2026-11-19: a subscriber who tried AI on this Mac was shown "Pay $19 a month" on the way back).
+   */
+  ozzieHeld: "You already have Ozzie's AI on this Mac.",
+  /** Card 1 when ozzie.church refused this Mac's connection (status `reconnect`): connecting again, never the price. */
+  ozzieReconnect: "This Mac's connection has ended. Connect it again; a plan you already have isn't charged again.",
   own: "Your church's own AI",
   ownCost: "Ozzie charges nothing. Pay an AI company a few dollars yourself, or use free AI on this Mac.",
   none: "No AI for now",
@@ -87,7 +95,7 @@ export const OWN = {
   key: "A key from an AI company",
   keyCost: "You pay the company directly, usually a few dollars a month or less. Answers are quick and good.",
   mac: "AI on this Mac",
-  macCost: "Free, and nothing leaves this Mac. Slower, and simpler answers.",
+  macCost: "Free. With Ollama, nothing leaves this Mac. Slower, and simpler answers.",
 } as const;
 
 // ---- S8a Which AI company? ---------------------------------------------------------------------------------------
@@ -734,6 +742,28 @@ export const OZZIE = {
   pay: (price: string) => `Pay ${price} in my browser`,
   small: "You'll sign in with your email (no password) and pay on Stripe's page. Paying means you agree to the terms.",
   terms: "Read the terms",
+  /**
+   * S10a when this Mac still holds its connection (CHOICE.ozzieHeld): no price and no browser, as switching back is only
+   * a choice saved on this Mac. `heldFree` only while another way is in use.
+   */
+  held: "You already have Ozzie's AI on this Mac.",
+  heldFree: "Switching back to it charges nothing.",
+  useAgain: "Use Ozzie's AI again",
+  /** The same press while Ozzie's AI is already the way in use. */
+  keepUsing: "Keep using Ozzie's AI",
+  /** While the press reads the status and saves the route (each can wait on ozzie.church's account reading). */
+  switching: "Checking this Mac's connection to Ozzie's AI…",
+  /** After either press, above the account's own line (or `notKnown` when the account couldn't be read). */
+  usingNow: "Ozzie's AI is in use on this Mac.",
+  /**
+   * Settings, while this Mac holds the connection and another way (or no AI) is in use: how to use it (only while the
+   * account isn't known to be without a plan), and how to end it.
+   */
+  heldSettings: "This Mac is still connected to Ozzie's AI. To use it again, choose Change, then Ozzie's AI.",
+  disconnectHeld: "Disconnect this Mac from Ozzie's AI",
+  disconnected: "This Mac is disconnected from Ozzie's AI.",
+  /** The same, when the account has a plan: disconnecting a Mac never stops the payments (review M2). */
+  disconnectedPlan: "This Mac is disconnected from Ozzie's AI. Your plan isn't cancelled: to stop paying for it, choose See my plan.",
   closed: "Ozzie's AI isn't open for sign-up yet. The free ways work today.",
   unreachable: "Ozzie couldn't check whether Ozzie's AI is open just now. The free ways work today.",
   waitTitle: "Waiting for you in your browser",

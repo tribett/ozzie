@@ -19,6 +19,14 @@ body { background: #FAF6EE; }
 .oz .person .push { margin-left: auto; }
 .oz .person-role { margin-top: 4px; }
 .oz .draft { margin-top: 16px; }
+/* A note to one person opens right under their row (sunday-page.tsx PeopleList), nearer to it than to the next person;
+   a hidden list keeps the note being written in it. */
+.oz .people > .draft { margin: 0 0 8px; }
+.oz .people[hidden] { display: none; }
+/* A note its button opened takes the focus so VoiceOver reads it there, with no focus box, as a moved-to heading. */
+.oz .draft[tabindex="-1"]:focus { outline: none; }
+/* The plan's own title beside its date in the service page's eyebrow: in its own case, and broken anywhere if very long. */
+.oz .eyebrow-plan { text-transform: none; letter-spacing: normal; overflow-wrap: anywhere; }
 .oz .draft-edit { width: 100%; font: 400 17px/1.6 var(--f-display); color: var(--ink); background: var(--paper); border: 1px solid var(--control); border-radius: 10px; padding: 14px; }
 .oz .notchecked { margin-top: 8px; padding: 18px 22px; border: 1.5px dashed var(--line-strong); border-radius: 14px; display: flex; flex-direction: column; gap: 10px; }
 .oz .form { display: flex; flex-direction: column; gap: 8px; }
@@ -68,6 +76,9 @@ body { background: #FAF6EE; }
 .oz .draft-actions > .draft-opened:not(:empty) { margin-top: 10px; color: var(--ink-2); }
 .oz .draft-actions > .problem { margin-top: 10px; }
 .oz .draft-actions > .draft-note { margin-top: 8px; }
+/* How Open in Mail and Messages work, under that short line on a note for one person: the full account, one click away. */
+.oz .draft-actions > .draft-how { margin-top: 0; }
+.oz .draft-how > p.small { margin: 0 0 6px; color: var(--ink-2); }
 .oz .ask-draft .draft-actions > .find-next:first-child, .oz .copy-draft .draft-actions > .find-next:first-child { margin-top: 0; }
 .oz .rule-team { display: flex; flex-direction: column; }
 .oz .rule-note { margin: 4px 0 0 192px; }

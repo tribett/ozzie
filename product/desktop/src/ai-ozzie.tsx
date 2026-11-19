@@ -28,11 +28,19 @@ export const KEEP_CHECKING_MS = 30 * 60_000;
 const waits = new WeakMap<object, { connect: Promise<unknown>; since: number }>();
 
 /** An account as native sent it, read only when its numbers are numbers. */
-const accountOk = (v: unknown): v is ManagedAccount => {
+export const accountOk = (v: unknown): v is ManagedAccount => {
   if (v === null || typeof v !== "object") return false;
   const a = v as Record<string, unknown>;
   return typeof a.plan === "string" && Number.isFinite(a.allowance_steps) && Number.isFinite(a.used_steps) && typeof a.period_ends === "string";
 };
+
+/**
+ * This Mac still holds its connection to Ozzie's AI, whichever way is in use: native's status reads it on every route,
+ * choosing another way never ends it (only Disconnect does), and the account isn't known to be without a plan. Then
+ * Ozzie's AI is used again without a browser or a price (live, 2026-11-19: a subscriber who tried AI on this Mac was
+ * shown "Pay $19 a month" on the way back).
+ */
+export const holdsOzzie = (s: ModelStatus | null): boolean => s?.managed === "connected" && !(accountOk(s.account) && noPlan(s.account));
 
 /**
  * The person went on while a payment was being applied (review M4): Ozzie keeps reading the account after the screen has
@@ -56,11 +64,14 @@ function keepChecking(read: () => Promise<unknown>, onOn: () => void, until: num
 type Phase = "explain" | "waiting" | "received" | "on" | "ended";
 /**
  * S10a–S10c. `reconnect`: this Mac's connection ended and the account may already have a plan, so the first screen
- * offers connecting again (the website charges nothing when the plan is already there) instead of the price.
+ * offers connecting again (the website charges nothing when the plan is already there) instead of the price. `held`
+ * (`holdsOzzie`): this Mac still holds its connection, so the first screen offers using it again, which only saves the
+ * route on this Mac; null while the AI status hasn't been read yet, when neither the price nor Pay is shown (review M3).
+ * `heldAccount`: the account as that status read it, for a pause said before the press. `inUse`: it is the way in use.
  */
-export function OzzieScreen({ offer, reconnect = false, onBack, onLater, onAnother, onModel, onDone, done }: {
-  offer: Offer | null; reconnect?: boolean; onBack: () => void; onLater: () => void; onAnother: () => void;
-  onModel: (configured: boolean) => void; onDone: () => void; done: string;
+export function OzzieScreen({ offer, reconnect = false, held = false, heldAccount = null, inUse = false, onBack, onLater, onAnother, onModel, onDone, done }: {
+  offer: Offer | null; reconnect?: boolean; held?: boolean | null; heldAccount?: unknown; inUse?: boolean; onBack: () => void; onLater: () => void;
+  onAnother: () => void; onModel: (configured: boolean) => void; onDone: () => void; done: string;
 }) {
   const { bridge, mode } = useAiPlace();
   const day = useDay();
@@ -71,6 +82,12 @@ export function OzzieScreen({ offer, reconnect = false, onBack, onLater, onAnoth
   const [end, setEnd] = useState<PaidEnd | null>(null);
   const [problem, setProblem] = useState("");
   const [account, setAccount] = useState<ManagedAccount | null>(null);
+  // On again through the connection this Mac held (`switchBack`), not after a payment: the account's own line is said.
+  const [again, setAgain] = useState(false);
+  // The connection (or its plan) turned out to have ended when Ozzie's AI was used again: the screens' own words for that.
+  const [lost, setLost] = useState<"reconnect" | "plan" | null>(null);
+  // "Use Ozzie's AI again" is reading the status and saving the route (each can wait on ozzie.church's account reading).
+  const [switching, setSwitching] = useState(false);
   // Following a wait that was already running (the screen was left and opened again, or native said `busy`).
   const [resumed, setResumed] = useState(false);
   const attempt = useRef(0);
@@ -118,7 +135,7 @@ export function OzzieScreen({ offer, reconnect = false, onBack, onLater, onAnoth
   const pay = async () => {
     const mine = ++attempt.current;
     following.current = false;
-    clear(); setPhase("waiting"); setStill(false); setSlow(false); setStopped(false); setEnd(null); setProblem(""); setResumed(false);
+    clear(); setPhase("waiting"); setStill(false); setSlow(false); setStopped(false); setEnd(null); setProblem(""); setResumed(false); setAgain(false);
     const held = waits.get(bridge);
     const wait = held ?? { connect: bridge.payAndConnect(), since: Date.now() };
     if (held) setResumed(true);
@@ -147,6 +164,29 @@ export function OzzieScreen({ offer, reconnect = false, onBack, onLater, onAnoth
     if (accountOk(a) && !noPlan(a)) { setAccount(a); setPhase("on"); return; }
     setPhase("received");
     poll(mine, Date.now());
+  };
+  // The connection this Mac holds: using Ozzie's AI again only saves the route on this Mac. No browser, no connect, nothing
+  // bought. The status is read again first (the same reading each screen makes), and the route changes only while the
+  // connection still holds, so a way that works is never swapped for one that doesn't (review M1). One that ended since
+  // the screen opened is said as the screens say it (connect again, or the price for no plan), never as on, and the way in
+  // use stays. The status the save returns is checked too, for the moment between.
+  const switchBack = async () => {
+    const mine = ++attempt.current;
+    const mineNow = () => live.current && mine === attempt.current;
+    const ended = (s: ModelStatus) => setLost(s.managed === "reconnect" || s.setup === "reconnect" ? "reconnect" : "plan");
+    setProblem(""); setSwitching(true);
+    try {
+      let before: ModelStatus;
+      try { before = await model.status(); } catch (error) { if (mineNow()) setProblem(routeProblem(error)); return; }
+      if (!mineNow()) return;
+      if (!holdsOzzie(before)) { ended(before); return; }
+      let s: ModelStatus;
+      try { s = await model.setRoute("managed"); } catch (error) { if (mineNow()) setProblem(routeProblem(error)); return; }
+      onModel(s.configured);
+      if (!mineNow()) return;
+      if (s.configured && holdsOzzie(s)) { setAgain(true); setAccount(accountOk(s.account) ? s.account : null); setPhase("on"); return; }
+      ended(s);
+    } finally { if (mineNow()) setSwitching(false); }
   };
   const checkNow = async () => {
     const mine = attempt.current;
@@ -203,8 +243,15 @@ export function OzzieScreen({ offer, reconnect = false, onBack, onLater, onAnoth
       <Quiet onClick={carryOn}>{OZZIE.carryOn(mode === "settings" ? done : `Open ${day.page}`)}</Quiet>
     </div>
   </Screen>;
+  // On again through the held connection: the account's own line (answers left, near the end, paused), never the offer's
+  // full month, which is only true just after paying.
+  const accountLine = again && account ? ozzieState(account, planReason(account)) : null;
   if (phase === "on") return <Screen key="on" title={OZZIE.title}>
-    <Ok lines={[OZZIE.on(offer?.open ? offer.answers_text : null, account ? resetDay(account) : null)]} />
+    <Ok lines={[again ? OZZIE.usingNow : OZZIE.on(offer?.open ? offer.answers_text : null, account ? resetDay(account) : null)]} />
+    {/* A pause is said as S10d says it, calmly, never as part of the success (review L3). */}
+    {again && (accountLine?.kind === "paused" ? <Problem text={accountLine.text} calm />
+      : <p className="ai-body">{accountLine ? accountLine.text : OZZIE.notKnown}</p>)}
+    {again && account?.offline && <p className="ai-small">{offlineLine(account)}</p>}
     {problem && <Problem text={problem} />}
     <div className="ai-actions"><button type="button" className="btn btn-primary ai-primary" onClick={onDone}>{done}</button></div>
   </Screen>;
@@ -220,17 +267,30 @@ export function OzzieScreen({ offer, reconnect = false, onBack, onLater, onAnoth
     </Screen>;
   }
   const open = offer?.open && offer.price_text && offer.answers_text ? { price: offer.price_text, answers: offer.answers_text } : null;
+  const reconnecting = reconnect || lost === "reconnect";
+  const holding = held === true && !reconnecting && lost === null;
+  // The AI status not read yet: neither the price nor Pay until it is, as a subscriber could be shown them (review M3).
+  const checking = held === null && !reconnecting && lost === null;
+  const priced = !reconnecting && !holding && !checking;
+  // A held plan that is paused is said before the press, in S10d's words (review L3).
+  const heldState = holding && accountOk(heldAccount) ? ozzieState(heldAccount, planReason(heldAccount)) : null;
   return <Screen key="explain" title={OZZIE.title}>
-    {reconnect ? <p className="ai-body">{OZZIE.reconnect}</p> : <p className="ai-body">{OZZIE.body}</p>}
-    {!reconnect && open && <>
+    {holding ? <p className="ai-body">{inUse ? OZZIE.held : `${OZZIE.held} ${OZZIE.heldFree}`}</p>
+      : reconnecting ? <p className="ai-body">{OZZIE.reconnect}</p> : !checking && <p className="ai-body">{OZZIE.body}</p>}
+    {heldState?.kind === "paused" && <Problem text={heldState.text} calm />}
+    {checking && <Status text={CHOICE.ozzieLooking} />}
+    {holding && <Status text={switching ? OZZIE.switching : ""} />}
+    {priced && open && <>
       <div className="ai-price"><p className="ai-price-t">{OZZIE.plan(open.price)}</p><p className="ai-price-d">{OZZIE.answers(open.answers)}</p></div>
       <ul className="ai-checks">{OZZIE.checks.map(c => <li key={c}><Icon name="check" small /><span>{c}</span></li>)}</ul>
       <div className="ai-head"><p className="ai-small">{OZZIE.small}</p><Quiet onClick={terms}>{OZZIE.terms}</Quiet></div>
     </>}
-    {!reconnect && !open && <p className="ai-body">{offer === null ? CHOICE.ozzieLooking : offer.reason === "unreachable" ? OZZIE.unreachable : OZZIE.closed}</p>}
+    {priced && !open && <p className="ai-body">{offer === null ? CHOICE.ozzieLooking : offer.reason === "unreachable" ? OZZIE.unreachable : OZZIE.closed}</p>}
     {problem && <Problem text={problem} calm />}
     <div className="ai-actions">
-      {reconnect ? <button type="button" className="btn btn-primary ai-primary" onClick={() => void pay()}>{OZZIE.connectAgain}</button>
+      {holding ? <button type="button" className="btn btn-primary ai-primary" disabled={switching} onClick={() => void switchBack()}>{inUse ? OZZIE.keepUsing : OZZIE.useAgain}</button>
+        : checking ? null
+        : reconnecting ? <button type="button" className="btn btn-primary ai-primary" onClick={() => void pay()}>{OZZIE.connectAgain}</button>
         : open && <button type="button" className="btn btn-primary ai-primary" onClick={() => void pay()}>{OZZIE.pay(open.price)}</button>}
       <Quiet onClick={onBack}>{AI.back}</Quiet>
       <Quiet onClick={onLater}>{AI.notNow}</Quiet>

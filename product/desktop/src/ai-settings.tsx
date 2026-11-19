@@ -2,7 +2,8 @@
 // and "Change" opens the very same screens as first run (ai-choice.tsx), so the two can't differ. The church's own key:
 // this month's count and its limit ("Change the limit"), and "Remove my key from this Mac" (also once AI is off, while a key is kept). AI on this Mac: whether it has answered the
 // check, and with LM Studio that its LM Link can answer from another computer. Ozzie's AI: its state and how to stop
-// paying. Every word comes from closed codes; native's label, a key or anything a company wrote is never shown.
+// paying, and, while another way is in use and this Mac still holds its connection, how to disconnect it. Every word
+// comes from closed codes; native's label, a key or anything a company wrote is never shown.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useDay } from "./day-words.js";
 import { Icon } from "./icons.js";
@@ -10,8 +11,8 @@ import { AI, aiLine, CHOICE, LIMIT, localModel, MAC, monthDay, OLLAMA, OZZIE } f
 import { AiPlaceContext, Ok, Problem, Quiet, Sheet, SentSheet, Status, type AiPlace } from "./ai-parts.js";
 import { AiFlow, type AiStep } from "./ai-choice.js";
 import { AiLine } from "./ai-line.js";
-import { OzzieAiState } from "./ai-ozzie.js";
-import { model, type ModelStatus } from "./model.js";
+import { accountOk, holdsOzzie, OzzieAiState } from "./ai-ozzie.js";
+import { managedProblem, model, noPlan, type ModelStatus } from "./model.js";
 import { COMPANIES, onboarding, type KeyProvider } from "./onboarding-bridge.js";
 
 const ownProvider = (s: ModelStatus): KeyProvider => s.provider && (COMPANIES as readonly string[]).includes(s.provider) ? s.provider : "other";
@@ -126,6 +127,15 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
     }, () => setProblem(LIMIT.removeFailed));
   };
   const seePlan = () => { setProblem(""); bridge.openHelpPage("ozzie-account").catch(() => setProblem(OZZIE.browserFailed("ozzie.church/account"))); };
+  // Another way (or none) in use while this Mac still holds its connection to Ozzie's AI: choosing another way never ends
+  // it, so its own way to end it is here too (native `managed_disconnect`: revoked on ozzie.church, then forgotten here).
+  // Disconnecting never stops the payments, so with a plan on the account it says so, with See my plan (review M2).
+  const heldOzzie = route !== null && route !== "managed" && status?.managed === "connected";
+  const disconnectHeld = () => {
+    const paying = accountOk(status?.account) && !noPlan(status.account);
+    setProblem(""); setNote(""); setKeyStays(false); setPlanLink(false);
+    model.disconnect().then(s => { shown(s); setNote(paying ? OZZIE.disconnectedPlan : OZZIE.disconnected); setPlanLink(paying); }, e => setProblem(managedProblem(e)));
+  };
   const resets = status ? monthDay(status) : null;
   return <AiPlaceContext.Provider value={place}><div className="ai ai-now ai-settings" role="group" aria-labelledby={labelledBy}>
     {loaded === "loading" && <Status text={AI.loading} />}
@@ -172,6 +182,11 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
     {route === "local" && status?.local_app === "lm-studio" && status.setup !== "not-on-this-mac" && <p className="ai-body">{MAC.lmLink}</p>}
     {route === "managed" && status && <OzzieAiState status={status} onStart={() => open({ at: "ozzie" })} onReconnect={() => open({ at: "ozzie", reconnect: true })}
       onAnother={() => open({ at: "choose" })} onChanged={shown} />}
+    {heldOzzie && <>
+      {/* "Use it again" only where using it again is offered: never to an account known to have no plan (review L4). */}
+      {holdsOzzie(status) && <p className="ai-small">{OZZIE.heldSettings}</p>}
+      <div className="ai-actions"><Quiet onClick={disconnectHeld}>{OZZIE.disconnectHeld}</Quiet></div>
+    </>}
     {problem && <Problem text={problem} />}
     {loaded === "ok" && ollamaAt !== null && <details className="ai-more"><summary><Icon name="chev" small />{OLLAMA.settingsTitle}</summary>
       <p className="ai-small">{OLLAMA.settingsBody(new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric" }).format(new Date(ollamaAt)))}</p>

@@ -629,6 +629,59 @@ fn a_refused_token_asks_to_connect_again_and_attach_says_so() {
 }
 
 #[test]
+fn choosing_another_way_keeps_this_macs_connection_and_choosing_ozzies_ai_again_needs_no_connect() {
+    // Live, 2026-11-19: a subscriber chose AI on this Mac, then Ozzie's AI again. Choosing a way only writes the route:
+    // the device token stays on every route (only Disconnect ends it), the status still reads the account, and Ozzie's
+    // AI is ready again on the same token, with nothing sent to ozzie.church but the account reading.
+    let server = FakeServer::start();
+    let hosted = local(&server);
+    let dir = TempDir::new("switch-back");
+    let http = native(&hosted);
+    server.with(|s| s.valid = vec![FAKE_TOKENS[0].into()]);
+    let keys = connected_keys(FAKE_TOKENS[0]);
+    save_config(&dir.0, Route::Managed, None, None).unwrap();
+    // A model on this Mac that answered its check.
+    crate::model::save_local_checked(
+        &dir.0,
+        crate::model::LOCAL_BASE,
+        crate::model::LOCAL_MODEL,
+        1,
+        crate::model::route_generation(&dir.0),
+    )
+    .unwrap();
+    let mut on_local = status_for(&dir.0, &keys, false);
+    attach(
+        &mut on_local,
+        account_using(&hosted, &keys, &http, &dir.0, NOW),
+    );
+    assert_eq!(
+        (on_local.route, on_local.configured, on_local.managed),
+        ("local", true, "connected")
+    );
+    assert!(on_local.account.is_some());
+    assert_eq!(keys.token().as_deref(), Some(FAKE_TOKENS[0]));
+    // No AI for now keeps it too.
+    let mut off = crate::model::choose_no_ai(&dir.0, &keys).unwrap();
+    attach(&mut off, account_using(&hosted, &keys, &http, &dir.0, NOW));
+    assert_eq!((off.route, off.managed), ("none", "connected"));
+    assert_eq!(keys.token().as_deref(), Some(FAKE_TOKENS[0]));
+    // Ozzie's AI again: the route only, ready on the token it held.
+    save_config(&dir.0, Route::Managed, None, None).unwrap();
+    let mut back = status_for(&dir.0, &keys, false);
+    attach(&mut back, account_using(&hosted, &keys, &http, &dir.0, NOW));
+    assert_eq!(
+        (back.route, back.configured, back.setup, back.managed),
+        ("managed", true, "ready", "connected")
+    );
+    assert!(back.account.is_some());
+    assert_eq!(keys.token().as_deref(), Some(FAKE_TOKENS[0]));
+    // Nothing revoked, no new token asked for: one account reading (the minute's cache served the rest).
+    assert_eq!(server.paths(), ["GET /api/v1/account"]);
+    assert!(server.state.lock().unwrap().revoked.is_empty());
+    no_token_in(&serde_json::to_string(&back).unwrap());
+}
+
+#[test]
 fn only_checked_plan_and_usage_fields_are_kept() {
     let server = FakeServer::start();
     let hosted = local(&server);

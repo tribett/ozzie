@@ -19,6 +19,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { cleanYourName, yourName, YOUR_NAME_MAX } from "./connection.js";
+import { Icon } from "./icons.js";
 import { moments as thisMac, nameMomentDue, peopleQuestionDue, type MomentsStore } from "./moments.js";
 import { PeopleQuestion, type PeopleAccess } from "./people-question.js";
 
@@ -67,6 +68,13 @@ export const HAND_OFF_NOTE = "Opens a new message in this Mac's email app or Mes
 /** A note for one person on the Sunday page: when To is filled (native contact.rs `choose`: the only usable one, or the
  *  one marked primary), and that what's read is kept nowhere (review P, L8). */
 export const handOffToNote = (name: string) => `Opens a new message in this Mac's email app or Messages addressed to ${name} when Planning Center has one usable email address or mobile number for them, or marks one as primary. What's read is used only to fill in To: never kept and never sent to AI. Check it and send it yourself.`;
+/**
+ * Under the open buttons of a note for one person, always in view: who sends it, and what the address is for
+ * (click-through, 2026-11-19: the draft was taller than the window). handOffToNote, word for word, is one click away in
+ * the fold titled HOW_OPEN right under it.
+ */
+export const HAND_OFF_TO_SHORT = "You check it and send it yourself; their email address or mobile number is used only to fill in To.";
+export const HOW_OPEN = "How Open in Mail and Messages work";
 /** Below a note opened with To empty because the sign-in doesn't include People: the note's own way back to the People
  *  question (the only way it's asked again once the person chose to open without an address). */
 export const FILL_IN = "Fill in who it's to";
@@ -159,10 +167,10 @@ export async function handOffTo(app: DraftApp, text: string, person: string, ope
 /**
  * A draft's actions: its own copy button first (`copy`), then Open in Mail and Open in Messages, then anything else
  * (`after`). With `split`, the two open buttons get a row of their own under the copy row, so four buttons never wrap
- * raggedly. What happened is said under the buttons; the note says how To is filled in (or that the leader fills it in)
- * and who sends. What happened stays on this card only: a reason such as "child" is a fact about a person, so it is
- * never kept, recorded or passed on (product/desktop/test/draft-actions.test.ts). The two questions asked here keep
- * only their answers (moments.ts).
+ * raggedly. What happened is said under the buttons; the note says who sends (and, for a note to one person, that their
+ * address only fills in To, with how To is filled in under HOW_OPEN). What happened stays on this card only: a reason
+ * such as "child" is a fact about a person, so it is never kept, recorded or passed on
+ * (product/desktop/test/draft-actions.test.ts). The two questions asked here keep only their answers (moments.ts).
  */
 export function DraftActions({ text, copy, after, small = false, split = false, describedBy, open = openDraftNatively, openTo = openDraftToNatively, to = null, initial = null,
   onSign, nameStore = yourName, memory = thisMac, people }: {
@@ -248,6 +256,7 @@ export function DraftActions({ text, copy, after, small = false, split = false, 
       onClose={() => setAsking(null)}
       onWithout={() => { memory.declinePeople(); setAsking(null); void send(asking, false); }}
       onAddressed={() => { setPeopleNow(true); setAsking(null); void send(asking, true); }} />}
-    <p className="small draft-note" id={noteId}>{to ? handOffToNote(to.name) : HAND_OFF_NOTE}</p>
+    <p className="small draft-note" id={noteId}>{to ? HAND_OFF_TO_SHORT : HAND_OFF_NOTE}</p>
+    {to && <details className="listen-more draft-how"><summary><Icon name="chev" small />{HOW_OPEN}</summary><p className="small">{handOffToNote(to.name)}</p></details>}
   </div>;
 }

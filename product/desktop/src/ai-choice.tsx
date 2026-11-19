@@ -10,9 +10,9 @@ import { AI, CHOICE } from "./ai-words.js";
 import { AiPlaceContext, InUseTag, Problem, Quiet, Screen, SentSheet, useAiPlace, type AiPlace, type InUse } from "./ai-parts.js";
 import { CompaniesScreen, KeyScreen, OwnScreen } from "./ai-own-key.js";
 import { ThisMacScreen } from "./ai-this-mac.js";
-import { OzzieScreen } from "./ai-ozzie.js";
+import { holdsOzzie, OzzieScreen } from "./ai-ozzie.js";
 import { onboarding, type KeyProvider, type Offer, type OnboardingBridge } from "./onboarding-bridge.js";
-import { model } from "./model.js";
+import { model, type ModelStatus } from "./model.js";
 
 /** Where the way through the AI screens is. Settings may start further in (a missing key, a check, connecting again). */
 export type AiStep = { at: "choose" } | { at: "own" } | { at: "companies" } | { at: "key"; provider: KeyProvider } | { at: "mac" } | { at: "ozzie"; reconnect?: boolean };
@@ -48,15 +48,19 @@ export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboardin
     return () => { live = false; };
   }, [bridge]);
   const place = useMemo<AiPlace>(() => ({ bridge, mode, onCheckSetup, focus: focusOnMount || moved }), [bridge, mode, onCheckSetup, focusOnMount, moved]);
-  // Which way works now, read again as each screen opens (a way chosen on a later screen shows when the person comes back).
-  const [inUse, setInUse] = useState<InUse>(null);
+  // Which way works now, read again as each screen opens (a way chosen on a later screen shows when the person comes back),
+  // and whether this Mac still holds its connection to Ozzie's AI (`holdsOzzie`) or holds one ozzie.church refused.
+  // Undefined until the first reading: then `held` is null, and neither the price nor Pay shows (review M3). A reading that
+  // fails keeps the last one, so a screen never turns to the price while it is shown.
+  const [now, setNow] = useState<ModelStatus | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    model.status().then(s => {
-      if (live) setInUse(s?.configured === true && (s.route === "managed" || s.route === "own" || s.route === "local") ? s.route : null);
-    }, () => { if (live) setInUse(null); });
+    model.status().then(s => { if (live) setNow(s ?? null); }, () => { if (live) setNow(last => last === undefined ? null : last); });
     return () => { live = false; };
   }, [step.at]);
+  const inUse: InUse = now?.configured === true && (now.route === "managed" || now.route === "own" || now.route === "local") ? now.route : null;
+  const held = now === undefined ? null : holdsOzzie(now);
+  const refused = now?.managed === "reconnect";
   const go = (s: AiStep) => { setStep(s); setMoved(true); };
   // The service's page as a sentence says it: "Next: open Sunday", "Next: open your service" (never "Your service").
   const done = mode === "settings" ? AI.backTo(backTo ?? "Settings") : AI.next(dayName(day));
@@ -71,7 +75,8 @@ export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboardin
   };
   let screen;
   switch (step.at) {
-    case "choose": screen = <ChooseScreen offer={offer} inUse={inUse} onOzzie={() => go({ at: "ozzie" })} onOwn={() => go({ at: "own" })} onNone={none} noneFailed={noneFailed} onLater={later}
+    // A connection ozzie.church refused: connecting again, never the price, to a Mac it knew (live, 2026-11-19).
+    case "choose": screen = <ChooseScreen offer={offer} inUse={inUse} held={held} refused={refused} onOzzie={() => go({ at: "ozzie", reconnect: refused })} onOwn={() => go({ at: "own" })} onNone={none} noneFailed={noneFailed} onLater={later}
       backLabel={backTo ? AI.backTo(backTo) : AI.back} />; break;
     case "own": screen = <OwnScreen inUse={inUse} onKey={() => go({ at: "companies" })} onMac={() => go({ at: "mac" })} onBack={back ?? (() => go({ at: "choose" }))} />; break;
     case "companies": screen = <CompaniesScreen onPick={p => go({ at: "key", provider: p })} onMac={() => go({ at: "mac" })} onBack={back ?? (() => go({ at: "own" }))} />; break;
@@ -80,7 +85,7 @@ export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboardin
     case "mac": screen = <ThisMacScreen onBack={back ?? (() => go({ at: "own" }))} onModel={onModel} onDone={chosen} done={done}
       // No AI for now from here is the choice screen's own (where its rare failure is said).
       onKey={() => go({ at: "companies" })} onNone={() => { go({ at: "choose" }); none(); }} />; break;
-    case "ozzie": screen = <OzzieScreen offer={offer} reconnect={step.reconnect === true} onBack={back ?? (() => go({ at: "choose" }))} onLater={later}
+    case "ozzie": screen = <OzzieScreen offer={offer} reconnect={step.reconnect === true} held={held} heldAccount={now?.account ?? null} inUse={inUse === "managed"} onBack={back ?? (() => go({ at: "choose" }))} onLater={later}
       onAnother={() => go({ at: "choose" })} onModel={onModel} onDone={chosen} done={done} />; break;
   }
   return <AiPlaceContext.Provider value={place}>{screen}</AiPlaceContext.Provider>;
@@ -94,10 +99,14 @@ export function AiChoice(props: AiChoiceProps) {
 /**
  * S6: three cards, each one button with its title and cost line; none is chosen to begin with, and focus starts on the
  * title, never on a card. Ozzie's AI, when it can't be bought, stays in the Tab order with `aria-disabled` so its reason
- * is heard (review L11).
+ * is heard (review L11). `held`: this Mac still holds its connection to Ozzie's AI, so its card says so instead of the
+ * price and can be chosen whatever the offer says (nothing is bought on the way); null until the AI status is read, when
+ * the card waits as it does for the offer. `refused`: ozzie.church refused this Mac's connection, so the card leads to
+ * connecting again, whatever the offer says (the website lets an account with a plan connect while sign-up is closed).
  */
-function ChooseScreen({ offer, inUse, onOzzie, onOwn, onNone, noneFailed, onLater, backLabel }: {
-  offer: Offer | null; inUse: InUse; onOzzie: () => void; onOwn: () => void; onNone: () => void; noneFailed: boolean; onLater: () => void;
+function ChooseScreen({ offer, inUse, held, refused, onOzzie, onOwn, onNone, noneFailed, onLater, backLabel }: {
+  offer: Offer | null; inUse: InUse; held: boolean | null; refused: boolean; onOzzie: () => void; onOwn: () => void; onNone: () => void; noneFailed: boolean;
+  onLater: () => void;
   /** Settings mode's quiet way back: "Back to Today" over a page, "Back" in Settings' own AI section. */
   backLabel: string;
 }) {
@@ -106,11 +115,13 @@ function ChooseScreen({ offer, inUse, onOzzie, onOwn, onNone, noneFailed, onLate
   const settings = useAiPlace().mode === "settings";
   const open = offer?.open && offer.price_text && offer.answers_text ? CHOICE.ozzieCost(offer.price_text, offer.answers_text) : null;
   const shut = offer === null ? CHOICE.ozzieLooking : offer.reason === "unreachable" ? CHOICE.ozzieUnreachable : CHOICE.ozzieClosed;
+  const ozzie = held === true || refused || (held === false && open !== null);
+  const ozzieLine = held === null ? CHOICE.ozzieLooking : held ? CHOICE.ozzieHeld : refused ? CHOICE.ozzieReconnect : open ?? shut;
   return <Screen eyebrow={settings ? undefined : CHOICE.eyebrow} title={CHOICE.title}>
     <p className="ai-body">{settings ? CHOICE.bodySettings(day.day) : CHOICE.body(day.day)}</p>
     <ul className="ai-cards">
-      <li><button type="button" className="ai-card" aria-disabled={open ? undefined : true} onClick={() => { if (open) onOzzie(); }}>
-        <span className="ai-card-t">{CHOICE.ozzie}{inUse === "managed" && <InUseTag />}</span><span className="ai-card-d">{open ?? shut}</span>
+      <li><button type="button" className="ai-card" aria-disabled={ozzie ? undefined : true} onClick={() => { if (ozzie) onOzzie(); }}>
+        <span className="ai-card-t">{CHOICE.ozzie}{inUse === "managed" && <InUseTag />}</span><span className="ai-card-d">{ozzieLine}</span>
       </button></li>
       <li><button type="button" className="ai-card" onClick={onOwn}>
         <span className="ai-card-t">{CHOICE.own}{(inUse === "own" || inUse === "local") && <InUseTag />}</span><span className="ai-card-d">{CHOICE.ownCost}</span>

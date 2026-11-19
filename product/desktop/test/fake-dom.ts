@@ -67,15 +67,20 @@ class FakeElement extends FakeNode {
   removeAttributeNS(_ns: string | null, name: string) { this.removeAttribute(name); }
   getAttribute(name: string) { return this.attributes.get(name) ?? null; }
   hasAttribute(name: string) { return this.attributes.has(name); }
-  focus() {}
+  /** Moves the document's focus here only when the test asked for focus to be kept (installFakeDom's `focus`). */
+  focus() { const doc = this.ownerDocument; if (doc?.keepsFocus) doc.activeElement = this; }
   blur() {}
   scrollIntoView() {}
+  scrollBy() {}
+  /** Nothing is laid out: every box is empty at the top left (a test that needs a place gives one of its own). */
+  getBoundingClientRect() { return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0 }; }
 }
 
 class FakeDocument extends FakeNode {
   readonly documentElement: FakeElement;
   readonly body: FakeElement;
   activeElement: FakeElement | null = null;
+  keepsFocus = false;
   defaultView: unknown = null;
   constructor() {
     super(9, "#document", null);
@@ -102,11 +107,17 @@ export type FakeDom = {
   button(label: string): FakeElement | null;
   /** Presses a button the way React hears a click: its own onClick. */
   press(button: FakeElement): void;
+  /** Where the keyboard focus is (kept only when installed with `focus`). */
+  focused(): FakeElement | null;
 };
 
-/** Puts a fake `window` and `document` on globalThis for this test file. */
-export function installFakeDom(): FakeDom {
+/**
+ * Puts a fake `window` and `document` on globalThis for this test file. With `focus`, an element's focus() becomes the
+ * document's activeElement, so a test can see where the keyboard focus went.
+ */
+export function installFakeDom({ focus = false }: { focus?: boolean } = {}): FakeDom {
   const document = new FakeDocument();
+  document.keepsFocus = focus;
   const window: Record<string, unknown> = {
     document, event: undefined, HTMLIFrameElement: class {}, navigator: globalThis.navigator,
     addEventListener() {}, removeEventListener() {}, getSelection: () => null,
@@ -139,6 +150,9 @@ export function installFakeDom(): FakeDom {
       const props = key ? (button as unknown as Record<string, { onClick?: (e: unknown) => void }>)[key] : undefined;
       if (!props?.onClick) throw new Error("that button has no onClick");
       props.onClick({ preventDefault() {}, stopPropagation() {}, currentTarget: button, target: button });
+    },
+    focused() {
+      return document.activeElement;
     },
   };
 }

@@ -19,7 +19,7 @@ vi.mock("../src/draft-actions.js", async importOriginal => {
 });
 
 import {
-  addressedText, DraftActions, handOff, handOffText, handOffTo, handOffToNote, HAND_OFF_NOTE, NO_RECIPIENT, openDraftNatively, openDraftToNatively, openLabel,
+  addressedText, DraftActions, handOff, handOffText, handOffTo, handOffToNote, HAND_OFF_NOTE, HAND_OFF_TO_SHORT, HOW_OPEN, NO_RECIPIENT, openDraftNatively, openDraftToNatively, openLabel,
   FILL_IN, LEAVE_NAME, NAME_HELP, NAME_LABEL, USE_NAME, type Addressee, type DraftApp, type HandOff,
 } from "../src/draft-actions.js";
 import { addresseeFor, DraftBox, LeaderNote, ReminderNote } from "../src/sunday-page.js";
@@ -298,7 +298,10 @@ describe("a note for one person opens addressed when Planning Center has one det
     const addressed = shown({ app: "mail", result: "addressed", text: NOTE, in: "Mail" });
     expect(addressed).toContain('role="status" aria-live="polite">Opened in Mail, addressed to Riley Thornbury. Check it and send it yourself.</p>');
     expect(addressed).not.toContain('role="alert"');
-    expect(text(addressed)).toContain(handOffToNote("Riley Thornbury"));
+    // Who sends and what the address is for, in view; how To is filled in, word for word, one click away under it
+    // (click-through, 2026-11-19: the note was taller than the window; note-placement.test.ts).
+    expect(text(addressed)).toContain(HAND_OFF_TO_SHORT);
+    expect(addressed).toContain(`<details class="listen-more draft-how"><summary><svg class="ic ic-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>${HOW_OPEN}</summary><p class="small">${handOffToNote("Riley Thornbury").replaceAll("'", "&#x27;")}</p></details>`);
     expect(text(addressed)).not.toContain(HAND_OFF_NOTE);
     const fillIn = `>${FILL_IN.replace("'", "&#x27;")}</button>`;
     // The note's own link back to the People question (onboarding spec §4.2), a quiet one; Settings is no longer needed.
