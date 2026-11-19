@@ -958,7 +958,7 @@ fn a_checked_app_is_moved_into_applications_checked_again_there_opened_and_waite
     for phase in [Phase::Starting, Phase::Downloading, Phase::Checking, Phase::Installing, Phase::Opening] {
         assert!(phases.contains(&phase), "{phase:?}");
     }
-    assert!(!phases.contains(&Phase::StillStarting));
+    // Whether "still starting" was told depends on how fast this machine ran the three asks, so it is not pinned here.
     let downloading = ran.told.iter().rfind(|p| p.phase == Phase::Downloading).unwrap();
     assert_eq!((downloading.done_bytes, downloading.total_bytes), (app_zip().len() as u64, app_zip().len() as u64));
     // Nothing of the work is left; the record says when Ozzie installed it, and nothing more.
