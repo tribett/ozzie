@@ -4,7 +4,7 @@ import { SiriShortcutsSection } from "./siri-shortcuts-section.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { moreOf, operationsGranted, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
-import { onboarding } from "./onboarding-bridge.js";
+import { askForOperations, useOperationsReads } from "./operations-reads.js";
 import { MoreFromPlanningCenter } from "./planning-center-more.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
@@ -25,6 +25,8 @@ export const CONNECTION_WORDING = "Planning Center's page may say Ozzie could al
 export const CONNECTION_HOW = "The connection is kept in this Mac's Keychain, where macOS keeps passwords. Ozzie uses it only to read your church's Planning Center, and disconnecting removes it.";
 /** "When the window is closed": the menu bar named for someone who has never heard the words (spec §6), then by name. */
 export const CLOSED_WINDOW = "Ozzie keeps running when you close its window, as the small Ozzie picture at the top of your screen, so it can keep an eye on what you asked. To stop it completely, click that picture in the menu bar and choose Quit Ozzie.";
+/** Where Settings' switch for rooms, follow-ups and group events is set, once the access is granted (operations-reads.ts). */
+export { setOperationsReadsAfter } from "./operations-reads.js";
 /** Check my setup (spec §4.3), in place of Guided setup. */
 export const CHECK_SETUP_BODY = "See at a glance whether Planning Center, the service Ozzie watches, AI, notices and starting with this Mac are working, with one button to fix anything that isn't.";
 
@@ -129,15 +131,6 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
  * and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and Check my setup, in
  * that order.
  */
-/**
- * Native's switch for rooms, follow-ups and group events, set once the connection holds the access: turning on before
- * Planning Center granted it would let a later People grant for To start those reads. Null: not set (not granted yet).
- */
-export async function setOperationsReadsAfter(status: ConnectionStatus | null, on: boolean, set: (on: boolean) => Promise<boolean> = onboarding.setOperationsReads): Promise<boolean | null> {
-  if (on && !operationsGranted(status)) return null;
-  return set(on);
-}
-
 export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
@@ -184,17 +177,17 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   const { canSignIn, working, pending, run } = control;
   // The opt-in signs in again with the same registration (Ozzie's own, or yours under Advanced) as the sign-in form.
   // Check-Ins and Registrations stay as they are when this choice changes.
-  // Rooms, follow-ups and group events are read only while native's switch is on (first-run review H1).
-  const [readsOn, setReadsOn] = useState<boolean | null>(readsProp ?? null);
-  const [wantReads, setWantReads] = useState(false);
-  // Native keeps the switch per church: read it again whenever the church in use changes.
-  useEffect(() => { if (readsProp === undefined) void onboarding.operationsReads().then(setReadsOn); }, [readsProp, status?.organization]);
-  const switchReads = (on: boolean) => { void setOperationsReadsAfter(status, on).then(v => { if (v !== null) setReadsOn(v); }, () => undefined); };
+  // Rooms, follow-ups and group events are read only while native's switch is on (first-run review H1). Native keeps the
+  // switch per church, read again whenever the church in use changes; the offer after the first check (read-more.tsx)
+  // shares it and this sign-in (operations-reads.ts).
+  const reads = useOperationsReads(status, { read: readsProp === undefined });
+  const readsOn = readsProp !== undefined ? readsProp : reads.on;
+  const switchReads = (on: boolean) => { void reads.switchReads(on).catch(() => undefined); };
   // A sign-in asked for the access: the switch goes on once Planning Center granted it, not before.
-  useEffect(() => { if (wantReads && operationsGranted(status)) { setWantReads(false); switchReads(true); } }, [wantReads, status?.scopes]);
   const reconnect = (operations: boolean) => {
-    if (operations) setWantReads(true); else switchReads(false);
-    void run(() => control.signIn(operations, moreOf(status)), "operations");
+    if (operations) { void askForOperations(control, status); return; }
+    switchReads(false);
+    void run(() => control.signIn(false, moreOf(status)), "operations");
   };
   // Each section's place, by its own element (never by looking anything up in the page): its heading, or for Calendars
   // and Updates (sections of their own) the box they sit in. The index lists every section this page can show; once

@@ -23,7 +23,7 @@ import { hasContactDetail } from "../ask.js";
 import { ToolFailure } from "../broker.js";
 import type { AttentionReport } from "../attention-import/index.js";
 import { roomRules, type SundayOperations } from "../operations-capture.js";
-import type { BriefPerson, Finding, SundayBrief } from "../sunday-brief.js";
+import { shownUncertainties, type BriefPerson, type Finding, type SundayBrief } from "../sunday-brief.js";
 import { LIVE_CHECK_VALID_MS, type SundayCapture, type SundayRules } from "../sunday-capture.js";
 import { backgroundChecksOn, forModels } from "../kids-rules.js";
 import { applyDecisions, type DecidedItem, type DecisionChoice, type SundayDecision } from "../sunday-decisions.js";
@@ -162,6 +162,14 @@ const KEPT_ON_THIS_MAC = "some findings are shown only in Ozzie on this Mac";
 const CHOICE: Record<DecisionChoice, string> = {
   "covered-outside": "covered outside Planning Center", "not-needed": "not needed this Sunday", "lead-expected": "no scheduled lead expected",
 };
+/**
+ * The overview's kinds for rooms, follow-ups and group meetings: words vocabulary.json already holds (shared with native
+ * and ozzie.church), so these rows change nothing either checks. compose.ts says each in the Sunday page's words.
+ */
+export const OVERVIEW_ROOM = "room use needs review";
+export const OVERVIEW_FOLLOW_UP = "needs an owner";
+export const OVERVIEW_UNCONFIRMED = "a detail couldn't be verified";
+export const OVERVIEW_GROUP = "group meets while serving";
 const UNDESCRIBED = "a part of the check Ozzie can't describe";
 const AGES = "confirmed people counted; ages not checked";
 const byLabel = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
@@ -316,9 +324,16 @@ export class HarnessTools {
 
   // -- Services tools --
 
+  /**
+   * The Sunday page's own counts (sunday-brief.ts sundayShownCount), so the same question never states a total that
+   * contradicts Today and the sidebar (live review 2026-11-18): Services findings still open after the leader's decisions
+   * (a settled one is listed with its decision, never counted), then rooms, follow-ups and group meetings as rows of their
+   * own. Background checks never reach the tools (forModels): the overview says some findings stay on this Mac instead.
+   */
   #overview(): Result {
     const { brief, zone } = this.#services();
     const decided = this.#decided();
+    const open = brief.findings.filter(f => decided.get(f.id)?.state !== "resolved");
     const findings = brief.findings.map(f => {
       const base: Record<string, unknown> = { kind: kindWord(f.kind), tone: f.tone === "decision" ? "needs a decision" : "worth a look" };
       switch (f.kind) {
@@ -337,12 +352,48 @@ export class HarnessTools {
       }
       return { ...base, ...this.#decision(decided.get(f.id)) };
     });
+    // After the Services findings, so their labels are numbered as before.
+    const ops = this.#operationsShown(zone);
     return this.#servicesResult({
       mode: this.#data.mode, sunday: brief.plan.date ?? NOT_KNOWN, reads: brief.sources.reads, reads_not_completed: brief.sources.failed.length,
-      needs_a_decision: brief.findings.filter(f => f.tone === "decision").length, worth_a_look: brief.findings.filter(f => f.tone === "look").length,
+      needs_a_decision: open.filter(f => f.tone === "decision").length + ops.decisions, worth_a_look: open.filter(f => f.tone === "look").length + ops.looks,
       ...(backgroundChecksOn(this.#data.rules) ? { kept_on_this_mac: KEPT_ON_THIS_MAC } : {}),
-      findings,
+      findings: [...findings, ...ops.rows],
     }, "findings");
+  }
+
+  /**
+   * Rooms, follow-ups and group meetings as the Sunday page counts them, each a row in the overview's closed words: a
+   * room overlap a Church rule confirms and a follow-up with no owner need a decision; an overlap no rule confirms, one row
+   * for room or follow-up details that couldn't be confirmed, and each group meeting at a serving time are worth a look.
+   * Rooms, workflows, steps and people are this session's labels, the same ones their own tools give. Only when the
+   * connection holds Calendar, People and Groups (as those tools), and never from an out-of-date check (as the page).
+   */
+  #operationsShown(zone: string | null): { rows: Record<string, unknown>[]; decisions: number; looks: number } {
+    const ops = this.#data.operations;
+    if (!this.#data.granted.includes("operations") || !ops || ops.stale) return { rows: [], decisions: 0, looks: 0 };
+    const where = ops.result?.churchTimeZone ?? zone;
+    const found = ops.result?.findings ?? [];
+    const tone = (decision: boolean) => decision ? "needs a decision" : "worth a look";
+    const rows: Record<string, unknown>[] = [
+      ...found.flatMap(f => f.kind === "room-overlap" ? [{ kind: OVERVIEW_ROOM, tone: tone(f.certainty === "confirmed"),
+        room: this.session.room(f.resource_id.replace(/^room/, "")), overlap: span(f.overlap, where) }] : []),
+      ...found.flatMap(f => f.kind === "unowned-overdue" ? [{ kind: OVERVIEW_FOLLOW_UP, tone: tone(true),
+        workflow: this.session.workflow(f.workflow_id.replace(/^workflow/, "")), step: this.session.step(f.step_id.replace(/^step/, "")),
+        due: localIso(f.due_at, where) ?? NOT_KNOWN }] : []),
+      ...(shownUncertainties(ops.result).length ? [{ kind: OVERVIEW_UNCONFIRMED, tone: tone(false) }] : []),
+      ...[...ops.group_meetings].sort((a, b) => byId(a.person_id, b.person_id)).map(m => ({ kind: OVERVIEW_GROUP, tone: tone(false),
+        person: this.#person(m.person_id), ...this.#meeting(m, where) })),
+    ];
+    const decisions = rows.filter(r => r["tone"] === "needs a decision").length;
+    return { rows, decisions, looks: rows.length - decisions };
+  }
+  /** A group meeting at a serving time: each role as Planning Center still counts the person on it, and the meeting's times. */
+  #meeting(m: SundayOperations["group_meetings"][number], zone: string | null) {
+    return {
+      serving: m.serving.map(s => ({ role: this.#roleOf(s.position ?? undefined), status: s.status, time: span(s.interval, zone) })),
+      group_meetings: m.meetings.map(i => ({ time: span(i, zone) })),
+    };
   }
 
   #openNeeds(): Result {
@@ -467,11 +518,8 @@ export class HarnessTools {
   #groups(): Result {
     const { ops, completeness, zone, result } = this.#operations("Planning Center Groups");
     const meetings = [...(ops?.group_meetings ?? [])].sort((a, b) => byId(a.person_id, b.person_id));
-    const clashes = meetings.map(m => ({
-      person: this.#person(m.person_id),
-      serving: m.serving.map(s => ({ role: this.#roleOf(s.position ?? undefined), status: s.status, time: span(s.interval, zone) })),
-      group_meetings: m.meetings.map(i => ({ time: span(i, zone) })), label: "Worth a look",
-    })).sort((a, b) => byLabel(a.person, b.person));
+    const clashes = meetings.map(m => ({ person: this.#person(m.person_id), ...this.#meeting(m, zone), label: "Worth a look" }))
+      .sort((a, b) => byLabel(a.person, b.person));
     const status = clashes.length ? "group meets while serving" : completeness === "complete" ? "no clash found" : "not fully checked";
     return result({ status, clashes }, "clashes");
   }

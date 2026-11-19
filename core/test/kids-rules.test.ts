@@ -369,8 +369,11 @@ describe("kids findings flow into the briefing; background checks never leave th
     expect(payload.findings.filter(r => r["kind"] === "fewer confirmed than the church rules ask")[0]).toMatchObject({
       tone: "needs a decision", confirmed: 1, needed: 2, asked_no_answer: 0, request_not_sent: 0, ages: "confirmed people counted; ages not checked" });
     expect(payload.kept_on_this_mac).toBe("some findings are shown only in Ozzie on this Mac");
-    // The count leaves background checks out too: it is the open roles plus the two kids-team counts.
-    expect(payload.needs_a_decision).toBe(b.findings.filter(f => f.tone === "decision" && f.kind !== "background-check").length);
+    // The count leaves background checks out too: it is the open roles plus the two kids-team counts, and the follow-up with
+    // no owner (rooms, follow-ups and group meetings count as on the Sunday page; live review 2026-11-18).
+    expect(payload.findings.filter(r => r["tone"] === "needs a decision" && ["room use needs review", "needs an owner"].includes(r["kind"] as string)).map(r => r["kind"]))
+      .toEqual(["needs an owner"]);
+    expect(payload.needs_a_decision).toBe(b.findings.filter(f => f.tone === "decision" && f.kind !== "background-check").length + 1);
     const wire = JSON.stringify(env);
     for (const name of Object.values(capture.names)) expect(wire).not.toContain(name);
     expect(wire).not.toMatch(/Nursery|Lyrics|2026-11-21/);

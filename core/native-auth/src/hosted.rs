@@ -3,9 +3,10 @@
 //! - Connecting: the app opens `{base}/connect?redirect_port=…&state=…&code_challenge=…&device_label=…` (an S256
 //!   challenge, a fresh state and DEVICE_LABEL, which names no one). The person signs in there; the browser comes back
 //!   to `http://127.0.0.1:<port>/ozzie/callback?code=…&state=…`, read by a one-attempt loopback receiver with the same
-//!   request rules as Planning Center's (callback.rs `read_loopback_get`), for at most five minutes. A request with
-//!   the wrong state is answered and ignored. The one-time code and the verifier go to `POST /api/v1/device/token`;
-//!   the device token that comes back is kept in the Keychain (KEYCHAIN_SERVICE / MANAGED_TOKEN_ACCOUNT) only.
+//!   request rules as Planning Center's (callback.rs `read_loopback_get`), for at most five minutes (an hour when the
+//!   connect starts a plan, PAID_CONNECT_LIFETIME_MS). A request with the wrong state is answered and ignored. The
+//!   one-time code and the verifier go to `POST /api/v1/device/token`; the device token that comes back is kept in the
+//!   Keychain (KEYCHAIN_SERVICE / MANAGED_TOKEN_ACCOUNT) only.
 //! - Sending: with a device token saved, the managed route sends agent steps and rewords to ozzie.church with it
 //!   (model.rs `Target::Hosted`). Every native check still runs on this Mac first and every reply is read by the same
 //!   code as before; only the address, the body's outer shape and the authorization change. ozzie.church refuses
@@ -55,8 +56,15 @@ pub const DEVICE_LABEL: &str = "Ozzie for Mac";
 /// How long a connect waits for the browser, as for a Planning Center sign-in.
 pub const CONNECT_LIFETIME_MS: u64 = crate::oauth::ATTEMPT_LIFETIME_MS;
 /// How long a connect that starts paying for a plan waits (onboarding spec S10b): signing in by email, then paying
-/// on Stripe's page, takes longer than a sign-in.
-pub const PAID_CONNECT_LIFETIME_MS: u64 = 30 * 60_000;
+/// on Stripe's page, takes longer than a sign-in. An hour (30 minutes until 2026-11-18, when the owner's first payment
+/// failed on the website, a later one went through, and Ozzie had already stopped waiting): Stripe's page lapses 31
+/// minutes after it is made (web.ts `checkoutExpiry`), so a page opened in the first 29 minutes is paid while Ozzie
+/// still waits. Longer is safe because nothing else changes: the receiver listens on 127.0.0.1 only, answers anything
+/// but this attempt's state (32 random bytes, compared in constant time) with the fixed stray page without ending the
+/// wait, ends at the first callback with that state, and the code it carries is single-use, lives five minutes on
+/// ozzie.church and is useless without the verifier, which never leaves this Mac. Try again makes a new port, state and
+/// verifier, so an older attempt's state is never accepted; Cancel, Disconnect and quitting still end it at once.
+pub const PAID_CONNECT_LIFETIME_MS: u64 = 60 * 60_000;
 /// The plans a connect may ask to start. Only Personal is on sale (decision 17).
 pub const PLANS_ON_SALE: [&str; 1] = ["personal"];
 /// ozzie.church's offer: whether Ozzie's AI is open for sign-up, and its price and allowance in words (W6).
@@ -731,8 +739,9 @@ impl ConnectAttempt {
             _ => Callback::Refused,
         }
     }
-    /// Answers loopback requests until this attempt's callback arrives, the person cancels or five minutes pass. The
-    /// browser's connection is returned open so the page it sees can say how connecting ended.
+    /// Answers loopback requests until this attempt's callback arrives, the person cancels or its time is up (five
+    /// minutes, or PAID_CONNECT_LIFETIME_MS for a paid connect). The browser's connection is returned open so the page it
+    /// sees can say how connecting ended.
     fn wait(
         &self,
         cancel: &AtomicBool,

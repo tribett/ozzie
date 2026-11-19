@@ -629,6 +629,9 @@ pub struct AuthController {
     generation: AtomicU64,
     busy: AtomicBool,
     cancelled: AtomicBool,
+    /// A finder whose sign-in connected and was handed over (`adopt_found`), then retired. Its status then reads
+    /// cancelled, so this is how the app's sign-in watcher still knows it connected (review L9).
+    handed_over: AtomicBool,
     sunday: Option<(
         Arc<crate::sunday::SundayAuthority>,
         crate::sunday::ControllerInstance,
@@ -695,6 +698,7 @@ impl AuthController {
             generation: AtomicU64::new(0),
             busy: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
+            handed_over: AtomicBool::new(false),
             sunday: None,
             renewing: Mutex::new(()),
         })
@@ -770,6 +774,7 @@ impl AuthController {
             generation: AtomicU64::new(0),
             busy: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
+            handed_over: AtomicBool::new(false),
             sunday: None,
             renewing: Mutex::new(()),
         })
@@ -820,8 +825,14 @@ impl AuthController {
             state.runs_out = runs_out;
         }
         drop(_operation);
+        self.handed_over.store(true, Ordering::SeqCst);
         self.cancel();
         Ok(bound)
+    }
+    /// Whether this finder's sign-in connected and was handed over (`adopt_found`): retired since, so its status reads
+    /// cancelled, but the sign-in itself connected.
+    pub fn handed_over(&self) -> bool {
+        self.handed_over.load(Ordering::SeqCst)
     }
     fn prepare_mutation(&self, reason: RetireReason) -> Result<Option<RetiredTag>, AuthError> {
         let Some((authority, controller)) = &self.sunday else {

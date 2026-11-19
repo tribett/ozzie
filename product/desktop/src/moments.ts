@@ -144,9 +144,12 @@ export function kidsFacts(teams: readonly Team[], markedKidsTeamIds: readonly st
 
 // ---- ozzie.finish-list.v1 -----------------------------------------------------------------------------------------
 
-export type FinishItemId = "start" | "service" | "kids" | "ai" | "waiting";
-export const FINISH_IDS: readonly FinishItemId[] = ["start", "service", "kids", "ai", "waiting"];
-/** `hidden`: "Hide this list" was chosen, for good. `notNow`: items collapsed with "Not now". */
+export type FinishItemId = "start" | "service" | "kids" | "ai" | "waiting" | "more";
+export const FINISH_IDS: readonly FinishItemId[] = ["start", "service", "kids", "ai", "waiting", "more"];
+/**
+ * `hidden`: "Hide this list" was chosen, for good. `notNow`: items collapsed with "Not now". The service page's offer of
+ * more Planning Center access (read-more.tsx) is the "more" item: its "Not now" there is this same one.
+ */
 export interface FinishMemory { hidden: boolean; notNow: readonly FinishItemId[] }
 export function parseFinish(v: unknown): FinishMemory {
   if (!plain(v)) return { hidden: false, notNow: [] };

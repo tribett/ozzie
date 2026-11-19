@@ -20,7 +20,7 @@ import { contextSize } from "./limits.js";
 const PROCEDURE_PROMPT = "Run this procedure now. Answer only with the JSON object.";
 const DENIED = '{"error":"denied"}';
 const ALLOWLIST: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);
-const MODEL_CODES: ReadonlySet<string> = new Set(["egress", "no-model", "limit", "denied", "invalid-task", "fidelity"]);
+const MODEL_CODES: ReadonlySet<string> = new Set(["egress", "no-model", "limit", "denied", "invalid-task", "fidelity", "invalid-arguments"]);
 const TOOL_ERRORS: ReadonlySet<string> = new Set<ToolError>(["denied", "stale", "partial", "provider-failure", "unverified"]);
 const COMPLETENESS: ReadonlySet<string> = new Set<Completeness>(["complete", "partial", "stale", "denied"]);
 const FINISH: ReadonlySet<string> = new Set(["stop", "tool_calls", "length"]);

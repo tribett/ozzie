@@ -13,6 +13,8 @@ import { MAX_BATCH, MAX_LINE, McpServer, TOOLS } from "../../mcp/server.js";
 import { envelopeProblems, isIsoTime, isoMillis, sentenceFits } from "../../src/harness/fixed.js";
 import { MAX_SHARED_BYTES, ON_FILE, parseSharedCheck, SHARED_FILE, sharedCheckText, sharedEnvelopes, type SharedTask } from "../../mcp/snapshot.js";
 import { FIXTURES, FRESH } from "../harness/fixtures.js";
+import { sundayShownCount } from "../../src/sunday-brief.js";
+import { applyDecisions } from "../../src/sunday-decisions.js";
 
 const skills: ReadonlyMap<string, Skill> = await bundledSkills();
 const COPY = "B4K7Q2X9M3T8";
@@ -150,11 +152,12 @@ describe("background checks", () => {
       return (JSON.parse(answer!) as { result: { content: { text: string }[] } }).result.content[0]!.text;
     }).join("\n");
     expect(out).not.toMatch(BACKGROUND);
-    // Even the counts leave them out: the overview counts only what isn't a background check, and says some findings
-    // are shown only in Ozzie.
+    // Even the counts leave them out: the overview counts what the Sunday page counts (rooms, follow-ups and group meetings
+    // included; live review 2026-11-18) less the background checks, and says some findings are shown only in Ozzie.
     const others = findings.filter(f => f.kind !== "background-check");
     const count = (tone: string, list: typeof findings) => list.filter(f => f.tone === tone).length;
-    expect(out).toContain(`this check found ${count("decision", others)} items that need a decision and ${count("look", others)} worth a look`);
+    const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
+    expect(out).toContain(`this check found ${shown.decisions - count("decision", background)} items that need a decision and ${shown.looks - count("look", background)} worth a look`);
     expect(out).toContain("Some findings are shown only in Ozzie on this Mac");
     if (background.length) expect(count("decision", findings) + count("look", findings)).toBeGreaterThan(count("decision", others) + count("look", others));
   });

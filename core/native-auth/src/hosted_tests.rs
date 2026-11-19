@@ -900,7 +900,7 @@ fn ozzie_church_refusals_and_connect_errors_are_closed_vocabularies() {
 // ---- Ozzie's AI, paid in one browser trip (onboarding spec S10, lane N7) -----------------------------------------
 
 #[test]
-fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_taken() {
+fn a_paid_connect_names_the_plan_waits_an_hour_and_knows_no_payment_was_taken() {
     let server = FakeServer::start();
     let hosted = local(&server);
     let dir = TempDir::new("paid");
@@ -919,7 +919,12 @@ fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_t
         ]
     );
     assert!(attempt.url().ends_with("&plan=personal"));
-    assert_eq!(attempt.expires_ms, NOW + 30 * 60_000);
+    assert_eq!(attempt.expires_ms, NOW + 60 * 60_000);
+    // A connect without a plan still waits five minutes, as a Planning Center sign-in does.
+    assert_eq!(
+        ConnectAttempt::begin(&hosted, NOW).unwrap().expires_ms,
+        NOW + 5 * 60_000
+    );
     // Only a plan on sale may be asked for.
     for plan in ["team", "church", "leader", "", "personal&x=1"] {
         assert_eq!(
@@ -960,8 +965,9 @@ fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_t
     );
     // Website change 02a4df66: after paying, the person presses "Connect this Mac" before any callback comes,
     // and a plan not yet applied sends them to the account page with no callback at all. The listener waits the
-    // whole thirty minutes for a slow payer, then ends as a closed "not-finished": try again re-opens the connect
-    // step (the site shows "Connect this Mac" without charging an account that already has the plan).
+    // whole hour for a slow payer (a first payment that failed, then a second), then ends as a closed "not-finished":
+    // try again re-opens the connect step (the site shows "Connect this Mac" without charging an account that already
+    // has the plan).
     let attempt = ConnectAttempt::begin_for(&hosted, NOW, Some("personal")).unwrap();
     assert_eq!(
         connect_using(
@@ -980,7 +986,32 @@ fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_t
         serde_json::to_string(&ManagedError::NotFinished).unwrap(),
         r#""not-finished""#
     );
-    // A slow payer who clicks at minute 29 is still heard.
+    // A slow payer is still heard at minute 31, just after the first Stripe page lapsed (review L8: the case this
+    // comment named is tested, not only said), and at minute 59.
+    let early = ConnectAttempt::begin_for(&hosted, NOW, Some("personal")).unwrap();
+    let heard = std::thread::spawn({
+        let (host, state) = (early.host.clone(), early.state.clone());
+        move || {
+            get(
+                &host,
+                &format!("/ozzie/callback?error=payment_cancelled&state={state}"),
+            )
+        }
+    });
+    assert_eq!(
+        connect_using(
+            &early,
+            &hosted,
+            &keys,
+            &native(&hosted),
+            &AtomicBool::new(false),
+            &|| NOW + 31 * 60_000,
+            &dir.0
+        )
+        .err(),
+        Some(ManagedError::PaymentCancelled)
+    );
+    heard.join().unwrap();
     let attempt = ConnectAttempt::begin_for(&hosted, NOW, Some("personal")).unwrap();
     let late = std::thread::spawn({
         let (host, state) = (attempt.host.clone(), attempt.state.clone());
@@ -998,7 +1029,7 @@ fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_t
             &keys,
             &native(&hosted),
             &AtomicBool::new(false),
-            &|| NOW + 29 * 60_000,
+            &|| NOW + 59 * 60_000,
             &dir.0
         )
         .err(),
@@ -1028,7 +1059,7 @@ fn a_paid_connect_names_the_plan_waits_thirty_minutes_and_knows_no_payment_was_t
         .err(),
         Some(ManagedError::Expired)
     );
-    assert_eq!(PAID_CONNECT_LIFETIME_MS, 1_800_000);
+    assert_eq!(PAID_CONNECT_LIFETIME_MS, 3_600_000, "a paid connect waits an hour");
     assert_eq!(
         CONNECT_LIFETIME_MS, 300_000,
         "Planning Center's sign-in keeps five minutes"

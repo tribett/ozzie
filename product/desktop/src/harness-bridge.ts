@@ -15,7 +15,8 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { AgentRuntime, AgentStepReply, FailureCode, ModelStep, Skill, TaskEvent, TaskOutcome, ToolEnvelope } from "../../../core/src/harness/contract.js";
 import { REFUSALS } from "../../../core/src/ask.js";
 import {
-  asksAboutChecksOrKids, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_TO_DECIDE, openDecisions, type KidsQuestion, type LocalAnswer,
+  asksAboutChecksOrKids, chosenSources, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_OPEN, NOTHING_TO_DECIDE, onPage, openDecisions, type KidsQuestion,
+  type LocalAnswer,
 } from "../../../core/src/harness/compose.js";
 import { answerText, parseAnswer } from "../../../core/src/harness/fixed.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
@@ -24,6 +25,7 @@ import { PiLoop } from "../../../core/src/harness/pi-loop.js";
 import type { HarnessSession } from "../../../core/src/harness/session.js";
 import { TsLoop } from "../../../core/src/harness/ts-loop.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
+import { SUNDAY_WORDS } from "../../../core/src/service-day.js";
 import { buildSundayBrief, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
@@ -41,9 +43,9 @@ const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 /** agent_step's closed error vocabulary (agent.rs AgentError), as Tauri rejects with it: a bare string. */
 export type AgentErrorCode = "egress" | "denied" | "limit" | "invalid-task" | "ledger-unavailable" | "not-configured" | "budget" | "daily-limit"
   | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail"
-  | "background-check" | "month-limit" | "no-credit" | "thought-only";
+  | "background-check" | "month-limit" | "no-credit" | "thought-only" | "too-many-facts" | "invalid-arguments";
 /** The FailureCodes a model step can end a task with (the loops keep exactly these from a step's error). */
-export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity";
+export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity" | "invalid-arguments";
 /**
  * Each native code as the loop's FailureCode (review 2026-11-14 C9). The ledger being unavailable is "transport" and
  * a spent allowance (the route's call cap, today's agent steps, or the church's Ozzie managed allowance, which pauses
@@ -56,6 +58,13 @@ const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   "rate-limited": "transport", "provider-failure": "transport", "invalid-request": "transport",
   // The model's final reply wasn't the closed answer form, or chose a fact the task never read (structured answers).
   "invalid-answer": "fidelity",
+  // The answer form's one fault was choosing more than its facts (vocabulary.json `max_facts`): still an answer Ozzie
+  // doesn't check, so "fidelity"; the Ask panel knows why from the native code (askOzzie: AI on this Mac writes a decision
+  // question's answer itself, and anywhere else it says the true reason).
+  "too-many-facts": "fidelity",
+  // The model asked for a lookup with arguments the tool doesn't take (a `role` for the open roles): its own code, never
+  // "egress", which says the question held details kept on this Mac.
+  "invalid-arguments": "invalid-arguments",
   // Ozzie managed: the church's allowance on ozzie.church is spent, so AI help is paused (never retried).
   "allowance-paused": "limit",
   // The church's own AI company says its account has no credit left (model.rs NoCredit): nothing more is sent.
@@ -79,7 +88,7 @@ export function stepFailure(error: unknown): StepCode {
   const code = nativeCode(error);
   return code ? STEP_CODES[code] : "transport";
 }
-const STEP_FAILURES: ReadonlySet<string> = new Set<StepCode>(["egress", "denied", "limit", "invalid-task", "no-model", "transport", "fidelity"]);
+const STEP_FAILURES: ReadonlySet<string> = new Set<StepCode>(["egress", "denied", "limit", "invalid-task", "no-model", "transport", "fidelity", "invalid-arguments"]);
 /** What a ModelStep threw: its own mapped code, or a native code mapped here. */
 const thrownCode = (error: unknown) => {
   const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -590,6 +599,11 @@ export interface ShownAnswer {
   local?: boolean;
   /** Open decisions the AI's answer left out were added on this Mac, under "Also on the Sunday page". */
   added?: boolean;
+  /**
+   * Written by Ozzie itself from the overview the task read, because the AI's answer chose more facts than Ozzie checks in
+   * one answer (`overviewAnswer`): the AI was asked, but none of this is its choice.
+   */
+  composedHere?: boolean;
   /** Who could help, from a Sunday card: what the AI's look adds to the fixed list (the people are always the finding's own). */
   look?: Look;
 }
@@ -605,6 +619,9 @@ export type AskTurn =
  * Ozzie's order, then names and times restored here. A draft is only ever the drafting tool's own text, restored with
  * first names. The same for Ask and for a responsibility's prepared summary.
  */
+/** The sources of the overview's rooms, follow-ups and group meetings the answer chose, at the operations check's time. */
+const rowSources = (harness: Harness, outcome: TaskOutcome) => chosenSources(outcome.answer ?? "", outcome.evidence, harness.data.operations?.checked_at ?? null);
+
 export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: Skill | undefined, sender: string): ShownAnswer {
   // The watched service's own day words, so an answer names Wednesday and "the Wednesday page" (review H4).
   const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
@@ -613,7 +630,7 @@ export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: S
     body: composed.paragraphs.map(p => harness.restore(p, { sender })).join("\n\n"),
     draft: composed.draft ? harness.restore(composed.draft, { sender, firstNames: true }) : null,
     notCovered: composed.kind === "not-covered" || outcome.evidence.length === 0,
-    basedOn: basedOnEvidence(outcome.evidence, mode),
+    basedOn: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
     gaps: evidenceGaps(outcome.evidence, mode),
     procedure: procedure ? { title: procedure.title, body: procedure.body } : null,
     steps: outcomeSteps(outcome.events, outcome.evidence, mode),
@@ -632,7 +649,7 @@ export function keptWriteup(harness: Harness, outcome: TaskOutcome): { lines: st
   const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
   const mode = harness.data.mode;
   return {
-    lines: composed.paragraphs.map(p => harness.keep(p)), based_on: basedOnEvidence(outcome.evidence, mode),
+    lines: composed.paragraphs.map(p => harness.keep(p)), based_on: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
     gaps: evidenceGaps(outcome.evidence, mode), steps: outcomeSteps(outcome.events, outcome.evidence, mode),
   };
 }
@@ -745,6 +762,39 @@ export function localAnswer(harness: Harness, local: LocalAnswer, first: string[
 }
 
 /**
+ * A decision question's answer written by Ozzie itself, after the AI's answer chose more facts than Ozzie checks in one
+ * answer (native `too-many-facts`): the newest overview the task read, said as an answer choosing only its summary fact
+ * would be (its counts), then every open decision on the service's page in the page's own order (`decisionsLeftOut`:
+ * findings that need a decision, background checks kept on this Mac, room overlaps and follow-ups without an owner),
+ * written here from the same check. Deterministic, never the AI's ids, never ranking anyone. Null when the task read no
+ * overview.
+ */
+export async function overviewAnswer(harness: Harness, outcome: TaskOutcome, signal: AbortSignal): Promise<{ answer: ShownAnswer; evidence: ToolEnvelope[] } | null> {
+  const overview = [...outcome.evidence].reverse().find(e => e.tool === "sunday.overview");
+  const fact = (overview?.payload as { fact?: unknown } | null | undefined)?.fact;
+  if (!overview || typeof fact !== "string") return null;
+  const day = harness.data.brief?.day ?? null;
+  const summary = answerText({ answer: "facts", facts: [fact], draft: null });
+  const counts = composeAnswer(summary, [overview], day).paragraphs;
+  const left = await decisionsLeftOut(harness.tools, summary, [overview], signal,
+    { head: onPage(day ?? SUNDAY_WORDS), none: NOTHING_OPEN });
+  const mode = harness.data.mode;
+  const evidence = [overview, ...left.evidence];
+  return { evidence: left.evidence, answer: {
+    body: [...counts.map(p => harness.restore(p)), ...left.paragraphs.map(p => left.fill(harness.restore(p)))].join("\n\n"),
+    draft: null, notCovered: false,
+    basedOn: basedOnEvidence([...evidence, ...left.sources], mode),
+    gaps: [...new Set(evidenceGaps(evidence, mode))],
+    procedure: null,
+    // What the AI's task looked at, then what Ozzie read on this Mac to write the answer, each once.
+    steps: [...new Set([...outcomeSteps(outcome.events, outcome.evidence, mode), ...localSteps(left.evidence, left.sources.some(s => s.source === "Planning Center People"))])],
+    aiSteps: modelSteps(outcome.events),
+    page: "sunday",
+    composedHere: true,
+  } };
+}
+
+/**
  * One question: refused before anything is sent; a question about kids teams or background checks answered on this Mac
  * without the AI (background checks never reach it); or run as a task and shaped for the panel, with any open decisions
  * a decision question's answer left out added here, and what Ozzie can do instead when it can't tell.
@@ -816,7 +866,7 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     return { state: "answered", answer: {
       ...shown, body,
       ...(added ? {
-        added: true, basedOn: basedOnEvidence([...outcome.evidence, ...left.evidence, ...left.sources], mode),
+        added: true, basedOn: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome), ...left.evidence, ...left.sources], mode),
         gaps: [...new Set([...shown.gaps, ...evidenceGaps(left.evidence, mode)])],
         // What Ozzie read on this Mac for them, after the AI's own steps, each once.
         steps: [...new Set([...shown.steps, ...localSteps(left.evidence, left.sources.some(s => s.source === "Planning Center People"))])],
@@ -824,10 +874,20 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     } };
   }
   if (outcome.status === "cancelled") return { state: "cancelled", text: askFailureText("cancelled") };
+  // AI on this Mac chose more facts than an answer holds for a decision question (measured 2026-11-18: a larger church's
+  // overview, 27 ids): Ozzie writes the answer itself from the overview the task read, and says so. Only then.
+  if (options.local && native === "too-many-facts" && outcome.code === "fidelity" && isDecisionQuestion(typed)) {
+    const own = await overviewAnswer(harness, outcome, signal);
+    if (signal.aborted) return { state: "cancelled", text: askFailureText("cancelled") };
+    if (own) {
+      options.recorder?.answeredHere(own.evidence);
+      return { state: "answered", answer: own.answer };
+    }
+  }
   // The second (native) or third (ozzie.church) refusal of background-check wording: the page's own words, as a refusal.
   if (native === "background-check") return { state: "refused", text: askFailureText(outcome.code, native) };
   if (outcome.code === "no-model") return { state: "no-model" };
   const text = askFailureText(outcome.code, native, options.pausedWhen ?? null);
   // AI on this Mac misses more often than an AI company's (measured 2026-11-18): it says so, and what helps.
-  return { state: "problem", code: outcome.code, text: options.local && text === ASK_FAILURES.fidelity ? `${text} ${ASK_FAILURES.fidelityHere}` : text };
+  return { state: "problem", code: outcome.code, text: options.local && (text === ASK_FAILURES.fidelity || text === ASK_FAILURES.tooMany) ? `${text} ${ASK_FAILURES.fidelityHere}` : text };
 }

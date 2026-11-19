@@ -19,9 +19,11 @@ export const peopleBody = (name: string) =>
   `To put ${name}'s email address or mobile number in To, Ozzie needs to read Planning Center People. Ozzie asks for People together with Calendar and Groups, and Planning Center words it as read-and-write. ${promise("connectAnd")}`;
 /**
  * Exactly what that read is and what it is for, said before it first happens (review P, L8: every read Ozzie can make is
- * stated where a person sees it first; native contact.rs reads it and never addresses a child).
+ * stated where a person sees it first; native contact.rs reads it and never addresses a child). The offer of what else
+ * Ozzie can check says the same sentences (read-more.tsx `MORE_PEOPLE_TO`).
  */
-export const PEOPLE_READS = "Each time you open a note for one person in Mail or Messages, Ozzie reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, for that one person only. It uses one only to fill in To, keeps it nowhere, and never sends it to an AI. A person Planning Center lists as a child is never addressed. " +
+export const PEOPLE_TO_READ = "Each time you open a note for one person in Mail or Messages, Ozzie reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, for that one person only. It uses one only to fill in To, keeps it nowhere, and never sends it to an AI. A person Planning Center lists as a child is never addressed.";
+export const PEOPLE_READS = `${PEOPLE_TO_READ} ` +
   // Native reads rooms, follow-ups and group events only while Settings' switch is on, never because of this grant
   // (sunday_check.rs ChurchReads::operations, commit 2159c645; first-run review H1).
   "Allowing it starts nothing else: room bookings, follow-ups and group meetings are read only if you turn them on in Settings.";
@@ -49,7 +51,8 @@ export interface PeopleAccess {
   cancel(): Promise<unknown>;
 }
 export const peopleAccess: PeopleAccess = {
-  start: async () => connection.connectApp(true, moreOf(await connection.status().catch(() => null))),
+  // Said to be for People on the To line, so native never lets its grant start rooms, follow-ups or group reads (review M1).
+  start: async () => connection.connectApp(true, moreOf(await connection.status().catch(() => null)), "people-for-to"),
   status: () => connection.status(),
   cancel: () => connection.cancel(),
 };

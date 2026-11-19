@@ -8,10 +8,11 @@ import { NATIVE_TOOL_ALLOWLIST, type FailureCode, type TaskEvent } from "./contr
 const COMPLETENESS: ReadonlySet<string> = new Set(["complete", "partial", "stale", "denied"]);
 /** contract.ts FailureCode, as native's FailureCode::ALL. */
 export const FAILURE_CODES: readonly FailureCode[] = Object.freeze(["denied", "stale", "partial", "provider-failure", "unverified", "invalid-task", "limit",
-  "timeout", "cancelled", "egress", "fidelity", "transport", "no-model", "interrupted"]);
+  "timeout", "cancelled", "egress", "fidelity", "transport", "no-model", "interrupted", "invalid-arguments"]);
 const FAILURES: ReadonlySet<string> = new Set(FAILURE_CODES);
 const TOOLS: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);
-const FINISH: ReadonlySet<string> = new Set(["stop", "tool_calls", "length"]);
+/** How a model step can end besides a FailureCode: its finish, or (native agent.rs `outcome`) an answer that listed too many facts. */
+const FINISH: ReadonlySet<string> = new Set(["stop", "tool_calls", "length", "too-many-facts"]);
 const STEP = /^[1-9]\d?$/u;
 const status = (s: string) => COMPLETENESS.has(s) || FAILURES.has(s);
 
@@ -32,7 +33,7 @@ export function ledgerDetailOk(type: TaskEvent["type"], detail: string): boolean
 
 /**
  * The native ledger detail for one runtime event, or null when it can't be expressed:
- *   model "step <n>" [outcome]          → "<n>" or "<n> <stop|tool_calls|length|FailureCode>"
+ *   model "step <n>" [outcome]          → "<n>" or "<n> <stop|tool_calls|length|too-many-facts|FailureCode>"
  *   tool "<allowlisted tool>:<status>"  → "<tool> <status>"   (status: a Completeness value or a FailureCode)
  *   tool "unknown:<status>" or "<status>" → "<status>" alone (a tool the allowlist doesn't hold is never named)
  *   failed "<FailureCode>", cancelled "" or "cancelled", and admitted, running and verified "" → unchanged.

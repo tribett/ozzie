@@ -6,11 +6,11 @@ import { HarnessSession, LABEL_PATTERN, restoreLabels } from "../../src/harness/
 import { envelopeProblems } from "../../src/harness/fixed.js";
 import { HarnessTools, localIso, TOOL_SPECS, type HarnessData } from "../../src/harness/tools.js";
 import { CHECKED, nov22Capture, PEOPLE, SERVICE, TEAMS } from "../../src/fictional-sunday.js";
-import { decide } from "../../src/sunday-decisions.js";
-import { buildSundayBrief } from "../../src/sunday-brief.js";
+import { applyDecisions, decide } from "../../src/sunday-decisions.js";
+import { buildSundayBrief, sundayShownCount } from "../../src/sunday-brief.js";
 import type { SundayCapture } from "../../src/sunday-capture.js";
 import { wednesdayCapture } from "../fixtures/service-days/wednesday.js";
-import { FRESH, harnessData, LEAD_RULES, sourceStrings, withScheduledBlockouts } from "./fixtures.js";
+import { FIXTURES, FRESH, harnessData, LEAD_RULES, sourceStrings, withScheduledBlockouts } from "./fixtures.js";
 
 const signal = new AbortController().signal;
 const tools = (data: HarnessData = harnessData(), now = FRESH) => new HarnessTools(data, new HarnessSession(), { now: () => now });
@@ -66,7 +66,8 @@ describe("Sunday tools", () => {
     expect(env).toMatchObject({ tool: "sunday.overview", source: "Planning Center Services", check_time: CHECKED, completeness: "complete" });
     const p = env.payload as { mode: string; sunday: string; reads: number; reads_not_completed: number; findings: { kind: string }[] };
     expect(p).toMatchObject({ mode: "fictional", sunday: "2026-11-22", reads: 26, reads_not_completed: 0 });
-    expect(p.findings.map(f => f.kind)).toEqual(["needs people", "needs people", "pending", "check-in suggested"]);
+    expect(p.findings.map(f => f.kind)).toEqual(["needs people", "needs people", "pending", "check-in suggested",
+      "room use needs review", "needs an owner", "group meets while serving"]);
   });
 
   it("overview: someone scheduled with a blockout as their label, each role with Planning Center's own status and time, worth a look", async () => {
@@ -81,7 +82,8 @@ describe("Sunday tools", () => {
     ]);
     expect(blocked.map(f => personOf(t, f["person"] as string))).toEqual([PEOPLE.greeterConfirmed, PEOPLE.lyricsPending]);
     expect(t.session.target((blocked[0]!["serving"] as { role: string }[])[0]!.role)).toMatchObject({ kind: "role", name: "Greeter" });
-    expect(p.worth_a_look).toBe(data.brief!.findings.filter(f => f.tone === "look").length);
+    // The Services findings worth a look, and the fictional group meeting at a serving time.
+    expect(p.worth_a_look).toBe(data.brief!.findings.filter(f => f.tone === "look").length + 1);
     // Not an open need: Planning Center still counts them, so the open roles are exactly as before.
     const needs = async (d: HarnessData) => ((await run(tools(d), "sunday.open_needs")).payload as { needs: unknown[] }).needs;
     expect(await needs(data)).toEqual(await needs(harnessData({ mode: "live" })));
@@ -221,6 +223,48 @@ describe("rooms, follow-ups and group meetings", () => {
     expect(env.source).toBe("Planning Center Groups");
     expect(env.payload).toMatchObject({ clashes: [{ person: pending.pending[0]!.person, serving: [{ role: pending.pending[0]!.role, status: "pending" }],
       group_meetings: [{ time: { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" } }], label: "Worth a look" }] });
+  });
+
+  it("are in the overview as facts of their own, so its counts are the Sunday page's, Today's and the sidebar's (live review 2026-11-18)", async () => {
+    // Every fixture: needs a decision and worth a look as the page counts them (sunday-brief.ts sundayShownCount), less only
+    // the background checks the overview keeps on this Mac (and says so). Rooms, follow-ups and group meetings count only
+    // when the connection holds Calendar, People and Groups, as their own tools; a leader's settled decision never counts.
+    const decidedNeed = harnessData().brief!.findings.find(f => f.kind === "needs-people")!;
+    const cases: [string, HarnessData][] = [...FIXTURES.map(([name, make]) => [name, make()] as [string, HarnessData]),
+      ["a settled decision", harnessData({ decisions: [decide(decidedNeed, "covered-outside", "A parent is covering", CHECKED)] })],
+      ["no Church room rule", harnessData({ rules: { ...LEAD_RULES, rooms: [] } })]];
+    for (const [name, data] of cases) {
+      const view = applyDecisions(data.brief!, data.decisions);
+      const shown = sundayShownCount(view, data.granted.includes("operations") ? data.operations : null);
+      const kept = view.items.filter(i => i.state !== "resolved" && i.finding.kind === "background-check");
+      const env = await run(tools(data), "sunday.overview");
+      const p = env.payload as { needs_a_decision: number; worth_a_look: number; findings: Record<string, unknown>[] };
+      expect(p.needs_a_decision, name).toBe(shown.decisions - kept.filter(i => i.finding.tone === "decision").length);
+      expect(p.worth_a_look, name).toBe(shown.looks - kept.filter(i => i.finding.tone === "look").length);
+      expect(envelopeProblems(env, () => true), name).toEqual([]);
+    }
+    // The fictional Sunday: the confirmed room overlap and the follow-up need a decision, the group meeting is worth a look.
+    const t = tools();
+    const rows = ((await run(t, "sunday.overview")).payload as { findings: Record<string, unknown>[] }).findings;
+    const pending = (await run(t, "sunday.pending_requests")).payload as { pending: { person: string; role: string }[] };
+    expect(rows.slice(4)).toEqual([
+      { kind: "room use needs review", tone: "needs a decision", room: "[Room 1]", overlap: { starts_at: "2026-11-22T10:30-05:00", ends_at: "2026-11-22T11:00-05:00" } },
+      { kind: "needs an owner", tone: "needs a decision", workflow: "[Workflow 1]", step: "[Step 1]", due: "2026-10-26T17:27-04:00" },
+      { kind: "group meets while serving", tone: "worth a look", person: pending.pending[0]!.person,
+        serving: [{ role: pending.pending[0]!.role, status: "pending", time: { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" } }],
+        group_meetings: [{ time: { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" } }] },
+    ]);
+    // The same labels as their own tools give, so an answer that says one isn't told it again.
+    expect(((await run(t, "rooms.conflicts")).payload as { rooms: { room: string }[] }).rooms[0]!.room).toBe("[Room 1]");
+    // Without a Church rule for the room, its overlap is worth a look, with one item for what couldn't be confirmed.
+    const unruled = ((await run(tools(harnessData({ rules: { ...LEAD_RULES, rooms: [] } })), "sunday.overview")).payload as { findings: Record<string, unknown>[] }).findings;
+    expect(unruled.filter(r => ["room use needs review", "a detail couldn't be verified"].includes(r["kind"] as string)).map(r => [r["kind"], r["tone"]]))
+      .toEqual([["room use needs review", "worth a look"], ["a detail couldn't be verified", "worth a look"]]);
+    // Not granted, turned off or out of date: none of them.
+    for (const data of [harnessData({ granted: ["services"] }), harnessData({ operationsOff: true }), harnessData({ mode: "live", now: "2026-11-20T17:00:00Z" })]) {
+      const kinds = ((await run(tools(data, "2026-11-20T17:00:00Z"), "sunday.overview")).payload as { findings: { kind: string }[] }).findings.map(f => f.kind);
+      expect(kinds.filter(k => ["room use needs review", "needs an owner", "group meets while serving", "a detail couldn't be verified"].includes(k))).toEqual([]);
+    }
   });
 
   it("are denied when the connection wasn't granted Calendar, People and Groups", async () => {

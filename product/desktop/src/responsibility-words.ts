@@ -263,6 +263,7 @@ export function problemText(code: string | null | undefined): string {
     case "unavailable": return "its list of what to keep an eye on couldn't be read on this Mac";
     case "invalid": return "its plan couldn't be used as saved; try Change";
     case "transport": case "no-model": return "the AI service didn't answer";
+    case "invalid-arguments": return "the AI asked to look something up in a way Ozzie doesn't allow";
     default: return "something went wrong";
   }
 }

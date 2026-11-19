@@ -131,7 +131,7 @@ export interface TaskEvent {
 }
 
 export type FailureCode = ToolError | "invalid-task" | "limit" | "timeout" | "cancelled" | "egress"
-  | "fidelity" | "transport" | "no-model" | "interrupted";
+  | "fidelity" | "transport" | "no-model" | "interrupted" | "invalid-arguments";
 
 export interface TaskOutcome {
   status: "verified" | "failed" | "cancelled";

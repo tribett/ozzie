@@ -8,6 +8,7 @@ import { REFUSALS } from "../../../core/src/ask.js";
 import { backgroundInToolResult, backgroundWording } from "../../../core/src/harness/background-wording.js";
 import { asksAboutChecksOrKids, NO_KIDS_TEAM } from "../../../core/src/harness/compose.js";
 import { NATIVE_TOOL_ALLOWLIST, type AgentStepReply, type AgentStepRequest, type ModelStep, type TaskEvent } from "../../../core/src/harness/contract.js";
+import { VOCABULARY } from "../../../core/src/harness/fixed.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { Harness } from "../../../core/src/harness/index.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
@@ -19,7 +20,11 @@ import {
   agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, retryDenied, runtimeFor, StepFailure, stepFailure, StepNotes,
   type Invoke,
 } from "../src/harness-bridge.js";
-import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, CAN_DO_INSTEAD, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, CAN_DO_INSTEAD, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { SUNDAY_WORDS } from "../../../core/src/service-day.js";
+import { sundayShownCount } from "../../../core/src/sunday-brief.js";
+import { applyDecisions } from "../../../core/src/sunday-decisions.js";
+import { sundayCount } from "../src/today-groups.js";
 import { answer, BACKGROUND_IN_REQUEST, calls, draftTurns, everyRequest, fakeNative as fakeLedger, fictionalData, greeterTurns, payloadOf, row, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
@@ -523,10 +528,11 @@ describe("Ask answers written on this Mac", () => {
   });
 
   it("adds the open decisions a decision question's answer left out, in fixed words, with their sources; background checks never reach the AI", async () => {
+    // The answer chose the roles and kids teams that need a decision, not the overview's room overlap or follow-up.
     const m = scripted([
       () => ({ content: "", tool_calls: [{ id: "c", name: "sunday.overview", arguments: "{}" }], finish: "tool_calls" }),
-      r => answer(JSON.stringify({ answer: "facts", facts: ((JSON.parse(r.messages.at(-1)!.content) as { payload: { findings: { fact: string; tone: string }[] } }).payload.findings)
-        .filter(f => f.tone === "needs a decision").map(f => f.fact) })),
+      r => answer(JSON.stringify({ answer: "facts", facts: ((JSON.parse(r.messages.at(-1)!.content) as { payload: { findings: { fact: string; tone: string; kind: string }[] } }).payload.findings)
+        .filter(f => f.tone === "needs a decision" && f.kind !== "room use needs review" && f.kind !== "needs an owner").map(f => f.fact) })),
     ]);
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "What still needs a decision this Sunday?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
@@ -551,18 +557,24 @@ describe("Ask answers written on this Mac", () => {
     expect(JSON.stringify(m.requests)).not.toMatch(/background/iu);
   });
 
-  it("never says nothing needs a decision above decisions it adds", async () => {
-    // Every Services role filled, so the overview counts no decision, while the room and the follow-up still need one.
+  it("never says nothing needs a decision while the room and the follow-up still need one", async () => {
+    // Every Services role filled, while the room and the follow-up still need a decision: the overview counts them, as the
+    // Sunday page does (live review 2026-11-18), so "nothing needs a decision" is refused, and its facts say them.
     const capture = withFictionalOperations(nov22Capture());
     capture.reads = capture.reads.map(r => r.collection === "needed_positions" ? { ...r, body: { ...r.body!, data: [] } } : r);
     const data = buildHarnessData({ capture, fictional: false, rules: { ...RULES, rooms: kidsRules.rooms }, decisions: [], status: null, configured: false, now: "2026-11-20T15:05:00Z" });
     expect(data.brief!.findings.filter(f => f.tone === "decision")).toEqual([]);
-    const m = scripted([() => ({ content: "", tool_calls: [{ id: "c", name: "sunday.overview", arguments: "{}" }], finish: "tool_calls" }), () => answer('{"answer":"nothing-needs-a-decision"}')]);
-    const turn = await askOzzie(harness(m.model, undefined, data), "Is there anything I need to decide?", { skills });
+    const look: Turn = () => ({ content: "", tool_calls: [{ id: "c", name: "sunday.overview", arguments: "{}" }], finish: "tool_calls" });
+    const nothing = await askOzzie(harness(scripted([look, () => answer('{"answer":"nothing-needs-a-decision"}')]).model, undefined, data), "Is there anything I need to decide?", { skills });
+    expect(nothing).toMatchObject({ state: "problem", code: "fidelity" });
+    const every: Turn = r => { const p = payloadOf(r, "sunday.overview") as { fact: string; findings: { fact: string; tone: string }[] };
+      return answer(JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.filter(f => f.tone === "needs a decision").map(f => f.fact)] })); };
+    const turn = await askOzzie(harness(scripted([look, every]).model, undefined, data), "Is there anything I need to decide?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
     const parts = turn.answer.body.split("\n\n");
-    expect(parts[0]).toBe("Also on the Sunday page, needing a decision:");
-    expect(parts.slice(1)).toEqual([expect.stringMatching(/^Room use needs review: /u), expect.stringMatching(/ has no owner\.$/u)]);
+    expect(parts[0]).toMatch(/^For Sunday, November 22, this check found 2 items that need a decision and \d+ worth a look\./u);
+    expect(parts.slice(1)).toEqual([expect.stringMatching(/^Needs a decision: Sanctuary \(fictional\) has bookings that overlap /u), expect.stringMatching(/^Needs a decision: .* has no owner\.$/u)]);
+    expect(turn.answer.added).toBeUndefined();
   });
 
   it("says what Ozzie can do instead when it can't tell, or couldn't back an answer up", async () => {
@@ -835,3 +847,168 @@ describe("contract 14: Gemini spent its whole answer thinking (thought-only)", (
   });
 });
 
+
+describe("native invalid-arguments: the AI asked for a lookup in a way the tool doesn't take (2026-11-18)", () => {
+  /** native agent_step: the first step asks for the open roles with a `role` they don't take, refused as native refuses it. */
+  const refusing = (code: string) => fakeLedger(command => command === "agent_step" ? Promise.reject(code) : {});
+  it("is its own code end to end, with a true sentence, never the question's egress", async () => {
+    expect(stepFailure("invalid-arguments")).toBe("invalid-arguments");
+    expect(askFailureText("invalid-arguments", "invalid-arguments")).toBe(ASK_FAILURES.arguments);
+    // "That lookup", never "nothing": an earlier step of the same question may have read something (review L3).
+    expect(ASK_FAILURES.arguments).toBe("The AI asked to look something up in a way Ozzie doesn't allow, so that lookup didn't happen and there's no answer this time. Try asking in other words.");
+    expect(ASK_FAILURES.arguments).not.toMatch(/question includes|keeps on this Mac/u);
+    for (const local of [true, false]) {
+      const native = refusing("invalid-arguments");
+      const notes = new StepNotes();
+      const r = recorder(native.invoke);
+      const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "pi", recorder: r, step: agentStep(native.invoke, notes) });
+      const turn = await askOzzie(h, "Why is Greeter flagged?", { recorder: r, skills, notes, local });
+      await r.idle();
+      expect(turn).toEqual({ state: "problem", code: "invalid-arguments", text: ASK_FAILURES.arguments });
+      // Recorded as its own fixed code; What happened says what happened.
+      expect(shape(native.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "to failed invalid-arguments"]);
+    }
+    expect(taskLine(row({ kind: "ask", state: "failed", failure: "invalid-arguments" }), { now: new Date("2026-11-20T22:00:00Z") }))
+      .toMatch(/^A question · Couldn't finish: the AI asked to look something up in a way Ozzie doesn't allow · /u);
+    expect(ledgerDetail("model", "step 2", "invalid-arguments")).toBe("2 invalid-arguments");
+    expect(ledgerDetail("failed", "invalid-arguments")).toBe("invalid-arguments");
+    // A question that holds details kept on this Mac is still egress, in its own words.
+    const egress = refusing("egress");
+    const notes = new StepNotes();
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "pi", step: agentStep(egress.invoke, notes) });
+    expect(await askOzzie(h, "Why is Greeter flagged?", { skills, notes })).toEqual({ state: "problem", code: "egress", text: ASK_FAILURES.egress });
+  });
+});
+
+describe("a decision question says the Sunday page's count, on every route (live review 2026-11-18)", () => {
+  // The test church: two roles that need people and a follow-up with no owner. Today and the sidebar say 3 things to decide.
+  const DECISION = "What still needs a decision this Sunday?";
+  const pageCount = () => { const d = fictionalData(); return sundayCount(sundayShownCount(applyDecisions(d.brief!, d.decisions), d.operations)); };
+  type Overview = { fact: string; findings: { fact: string; kind: string; tone: string }[] };
+  const overviewIn = (r: AgentStepRequest) => payloadOf(r, "sunday.overview") as Overview;
+  /** As Ozzie's AI answered live: the overview, open roles and pending requests read, then the summary and the two roles chosen. */
+  const looked: Turn = () => calls(["sunday.overview"], ["sunday.open_needs"], ["sunday.pending_requests"]);
+  const roles: Turn = r => { const p = overviewIn(r); return answer(JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.filter(f => f.kind === "needs people").map(f => f.fact)] })); };
+  const everyDecision: Turn = r => { const p = overviewIn(r); return answer(JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.filter(f => f.tone === "needs a decision").map(f => f.fact)] })); };
+  const SUMMARY = "For Sunday, November 22, this check found 3 items that need a decision and 5 worth a look. This is fictional example data.";
+  const GREETER = "Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.";
+  const NURSERY = "Needs a decision: Nursery at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.";
+  const FOLLOW_UP = "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.";
+
+  it("an answer choosing the two roles: the page's count, then the follow-up it left out, once, on Ozzie's AI and on AI on this Mac", async () => {
+    expect(pageCount()).toBe(3);
+    for (const local of [false, true]) {
+      const turn = await askOzzie(harness(scripted([looked, roles]).model), DECISION, { skills, local });
+      if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+      expect(turn.answer.body.split("\n\n"), String(local)).toEqual([SUMMARY, GREETER, NURSERY, "Also on the Sunday page, needing a decision:", FOLLOW_UP]);
+      expect(turn.answer.page).toBe("sunday");
+    }
+  });
+
+  it("an answer choosing every decision the overview holds: each said once, nothing added, and the follow-up's own source named", async () => {
+    const turn = await askOzzie(harness(scripted([looked, everyDecision]).model), DECISION, { skills });
+    if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+    expect(turn.answer.body.split("\n\n")).toEqual([SUMMARY, GREETER, NURSERY, `Needs a decision: ${FOLLOW_UP}`]);
+    expect(turn.answer.added).toBeUndefined();
+    expect(turn.answer.basedOn).toMatch(/^Based on: fictional example data as of /u);
+    const live = buildHarnessData({ capture: withFictionalOperations(nov22Capture()), fictional: false, rules: RULES, decisions: [], status: null, configured: false, now: "2026-11-20T15:05:00Z" });
+    const liveTurn = await askOzzie(harness(scripted([looked, everyDecision]).model, undefined, live), DECISION, { skills });
+    if (liveTurn.state !== "answered") throw new Error(JSON.stringify(liveTurn));
+    expect(liveTurn.answer.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center People, checked .+$/u);
+  });
+
+  it("AI on this Mac choosing too many facts: Ozzie's own answer says the page's count and every decision once", async () => {
+    let step = 0;
+    const fake = fakeLedger(command => {
+      if (command !== "agent_step") return {};
+      step += 1;
+      return step === 1 ? calls(["sunday.overview"]) : Promise.reject("too-many-facts");
+    });
+    const notes = new StepNotes();
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "pi", step: agentStep(fake.invoke, notes) });
+    const turn = await askOzzie(h, DECISION, { skills, notes, local: true });
+    if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+    expect(turn.answer.composedHere).toBe(true);
+    expect(turn.answer.body.split("\n\n")).toEqual([SUMMARY, "On the Sunday page, needing a decision:", GREETER, NURSERY, FOLLOW_UP]);
+  });
+});
+
+describe("AI on this Mac: an answer choosing more than 24 facts (native too-many-facts, measured 2026-11-18)", () => {
+  const DECISION = "What still needs a decision this Sunday?";
+  /** native agent_step: the overview first, then a final answer native refuses with `code` (or the answer the turn gives). */
+  const native = (last: (request: AgentStepRequest) => Promise<AgentStepReply>, first: [string, Record<string, unknown>?] = ["sunday.overview"]) => {
+    let step = 0;
+    return fakeLedger((command, args) => {
+      if (command !== "agent_step") return {};
+      step += 1;
+      return step === 1 ? calls(first) : last(args["request"] as AgentStepRequest);
+    });
+  };
+  const ask = async (fake: ReturnType<typeof native>, question: string, local: boolean | undefined, rec?: LedgerRecorder) => {
+    const notes = new StepNotes();
+    const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "pi", ...(rec ? { recorder: rec } : {}), step: agentStep(fake.invoke, notes) });
+    return askOzzie(h, question, { skills, notes, ...(local === undefined ? {} : { local }), ...(rec ? { recorder: rec } : {}) });
+  };
+  const tooMany = () => Promise.reject("too-many-facts");
+
+  it("is fidelity to the loop; every other route and question says the true reason, never that the answer couldn't be backed up", async () => {
+    expect(stepFailure("too-many-facts")).toBe("fidelity");
+    // Every id was one the task had read: the true reason is how many there were (review L4), the number the shared
+    // vocabulary holds.
+    expect(VOCABULARY.answer.max_facts).toBe(24);
+    expect(ASK_FAILURES.tooMany).toBe("The AI's answer listed more than 24 facts, more than Ozzie checks in one answer, so it isn't shown. Try asking about one role or one thing at a time, or ask “What can you do?”");
+    expect(askFailureText("fidelity", "too-many-facts")).toBe(ASK_FAILURES.tooMany);
+    for (const local of [false, undefined]) expect(await ask(native(tooMany), DECISION, local)).toEqual({ state: "problem", code: "fidelity", text: ASK_FAILURES.tooMany });
+    // Not a decision question: no answer is written for it.
+    expect(await ask(native(tooMany), "Why is Greeter flagged?", true)).toEqual({ state: "problem", code: "fidelity", text: `${ASK_FAILURES.tooMany} ${ASK_FAILURES.fidelityHere}` });
+    expect(await ask(native(tooMany), "Why is Greeter flagged?", false)).toEqual({ state: "problem", code: "fidelity", text: ASK_FAILURES.tooMany });
+    // Any other refused answer, on this Mac too.
+    expect(await ask(native(() => Promise.reject("invalid-answer")), DECISION, true)).toEqual({ state: "problem", code: "fidelity", text: `${ASK_FAILURES.fidelity} ${ASK_FAILURES.fidelityHere}` });
+    // No overview was read: nothing to write it from.
+    expect(await ask(native(tooMany, ["sunday.open_needs"]), DECISION, true)).toEqual({ state: "problem", code: "fidelity", text: `${ASK_FAILURES.tooMany} ${ASK_FAILURES.fidelityHere}` });
+  });
+
+  it("on AI on this Mac, Ozzie writes a decision question's answer itself from the overview, as an answer choosing only its summary reads, and says so", async () => {
+    const ledger = fakeLedger();
+    const r = recorder(ledger.invoke);
+    const fake = native(tooMany);
+    const turn = await ask(fake, DECISION, true, r);
+    if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+    const a = turn.answer;
+    expect(a.composedHere).toBe(true);
+    // The same words as when the AI chooses only the overview's summary fact, under "On" rather than "Also on".
+    const summaryOnly = native(async request => answer(JSON.stringify({ answer: "facts", facts: [payloadOf(request, "sunday.overview")!["fact"]] })));
+    const chosen = await ask(summaryOnly, DECISION, true);
+    if (chosen.state !== "answered") throw new Error(chosen.state);
+    expect(chosen.answer.composedHere).toBeUndefined();
+    expect(a.body).toBe(chosen.answer.body.replace("Also on the Sunday page, needing a decision:", "On the Sunday page, needing a decision:"));
+    const paragraphs = a.body.split("\n\n");
+    expect(paragraphs[0]).toMatch(/^For Sunday, November 22, this check found \d+ items? that needs? a decision and \d+ worth a look\./u);
+    expect(paragraphs[1]).toBe("On the Sunday page, needing a decision:");
+    expect(paragraphs.length).toBeGreaterThan(2);
+    // Never presented as the AI's choice or as an answer without the AI.
+    expect([a.local, a.end, a.added]).toEqual([undefined, undefined, undefined]);
+    expect(a).toMatchObject({ procedure: null, notCovered: false, page: "sunday", aiSteps: 2, draft: null });
+    expect(a.steps[0]).toBe("Looked at the overview of the service — all of it");
+    // The AI's task is recorded as refused (fidelity); what Ozzie wrote is recorded as answered on this Mac.
+    await r.idle();
+    expect(shape(ledger.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "tool sunday.overview complete", "to failed fidelity",
+      "admit ask answer-from-what-was-read", "to running", "tool sunday.overview complete", "tool rooms.conflicts partial", "tool followups.unowned partial", "to verified"]);
+  });
+
+  it("a decision question that names one person gets the whole service's answer, and the note under it says so (review L6)", async () => {
+    const turn = await ask(native(tooMany), "What still needs a decision about Riley?", true);
+    if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+    expect(turn.answer.composedHere).toBe(true);
+    expect(turn.answer.body.split("\n\n")[0]).toMatch(/^For Sunday, November 22, this check found /u);
+    expect(COMPOSED_NOTE).toContain("it covers the whole service");
+  });
+
+  it("says its number from the shared vocabulary, never typed into its words (review L4)", () => {
+    const source = readFileSync(new URL("../src/harness-words.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/more than 24\b/u);
+    for (const words of [COMPOSED_NOTE, COMPOSED_ENDED, composedHow(SUNDAY_WORDS), ASK_FAILURES.tooMany]) {
+      expect(words).toContain(`more than ${VOCABULARY.answer.max_facts} facts`);
+    }
+  });
+});

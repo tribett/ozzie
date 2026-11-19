@@ -19,7 +19,9 @@ import { kidsWording } from "../../../core/src/harness/compose.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
-import { addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, HELP, LOCAL_HOW, LOCAL_NOTE, procedureTitle, type Account } from "./harness-words.js";
+import {
+  addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, HELP, LOCAL_HOW, LOCAL_NOTE, procedureTitle, type Account,
+} from "./harness-words.js";
 import { TaskAccount } from "./activity-page.js";
 import { ChooseAiButton, ChooseAiContext } from "./ai-line.js";
 import { NEEDS_AI } from "./ai-words.js";
@@ -105,6 +107,8 @@ export function DraftCard({ text, open }: { text: string; open?: OpenDraft | und
 
 /** An answer's steps as the same short account What happened gives (audit items 7 and 8). */
 export function answerAccount(answer: ShownAnswer): Account {
+  // Written by Ozzie after the AI's answer was set aside: the AI was asked, but it chose none of this.
+  if (answer.composedHere) return { started: "You asked a question.", looked: answer.steps, ai: aiText("ask", undefined, answer.aiSteps, false), ended: COMPOSED_ENDED };
   const ended = answer.local ? "Answered on this Mac." : answer.end === "nothing-needs-a-decision" ? "Nothing needed a decision."
     : answer.end === "not-covered" || answer.notCovered ? "What Ozzie read didn't answer it, and the answer says so."
       : answer.end === "draft" ? "Answered with a draft note for you to read and send yourself." : "Answered.";
@@ -121,6 +125,7 @@ export function HowItWorks({ answer }: { answer: ShownAnswer }) {
     </>}
     <TaskAccount account={answerAccount(answer)} />
     {answer.local ? <p className="small">{LOCAL_HOW}</p>
+      : answer.composedHere ? <p className="small">{composedHow(day)}</p>
       : <p className="small">The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such
         as [Person 1] and [Role 1]; Ozzie put them back on this Mac. The AI only chose which facts answer your question: Ozzie wrote every sentence
         here from those facts, in its own order. Nothing was sent to anyone, and nothing in Planning Center changed.</p>}
@@ -140,6 +145,7 @@ export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page:
     </div>}
     {answer.body && <div className="ask-lines">{onDayPage(answer.body, d).split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}</div>}
     {answer.local && <p className="small">{LOCAL_NOTE}</p>}
+    {answer.composedHere && <p className="small">{COMPOSED_NOTE}</p>}
     {answer.draft && <DraftCard text={answer.draft} />}
     <div className="ask-src">
       <BasedOn text={answer.basedOn} />

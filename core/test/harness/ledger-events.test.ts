@@ -31,6 +31,15 @@ describe("ledgerDetail", () => {
     expect(ledgerDetailOk("tool", "email.send denied")).toBe(false);
     expect(ledgerDetailOk("model", `1 ${"x".repeat(70)}`)).toBe(false);
   });
+
+  it("holds a model step that ended because the AI's answer listed too many facts, as native records it, and only as a step", () => {
+    // agent.rs `outcome`: TooManyFacts finishes its step as "too-many-facts", so What happened can say so (review L4).
+    expect(ledgerDetailOk("model", "2 too-many-facts")).toBe(true);
+    expect(ledgerDetail({ type: "model", detail: "step 2 too-many-facts" })).toBe("2 too-many-facts");
+    // Never a task's failure code: the task still fails as fidelity.
+    expect(ledgerDetailOk("failed", "too-many-facts")).toBe(false);
+    expect(ledgerDetailOk("tool", "sunday.overview too-many-facts")).toBe(false);
+  });
 });
 
 // ---- Every event the loops emit -----------------------------------------------------------------

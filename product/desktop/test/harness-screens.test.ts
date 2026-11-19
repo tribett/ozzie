@@ -12,7 +12,7 @@ import { sundayOperations } from "../../../core/src/operations-capture.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { ActivityPage, byDay, dayLabel, LEDGER_UNAVAILABLE, RECENT_SHOWN, RecentWork } from "../src/activity-page.js";
 import { PROCEDURE_ORDER } from "../src/harness-bridge.js";
-import { aiText, taskAccount, taskLine, TOOL_PHRASES, type TaskEventRow } from "../src/harness-words.js";
+import { aiText, stepText, taskAccount, taskLine, TOOL_PHRASES, type TaskEventRow } from "../src/harness-words.js";
 import { HowOzzieChecks, RulesPage } from "../src/rules-page.js";
 import { FIXED_HOW, GroupMeetings, OperationsSection, readsFor, SundayPage, Why } from "../src/sunday-page.js";
 import { HIDDEN_WORDS, row, text } from "./harness-fakes.js";
@@ -47,6 +47,14 @@ describe("What happened: the task ledger in plain words", () => {
     expect(taskLine({ ...automatic, events: [...automatic.events.slice(0, 2), ev(2, "tool", "planning_center.refresh partial"), ev(3, "verified")] }, { now }))
       .toMatch(/^Planning Center check · part of it couldn't be read · /u);
     expect(taskLine(failed, { now })).toBe(`A question · Couldn't finish: the answer couldn't be backed up by what Ozzie read · ${clock}`);
+    // Every id the AI chose was one it had read, only too many of them (native step outcome "too-many-facts"): said so,
+    // so beside "Answered on this Mac" the two rows explain why Ozzie answered itself (review L4).
+    const tooMany = row({ ...failed, events: [ev(0, "admitted"), ev(1, "running"), ev(2, "model", "1"), ev(3, "model", "1 tool_calls"),
+      ev(4, "tool", "sunday.overview complete"), ev(5, "model", "2"), ev(6, "model", "2 too-many-facts"), ev(7, "failed", "fidelity")] });
+    expect(taskLine(tooMany, { now })).toBe(`A question · Couldn't finish: the AI's answer listed more facts than Ozzie checks in one answer · ${clock}`);
+    expect(taskAccount(tooMany, { now }).ended).toBe("The AI's answer listed more facts than Ozzie checks in one answer, so it wasn't shown.");
+    expect(stepText("model", "2 too-many-facts")).toBe("Asked the AI (step 2); the AI's answer listed more facts than Ozzie checks in one answer");
+    expect(taskAccount(failed, { now }).ended).toBe("The AI's answer didn't check out against what Ozzie read, so nothing was shown.");
     expect(taskLine(interrupted, { now, procedures: skills })).toBe(`Sunday ready · Couldn't finish: it was stopped before it finished · ${clock}`);
     expect(taskLine(row({ kind: "ask", state: "cancelled" }), { now })).toBe(`A question · You stopped it · ${clock}`);
     // A Sunday check that couldn't finish says why, true to the cause (harness-bridge.ts checkFailure).

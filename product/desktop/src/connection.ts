@@ -28,6 +28,20 @@ export const moreOf = (status: Pick<ConnectionStatus, "scopes"> | null | undefin
   return { checkIns: g?.checkIns === true, registrations: g?.registrations === true };
 };
 const moreArgs = (more: MoreProducts) => ({ ...(more.checkIns ? { checkIns: true } : {}), ...(more.registrations ? { registrations: true } : {}) });
+/**
+ * What a browser sign-in is for, when it is one of these two: the rooms, follow-ups and group reads (operations-reads.ts
+ * `askForOperations`), or People for a note's To line (people-question.tsx). Native keeps it with the sign-in, and only a
+ * grant from one started for the reads lets the page turn their switch on (main.rs `set_operations_reads`; review M1).
+ */
+export type SignInPurpose = "operations" | "people-for-to";
+const purposeArgs = (purpose: SignInPurpose | undefined) => (purpose ? { purpose } : {});
+const starting = new Set<(purpose: SignInPurpose | undefined) => void>();
+/** Hears every browser sign-in as it starts, with its purpose (none for any other sign-in). Returns a way to stop. */
+export function onSignInStart(listener: (purpose: SignInPurpose | undefined) => void): () => void {
+  starting.add(listener);
+  return () => { starting.delete(listener); };
+}
+const signInStarting = (purpose: SignInPurpose | undefined) => { for (const l of starting) l(purpose); };
 export type ConnectionStatus = {
   state: "disconnected" | "waiting" | "checking" | "connected" | "stored-unchecked" | "cancelled" | "expired" | "failed";
   organization: string; checked_at_ms: number | null; source: string; problem: unknown;
@@ -115,16 +129,22 @@ export const signNote = (text: string, name: string) => text.split(PLACEHOLDER).
 export const connection = {
   status: () => invoke<ConnectionStatus | null>("connection_status"),
   /** `operations` asks Planning Center for Calendar, People and Groups too; `more` for Check-Ins and Registrations. Ozzie still only reads. */
-  connect: (client_id: string, organization: string, registered: boolean, operations = false, more: MoreProducts = {}) => invoke<ConnectionStatus>("connect_planning_center",
-    { clientId: client_id, organization, registered, ...(operations ? { operations: true } : {}), ...moreArgs(more) })
-    .then(status => { operationsAsked.set(operations); return status; }),
+  connect: (client_id: string, organization: string, registered: boolean, operations = false, more: MoreProducts = {}, purpose?: SignInPurpose) => {
+    signInStarting(purpose);
+    return invoke<ConnectionStatus>("connect_planning_center",
+      { clientId: client_id, organization, registered, ...(operations ? { operations: true } : {}), ...moreArgs(more), ...purposeArgs(purpose) })
+      .then(status => { operationsAsked.set(operations); return status; });
+  },
   /**
    * One click: Ozzie's own registration ("Ozzie for Mac"); Planning Center names the organization after
    * sign-in. Only in builds that have that registration built in (`appAvailable`).
    */
-  connectApp: (operations = false, more: MoreProducts = {}) => invoke<ConnectionStatus>("connect_planning_center_app",
-    { ...(operations ? { operations: true } : {}), ...moreArgs(more) })
-    .then(status => { operationsAsked.set(operations); return status; }),
+  connectApp: (operations = false, more: MoreProducts = {}, purpose?: SignInPurpose) => {
+    signInStarting(purpose);
+    return invoke<ConnectionStatus>("connect_planning_center_app",
+      { ...(operations ? { operations: true } : {}), ...moreArgs(more), ...purposeArgs(purpose) })
+      .then(status => { operationsAsked.set(operations); return status; });
+  },
   /** Whether this build can connect in one click. */
   appAvailable: () => invoke<boolean>("planning_center_app").catch(() => false),
   /** An empty `client_id` means Ozzie's own registration. */

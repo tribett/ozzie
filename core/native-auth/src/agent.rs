@@ -72,14 +72,16 @@
 //! A final reply (no tool calls) must be the closed answer form and nothing else (structured
 //! answers, review 2026-11-14 section C; `fixed::final_answer`): a JSON object choosing fact ids
 //! (and a draft id) that the tool results in this very request hold, so the model writes no prose
-//! about anyone; anything else is `invalid-answer` and the reply is dropped. Ozzie writes the
-//! sentences on the Mac (core/src/harness/compose.ts).
+//! about anyone; anything else is `invalid-answer` and the reply is dropped, except an answer whose
+//! only fault is choosing more facts than the form allows (`too-many-facts`, so the page can say so).
+//! Ozzie writes the sentences on the Mac (core/src/harness/compose.ts).
 //!
 //! Replies are checked the same way before the webview sees them: only tools offered in this
 //! request (a call to any other is `denied` and the reply dropped), arguments that fit the offered
-//! parameters and are at most 2000 characters, no more tool calls than the task has left of
-//! MAX_TOOL_CALLS, content of at most 4000 characters, no name (under the "capitalized only" rule
-//! for the text), contact detail or hidden character anywhere.
+//! parameters (clean arguments that don't fit are `invalid-arguments`: the model asked for a lookup
+//! in a way the tool doesn't take) and are at most 2000 characters, no more tool calls than the
+//! task has left of MAX_TOOL_CALLS, content of at most 4000 characters, no name (under the
+//! "capitalized only" rule for the text), contact detail or hidden character anywhere.
 //! Tool-call ids are minted here (`call_<step>_<n>`) and their number persisted with the step's
 //! outcome, so neither provider text nor free text travels in an id; the loop must echo them
 //! unchanged. Tool names carry dots in the contract but
@@ -215,6 +217,16 @@ pub enum AgentError {
     /// id) or chose a fact or draft id no tool result in the request holds. The reply was dropped;
     /// the loop fails the task as `fidelity`.
     InvalidAnswer,
+    /// The model's final reply was the closed answer form with ids the tool results in the request
+    /// hold, but chose more facts than the form allows (vocabulary.json `max_facts`), so it isn't one
+    /// Ozzie checks. The reply was dropped; the loop fails the task as `fidelity`, and the page knows
+    /// why (with AI on this Mac it writes a decision question's answer itself from the overview).
+    TooManyFacts,
+    /// A tool call in the reply had arguments whose text passed every check (no name, contact
+    /// detail, hidden character or escape) but didn't fit the tool's parameters: a property it
+    /// doesn't take, one it needs missing, or a value of another type or family. Nothing was looked
+    /// up; the reply was dropped and the loop fails the task as `invalid-arguments`.
+    InvalidArguments,
     /// Ozzie managed: the church's allowance on ozzie.church is spent; AI help is paused until it
     /// resets or the plan changes. Checks and briefings keep working.
     AllowancePaused,
@@ -659,6 +671,32 @@ fn arguments_ok(arguments: &str, parameters: &ToolParameters, names: &NameGuard)
             .filter_map(Value::as_str)
             .all(|value| text_ok(value, names))
 }
+/// Why a reply's tool call with arguments `arguments_ok` refused can't be used. `invalid-arguments`
+/// only when the whole raw text, keys included, passes every text check (within the size limit, JSON
+/// with no key repeated, no hidden character, escape, contact detail or name under the strict rule):
+/// the model asked for a lookup in a way the tool doesn't take, such as `sunday.open_needs` with a
+/// `role`. Anything else stays `egress`, as before.
+fn arguments_refusal(arguments: &str, names: &NameGuard) -> AgentError {
+    let clean = chars_within(arguments, 2, MAX_ARGUMENT_CHARS)
+        && fixed::parse_unique(arguments).is_some()
+        && text_ok(arguments, names);
+    if clean {
+        AgentError::InvalidArguments
+    } else {
+        AgentError::Egress
+    }
+}
+/// Whether a call's raw arguments, whatever tool it names, fail a text check (`arguments_refusal`'s egress). Arguments
+/// that aren't a string are checked as their JSON text; a call without any has nothing to check.
+fn raw_arguments_refused(call: &Value, names: &NameGuard) -> bool {
+    let raw = match &call["function"]["arguments"] {
+        Value::Null => return false,
+        Value::String(text) if text.is_empty() => "{}".to_owned(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    arguments_refusal(&raw, names) == AgentError::Egress
+}
 /// `call_<step>_<n>` as `read_reply` mints it (step 1-99, n 0-99, no leading zeros), as numbers.
 fn call_id(id: &str) -> Option<(usize, usize)> {
     let number = |part: &str| {
@@ -1039,9 +1077,11 @@ pub fn hosted_step_body(request: &AgentStepRequest, kind: TaskKind) -> Option<Ve
 }
 
 /// The provider's reply as the contract's AgentStepReply, or a closed code. A malformed reply is
-/// `provider-failure`; one that fails a check is `egress`; more tool calls than the task has left
-/// (`calls_left`) is `limit`. A truncated reply ("length") keeps its checked text and drops any
-/// tool calls, whose arguments may be cut off.
+/// `provider-failure`; one that fails a check is `egress`, except a tool call with clean arguments
+/// the tool doesn't take (`invalid-arguments`); more tool calls than the task has left
+/// (`calls_left`) is `limit`; a final answer the check refuses is `invalid-answer`, or
+/// `too-many-facts` when choosing too many facts is its only fault. A truncated reply ("length")
+/// keeps its checked text and drops any tool calls, whose arguments may be cut off.
 fn read_reply(
     value: &Value,
     request: &AgentStepRequest,
@@ -1097,6 +1137,38 @@ fn read_reply(
     if calls.len() > MAX_TOOL_CALLS {
         return Err(AgentError::Egress);
     }
+    // Every call's raw text first, at most MAX_TOOL_CALLS of them, before any is refused for its tool or its
+    // arguments: a name or contact detail anywhere in a reply's calls is `egress`, in whichever call and whatever
+    // tool it names (review 2026-11-18; before, a tool not offered was `denied` before its own arguments or a later
+    // call's were looked at). A call that fits a tool this request offered is checked by `arguments_ok` below, on
+    // its values only, so a member named Person or Role still can't stop it.
+    let offered = |wire: &str| {
+        request
+            .tools
+            .iter()
+            .find(|tool| wire_name(&tool.name) == wire)
+    };
+    let fits = |call: &Value| {
+        let function = &call["function"];
+        let (Some(tool), Some(arguments)) = (
+            function["name"].as_str().and_then(offered),
+            function["arguments"].as_str(),
+        ) else {
+            return false;
+        };
+        let arguments = if arguments.is_empty() {
+            "{}"
+        } else {
+            arguments
+        };
+        arguments_ok(arguments, &tool.parameters, names)
+    };
+    if calls
+        .iter()
+        .any(|call| !fits(call) && raw_arguments_refused(call, names))
+    {
+        return Err(AgentError::Egress);
+    }
     if calls.len() > calls_left {
         return Err(AgentError::Limit);
     }
@@ -1114,18 +1186,16 @@ fn read_reply(
         // Only a tool offered in this request, matched by its exact wire name. Any other (an
         // invented name, or a tool this task wasn't offered) is `denied`: the reply is dropped, so
         // the name never reaches the webview or a later request (review N5).
-        let tool = request
-            .tools
-            .iter()
-            .find(|tool| wire_name(&tool.name) == wire)
-            .ok_or(AgentError::Denied)?;
+        let tool = offered(wire).ok_or(AgentError::Denied)?;
         let arguments = if arguments.is_empty() {
             "{}"
         } else {
             arguments
         };
         if !arguments_ok(arguments, &tool.parameters, names) {
-            return Err(AgentError::Egress);
+            // Only doesn't fit: every call's text, this one's and any later one's, passed its check above, so
+            // What happened never hides a name behind "a way Ozzie doesn't allow" (review L2).
+            return Err(arguments_refusal(arguments, names));
         }
         tool_calls.push(AgentToolCall {
             id: format!("call_{step}_{index}"),
@@ -1142,7 +1212,7 @@ fn read_reply(
         return Err(malformed);
     }
     if tool_calls.is_empty() && !answer_ok(content, request) {
-        return Err(AgentError::InvalidAnswer);
+        return Err(answer_refusal(content, request));
     }
     let finish = if tool_calls.is_empty() {
         Finish::Stop
@@ -1165,19 +1235,7 @@ fn answer_ok(content: &str, request: &AgentStepRequest) -> bool {
         debug_answer_shape(content, None);
         return false;
     };
-    let mut known = BTreeSet::new();
-    let mut overviews = Vec::new();
-    for message in &request.messages {
-        if let AgentMessage::Tool { content, .. } = message
-            && let Some(fixed::ToolMessage::Envelope { tool, ids, .. }) =
-                fixed::tool_message(content)
-        {
-            known.extend(ids);
-            if tool == "sunday.overview" {
-                overviews.push(serde_json::from_str::<Value>(content).unwrap_or(Value::Null));
-            }
-        }
-    }
+    let (known, overviews) = known_ids(request);
     if answer.kind == "nothing-needs-a-decision"
         && (overviews.is_empty()
             || overviews.iter().any(|overview| {
@@ -1203,6 +1261,43 @@ fn answer_ok(content: &str, request: &AgentStepRequest) -> bool {
         debug_answer_shape(content, Some((&unknown, known.len())));
     }
     ok
+}
+/// Every id the tool messages in this request hold, and each overview they include, parsed.
+fn known_ids(request: &AgentStepRequest) -> (BTreeSet<String>, Vec<Value>) {
+    let mut known = BTreeSet::new();
+    let mut overviews = Vec::new();
+    for message in &request.messages {
+        if let AgentMessage::Tool { content, .. } = message
+            && let Some(fixed::ToolMessage::Envelope { tool, ids, .. }) =
+                fixed::tool_message(content)
+        {
+            known.extend(ids);
+            if tool == "sunday.overview" {
+                overviews.push(serde_json::from_str::<Value>(content).unwrap_or(Value::Null));
+            }
+        }
+    }
+    (known, overviews)
+}
+/// Why `answer_ok` refused a final reply: `too-many-facts` only when the reply is the closed form for
+/// "facts" in every way but its count (`fixed::final_answer_uncapped`), choosing more than
+/// vocabulary.json's `max_facts`, every one of them an id a tool message in this request holds. A
+/// larger church's "What still needs a decision?" did this with AI on this Mac (measured 2026-11-18:
+/// 27 ids from the overview). Anything else is `invalid-answer`.
+fn answer_refusal(content: &str, request: &AgentStepRequest) -> AgentError {
+    let Some(answer) = fixed::final_answer_uncapped(content) else {
+        return AgentError::InvalidAnswer;
+    };
+    let (known, _) = known_ids(request);
+    let over = answer.kind == "facts"
+        && answer.draft.is_none()
+        && answer.facts.len() > fixed::vocabulary().max_facts
+        && answer.facts.iter().all(|id| known.contains(id));
+    if over {
+        AgentError::TooManyFacts
+    } else {
+        AgentError::InvalidAnswer
+    }
 }
 
 /// Debug builds only: why a final answer was refused, as a name-free shape — never its text. Keys are
@@ -1265,6 +1360,10 @@ fn outcome(reply: &Result<AgentStepReply, AgentError>) -> &'static str {
         ) => "limit",
         Err(AgentError::ProviderFailure) => "provider-failure",
         Err(AgentError::InvalidAnswer) => "fidelity",
+        // Its own step outcome, so What happened can say the answer listed more facts than Ozzie checks (review L4);
+        // the loop still fails the task as fidelity.
+        Err(AgentError::TooManyFacts) => "too-many-facts",
+        Err(AgentError::InvalidArguments) => "invalid-arguments",
         Err(AgentError::NotConfigured | AgentError::ModelNotAllowed) => "no-model",
         Err(_) => "transport",
     }

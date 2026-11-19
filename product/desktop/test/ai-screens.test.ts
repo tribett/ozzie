@@ -198,8 +198,8 @@ describe("Ozzie's AI in words (spec S10)", () => {
     // The plan may not be on the account yet, so it's never said to be (review M10).
     expect(paidSaid("cancelled")).toBe("This Mac isn't connected to Ozzie's AI. If you finished paying, wait until your account page shows Personal, then press Try again and choose Connect this Mac. You won't be charged again.");
     expect(paidSaid("expired")).toBe("Ozzie stopped waiting. If you finished paying, wait until your account page shows Personal, then press Try again and choose Connect this Mac. You won't be charged again.");
-    // A paid connect's 30 minutes ran out: never "couldn't reach its website" (review M2).
-    expect(paidSaid("not-finished")).toBe("Ozzie stopped waiting after 30 minutes. If you finished paying, wait until your account page shows Personal, then press Try again and choose Connect this Mac. You won't be charged again.");
+    // A paid connect's hour ran out: never "couldn't reach its website" (review M2).
+    expect(paidSaid("not-finished")).toBe("Ozzie stopped waiting after an hour. If you finished paying, wait until your account page shows Personal, then press Try again and choose Connect this Mac. You won't be charged again.");
     for (const end of PAID_ENDS) {
       expect(paidSaid(end)).not.toMatch(FORBIDDEN);
       expect(paidSaid(end)).not.toMatch(/Personal is on your account/u);
@@ -1299,7 +1299,7 @@ describe("S10: Ozzie's AI", () => {
     expect(reads()).toBe(after);
   });
 
-  it("waits up to 30 minutes with a calm line after 25, says to choose Connect this Mac after paying, never cancels on Escape, and Cancel says what is still true", async () => {
+  it("waits up to an hour with a calm line after 55 minutes, says to choose Connect this Mac after paying, never cancels on Escape, and Cancel says what is still true", async () => {
     vi.useFakeTimers();
     const s = await mount(base({ managed_connect: new Promise(() => {}), managed_connect_cancel: null }));
     await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
@@ -1311,7 +1311,7 @@ describe("S10: Ozzie's AI", () => {
     expect(seen()).toContain("Wait until your account page shows Personal (usually a few minutes), then press Open the page again and choose Connect this Mac. You won't be charged again.");
     expect(seen()).not.toContain("Still there?");
     const { act } = await import("react");
-    await act(async () => { await vi.advanceTimersByTimeAsync(24 * 60_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(54 * 60_000); });
     expect(seen()).not.toContain("Still there?");
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(seen()).toContain("Still there? Ozzie waits about 5 more minutes.");
@@ -1343,8 +1343,141 @@ describe("S10: Ozzie's AI", () => {
     expect(commands().filter(c => c === "managed_connect")).toHaveLength(2);
   });
 
+  it("after the hour ran out, Try again is a fresh attempt that turns Ozzie's AI on once the website gives this Mac its code (seen live 2026-11-18)", async () => {
+    // The owner's first payment failed on the website; a later one went through after Ozzie had stopped waiting. Try
+    // again opens the connect page again, where an account that already has Personal only chooses Connect this Mac.
+    let tries = 0;
+    const s = await mount(base({ managed_connect: () => { tries += 1; if (tries === 1) throw "not-finished"; return PAID; }, set_model_route: ROUTE }));
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    expect(seen()).toContain("Ozzie stopped waiting after an hour. If you finished paying, wait until your account page shows Personal, then press Try again and choose Connect this Mac. You won't be charged again.");
+    await press("Try again");
+    // A new attempt with the plan, never Open the page again for the ended one; then on, with no new screen in between.
+    expect(s.calls.filter(c => c.command === "managed_connect").map(c => c.args)).toEqual([{ plan: "personal" }, { plan: "personal" }]);
+    expect(s.calls.some(c => c.command === "managed_connect_reopen")).toBe(false);
+    expect(seen()).toContain("Ozzie's AI is on. About 400 answers this month; it starts again on December 17.");
+    expect(s.onModel).toHaveBeenCalledWith(true);
+  });
+
+  /** The same bridge mounted again, as the app keeps one bridge while its screens come and go (leaving the wait). */
+  const mountAgain = async (fake: ReturnType<typeof fakeNative>) => {
+    native.invoke = fake.invoke as never;
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(dom.root as unknown as Element);
+    await act(async () => { root.render(React.createElement(AiChoice, { mode: "settings", onModel() {}, onDone() {}, bridge: fake.bridge })); });
+    await settle();
+    unmount = async () => { await act(async () => { root.unmount(); }); };
+  };
+
+  it("leaving the wait and paying again follows the wait still running: no second connect, never busy, and it ends as that wait ends (review M2)", async () => {
+    let finish: (a: unknown) => void = () => {};
+    const running = new Promise(resolve => { finish = resolve; });
+    let connects = 0;
+    const fake = fakeNative(base({ managed_connect: () => { connects += 1; if (connects > 1) throw "busy"; return running; }, set_model_route: ROUTE,
+      managed_connect_reopen: null }));
+    await mountAgain(fake);
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    expect(seen()).toContain("Waiting for you in your browser");
+    // The person goes to another page; Ozzie still waits for the browser.
+    await unmount!(); unmount = null;
+    await mountAgain(fake);
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    expect(connects).toBe(1);
+    expect(seen()).toContain("Waiting for you in your browser");
+    expect(seen()).toContain(OZZIE.stillWaiting);
+    expect(OZZIE.stillWaiting).toBe("Ozzie is still waiting for you in your browser.");
+    expect(seen()).not.toContain("start fresh");
+    // Open the page again acts on that wait.
+    await press("Open the page again");
+    expect(fake.calls.filter(c => c.command === "managed_connect_reopen")).toHaveLength(1);
+    expect(connects).toBe(1);
+    // The wait ends as it ends: here, connected with the plan on.
+    const { act } = await import("react");
+    await act(async () => { finish(PAID); await Promise.resolve(); });
+    await settle();
+    expect(seen()).toContain("Ozzie's AI is on.");
+    expect(fake.calls.find(c => c.command === "set_model_route")?.args).toEqual({ route: "managed", baseUrl: null, model: null });
+  });
+
+  it("native busy (a wait this screen didn't start) shows that wait with true words; Open the page again and Cancel act on it; once the plan is on, it's on (review M2)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let paidNow = false;
+    const s = await mount(base({ managed_connect: () => { throw "busy"; }, managed_connect_reopen: null, managed_connect_cancel: null, set_model_route: ROUTE,
+      managed_account_now: () => paidNow ? PAID : NONE }));
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    expect(seen()).toContain("Waiting for you in your browser");
+    expect(seen()).toContain("Ozzie is still waiting for you in your browser.");
+    expect(button("Try again")).toBeNull();
+    await press("Open the page again");
+    expect(s.calls.filter(c => c.command === "managed_connect_reopen")).toHaveLength(1);
+    expect(s.calls.filter(c => c.command === "managed_connect")).toHaveLength(1);
+    // The person pays in the browser: the plan shows on the account, and Ozzie's AI turns on here.
+    paidNow = true;
+    const { act } = await import("react");
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    await settle();
+    expect(seen()).toContain("Ozzie's AI is on.");
+    expect(s.calls.find(c => c.command === "set_model_route")?.args).toEqual({ route: "managed", baseUrl: null, model: null });
+    await unmount!(); unmount = null;
+    // Cancel stops the wait that is running.
+    const t = await mount(base({ managed_connect: () => { throw "busy"; }, managed_connect_cancel: null, managed_account_now: NONE }));
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    await press("Cancel");
+    expect(t.calls.some(c => c.command === "managed_connect_cancel")).toBe(true);
+    expect(seen()).toContain("This Mac isn't connected to Ozzie's AI.");
+  });
+
+  it("native busy: following that wait stops after its hour with the true ending, saying Still there? first, and reads the account no more (review 2026-11-18)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let reads = 0;
+    const s = await mount(base({ managed_connect: () => { throw "busy"; }, managed_account_now: () => { reads += 1; return NONE; } }));
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    expect(seen()).toContain(OZZIE.stillWaiting);
+    const { act } = await import("react");
+    await act(async () => { await vi.advanceTimersByTimeAsync(54 * 60_000); });
+    expect(seen()).not.toContain("Still there?");
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(seen()).toContain("Still there? Ozzie waits about 5 more minutes.");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    await settle();
+    expect(seen()).toContain(paidSaid("not-finished"));
+    expect(button("Try again")).not.toBeNull();
+    expect(button("Choose another way")).not.toBeNull();
+    const after = reads;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(reads).toBe(after);
+    expect(s.calls.filter(c => c.command === "managed_connect")).toHaveLength(1);
+  });
+
+  it("native busy: when Open the page again finds no wait any more, the followed wait has ended: on if the plan is, otherwise said, never a new payment (review 2026-11-18)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let paidNow = false;
+    const s = await mount(base({ managed_connect: () => { throw "busy"; }, managed_connect_reopen: () => { throw "no-attempt"; }, set_model_route: ROUTE,
+      managed_account_now: () => paidNow ? PAID : NONE }));
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    await press("Open the page again");
+    await settle();
+    expect(seen()).toContain(paidSaid("expired"));
+    expect(s.calls.filter(c => c.command === "managed_connect")).toHaveLength(1);
+    const { act } = await import("react");
+    const reads = s.calls.filter(c => c.command === "managed_account_now").length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    expect(s.calls.filter(c => c.command === "managed_account_now")).toHaveLength(reads);
+    await unmount!(); unmount = null;
+    // The followed wait ended with the plan on: it's on.
+    paidNow = true;
+    const t = await mount(base({ managed_connect: () => { throw "busy"; }, managed_connect_reopen: () => { throw "no-attempt"; }, set_model_route: ROUTE,
+      managed_account_now: () => paidNow ? PAID : NONE }));
+    await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
+    await press("Open the page again");
+    await settle();
+    expect(seen()).toContain("Ozzie's AI is on.");
+    expect(t.calls.filter(c => c.command === "managed_connect")).toHaveLength(1);
+  });
+
   it("says how each attempt ended, by its closed code only, and every ending offers another way (review M4)", async () => {
-    for (const code of [...PAID_ENDS.filter(e => e !== "unreachable"), "something the server wrote: card_declined"]) {
+    // `busy` is no ending: it is a wait still running, shown as one (review M2, above).
+    for (const code of [...PAID_ENDS.filter(e => e !== "unreachable" && e !== "busy"), "something the server wrote: card_declined"]) {
       const s = await mount(base({ managed_connect: () => { throw code; } }));
       await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
       const end = ((PAID_ENDS as string[]).includes(code) ? code : "unreachable") as PaidEnd;

@@ -89,7 +89,14 @@ const FAILURE: Readonly<Record<string, string>> = {
   limit: "a limit was reached", timeout: "it took too long", cancelled: "it was stopped",
   egress: "a safety check stopped a message before it left the Mac", fidelity: "the answer couldn't be checked against what was read",
   transport: "the AI service couldn't be reached", "no-model": "no AI service is set up", interrupted: "Ozzie was closed while it ran",
+  "invalid-arguments": "the AI asked to look something up in a way Ozzie doesn't allow",
 };
+/**
+ * A fidelity failure whose AI step ended because the answer listed more facts than Ozzie checks in one answer (native step
+ * outcome `too-many-facts`): every id it chose was one Ozzie had read, so "couldn't be checked" would be untrue (review L5).
+ */
+const TOO_MANY_FACTS = "the AI's answer listed more facts than Ozzie checks in one answer";
+const tooManyFacts = (t: SharedTask) => t.failure === "fidelity" && t.events.some(e => e.type === "model" && /^[1-9]\d? too-many-facts$/u.test(e.detail));
 const STATE: Readonly<Record<SharedTask["state"], string>> = {
   proposed: "proposed", admitted: "about to start", running: "still running", verified: "finished, and its answer was checked against what was read",
   failed: "didn't finish", cancelled: "stopped by a person",
@@ -105,7 +112,7 @@ const ALLOWED: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);
 
 function taskLine(t: SharedTask, skills: ReadonlyMap<string, Skill>): string {
   const what = t.kind === "skill" ? `Ozzie's "${skills.get(t.skill_id)?.title ?? "procedure"}" procedure` : KIND[t.kind];
-  const state = t.state === "failed" ? `didn't finish: ${FAILURE[t.failure ?? ""] ?? "it stopped"}`
+  const state = t.state === "failed" ? `didn't finish: ${tooManyFacts(t) ? TOO_MANY_FACTS : FAILURE[t.failure ?? ""] ?? "it stopped"}`
     : t.state === "verified" && t.kind === "check" ? "finished" : STATE[t.state];
   const read = [...new Set(t.events.filter(e => e.type === "tool").map(e => e.detail.split(" ")[0]!).filter(n => ALLOWED.has(n)))]
     .map(n => TOOL_WORDS[n as keyof typeof TOOL_WORDS]);

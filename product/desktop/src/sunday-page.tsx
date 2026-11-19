@@ -947,6 +947,11 @@ export function SundayPage(props: {
   checking?: boolean;
   /** That check had no answer after 20 seconds: say so, with a way to check again, and never "connect" (review L6). */
   stuck?: (() => void) | null;
+  /**
+   * A sign-in that only adds Calendar, People and Groups is in the browser: the church stays connected, so nothing here
+   * offers to connect it (the offer's own card says what it waits for, read-more.tsx).
+   */
+  adding?: boolean;
   decisions: SundayDecision[]; onDecisions: (next: SundayDecision[]) => void;
   operations: SundayOperations | null;
   onCheck: () => void; onRecording: () => void; onExample: () => void; onLaterExample?: (() => void) | undefined;
@@ -980,6 +985,11 @@ export function SundayPage(props: {
   onSetUp?: (() => void) | undefined;
   /** Last Sunday in Check-Ins against the kids rules (church-reads-view.tsx), when Check-Ins was part of the check. */
   church?: ReactNode;
+  /**
+   * What else Ozzie can check with more of Planning Center (read-more.tsx, decision 24), where rooms and follow-ups show
+   * once they are read. App passes it for a check of the church's own service, never the example.
+   */
+  more?: ReactNode;
   /** Shown on an open card for its team or position: App passes the church's own lists here (church-own-words.tsx). */
   beside?: Beside | undefined;
 }) {
@@ -1040,6 +1050,7 @@ export function SundayPage(props: {
       : props.checking ? <p className="small" role="status" aria-live="polite">{CHECKING_LINE}</p>
       : props.stuck ? <p className="small row"><span role="status" aria-live="polite">{STUCK_LINE}</span>
         <button type="button" className="btn btn-quiet btn-sm" onClick={props.stuck}>{CHECK_CONNECTION}</button></p>
+      : props.adding ? null
       : (!props.connected || !props.configured) && <p className="small row">
         <span>{!props.connected ? `Connect Planning Center to check your own service. ${promise("connectAnd")}` : "Choose which service Ozzie watches."}</span>
         {(props.onSetUp ?? props.onSettings) && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSetUp ?? props.onSettings}>
@@ -1064,6 +1075,7 @@ export function SundayPage(props: {
       {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => onDecisions(withoutDecision(decisions, i.finding.key))} />)}
       {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => onDecisions(withoutDecision(decisions, h.decision.key))} />)}
     </section>}
+    {brief && brief.mode !== "fictional" && props.more}
     {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} feedback={controls} occurrence={occurrence.id} titleRef={titleRef("rooms")}
       checkedAt={brief.checked_at ?? brief.completed_at} />}
     {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names}

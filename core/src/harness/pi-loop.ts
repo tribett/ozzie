@@ -25,7 +25,7 @@ const MODEL: Model<"ozzie-agent-step"> = { id: "agent_step", name: "agent_step",
 const ZERO_USAGE = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 
-const MODEL_CODES: ReadonlySet<string> = new Set(["egress", "no-model", "limit", "denied", "invalid-task", "fidelity"]);
+const MODEL_CODES: ReadonlySet<string> = new Set(["egress", "no-model", "limit", "denied", "invalid-task", "fidelity", "invalid-arguments"]);
 const TOOL_ERRORS: ReadonlySet<string> = new Set<ToolError>(["denied", "stale", "partial", "provider-failure", "unverified"]);
 const COMPLETENESS: ReadonlySet<string> = new Set<Completeness>(["complete", "partial", "stale", "denied"]);
 const ALLOWLIST: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);

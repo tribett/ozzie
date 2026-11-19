@@ -46,6 +46,15 @@
 .oz .people-acts { display: flex; flex-direction: column; align-items: stretch; gap: 10px; margin-top: 4px; }
 .oz .people-acts .btn { white-space: normal; height: auto; min-height: var(--h-btn); padding-top: 10px; padding-bottom: 10px; text-align: center; line-height: 1.3; }
 
+/* ---- What else Ozzie can check (read-more.tsx): the service page's card and the Finish list's item --------------- */
+.oz .read-more { display: flex; flex-direction: column; gap: 10px; }
+.oz .read-more .find-top { margin-bottom: 0; }
+.oz .read-more-body { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.oz .read-more-lines { color: var(--ink-2); }
+.oz :is(.read-more, .read-more-body) .people-wait:empty { display: none; }
+.oz .read-more-later { margin: 0; }
+.oz .read-more-hidden { padding: 4px 2px; }
+
 /* ---- Narrow windows, large text, contrast and motion ---------------------------------------------------------- */
 @media (max-width: 760px) {
   .oz .finish { padding: 16px; }

@@ -4,7 +4,7 @@ import { harborAttentionImport } from "../src/fictional-attention.js";
 import { CHECKED, nov22Capture, nov22LaterCapture, TEAMS } from "../src/fictional-sunday.js";
 import { FICTIONAL_ROOM, withFictionalOperations } from "../src/fictional-operations.js";
 import { sundayOperations } from "../src/operations-capture.js";
-import { buildSundayBrief, needKey, type Finding, type SundayBrief } from "../src/sunday-brief.js";
+import { buildSundayBrief, needKey, sundayShownCount, type Finding, type SundayBrief } from "../src/sunday-brief.js";
 import { applyDecisions, decide } from "../src/sunday-decisions.js";
 import { buildSpokenBriefing, MAX_SPOKEN_CHARS, MAX_SPOKEN_SECONDS, SPOKEN_WORDS_PER_MINUTE } from "../src/spoken-briefing.js";
 import { wednesdayCapture, wednesdayWords } from "./fixtures/service-days/wednesday.js";
@@ -169,6 +169,18 @@ describe("spoken briefing: rooms, follow-ups and group meetings, and what couldn
     const confirmed = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: sundayOperations(withOps, { ...quiet, rooms: [{ room_id: FICTIONAL_ROOM, exclusive: true, setup_minutes: 30 }] }) },
       { timeZone: tz });
     expect(section(confirmed, "decisions")).toContain("One room use needs review: bookings overlap in a room your Church rules say isn't shared.");
+  });
+
+  it("counts each follow-up and group meeting as the Sunday page does, however many one line says (live review 2026-11-18)", () => {
+    const operations = sundayOperations(withOps, quiet)!;
+    const followUp = operations.result!.findings.find(f => f.kind === "unowned-overdue")!, meeting = operations.group_meetings[0]!;
+    const more = { ...operations, result: { ...operations.result!, findings: [...operations.result!.findings, { ...followUp, finding_id: `${followUp.finding_id}-2`, card_id: "c2" }] },
+      group_meetings: [meeting, { ...meeting, person_id: "p2" }] };
+    const shown = sundayShownCount(applyDecisions(opsBrief, []), more);
+    expect(shown).toMatchObject({ decisions: 4, looks: 5 });
+    const s = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: more }, { timeZone: tz });
+    expect(section(s, "intro")).toEqual(["Here is today's briefing. 4 things need a decision, and 5 are worth a look."]);
+    expect(section(s, "decisions")).toContain("2 follow-ups have no owner and are past due. Choose who will handle them in your church tools.");
   });
 
   it("reads the rooms and follow-ups gaps, and the Groups gap when Groups couldn't be read (P8, L8)", () => {

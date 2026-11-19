@@ -1895,6 +1895,121 @@ fn contact_details_hidden_characters_and_escapes_are_refused() {
 
 // ---- Replies --------------------------------------------------------------------------------
 
+/// Review 2026-11-18: a call to a tool the task wasn't offered was `denied` before its own arguments,
+/// or any later call's, were checked, so a name in such a reply wasn't recorded as `egress`. Every
+/// call's raw text is checked first, in either order; a call that fits a tool the task was offered is
+/// checked by its values only, so a member named Person or Role still can't stop it.
+#[test]
+fn a_name_beside_a_tool_not_offered_is_egress_in_either_order() {
+    let names = roster();
+    let named = r#"{"role":"Riley's slot"}"#;
+    for (why, answer) in [
+        (
+            "a name in a call to a tool not offered",
+            tool_reply(json!([call("shell", named)]), "tool_calls"),
+        ),
+        (
+            "a tool not offered, then a name",
+            tool_reply(
+                json!([
+                    call("send_email_to_riley", "{}"),
+                    call("sunday__who_could_help", named)
+                ]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a name, then a tool not offered",
+            tool_reply(
+                json!([
+                    call("sunday__who_could_help", named),
+                    call("send_email_to_riley", "{}")
+                ]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a good call, then a phone number in a call to a tool not offered",
+            tool_reply(
+                json!([
+                    call("sunday__who_could_help", ROLE_ARGUMENT),
+                    call("sunday__no_such_tool", r#"{"x":"555-123-4567"}"#)
+                ]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a phone number in a call to a tool not offered, then a good call",
+            tool_reply(
+                json!([
+                    call("sunday__no_such_tool", r#"{"x":"555-123-4567"}"#),
+                    call("sunday__who_could_help", ROLE_ARGUMENT)
+                ]),
+                "tool_calls",
+            ),
+        ),
+    ] {
+        let bench = Bench::new("reply-denied-named").answering(vec![(200, answer)]);
+        assert_eq!(
+            bench.step(base(), &names).err(),
+            Some(AgentError::Egress),
+            "{why}"
+        );
+        assert_eq!(bench.model_events(TASK), ["1", "1 egress"], "{why}");
+        assert_eq!(bench.ledger.step_view(TASK).unwrap().minted, [0], "{why}");
+    }
+    // A church with members named Person and Role: a call that fits keeps its tool's own keys, so beside a
+    // tool not offered the reply is still `denied`, and beside a call that only doesn't fit, `invalid-arguments`.
+    let mut members = roster();
+    members.remember(&["Mary Person".to_owned(), "Pat Role".to_owned()]);
+    for (why, answer, code) in [
+        (
+            "a tool not offered beside a call that fits",
+            tool_reply(
+                json!([
+                    call("shell", "{}"),
+                    call("sunday__who_could_help", ROLE_ARGUMENT)
+                ]),
+                "tool_calls",
+            ),
+            AgentError::Denied,
+        ),
+        (
+            "a call that only doesn't fit, then one that fits",
+            tool_reply(
+                json!([
+                    call("sunday__open_needs", r#"{"who":"[Person 1]"}"#),
+                    call("sunday__who_could_help", ROLE_ARGUMENT)
+                ]),
+                "tool_calls",
+            ),
+            AgentError::InvalidArguments,
+        ),
+        (
+            "a call that fits, then one that only doesn't fit",
+            tool_reply(
+                json!([
+                    call("sunday__who_could_help", ROLE_ARGUMENT),
+                    call("sunday__open_needs", r#"{"who":"[Person 1]"}"#)
+                ]),
+                "tool_calls",
+            ),
+            AgentError::InvalidArguments,
+        ),
+    ] {
+        let bench = Bench::new("reply-members-named").answering(vec![(200, answer)]);
+        assert_eq!(bench.step(base(), &members).err(), Some(code), "{why}");
+    }
+    let fits = Bench::new("reply-members-named-fits").answering(vec![(
+        200,
+        tool_reply(
+            json!([call("sunday__who_could_help", ROLE_ARGUMENT)]),
+            "tool_calls",
+        ),
+    )]);
+    assert!(fits.step(base(), &members).is_ok());
+}
+
 #[test]
 fn replies_are_checked_before_the_webview_sees_them() {
     let names = roster();
@@ -1934,17 +2049,13 @@ fn replies_are_checked_before_the_webview_sees_them() {
         assert_eq!(bench.model_events(TASK), ["1", "1 denied"], "{why}");
         assert_eq!(bench.ledger.step_view(TASK).unwrap().minted, [0], "{why}");
     }
-    let egress: Vec<(&str, String)> = vec![
+    // Clean arguments the tool doesn't take are `invalid-arguments`, a code of its own: the model asked
+    // for a lookup in a way the tool doesn't allow, and nothing in the question was the matter (seen
+    // with AI on this Mac: the open roles asked for one role). The reply is dropped all the same.
+    for (why, answer) in [
         (
-            "custom type",
-            tool_reply(
-                json!([{"id": "x", "type": "custom", "function": {"name": "sunday__open_needs", "arguments": "{}"}}]),
-                "tool_calls",
-            ),
-        ),
-        (
-            "array arguments",
-            tool_reply(json!([call("sunday__open_needs", "[]")]), "tool_calls"),
+            "an argument the tool doesn't take (measured with AI on this Mac)",
+            tool_reply(json!([call("sunday__open_needs", ROLE_ARGUMENT)]), "tool_calls"),
         ),
         (
             "argument the tool doesn't take",
@@ -1954,6 +2065,10 @@ fn replies_are_checked_before_the_webview_sees_them() {
             ),
         ),
         (
+            "array arguments",
+            tool_reply(json!([call("sunday__open_needs", "[]")]), "tool_calls"),
+        ),
+        (
             "argument missing",
             tool_reply(json!([call("sunday__who_could_help", "{}")]), "tool_calls"),
         ),
@@ -1961,6 +2076,111 @@ fn replies_are_checked_before_the_webview_sees_them() {
             "argument of the wrong type",
             tool_reply(
                 json!([call("sunday__who_could_help", r#"{"role":true}"#)]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "another family's label",
+            tool_reply(
+                json!([call("sunday__who_could_help", r#"{"role":"[Person 1]"}"#)]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a good call beside one that doesn't fit",
+            tool_reply(
+                json!([
+                    call("sunday__who_could_help", ROLE_ARGUMENT),
+                    call("sunday__open_needs", ROLE_ARGUMENT)
+                ]),
+                "tool_calls",
+            ),
+        ),
+    ] {
+        let bench = Bench::new("reply-arguments").answering(vec![(200, answer)]);
+        assert_eq!(
+            bench.step(base(), &names).err(),
+            Some(AgentError::InvalidArguments),
+            "{why}"
+        );
+        assert_eq!(bench.sent(), 1, "{why}");
+        assert_eq!(
+            bench.model_events(TASK),
+            ["1", "1 invalid-arguments"],
+            "{why}"
+        );
+        assert_eq!(bench.ledger.step_view(TASK).unwrap().minted, [0], "{why}");
+    }
+    let egress: Vec<(&str, String)> = vec![
+        (
+            "custom type",
+            tool_reply(
+                json!([{"id": "x", "type": "custom", "function": {"name": "sunday__open_needs", "arguments": "{}"}}]),
+                "tool_calls",
+            ),
+        ),
+        // Arguments whose text fails a check stay `egress`, whatever else is wrong with them.
+        (
+            "a name as a key the tool doesn't take",
+            tool_reply(
+                json!([call("sunday__open_needs", r#"{"Riley":"[Role 1]"}"#)]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a phone number as a value the tool doesn't take",
+            tool_reply(
+                json!([call("sunday__open_needs", r#"{"role":"555-123-4567"}"#)]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "an escape in a key the tool doesn't take",
+            tool_reply(
+                json!([call("sunday__open_needs", r#"{"\u0052iley":"[Role 1]"}"#)]),
+                "tool_calls",
+            ),
+        ),
+        // A call that only doesn't fit beside another carrying a name is egress in either order, so What
+        // happened never says "a way Ozzie doesn't allow" for a reply that held a name (review L2).
+        (
+            "a call that doesn't fit, then one with a name",
+            tool_reply(
+                json!([
+                    call("sunday__open_needs", ROLE_ARGUMENT),
+                    call("sunday__who_could_help", r#"{"role":"Riley's slot"}"#)
+                ]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a call with a name, then one that doesn't fit",
+            tool_reply(
+                json!([
+                    call("sunday__who_could_help", r#"{"role":"Riley's slot"}"#),
+                    call("sunday__open_needs", ROLE_ARGUMENT)
+                ]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "a call that doesn't fit, then a phone number in a call to a tool not offered",
+            tool_reply(
+                json!([
+                    call("sunday__open_needs", ROLE_ARGUMENT),
+                    call("sunday__no_such_tool", r#"{"x":"555-123-4567"}"#)
+                ]),
+                "tool_calls",
+            ),
+        ),
+        (
+            "cut arguments",
+            tool_reply(json!([call("sunday__who_could_help", "{\"role\":")]), "tool_calls"),
+        ),
+        (
+            "a repeated key",
+            tool_reply(
+                json!([call("sunday__who_could_help", r#"{"role":"[Role 1]","role":"[Role 2]"}"#)]),
                 "tool_calls",
             ),
         ),
@@ -2216,6 +2436,68 @@ fn a_final_reply_is_only_a_choice_of_facts_this_request_holds() {
         serde_json::to_string(&AgentError::InvalidAnswer).unwrap(),
         "\"invalid-answer\""
     );
+}
+
+/// who_could_help's result listing `n` people (f30 onward), each a fact the answer may choose.
+fn help_listing(n: usize) -> String {
+    let mut envelope: Value = serde_json::from_str(HELP).unwrap();
+    envelope["payload"]["people"] = json!(
+        (0..n)
+            .map(|k| json!({"fact": format!("f{}", 30 + k), "role": "[Role 1]", "person": format!("[Person {}]", 30 + k), "status": "no overlap found"}))
+            .collect::<Vec<_>>()
+    );
+    envelope.to_string()
+}
+
+/// An answer whose only fault is choosing more facts than the form allows (24) is `too-many-facts`, so the page can
+/// say so; its step is recorded as `too-many-facts` (What happened says why, review L4), the task still fails as
+/// fidelity, and the reply is dropped. Anything else wrong with it is still `invalid-answer`, recorded as fidelity
+/// (measured 2026-11-18: a larger church's overview, 27 ids, with AI on this Mac).
+#[test]
+fn an_answer_choosing_more_facts_than_the_form_allows_has_its_own_code() {
+    let names = roster();
+    let listing = help_listing(26);
+    let value = with_tool_content(&listing);
+    let ids = |range: std::ops::Range<usize>| -> Vec<String> { range.map(|n| format!("f{n}")).collect() };
+    let facts = |list: Vec<String>| json!({"answer": "facts", "facts": list}).to_string();
+    // 24 of them pass; 25 and 26 are too many.
+    let bench = Bench::round("answer-24").echo(&value).answering(vec![(200, text_reply(&facts(ids(30..54))))]);
+    assert_eq!(bench.step(value.clone(), &names).ok().unwrap().finish, Finish::Stop);
+    for (why, answer) in [
+        ("25 facts", facts(ids(30..55))),
+        ("every fact the result holds", facts([vec!["f20".to_owned(), "f21".to_owned()], ids(30..56)].concat())),
+        ("in a fence", format!("```json\n{}\n```", facts(ids(30..56)))),
+    ] {
+        let bench = Bench::round("answer-too-many").echo(&value).answering(vec![(200, text_reply(&answer))]);
+        assert_eq!(bench.step(value.clone(), &names).err(), Some(AgentError::TooManyFacts), "{why}");
+        assert_eq!(bench.sent(), 1, "{why}");
+        assert_eq!(bench.model_events(TASK).last().unwrap(), "2 too-many-facts", "{why}");
+    }
+    // Too many and another fault: an id no result holds, a repeated id, another kind, a draft, prose.
+    for (why, answer) in [
+        ("an id no result holds", facts([ids(30..54), vec!["f99".to_owned()]].concat())),
+        ("a repeated id", facts([ids(30..55), vec!["f30".to_owned()]].concat())),
+        ("not covered", json!({"answer": "not-covered", "facts": ids(30..56)}).to_string()),
+        ("nothing to decide", json!({"answer": "nothing-needs-a-decision", "facts": ids(30..56)}).to_string()),
+        ("words before it", format!("Here they are: {}", facts(ids(30..56)))),
+        ("a malformed id", facts([ids(30..55), vec!["f030".to_owned()]].concat())),
+    ] {
+        let bench = Bench::round("answer-too-many-and").echo(&value).answering(vec![(200, text_reply(&answer))]);
+        assert_eq!(bench.step(value.clone(), &names).err(), Some(AgentError::InvalidAnswer), "{why}");
+        assert_eq!(bench.model_events(TASK).last().unwrap(), "2 fidelity", "{why}");
+    }
+    assert_eq!(serde_json::to_string(&AgentError::TooManyFacts).unwrap(), "\"too-many-facts\"");
+    // The form itself is unchanged: over the cap it is never an answer Ozzie uses.
+    let over = facts(ids(30..56));
+    assert!(fixed::final_answer(&over).is_none());
+    assert_eq!(fixed::final_answer_uncapped(&over).unwrap().facts.len(), 26);
+    // The answer-parity vectors read the same uncapped, apart from the one over the cap.
+    let parity: Value = serde_json::from_str(include_str!("../../test/answer-parity.json")).unwrap();
+    for text in parity["invalid"].as_array().unwrap() {
+        let text = text.as_str().unwrap();
+        let uncapped = fixed::final_answer_uncapped(text);
+        assert_eq!(uncapped.is_some(), text.contains("\"f25\""), "{text:?}");
+    }
 }
 
 /// core/test/answer-parity.json: the same answers read the same way here and in the webview
@@ -2650,6 +2932,8 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
         AgentError::InvalidRequest,
         AgentError::ModelNotAllowed,
         AgentError::AllowancePaused,
+        AgentError::TooManyFacts,
+        AgentError::InvalidArguments,
     ]
     .iter()
     .map(|e| serde_json::to_string(e).unwrap())
@@ -2669,7 +2953,9 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
             "\"provider-failure\"",
             "\"invalid-request\"",
             "\"model-not-allowed\"",
-            "\"allowance-paused\""
+            "\"allowance-paused\"",
+            "\"too-many-facts\"",
+            "\"invalid-arguments\""
         ]
     );
     // A malformed IPC request is one code, whatever serde would have quoted.
@@ -2695,6 +2981,9 @@ fn errors_are_a_closed_vocabulary_and_never_echo_a_key_or_any_text() {
         AgentError::RateLimited,
         AgentError::InvalidRequest,
         AgentError::AllowancePaused,
+        AgentError::InvalidAnswer,
+        AgentError::TooManyFacts,
+        AgentError::InvalidArguments,
     ]
     .map(Err);
     for result in replies.iter().chain(&errors) {

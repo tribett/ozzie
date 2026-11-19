@@ -122,8 +122,16 @@ fn one_click_sign_in_saves_under_the_organization_planning_center_names_and_hand
         "status carries no credential"
     );
     assert!(store.get("local:1001", "1001").unwrap().is_some());
+    assert!(
+        !auth.handed_over(),
+        "nothing is handed over before adopt_found"
+    );
 
     let bound = auth.adopt_found().unwrap();
+    // The retired finder says it connected and was handed over, so the sign-in watcher brings Ozzie forward even when
+    // the page's status read handed it over first (review L9: Ozzie stayed behind the browser).
+    assert!(auth.handed_over());
+    assert_eq!(auth.status().unwrap().organization, "1001");
     let handed = bound.status().unwrap();
     assert_eq!(handed.state, ConnectionState::Connected);
     assert_eq!(handed.organization, "1001");
@@ -141,6 +149,16 @@ fn one_click_sign_in_saves_under_the_organization_planning_center_names_and_hand
     // Single use: the finder is retired and cannot hand over twice.
     assert_eq!(auth.status().unwrap().state, ConnectionState::Cancelled);
     assert!(auth.adopt_found().is_err());
+    assert!(
+        auth.handed_over(),
+        "a refused second hand-over leaves the first one's mark"
+    );
+    // A finder cancelled before it handed over is never marked.
+    let other = finder(Arc::new(MemoryStore::default()), Church::new("2002"));
+    other.begin().unwrap();
+    other.cancel();
+    assert!(other.adopt_found().is_err());
+    assert!(!other.handed_over());
     // The bound connection is an ordinary one: refresh re-verifies and keeps the saved scopes.
     let refreshed = bound.refresh().unwrap();
     assert_eq!(refreshed.state, ConnectionState::Connected);

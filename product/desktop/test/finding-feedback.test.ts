@@ -8,12 +8,12 @@ import { RulesPage } from "../src/rules-page.js";
 import { TodayPage } from "../src/today-page.js";
 import { SundayReadyBrief, sundayReadyLine } from "../src/sunday-ready.js";
 import { correctionChoices, correctionSaid, FindingFeedback, FromYourCards, type FeedbackControls, type FeedbackSource } from "../src/finding-feedback.js";
-import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { nov22Capture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
 import { FICTIONAL_ROOM, fictionalOperations, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
-import { decide } from "../../../core/src/sunday-decisions.js";
+import { applyDecisions, decide } from "../../../core/src/sunday-decisions.js";
 import { briefTarget, type CorrectionWhat, type FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import { evaluateAttentionImport } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
@@ -250,6 +250,17 @@ describe("Today", () => {
     const entry: FeedbackEntry = { type: "correction", id: "c", kind: "needs-people", at: AT, key: greeter.key, occurrence: greeter.occurrence, facts: greeter.facts,
       scope: greeter.scope, labels: {}, note: "" };
     expect(today([entry])).toContain("Sunday has 1 thing to decide.");
+  });
+
+  it("the Ready for Sunday brief says the same counts as Today and the Sunday page, rooms, follow-ups and group meetings included (live review 2026-11-18)", () => {
+    const b = briefOf(), ops = fictionalOperations();
+    const shown = sundayShownCount(applyDecisions(b, []), ops);
+    expect(shown).toMatchObject({ decisions: 4, looks: 2 });
+    const today = text(renderToStaticMarkup(React.createElement(TodayPage, { brief: b, operations: ops, onSunday: () => undefined, store: memory() })));
+    expect(today).toContain("Sunday has 4 things to decide.");
+    const t = text(renderToStaticMarkup(React.createElement(SundayReadyBrief, { brief: b, operations: ops, names, onSunday: () => undefined })));
+    expect(t).toContain("4 things need a decision, and 2 are worth a look.");
+    expect(t).toContain("Rooms, follow-ups and group meetings");
   });
 
   it("the Ready for Sunday brief lists everything open, what wasn't checked and when it was read", () => {

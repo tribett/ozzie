@@ -225,6 +225,22 @@ describe("every tool's words, over every kind of check", () => {
     expect(out).not.toMatch(/sunday-ready|answer-from-what-was-read|[0-9a-f]{8}-[0-9a-f]{4}/u);
   });
 
+  it("says why a question stopped for every code it can stop with, never just that it stopped (review L5)", async () => {
+    const { envelopes } = await sharedFor(harnessData());
+    const at = "2026-11-20T14:30:00Z";
+    const asked = (failure: string, outcome: string): SharedTask => ({ kind: "ask", skill_id: "answer-from-what-was-read", state: "failed", created_at: at, updated_at: at,
+      failure, events: [{ type: "model", detail: "1", at }, { type: "model", detail: `1 ${outcome}`, at }, { type: "failed", detail: failure, at }] } as SharedTask);
+    const tasks = [asked("invalid-arguments", "invalid-arguments"), asked("fidelity", "too-many-facts"), asked("fidelity", "fidelity")];
+    const text = sharedCheckText(envelopes, tasks, SHARED_AT, COPY);
+    expect(parseSharedCheck(text)?.tasks.length).toBe(3);
+    const out = textOf(call(serverOver(() => text), "what_happened"));
+    expect(out).toContain("Didn't finish: the AI asked to look something up in a way Ozzie doesn't allow. It used 1 AI step.");
+    // Every id the AI chose was one Ozzie had read, only more of them than it checks in one answer.
+    expect(out).toContain("Didn't finish: the AI's answer listed more facts than Ozzie checks in one answer. It used 1 AI step.");
+    expect(out).toContain("Didn't finish: the answer couldn't be checked against what was read. It used 1 AI step.");
+    expect(out).not.toContain("it stopped");
+  });
+
   it("with nothing shared, every tool says so plainly, without urging anyone to turn sharing on", () => {
     const server = serverOver(() => null);
     for (const t of TOOLS) expect(textOf(call(server, t.name))).toContain(NOT_SHARED);

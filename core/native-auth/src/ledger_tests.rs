@@ -729,7 +729,13 @@ fn only_name_free_fields_and_details_are_stored() {
         assert!(ledger.event(&task(1), "tool", detail).is_ok(), "{detail}");
     }
     // Model events are native code's alone: the grammar holds them, the webview can't add them.
-    for detail in ["6", "3 tool_calls", "4 egress", "5 length"] {
+    for detail in [
+        "6",
+        "3 tool_calls",
+        "4 egress",
+        "5 length",
+        "2 too-many-facts",
+    ] {
         assert!(detail_ok(EventType::Model, detail), "{detail}");
         assert_eq!(
             ledger.event(&task(1), "model", detail).err(),
@@ -737,6 +743,11 @@ fn only_name_free_fields_and_details_are_stored() {
             "{detail}"
         );
     }
+    // A step that ended because the AI's answer listed too many facts is a step's outcome only (agent.rs `outcome`, review
+    // L4): never a task's failure code, which stays fidelity.
+    assert!(!detail_ok(EventType::Failed, "too-many-facts"));
+    assert!(!detail_ok(EventType::Tool, "too-many-facts"));
+    assert!(FailureCode::parse("too-many-facts").is_none());
     // The file holds only what the rows show: no field for a question, an answer or source text.
     let text = std::fs::read_to_string(dir.file()).unwrap();
     assert!(!text.to_lowercase().contains("riley") && !text.contains('?'));

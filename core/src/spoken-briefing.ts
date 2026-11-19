@@ -140,9 +140,12 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
   }
 }
 
-/** Rooms, follow-ups and group meetings as counts: what needs a decision and what's worth a look. Never a name. */
-function operationsLines(ops: SundayOperations | null | undefined, d: DayWords): { decisions: string[]; looks: string[] } {
-  if (!ops || ops.stale) return { decisions: [], looks: [] };
+/**
+ * Rooms, follow-ups and group meetings as counts: what needs a decision and what's worth a look. Never a name. `counted`:
+ * how many items those lines stand for, as the Sunday page counts them (one line can say two follow-ups).
+ */
+function operationsLines(ops: SundayOperations | null | undefined, d: DayWords): { decisions: string[]; looks: string[]; counted: { decisions: number; looks: number } } {
+  if (!ops || ops.stale) return { decisions: [], looks: [], counted: { decisions: 0, looks: 0 } };
   const findings = ops.result?.findings ?? [];
   const owners = findings.filter(f => f.kind === "unowned-overdue").length;
   const review = findings.filter(f => f.kind === "room-overlap" && f.certainty === "confirmed").length;
@@ -160,7 +163,7 @@ function operationsLines(ops: SundayOperations | null | undefined, d: DayWords):
     ...(unsure ? ["Some room or follow-up details couldn't be confirmed."] : []),
     ...(meetings ? [`${meetings === 1 ? `One person on ${plan} has` : `${meetings} people on ${plan} have`} a group meeting at the same time they serve.`] : []),
   ];
-  return { decisions, looks };
+  return { decisions, looks, counted: { decisions: owners + review, looks: overlaps + (unsure ? 1 : 0) + meetings } };
 }
 
 /** Read the first few items; point to the screen for the rest so the briefing stays short. */
@@ -198,7 +201,7 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   const sundayDecisions = open.filter(i => i.finding.tone === "decision")
     .map((i, n) => again(i, `${n === 0 && i.state !== "reopened" ? `For ${ctx.name}, ` : ""}${decision(i.finding, ctx)}`));
   decisions.push(...sundayDecisions);
-  const operations = sunday ? operationsLines(input.operations, ctx.d) : { decisions: [], looks: [] };
+  const operations = sunday ? operationsLines(input.operations, ctx.d) : { decisions: [], looks: [], counted: { decisions: 0, looks: 0 } };
   decisions.push(...operations.decisions);
   const decisionLines = bounded(decisions, limit, n => `And ${n} more that ${n === 1 ? "needs" : "need"} a decision, listed on screen.`);
   if (resolved) decisionLines.push(ctx.d.kind === "weekday" ? `You already decided ${one(resolved, `${ctx.d.day} item`, `${ctx.d.day} items`)}, for ${ctx.d.thisOne} only.`
@@ -228,8 +231,11 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
         : `Planning Center was checked ${at}.${sunday.stale ? " That's more than 30 minutes ago, so it may not be current." : ""}`);
   }
 
-  const summary = decisions.length + looks.length === 0 ? "Nothing I read needs you right now."
-    : `${decisions.length ? `${one(decisions.length, "thing needs", "things need")} a decision` : "nothing needs a decision"}${looks.length ? `, and ${one(looks.length, "is", "are")} worth a look` : ""}.`;
+  // Items, not lines: each follow-up, room and group meeting counts as on the Sunday page and Today (live review 2026-11-18).
+  const decided = decisions.length - operations.decisions.length + operations.counted.decisions;
+  const looked = looks.length - operations.looks.length + operations.counted.looks;
+  const summary = decided + looked === 0 ? "Nothing I read needs you right now."
+    : `${decided ? `${one(decided, "thing needs", "things need")} a decision` : "nothing needs a decision"}${looked ? `, and ${one(looked, "is", "are")} worth a look` : ""}.`;
   const sections: BriefingSection[] = ([
     { id: "intro", heading: "", sentences: [`Here is today's briefing. ${summary.charAt(0).toUpperCase()}${summary.slice(1)}`] },
     { id: "decisions", heading: "Needs a decision", sentences: decisionLines },

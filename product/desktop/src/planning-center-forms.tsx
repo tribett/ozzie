@@ -5,7 +5,7 @@ import { useEffect, useId, useState } from "react";
 import {
   attemptCopy, churchShort, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
   missingCopy, parseDeclined, parseInUse, parseLastAttempt, parseSwitchQuestion, parseUnretired, signInInstead, switchCopy, switchProblem,
-  switchSettings, disconnectNote, type ConnectionStatus, type MoreProducts, type RulesAtStake,
+  switchSettings, disconnectNote, type ConnectionStatus, type MoreProducts, type RulesAtStake, type SignInPurpose,
   type SwitchDecision, type SwitchQuestion, type Unretired,
 } from "./connection.js";
 import { ADMIN_COPIED, ADMIN_COPY, adminMessage, loadRules, type Settings } from "./sunday-source.js";
@@ -25,11 +25,10 @@ const stateCopy: Record<Exclude<ConnectionStatus["state"], "connected">, string>
 /**
  * "Copy a message for your administrator", beside a refusal that says an administrator can give access (sunday-source.ts
  * `adminMessage`). It says "Copied" as Ozzie's other copy buttons do; if this Mac won't copy, the message is shown to
- * select instead.
+ * select instead. `message`: another product's request (read-more.tsx), in place of the one for Services.
  */
-export function CopyForAdministrator() {
+export function CopyForAdministrator({ message = adminMessage() }: { message?: string } = {}) {
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
-  const message = adminMessage();
   const write = () => navigator.clipboard ? navigator.clipboard.writeText(message) : Promise.reject(new Error("no clipboard"));
   return <div className="stack-tight">
     <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => { void write().then(() => setCopy("copied"), () => setCopy("failed")); }}>
@@ -74,9 +73,9 @@ export function useConnectionControl(settings: Settings, onStatus: (s: Connectio
   /** Whether a sign-in can start now, with whichever registration is in use. */
   const canSignIn = (ownIds ? ready : builtIn) && !asking;
   const canCheck = numeric(settings.organization) && (ownIds ? registered : builtIn);
-  const signIn = (operations = false, more: MoreProducts = {}) => ownIds
-    ? connection.connect(settings.clientId, settings.organization, registered, operations, more)
-    : connection.connectApp(operations, more);
+  const signIn = (operations = false, more: MoreProducts = {}, purpose?: SignInPurpose) => ownIds
+    ? connection.connect(settings.clientId, settings.organization, registered, operations, more, purpose)
+    : connection.connectApp(operations, more, purpose);
   const checkSaved = () => connection.refresh(ownIds ? settings.clientId : "", settings.organization, ownIds ? registered : true);
   const run = async (operation: () => Promise<ConnectionStatus | void>, from: "sign-in" | "operations" | "more" = "sign-in") => {
     setWorking(true); setProblem(null);

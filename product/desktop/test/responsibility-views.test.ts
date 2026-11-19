@@ -291,6 +291,8 @@ describe("Keeping watch: the home for responsibilities", () => {
     // Paused, or its check stopped because Ozzie's sign-in was busy or the Mac's credential storage was locked
     // (harness-bridge.ts checkFailure): true of each.
     expect(problemText("cancelled")).toBe("it was paused or stopped before it finished");
+    // Every code a run can end with has its own words, never "something went wrong" (review L5).
+    expect(problemText("invalid-arguments")).toBe("the AI asked to look something up in a way Ozzie doesn't allow");
     expect(problemText("unverified")).toBe("Ozzie couldn't confirm which church its sign-in to Planning Center belongs to");
     // Waiting for Planning Center: says so rather than "Not scheduled".
     const waiting = render(React.createElement(ResponsibilityList, { view: view({ items: [r] }), context: context({ connected: false }), runner: fakeRunner(view()), actions }));

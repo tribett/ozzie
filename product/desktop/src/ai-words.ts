@@ -569,6 +569,8 @@ export const OZZIE = {
   openAgain: "Open the page again",
   cancel: "Cancel",
   stillThere: "Still there? Ozzie waits about 5 more minutes.",
+  /** The screen was left while Ozzie waited, then opened again: the same wait, still running (review M2). */
+  stillWaiting: "Ozzie is still waiting for you in your browser.",
   /** "Ozzie's AI is on. About 400 answers this month; it starts again on December 17." from the offer and the account. */
   on(answers: string | null, day: string | null): string {
     const month = answers ? answers.replace(/ a month$/u, " this month") : null;
@@ -617,10 +619,11 @@ export function paidSaid(end: PaidEnd): string {
     // Cancelled here, or "Don't connect" on the site: payment may already have gone through, so it says what is still true.
     case "cancelled": return `This Mac isn't connected to Ozzie's AI. ${paidAlready}`;
     case "expired": return `Ozzie stopped waiting. ${paidAlready}`;
-    // A paid connect that heard nothing back in its 30 minutes (contract N7): never "couldn't reach" (review M2).
-    case "not-finished": return `Ozzie stopped waiting after 30 minutes. ${paidAlready}`;
+    // A paid connect that heard nothing back in its hour (contract N7): never "couldn't reach" (review M2).
+    case "not-finished": return `Ozzie stopped waiting after an hour. ${paidAlready}`;
     case "browser-unavailable": return "Your browser didn't open. Press Try again. If nothing happens, choose a default web browser in System Settings › Desktop & Dock, then try again.";
-    case "busy": return "Ozzie was already waiting for you in your browser. Press Try again to start fresh.";
+    // Never an ending the screen shows: a wait still running is shown as the wait (ai-ozzie.tsx, review M2).
+    case "busy": return "Ozzie is still waiting for you in your browser.";
     case "refused": return `Ozzie's website didn't accept that sign-in, so this Mac isn't connected yet. ${paidAlready}`;
     case "keychain": return `This Mac didn't let Ozzie keep the connection. Unlock this Mac (type your Mac password if it asks). ${paidAlready}`;
     case "unreachable": return `Ozzie couldn't reach its website just now. Check that this Mac is online. ${paidAlready}`;

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentStepReply, AgentStepRequest, ModelStep, ToolEnvelope } from "../../src/harness/contract.js";
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
 import {
-  ALSO_ON_SUNDAY, alsoOnPage, backgroundSentence, BACKGROUND_OFF, BACKGROUND_ON_FILE, BACKGROUND_UNCONFIRMED, composeAnswer, DECISION_QUESTION, decisionsLeftOut, DRAFT_INTRO, isDecisionQuestion, KEPT_HERE,
+  ALSO_ON_SUNDAY, alsoOnPage, backgroundSentence, BACKGROUND_OFF, BACKGROUND_ON_FILE, BACKGROUND_UNCONFIRMED, chosenSources, composeAnswer, DECISION_QUESTION, decisionsLeftOut, DRAFT_INTRO, isDecisionQuestion, KEPT_HERE,
   kidsAnswer, kidsQuestion, kidsWording, MEMBERS_UNREAD, NO_KIDS_TEAM, NOBODY_SCHEDULED, nobodyScheduled, NOTHING_OPEN, ON_SUNDAY, onPage, openDecisions, setAside, NOT_COVERED_MORE, NOT_FREE, NOT_RANKED, NOTHING_TO_DECIDE,
 } from "../../src/harness/compose.js";
 import { envelopeProblems } from "../../src/harness/fixed.js";
@@ -15,12 +15,12 @@ import { TsLoop } from "../../src/harness/ts-loop.js";
 import { NOT_COVERED } from "../../src/ask.js";
 import { CHECKED, nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../src/fictional-sunday.js";
 import type { SundayCapture, SundayRules } from "../../src/sunday-capture.js";
-import { buildSundayBrief, type Finding } from "../../src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount, type Finding } from "../../src/sunday-brief.js";
 import { sundayOperations } from "../../src/operations-capture.js";
 import { dayWords, SUNDAY_WORDS, UNKNOWN_WORDS, type DayWords } from "../../src/service-day.js";
 import { wednesdayWithEverything } from "../fixtures/service-days/wednesday.js";
 import type { CorrectionEntry } from "../../src/finding-feedback.js";
-import { decide } from "../../src/sunday-decisions.js";
+import { applyDecisions, decide } from "../../src/sunday-decisions.js";
 import { allEnvelopes, FIXTURES, FRESH, harnessData, KIDS_RULES, LEAD_RULES, RULES } from "./fixtures.js";
 
 const skills = await bundledSkills();
@@ -90,6 +90,9 @@ describe("the four suggested questions, answered from facts the model chose", ()
     expect(out.restored).toEqual([
       "Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
       "Needs a decision: Nursery at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
+      // The room overlap a Church rule confirms and the follow-up with no owner, as the Sunday page counts them (live review 2026-11-18).
+      "Needs a decision: Sanctuary (fictional) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM.",
+      "Needs a decision: Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.",
     ]);
   });
 
@@ -352,8 +355,10 @@ describe("kids teams and background checks, answered on this Mac without the AI"
 describe("a decision question: open decisions the answer left out are added on this Mac", () => {
   it("What still needs a decision this Sunday? The answer's own items, then the background checks, the follow-up and the room overlap it left out", async () => {
     const data = kidsData();
+    // As Ozzie's AI answered live (2026-11-18): the roles and kids teams that need a decision, not the room or the follow-up.
     const model: ModelStep = async r => r.messages.length < 3 ? call("sunday.overview")
-      : answer({ answer: "facts", facts: (results(r)[0]!.payload as { findings: { fact: string; tone: string }[] }).findings.filter(f => f.tone === "needs a decision").map(f => f.fact) });
+      : answer({ answer: "facts", facts: (results(r)[0]!.payload as { findings: { fact: string; tone: string; kind: string }[] }).findings
+        .filter(f => f.tone === "needs a decision" && f.kind !== "room use needs review" && f.kind !== "needs an owner").map(f => f.fact) });
     const h = new Harness({ workspace_id: "w", data, skills, runtime: new TsLoop(), model, now: () => FRESH });
     const res = await h.ask("What still needs a decision this Sunday?");
     if (!res.ok) throw new Error(res.refusal);
@@ -369,6 +374,55 @@ describe("a decision question: open decisions the answer left out are added on t
     ]);
     expect(left.evidence.map(e => e.tool)).toEqual(["sunday.overview", "rooms.conflicts", "followups.unowned"]);
     expect(left.sources.map(s => s.source)).toEqual(["Planning Center People"]);
+  });
+
+  it("says a room or follow-up once when an answer chose it from the overview and from its own tool, in its own tool's fuller words (review 2026-11-18)", async () => {
+    const data = harnessData({ mode: "live" });
+    const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
+    const evidence = [await tools.run("sunday.overview", {}, signal, "t"), await tools.run("rooms.conflicts", {}, signal, "t"), await tools.run("followups.unowned", {}, signal, "t")];
+    const rows = (e: ToolEnvelope, list: string) => ((e.payload as Record<string, unknown>)[list] as { fact: string; kind?: string }[]);
+    const overviewOps = rows(evidence[0]!, "findings").filter(r => r.kind === "room use needs review" || r.kind === "needs an owner").map(r => r.fact);
+    const own = [...rows(evidence[1]!, "rooms"), ...rows(evidence[2]!, "follow_ups")].map(r => r.fact);
+    expect([overviewOps.length, own.length]).toEqual([2, 2]);
+    const said = composeAnswer(JSON.stringify({ answer: "facts", facts: [...overviewOps, ...own] }), evidence).paragraphs;
+    expect(said).toEqual([
+      expect.stringMatching(/^Room use needs review: \[Room 1\] has bookings that overlap .* Planning Center doesn't show it as worked out\.$/u),
+      "[Workflow 1], step [Step 1], was due 2026-10-26T17:27-04:00 and has no owner.",
+    ]);
+    // Only the overview's: said in its own words.
+    expect(composeAnswer(JSON.stringify({ answer: "facts", facts: overviewOps }), evidence).paragraphs).toHaveLength(2);
+  });
+
+  it("the overview says the Sunday page's count, each room, follow-up and group meeting in its tone, and a settled decision as Resolved by you (live review 2026-11-18)", async () => {
+    const greeter = harnessData().brief!.findings.find(f => f.kind === "needs-people")!;
+    const data = harnessData({ mode: "live", decisions: [decide(greeter, "covered-outside", "A parent is covering", CHECKED)] });
+    const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
+    const overview = await tools.run("sunday.overview", {}, signal, "t");
+    const p = overview.payload as { fact: string; findings: { fact: string; kind: string }[] };
+    const every = JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.map(f => f.fact)] });
+    const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
+    expect(shown).toMatchObject({ decisions: 3, looks: 3 });
+    expect(composeAnswer(every, [overview]).paragraphs.map(t => showTimes(t, data.brief!.time_zone))).toEqual([
+      "For Sunday, November 22, this check found 3 items that need a decision and 3 worth a look.",
+      "Resolved by you: [Role 1] at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count. You decided: covered outside Planning Center.",
+      "Needs a decision: [Role 2] at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
+      "Worth a look: [Person 1] is pending for [Role 3] at 9:30 AM on November 22. The request hasn't been sent yet. Pending is not the same as asked.",
+      "Worth a look: [Person 2] is scheduled 3 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance.",
+      "Needs a decision: [Room 1] has bookings that overlap on November 22 from 10:30 AM to 11:00 AM.",
+      "Needs a decision: [Workflow 1], step [Step 1], was due 5:27 PM on October 26 and has no owner.",
+      "Worth a look: [Person 1] is scheduled for [Role 3] (pending) at 9:30 AM on November 22 while their group meets at 9:30 AM on November 22.",
+    ]);
+    // Said once: a decision question's answer that chose them gets nothing added for them.
+    expect((await decisionsLeftOut(tools, every, [overview], signal)).paragraphs).toEqual([]);
+    // "Based on" names where the room, follow-up and group meeting came from, not only the overview's Services.
+    expect(chosenSources(every, [overview], data.operations!.checked_at).map(s => s.source)).toEqual(["Planning Center Calendar", "Planning Center People", "Planning Center Groups"]);
+    expect(chosenSources(JSON.stringify({ answer: "facts", facts: [p.fact] }), [overview], null)).toEqual([]);
+    // Without a Church room rule: the overlap is worth a look, with one line for what couldn't be confirmed.
+    const unruled = new HarnessTools(harnessData({ mode: "live", rules: { ...RULES, rooms: [] } }), new HarnessSession(), { now: () => FRESH });
+    const o2 = await unruled.run("sunday.overview", {}, signal, "t");
+    const rows = (o2.payload as { findings: { fact: string; kind: string }[] }).findings.filter(f => f.kind === "room use needs review" || f.kind === "a detail couldn't be verified");
+    expect(composeAnswer(JSON.stringify({ answer: "facts", facts: rows.map(r => r.fact) }), [o2]).paragraphs).toEqual([
+      "Worth a look: [Room 1] has bookings that overlap on 2026-11-22 from 10:45 AM to 11:00 AM.", "Worth a look: Some room or follow-up details couldn't be confirmed."]);
   });
 
   it("adds nothing the answer already said, and nothing a leader already decided", async () => {
@@ -546,14 +600,19 @@ describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
     const withDay = said(data.brief!.day!), without = said(null);
     for (const line of [...withDay, ...without]) expect(line).not.toMatch(/Sunday/u);
     // The real day and date, the page by its real name, and the Church rules' own words.
-    expect(withDay).toContain("For Wednesday, November 25, this check found 4 items that need a decision and 3 worth a look. Some findings are shown only in Ozzie on this Mac, on the Wednesday page.");
+    // The Wednesday page's own counts (7 to decide, 4 worth a look), less the two background checks kept on this Mac; the
+    // Nursery need marked not needed is settled, so it isn't counted (live review 2026-11-18).
+    const view = applyDecisions(data.brief!, data.decisions);
+    expect(sundayShownCount(view, data.operations)).toMatchObject({ decisions: 7, looks: 4 });
+    expect(view.items.filter(i => i.state !== "resolved" && i.finding.kind === "background-check").map(i => i.finding.tone)).toEqual(["decision", "decision"]);
+    expect(withDay).toContain("For Wednesday, November 25, this check found 5 items that need a decision and 4 worth a look. Some findings are shown only in Ozzie on this Mac, on the Wednesday page.");
     expect(withDay.join(" ")).toContain("You decided: not needed this Wednesday.");
     expect(withDay.join(" ")).toMatch(/is scheduled \d+ weeks in a row/u);
     expect(withDay.join(" ")).toContain("They ask for a scheduled Wednesday lead for [Role");
     expect(withDay.join(" ")).toMatch(/1 person serving this Wednesday has a group meeting at the same time\./u);
     expect(withDay.join(" ")).toContain("(oversight of the team, not a serving assignment)");
     // Without them (what composeAnswer's callers pass today): the plan's own date, and neutral words otherwise.
-    expect(without).toContain("For Wednesday, November 25, this check found 4 items that need a decision and 3 worth a look. Some findings are shown only in Ozzie on this Mac.");
+    expect(without).toContain("For Wednesday, November 25, this check found 5 items that need a decision and 4 worth a look. Some findings are shown only in Ozzie on this Mac.");
     expect(without.join(" ")).toContain("You decided: not needed for this service.");
     expect(without.join(" ")).toContain("They ask for a scheduled lead for [Role");
     expect(without.join(" ")).toMatch(/1 person serving at this service has a group meeting at the same time\./u);

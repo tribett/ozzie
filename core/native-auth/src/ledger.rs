@@ -204,9 +204,11 @@ pub enum FailureCode {
     Transport,
     NoModel,
     Interrupted,
+    /// The model asked for a lookup with arguments the tool doesn't take (agent.rs `InvalidArguments`).
+    InvalidArguments,
 }
 impl FailureCode {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Denied,
         Self::Stale,
         Self::Partial,
@@ -221,6 +223,7 @@ impl FailureCode {
         Self::Transport,
         Self::NoModel,
         Self::Interrupted,
+        Self::InvalidArguments,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -238,6 +241,7 @@ impl FailureCode {
             Self::Transport => "transport",
             Self::NoModel => "no-model",
             Self::Interrupted => "interrupted",
+            Self::InvalidArguments => "invalid-arguments",
         }
     }
     pub fn parse(text: &str) -> Option<Self> {
@@ -362,7 +366,7 @@ pub fn detail_ok(kind: EventType, detail: &str) -> bool {
             EventType::Model => match detail.split_once(' ') {
                 Some((n, outcome)) => {
                     step(n)
-                        && (matches!(outcome, "stop" | "tool_calls" | "length")
+                        && (matches!(outcome, "stop" | "tool_calls" | "length" | "too-many-facts")
                             || FailureCode::parse(outcome).is_some())
                 }
                 None => step(detail),
@@ -970,7 +974,7 @@ impl TaskLedger {
         Ok(step)
     }
 
-    /// Closes step `step` with its outcome (`stop`, `tool_calls`, `length` or a FailureCode), the
+    /// Closes step `step` with its outcome (`stop`, `tool_calls`, `length`, `too-many-facts` or a FailureCode), the
     /// number of tool calls its reply minted and the reply's hash (`agent::reply_hash`; empty when
     /// the step returned no reply). Refused unless that step is the one in flight on a running task
     /// and the task's minted calls stay within MAX_TOOL_CALLS.

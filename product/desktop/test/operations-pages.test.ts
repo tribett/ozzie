@@ -131,12 +131,13 @@ describe("Settings: opt in to rooms, follow-ups and group events", () => {
 
   it("turning it on or off is native's switch, and a new sign-in turns it on only once Planning Center granted the access", async () => {
     const { setOperationsReadsAfter } = await import("../src/connection-page.js");
-    const calls: boolean[] = [];
-    const set = async (on: boolean) => { calls.push(on); return on; };
-    expect(await setOperationsReadsAfter(status("services-and-operations"), true, set)).toBe(true);
-    expect(await setOperationsReadsAfter(status("services"), true, set)).toBeNull();
-    expect(await setOperationsReadsAfter(status("services-and-operations"), false, set)).toBe(false);
-    expect(calls).toEqual([true, false]);
+    const calls: [boolean, boolean][] = [];
+    const set = async (on: boolean, pressed: boolean) => { calls.push([on, pressed]); return on; };
+    expect(await setOperationsReadsAfter(status("services-and-operations"), true, "after-sign-in", set)).toBe(true);
+    expect(await setOperationsReadsAfter(status("services"), true, "pressed", set)).toBeNull();
+    expect(await setOperationsReadsAfter(status("services-and-operations"), false, "pressed", set)).toBe(false);
+    // Native hears which: a person's press, or the page's own call after a sign-in (review M1).
+    expect(calls).toEqual([[true, false], [false, true]]);
   });
   it("reconnects with operations only when asked; the default call is unchanged", async () => {
     invoke.mockResolvedValue(status());

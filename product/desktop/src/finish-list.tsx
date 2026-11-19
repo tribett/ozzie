@@ -4,7 +4,7 @@
 // 10: it never comes back by itself). Item 1 replaces Today's old "Ozzie isn't set to start with this Mac" card.
 //
 // It also holds the small styles for the other at-the-moment questions (finish.css).
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
 import { finishMemory, type FinishItemId, type FinishStore } from "./moments.js";
@@ -29,6 +29,11 @@ export interface FinishFacts {
   ai: { left: boolean; chosen: boolean };
   /** Item 5. `waiting`: setup found no upcoming plan (S5d). `found`: a plan has appeared. `service`: its Planning Center name. */
   plan: { waiting: boolean; found: boolean; service?: string | null | undefined };
+  /**
+   * Item 6 (decision 24). `offered`: after a check, the connection reads Services only (or holds Calendar, People and
+   * Groups with their reads off) and the offer wasn't hidden; it stays offered, done, once the person allowed it.
+   */
+  more?: { offered: boolean; done: boolean } | undefined;
 }
 export interface FinishItem { id: FinishItemId; title: string; done: boolean }
 
@@ -39,6 +44,10 @@ const TITLES: Record<FinishItemId, string> = {
   kids: "Mark the teams that serve with kids",
   ai: "Choose how Ozzie uses AI",
   waiting: "Ozzie is waiting for the next plan",
+  // An action, as the other titles are, which still reads right once ticked (review 2026-11-18); the card itself keeps the
+  // offer's own heading (read-more.tsx `moreTitle`), and its button, "Let Ozzie read more in Planning Center", isn't the
+  // title said twice (review L8).
+  more: "Choose what else Ozzie checks",
 };
 /** At most four at once (spec §4.1). */
 export const FINISH_MAX = 4;
@@ -51,6 +60,8 @@ export function finishItems(f: FinishFacts): FinishItem[] {
     f.kids.looking ? { id: "kids", title: TITLES.kids, done: f.kids.answered } : null,
     f.ai.left ? { id: "ai", title: TITLES.ai, done: f.ai.chosen } : null,
     f.plan.waiting ? { id: "waiting", title: TITLES.waiting, done: f.plan.found } : null,
+    // Last: the most optional, so over four it is the first open one to wait.
+    f.more?.offered ? { id: "more", title: TITLES.more, done: f.more.done } : null,
   ];
   const items = all.filter((i): i is FinishItem => i !== null);
   // Over four: done items leave first, from the end; then the last open ones.
@@ -64,7 +75,8 @@ export function finishItems(f: FinishFacts): FinishItem[] {
 export const openItem = (items: readonly FinishItem[], notNow: readonly FinishItemId[]): FinishItemId | null =>
   items.find(i => !i.done && !notNow.includes(i.id))?.id ?? null;
 
-export const HIDDEN_LINE = "This list is hidden and won't come back by itself. The same things are in Settings › Check my setup and in Church rules.";
+// "What else Ozzie can check" lives in Settings › Planning Center, not in Check my setup: so "Settings".
+export const HIDDEN_LINE = "This list is hidden and won't come back by itself. The same things are in Settings and in Church rules.";
 export const START_FAILED_LINE = "This Mac didn't let Ozzie change that setting. Try again, or later in Settings › Check my setup.";
 
 export interface FinishSettingUpProps {
@@ -77,13 +89,15 @@ export interface FinishSettingUpProps {
   onKidsRules: () => void;
   /** Item 4: "Choose" (S6). */
   onChooseAi: () => void;
+  /** Item 6's body: what else Ozzie can check and its one button (read-more.tsx `ReadMore`, place "today"). */
+  moreBody?: ReactNode;
   /** The Mac refused the login-item change: said under item 1. */
   startFailed?: boolean | undefined;
   /** Where "Not now" and "Hide this list" are kept (tests pass their own). */
   store?: FinishStore | undefined;
 }
 
-export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKidsRules, onChooseAi, startFailed = false, store = finishMemory }: FinishSettingUpProps) {
+export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKidsRules, onChooseAi, moreBody, startFailed = false, store = finishMemory }: FinishSettingUpProps) {
   const { day } = useDay();
   const [memory, setMemory] = useState(() => store.get());
   // A line the person opened themselves (a collapsed one), over the first-not-done rule.
@@ -129,6 +143,7 @@ export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKids
       </>;
       case "waiting": return <p className="finish-body">
         {`When someone at your church makes the next ${facts.plan.service ? `${facts.plan.service} ` : ""}plan in Planning Center Services, Ozzie finds it by itself. It looks again every hour while it's open. If it's the only service with a plan, Ozzie starts watching it by itself; otherwise it asks you on Today.`}</p>;
+      case "more": return moreBody ?? null;
     }
   };
   return <section className="find finish" aria-labelledby={`${id}-t`}>

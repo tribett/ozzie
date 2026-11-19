@@ -288,7 +288,7 @@ export const pausedUntil = (account: unknown): string | null =>
 export type PlanReason = "payment-failed" | "cancelled" | "none" | null;
 export const planReason = (account: unknown): PlanReason => plain(account) ? oneOf(account.plan_reason, ["payment-failed", "cancelled", "none"] as const) : null;
 /** How a paid connect ended, from its closed `ManagedError` code (native hosted.rs). */
-/** `not-finished`: a paid connect heard nothing back in its 30 minutes (contract N7). */
+/** `not-finished`: a paid connect heard nothing back in its hour (contract N7). */
 export type PaidEnd = "payment-cancelled" | "cancelled" | "expired" | "not-finished" | "busy" | "browser-unavailable" | "refused" | "keychain" | "unreachable";
 export const paidEnd = (error: unknown): PaidEnd =>
   oneOf(reasonOf(error), ["payment-cancelled", "cancelled", "expired", "not-finished", "busy", "browser-unavailable", "refused", "keychain"] as const) ?? "unreachable";
@@ -464,7 +464,7 @@ export function createOnboardingBridge(invoke: Invoke = tauriInvoke as Invoke, l
 
     // Ozzie's AI (N7, with W6).
     offer: async (): Promise<Offer> => { try { return parseOffer(await invoke<unknown>("managed_offer")); } catch { return parseOffer(null); } },
-    /** The one browser trip: sign in, pay, come back (30 minutes). Resolves with the account; rejects with a `PaidEnd` code. */
+    /** The one browser trip: sign in, pay, come back (an hour). Resolves with the account; rejects with a `PaidEnd` code. */
     payAndConnect: () => invoke<ManagedAccount>("managed_connect", { plan: "personal" }),
     cancelPay: () => invoke<void>("managed_connect_cancel"),
     /** "Open the page again" during the paid wait: the waiting attempt's own page (contract item 3); rejects "no-attempt" when none waits. */
@@ -484,7 +484,11 @@ export function createOnboardingBridge(invoke: Invoke = tauriInvoke as Invoke, l
      * on; first-run review H1). Settings' "Also check rooms, follow-ups and group events" sets it.
      */
     operationsReads: async (): Promise<boolean | null> => { try { return (await invoke<unknown>("operations_reads")) === true; } catch { return null; } },
-    setOperationsReads: async (on: boolean): Promise<boolean> => (await invoke<unknown>("set_operations_reads", { on })) === true,
+    /**
+     * `pressed`: a person pressed a button for it just now. Otherwise the page asks after a sign-in, and native turns it
+     * on only when that sign-in was started for these reads and granted them (main.rs `reads_may_go_on`; review M1).
+     */
+    setOperationsReads: async (on: boolean, pressed: boolean): Promise<boolean> => (await invoke<unknown>("set_operations_reads", { on, pressed })) === true,
     /** System Settings' Notifications pane (this build can't tell whether Ozzie's notices are allowed: contract N8). */
     openNoticeSettings: () => invoke<void>("open_notification_settings"),
     noticePermission: async (): Promise<NoticePermission> => {

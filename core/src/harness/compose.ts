@@ -20,7 +20,7 @@ import { applyDecisions, type DecidedItem } from "../sunday-decisions.js";
 import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
-import { FACT_LISTS, localIso, type HarnessData, type HarnessTools } from "./tools.js";
+import { FACT_LISTS, localIso, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, type HarnessData, type HarnessTools } from "./tools.js";
 
 export interface ComposedAnswer {
   kind: AnswerKind;
@@ -40,6 +40,8 @@ export const NOT_RANKED = "People are listed in no particular order, not ranked.
 export const NOTHING_TO_DECIDE = "Nothing in this check needs a decision right now.";
 export const DRAFT_INTRO = "Here is a draft for you to read, change and send yourself. Nothing has been sent.";
 export const NOT_COVERED_MORE = "Here is what Ozzie did read:";
+/** The Sunday page's tone for a finding the leader decided, until a later check reopens it (review Q L1). */
+const RESOLVED = "Resolved by you";
 
 const str = (v: unknown): string | null => typeof v === "string" ? v : null;
 const num = (v: unknown): number | null => typeof v === "number" ? v : null;
@@ -135,9 +137,28 @@ function finding(row: Row): string | null {
       const n = num(row["reads_not_completed"]) ?? 0;
       return `Part of this check couldn't be verified: ${plural(n, "Planning Center read", "Planning Center reads")} didn't complete.${row["too_old_to_treat_as_current"] === true ? " The check is also too old to treat as current." : ""}`;
     }
+    // Rooms, follow-ups and group meetings in the overview (tools.ts #operationsShown), as their own tools say them.
+    case OVERVIEW_ROOM: return `${str(row["room"]) ?? "A room"} has bookings that overlap ${fromTo(row["overlap"])}.`;
+    case OVERVIEW_FOLLOW_UP: return followUp(row);
+    case OVERVIEW_UNCONFIRMED: return "Some room or follow-up details couldn't be confirmed.";
+    case OVERVIEW_GROUP: return groupMeets(row);
     default: return null;
   }
 }
+/** A follow-up with no owner, as followups.unowned and the overview give it. */
+const followUp = (row: Row) => {
+  const due = str(row["due"]);
+  return `${str(row["workflow"]) ?? "A follow-up"}, step ${str(row["step"]) ?? "not known"}, ${due && due !== "not known" ? `was due ${due}` : "is overdue"} and has no owner.`;
+};
+/** Someone whose group meets while they serve, as groups.clashes and the overview give it. */
+const groupMeets = (row: Row) => {
+  const person = str(row["person"]) ?? "Someone";
+  const serving = (Array.isArray(row["serving"]) ? row["serving"] as Row[] : []).map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"])}`);
+  const meetings = (Array.isArray(row["group_meetings"]) ? row["group_meetings"] as Row[] : []).map(m => at(m["time"]).trim()).filter(Boolean);
+  return `${person} is scheduled for ${list(serving) || "a role"} while their group meets${meetings.length ? ` ${list(meetings)}` : " at the same time"}.`;
+};
+/** A finding the leader settled: their decision, and no later check changed it. Listed, never counted as open (tools.ts #overview). */
+const settled = (row: Row) => typeof row["decision"] === "string" && row["changed_since_decision"] !== true;
 
 /** The sentence for one fact: a row of one of a tool's FACT_LISTS, or the payload itself (`list` null). */
 function sentenceFor(f: Fact, day: Day): string | null {
@@ -148,7 +169,8 @@ function sentenceFor(f: Fact, day: Day): string | null {
     case "sunday.overview findings": {
       const text = finding(row);
       if (!text) return null;
-      return `${row["tone"] === "needs a decision" ? "Needs a decision" : "Worth a look"}: ${text}${decided(row, day)}`;
+      // In the Sunday page's tone: "Resolved by you" once the leader decided it, as the overview no longer counts it.
+      return `${settled(row) ? RESOLVED : row["tone"] === "needs a decision" ? "Needs a decision" : "Worth a look"}: ${text}${decided(row, day)}`;
     }
     case "sunday.open_needs needs": {
       if (row["kind"] !== "needs people") { const text = finding(row); return text ? `${text}${notAccepted(row)}${leaders(row)}${decided(row, day)}` : null; }
@@ -186,15 +208,8 @@ function sentenceFor(f: Fact, day: Day): string | null {
       const tone = row["label"] === "Room use needs review" ? "Room use needs review" : "Worth a look";
       return `${tone}: ${room} has bookings that overlap ${fromTo(row["overlap"])}${bookings.length ? `; the bookings are ${list(bookings)}` : ""}${setup ? `, with ${setup} minutes of setup time` : ""}.${rule}${worked}`;
     }
-    case "followups.unowned follow_ups": {
-      const due = str(row["due"]);
-      return `${str(row["workflow"]) ?? "A follow-up"}, step ${str(row["step"]) ?? "not known"}, ${due && due !== "not known" ? `was due ${due}` : "is overdue"} and has no owner.`;
-    }
-    case "groups.clashes clashes": {
-      const serving = (Array.isArray(row["serving"]) ? row["serving"] as Row[] : []).map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"])}`);
-      const meetings = (Array.isArray(row["group_meetings"]) ? row["group_meetings"] as Row[] : []).map(m => at(m["time"]).trim()).filter(Boolean);
-      return `Worth a look: ${person} is scheduled for ${list(serving) || "a role"} while their group meets${meetings.length ? ` ${list(meetings)}` : " at the same time"}.`;
-    }
+    case "followups.unowned follow_ups": return followUp(row);
+    case "groups.clashes clashes": return `Worth a look: ${groupMeets(row)}`;
     case "today.attention items": {
       const contacted = row["volunteers_contacted"] === "not contacted, according to the message" ? " The message says volunteers have not been contacted." : "";
       return `${row["label"] === "Needs a decision" ? "Needs a decision" : "Worth a look"}: ${str(row["event"]) ?? "An event"}${at({ starts_at: row["starts_at"] })}. ${sentence(capital(str(row["kind"]) ?? "something needs a look"))}${contacted}`;
@@ -328,7 +343,11 @@ export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[],
   const parsed = parseAnswer(answer);
   if (!parsed) return { kind: "not-covered", paragraphs: [NOT_COVERED], draft: null };
   const all = factsIn(evidence);
-  const chosen = ordered(parsed.facts.flatMap(id => all.get(id) ?? []));
+  const picked = parsed.facts.flatMap(id => all.get(id) ?? []);
+  // A room or follow-up chosen both from the overview and from its own tool is said once, in its own tool's fuller words.
+  const ownRows = new Set(picked.filter(f => f.tool !== "sunday.overview" && f.list !== null).flatMap(keysOf));
+  const chosen = ordered(picked.filter(f => !(f.tool === "sunday.overview" && f.list === "findings"
+    && (f.row["kind"] === OVERVIEW_ROOM || f.row["kind"] === OVERVIEW_FOLLOW_UP) && keysOf(f).some(k => ownRows.has(k)))));
   const rendered = chosen.flatMap(f => { const s = sentenceFor(f, day); return s ? [{ f, s }] : []; });
   // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
   // shown once, in the longer sentence's place.
@@ -355,6 +374,25 @@ export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[],
   }
 }
 
+/** The source each of the overview's room, follow-up and group-meeting rows comes from (tools.ts #operationsShown). */
+const ROW_SOURCES: Readonly<Record<string, string>> = {
+  [OVERVIEW_ROOM]: "Planning Center Calendar", [OVERVIEW_FOLLOW_UP]: "Planning Center People", [OVERVIEW_GROUP]: "Planning Center Groups",
+};
+/**
+ * Where the overview's rooms, follow-ups and group meetings an answer chose come from, at `checkedAt` (the operations
+ * check's own read time, as their tools say it; the overview's when unknown): the overview's source is Planning Center
+ * Services, so without these "Based on" wouldn't name the source of a follow-up it says.
+ */
+export function chosenSources(answer: string, evidence: readonly ToolEnvelope[], checkedAt: string | null): { source: string; check_time: string }[] {
+  const all = factsIn(evidence), out: { source: string; check_time: string }[] = [];
+  for (const id of parseAnswer(answer)?.facts ?? []) {
+    const f = all.get(id);
+    const source = f?.tool === "sunday.overview" && f.list === "findings" ? ROW_SOURCES[str(f.row["kind"]) ?? ""] : undefined;
+    if (f && source && !out.some(s => s.source === source)) out.push({ source, check_time: checkedAt ?? evidence[f.envelope]!.check_time });
+  }
+  return out;
+}
+
 // ---- Answers written on this Mac, without the AI -------------------------------------------------------------------
 
 /** Said with each finding Ozzie keeps on this Mac (background checks, review M2/M3): shown here, never in any AI request. */
@@ -378,7 +416,6 @@ export const onPage = (d: DayWords) => `On ${dayPage(d)}, needing a decision:`;
 export const ALSO_ON_SUNDAY = alsoOnPage(SUNDAY_WORDS);
 export const ON_SUNDAY = onPage(SUNDAY_WORDS);
 export const NOTHING_OPEN = "This check found nothing open that needs a decision.";
-const RESOLVED = "Resolved by you";
 /** Findings set aside with "This isn't right" or "Stop flagging this", in the service page's words: counted, never dropped. */
 export const setAside = (n: number, what = "finding", d: DayWords = SUNDAY_WORDS) => n === 1
   ? `One ${what} is set aside by your Church rules, so it isn't listed here; it's on ${dayPage(d)}.`
@@ -675,7 +712,9 @@ function keysOf(f: Fact): string[] {
   if (f.list === null) return f.tool === "rooms.conflicts" ? rowsOf({ payload: f.payload } as ToolEnvelope, "rooms").map(roomKey)
     : f.tool === "followups.unowned" ? rowsOf({ payload: f.payload } as ToolEnvelope, "follow_ups").map(followUpKey) : [];
   switch (`${f.tool} ${f.list}`) {
-    case "sunday.overview findings": case "sunday.open_needs needs": return [findingKey(str(r["kind"]), r)];
+    // The overview's rooms and follow-ups are the same items their own tools give, keyed the same way.
+    case "sunday.overview findings": return [r["kind"] === OVERVIEW_ROOM ? roomKey(r) : r["kind"] === OVERVIEW_FOLLOW_UP ? followUpKey(r) : findingKey(str(r["kind"]), r)];
+    case "sunday.open_needs needs": return [findingKey(str(r["kind"]), r)];
     case "sunday.who_could_help times": return [findingKey("needs people", r)];
     case "sunday.pending_requests pending": return [findingKey("pending", r)];
     case "rooms.conflicts rooms": return [roomKey(r)];

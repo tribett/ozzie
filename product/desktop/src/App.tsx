@@ -51,6 +51,8 @@ import { AiLine, ChooseAiContext } from "./ai-line.js";
 import { FinishSettingUp } from "./finish-list.js";
 import { kidsFacts, kidsTeamToAsk, moments } from "./moments.js";
 import { KidsQuestion, markKidsTeam } from "./kids-question.js";
+import { ReadMore, readMoreMemory, readMoreNeed } from "./read-more.js";
+import { useOperationsReads } from "./operations-reads.js";
 import { PhoneMoment, phoneMomentNow } from "./phone-moment.js";
 import { CheckMySetup } from "./check-setup.js";
 import { hasPassed, moveOn, WAIT_AGAIN_MS, waitingText, type WatchedPlan } from "./move-on.js";
@@ -136,6 +138,13 @@ function useWindowVisible(): boolean {
   const [shown, setShown] = useState(onScreen.visible);
   useEffect(() => onScreen.subscribe(setShown), []);
   return shown;
+}
+
+/** `value` as it was before `hold` began, for as long as it holds; `value` itself otherwise. */
+function useHeldWhile<T>(value: T, hold: boolean): T {
+  const before = useRef(value);
+  useEffect(() => { if (!hold) before.current = value; });
+  return hold ? before.current : value;
 }
 
 /** Dark appearance follows this Mac's setting, live. Hearth's dark tokens apply under `.oz.dark`. */
@@ -662,6 +671,18 @@ export function App() {
   const markedKids = kidsTeams(rules).map(t => t.team_id);
   const momentsNow = moments.get();
   const kidsToAsk = !fictional && ofWatched ? kidsTeamToAsk(teamsSeen, markedKids, momentsNow) : null;
+  // What else Ozzie can check with more of Planning Center (decision 24): after a check of the church's own service, while
+  // the connection reads Services only (or holds the access with its reads off), until hidden. Native's switch is read
+  // here for the church in use, and goes on here once a sign-in that asked for the access is granted (operations-reads.ts).
+  const operationsReads = useOperationsReads(status);
+  // A sign-in that only adds Calendar, People and Groups is in the browser (native says "waiting"): the church stays
+  // connected meanwhile, so nothing offers to connect it, setup doesn't come back, and Today keeps its list.
+  const addingAccess = operationsReads.asking && (status?.state === "waiting" || status?.state === "checking") && Boolean(org);
+  const moreNeed = readMoreNeed({ status, readsOn: operationsReads.on, checked: Boolean(ofWatched), hidden: readMoreMemory.hidden() });
+  const moreOffered = useRef(false);
+  if (moreNeed) moreOffered.current = true;
+  const moreDone = moreNeed === null && operationsGranted(status) && operationsReads.on === true;
+  const moreProps = { need: moreNeed, status, settings, onStatus: setStatus, church: inUse?.name ?? status?.organization_name ?? null };
   // "Finish setting up" (spec §4.1), from facts only.
   const finishFacts = {
     start: { asked: startAsked, on: startOn },
@@ -672,6 +693,9 @@ export function App() {
     ai: { left: aiStillOpen(setupMemo.get(), modelStatus, recordings.length > 0), chosen: modelStatus !== null && modelStatus.route !== "none" },
     plan: { waiting: Boolean(waitingLine) || (connected && !configured && serviceLook === "waiting"), found: false,
       service: watchedDay.get(settings.planId)?.service ?? null },
+    // Kept while its sign-in is in the browser; once allowed, a check mark for the rest of this session, as the list keeps
+    // done items.
+    more: { offered: moreNeed !== null || (moreOffered.current && (addingAccess || moreDone)), done: moreDone },
   };
   // What Check my setup knows from the page (native's setup_check adds its own when it is built). The report never holds
   // the church, plan titles or people: their words are passed as `never`.
@@ -776,7 +800,7 @@ export function App() {
   }, [setup, launched, launchChecked, statusRead, recordingsKnown]);
   const showSetup = setup !== "auto" && setup !== null;
   // Setup is unfinished while a required fact is unmet (once launch has decided): the sidebar's first entry leads back.
-  const setupAt = setup === "auto" || fictional ? null : firstRunScreen(facts);
+  const setupAt = setup === "auto" || fictional || addingAccess ? null : firstRunScreen(facts);
   // The sidebar's entry and the screen agree: it shows while setup is on screen (step 3's result included), and while a
   // required fact is unmet (0.3.0 live click-through).
   const setupEntry = showSetup || setupAt !== null;
@@ -820,8 +844,11 @@ export function App() {
   // What quitting would stop or lose, told to native code as it changes: open cards (a count) and whether the regular
   // Sunday check or any job is on.
   useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch });
+  // While a Planning Center sign-in is in the browser, checks wait so as not to cancel it, and the church in use is still
+  // connected: Today says what was true before it started, never "Nothing runs yet" (review 2026-11-18).
+  const shownReadiness = useHeldWhile(readiness, status?.state === "waiting" || status?.state === "checking");
   const regular: RegularCheck = {
-    ready: readiness === "ready", paused: automatic.schedule.paused, running: automatic.running || busy,
+    ready: shownReadiness === "ready", paused: automatic.schedule.paused, running: automatic.running || busy,
     intervalMinutes: automatic.prefs.intervalMinutes, runOnLaunch: automatic.prefs.runOnLaunch,
     last: automatic.schedule.last_run ? { at: automatic.schedule.last_run.finished_at, ok: automatic.schedule.last_run.outcome === "ok" } : null,
     next: automatic.schedule.next_run_at,
@@ -878,7 +905,7 @@ export function App() {
   const automaticCount = page !== "automatic" ? automatic.unseen + watch.unseen : 0;
   // The sidebar keeps its words at every width (audit item 22c); a narrow window puts them under Menu, which Escape closes.
   // Its two lines (reads only; the church in use) go under Menu too, and the church stays in the bar (review F, L-6).
-  const churchLine = checkingSaved && !connected ? CHECKING_LINE : checkStuck ? STUCK_LINE : !connected ? "Planning Center not connected" : inUse?.name ? `Planning Center: ${inUse.name}` : "Planning Center connected";
+  const churchLine = checkingSaved && !connected ? CHECKING_LINE : checkStuck ? STUCK_LINE : !connected && !addingAccess ? "Planning Center not connected" : inUse?.name ? `Planning Center: ${inUse.name}` : "Planning Center connected";
   return <DayProvider value={day}><ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
       <aside ref={side} className={`side${menu ? " is-menu" : ""}`}>
@@ -936,19 +963,20 @@ export function App() {
             own jobs, events or the regular check, so nothing of the church's sits under the example's band (audit item 2). */}
         {page === "today" && <TodayPage brief={brief} names={capture?.names} sundayDecisions={decisions} operations={operations} onSunday={() => setPage("sunday")}
           watch={fictional ? null : { view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={fictional} now={now}
-          notConnected={!connected && !fictional && !checkingSaved && !checkStuck ? { onConnect: () => openSetup("browser"), onExample: showExample } : null}
+          notConnected={!connected && !addingAccess && !fictional && !checkingSaved && !checkStuck ? { onConnect: () => openSetup("browser"), onExample: showExample } : null}
           checking={checkingSaved && !connected} stuck={checkStuck ? checkConnection : null}
           regular={fictional ? null : regular} asked={askedLines} onSundayCard={key => { setSundayFocus(key); setPage("sunday"); }}
           startQuestion={null}
-          finish={!fictional && connected ? <FinishSettingUp facts={finishFacts} startFailed={startFailed} onStartWithMac={answerStart}
-            onChooseService={() => openSetup("service")} onKidsRules={() => setPage("rules")} onChooseAi={openAi} /> : undefined}
+          finish={!fictional && (connected || addingAccess) ? <FinishSettingUp facts={finishFacts} startFailed={startFailed} onStartWithMac={answerStart}
+            onChooseService={() => openSetup("service")} onKidsRules={() => setPage("rules")} onChooseAi={openAi}
+            moreBody={<ReadMore {...moreProps} place="today" />} /> : undefined}
           waiting={fictional ? null : waitingLine ?? (connected && !configured && serviceLook === "waiting" ? waitingText(null) : null)}
           moment={fictional ? undefined : movedLine && Date.now() - movedLine.at < 86_400_000 ? <p className="banner" role="status"><Icon name="check" small /><span>{movedLine.line}</span></p>
             : phoneMomentNow(momentsNow.noticeSent, false) ? <PhoneMoment onSetUp={() => setPage("connection")} /> : undefined}
           church={<ChurchReadsToday capture={capture} rules={rules} names={capture?.names} feedback={feedback} now={now} />}
           calendar={!fictional && calendarsConnected(calendarState) ? { reads: calendarState.reads, reading: calendarState.reading, onSettings: () => setPage("connection") } : null} />}
         {page === "sunday" && <SundayPage brief={brief} names={capture?.names ?? {}} busy={busy} problem={problem} sender=""
-          connected={connected} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady} checking={checkingSaved && !connected}
+          connected={connected} adding={addingAccess} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady} checking={checkingSaved && !connected}
           stuck={checkStuck ? checkConnection : null}
           decisions={decisions} onDecisions={setDecisions} operations={operations}
           onCheck={() => { void check(); }}
@@ -962,6 +990,7 @@ export function App() {
           worthALook={kidsToAsk ? <KidsQuestion teamId={kidsToAsk.id} teamName={kidsToAsk.name ?? "This team"}
             onYes={id => setRules(r => markKidsTeam(r, id, kidsToAsk.name ?? ""))} /> : undefined}
           church={<CheckInsSunday capture={capture} rules={rules} names={capture?.names ?? {}} feedback={feedback} now={now} />}
+          more={ofWatched && capture ? <ReadMore {...moreProps} place="service" reads={capture.reads} onCheck={() => { void check(); }} /> : undefined}
           beside={card => <ChurchOwnWords state={sourcesState} card={card} onOpen={target => { churchSources.focus(target); setPage("lists"); }} />} />}
         {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions} keptElsewhere={Object.entries(rulesByChurch.kept).map(([organization, k]) => ({ organization, ...(k.name ? { name: k.name } : {}) }))}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}

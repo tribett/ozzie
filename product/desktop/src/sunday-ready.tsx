@@ -2,7 +2,7 @@
 // everything still open for the Sunday on screen, in one place, with what wasn't checked and when it
 // was read. Built only from the brief, the person's decisions and the rooms / follow-ups check the
 // Sunday page shows; names resolve on this Mac only. Read-only: decisions happen on the Sunday page.
-import { blockoutRoles, blockoutTime, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutRoles, blockoutTime, shownUncertainties, sundayShownCount, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../core/src/harness/responsibilities.js";
@@ -50,14 +50,17 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   const view = applyDecisions(brief, decisions);
   const open = view.items.filter(i => i.state !== "resolved");
   const decide = open.filter(i => i.finding.tone === "decision"), looks = open.filter(i => i.finding.tone === "look");
-  const resolved = view.items.length - open.length + view.history.length;
-  const findings = operations?.stale ? [] : operations?.result?.findings ?? [];
+  // The Sunday page's own counts, as Today and the sidebar say them: rooms, follow-ups and group meetings included (live review 2026-11-18).
+  const counts = sundayShownCount(view, operations);
+  const current = operations?.stale ? null : operations;
+  const findings = current?.result?.findings ?? [];
   const rooms = findings.filter(f => f.kind === "room-overlap").length, followUps = findings.filter(f => f.kind === "unowned-overdue").length;
-  const meetings = operations?.stale ? 0 : operations?.group_meetings.length ?? 0;
+  const meetings = current?.group_meetings.length ?? 0;
   const setAside = (brief.hidden?.length ?? 0) + (operations?.hidden?.length ?? 0);
   const others = [
     ...(rooms ? [`${rooms === 1 ? "One room booking overlap" : `${rooms} room booking overlaps`} to review.`] : []),
     ...(followUps ? [`${followUps === 1 ? "One follow-up has" : `${followUps} follow-ups have`} no owner and ${followUps === 1 ? "is" : "are"} past due.`] : []),
+    ...(shownUncertainties(current?.result ?? null).length ? ["Some room or follow-up details couldn't be confirmed."] : []),
     ...(meetings ? [`${meetings === 1 ? "One person has" : `${meetings} people have`} a group meeting while they serve.`] : []),
   ];
   const unchecked = [...brief.not_checked, ...(operations?.not_checked ?? [])];
@@ -65,9 +68,9 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   return <section className="sunday-ready" aria-label={readyTitle(d)}>
     <p className="bold">{readyTitle(d)}{brief.plan.dates ? ` · ${brief.plan.dates}` : ""}</p>
     {brief.mode === "fictional" && <p className="small">Fictional example. No church data is shown.</p>}
-    <p className="small">{decide.length ? `${decide.length === 1 ? "One thing needs" : `${decide.length} things need`} a decision` : "Nothing needs a decision"}
-      {looks.length ? `, and ${looks.length} ${looks.length === 1 ? "is" : "are"} worth a look` : ""}.
-      {resolved ? ` You resolved ${resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>
+    <p className="small">{counts.decisions ? `${counts.decisions === 1 ? "One thing needs" : `${counts.decisions} things need`} a decision` : "Nothing needs a decision"}
+      {counts.looks ? `, and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}.
+      {counts.resolved ? ` You resolved ${counts.resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>
     {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names, d)))}</>}
     {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names, d)))}</>}
     {others.length > 0 && <><p className="small bold">Rooms, follow-ups and group meetings</p>{list(others)}</>}

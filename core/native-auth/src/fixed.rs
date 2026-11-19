@@ -248,7 +248,8 @@ pub struct Vocabulary {
     /// Keys whose string is an id, and each one's prefix (`fact` → `f`, `draft_id` → `d`).
     id_prefixes: std::collections::HashMap<String, String>,
     answer_kinds: HashSet<String>,
-    max_facts: usize,
+    /// The most facts a final answer may choose (vocabulary.json `answer.max_facts`).
+    pub max_facts: usize,
 }
 impl Vocabulary {
     fn parse(text: &str) -> Option<Self> {
@@ -824,6 +825,15 @@ fn scan_answer(text: &str) -> Option<Vec<(String, AnswerValue)>> {
 /// at most max_facts; required and non-empty for "facts") and "draft" (a draft id; required for
 /// "draft" and allowed only there). No prose, no other key, no repeated key.
 pub fn final_answer(text: &str) -> Option<FinalAnswer> {
+    final_answer_within(text, vocabulary().max_facts)
+}
+/// `final_answer` with no limit on how many facts: only for telling an answer whose one fault is
+/// choosing more than max_facts (agent.rs `answer_refusal`, `too-many-facts`) from any other. Never
+/// an answer Ozzie uses.
+pub fn final_answer_uncapped(text: &str) -> Option<FinalAnswer> {
+    final_answer_within(text, usize::MAX)
+}
+fn final_answer_within(text: &str, max_facts: usize) -> Option<FinalAnswer> {
     let vocabulary = vocabulary();
     let trim = |s: &str| s.trim_matches([' ', '\t', '\n', '\r']).to_owned();
     let mut body = trim(text);
@@ -851,7 +861,7 @@ pub fn final_answer(text: &str) -> Option<FinalAnswer> {
     let draft_prefix = vocabulary.id_prefixes.get("draft_id")?;
     let facts = facts.unwrap_or_default();
     let distinct: HashSet<&String> = facts.iter().collect();
-    let facts_ok = facts.len() <= vocabulary.max_facts
+    let facts_ok = facts.len() <= max_facts
         && distinct.len() == facts.len()
         && facts.iter().all(|f| id_ok(fact_prefix, f))
         && (kind != "facts" || !facts.is_empty());

@@ -6,8 +6,9 @@ import type { FailureCode, Skill, TaskEvent, ToolEnvelope, ToolName } from "../.
 import { NATIVE_TOOL_ALLOWLIST } from "../../../core/src/harness/contract.js";
 import { TEMPLATE_IDS, TEMPLATES, type RunTrigger, type TemplateId } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
-import { REFUSALS } from "../../../core/src/ask.js";
+import { dayPage, REFUSALS } from "../../../core/src/ask.js";
 import { alsoOnPage } from "../../../core/src/harness/compose.js";
+import { VOCABULARY } from "../../../core/src/harness/fixed.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
 import { dayName } from "./day-phrases.js";
 import { templateTitle } from "./responsibility-words.js";
@@ -28,7 +29,7 @@ export interface TaskRow {
 const ALLOWLIST: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);
 const COMPLETENESS: ReadonlySet<string> = new Set(["complete", "partial", "stale", "denied"]);
 const FAILURES: ReadonlySet<string> = new Set<FailureCode>(["denied", "stale", "partial", "provider-failure", "unverified", "invalid-task", "limit",
-  "timeout", "cancelled", "egress", "fidelity", "transport", "no-model", "interrupted"]);
+  "timeout", "cancelled", "egress", "fidelity", "transport", "no-model", "interrupted", "invalid-arguments"]);
 
 /**
  * A runtime event detail in the native ledger grammar (ledger.rs `detail_ok`), or null when the event
@@ -100,8 +101,19 @@ export const FAILURE_REASONS: Readonly<Record<FailureCode, string>> = Object.fre
   transport: "the AI service couldn't be reached",
   "no-model": "no AI model is set up",
   interrupted: "it was stopped before it finished",
+  "invalid-arguments": "the AI asked to look something up in a way Ozzie doesn't allow",
 });
 const reason = (code: string | null | undefined) => (code && Object.hasOwn(FAILURE_REASONS, code) ? FAILURE_REASONS[code as FailureCode] : "something went wrong");
+/** The most facts one answer holds (vocabulary.json `max_facts`), the one number the words below say. */
+const MAX_FACTS = VOCABULARY.answer.max_facts;
+/**
+ * Why an answer was set aside when every id it chose was one the task had read, only more of them than an answer holds
+ * (native step outcome `too-many-facts`; the task still fails as fidelity). Finishes "Couldn't finish: …" (review L4).
+ */
+export const TOO_MANY_FACTS = "the AI's answer listed more facts than Ozzie checks in one answer";
+/** A failed task whose AI step ended because its answer listed too many facts, from the ledger's own events. */
+const tooManyFacts = (row: Pick<TaskRow, "failure" | "events">) =>
+  row.failure === "fidelity" && row.events.some(e => e.type === "model" && /^[1-9]\d? too-many-facts$/u.test(e.detail));
 /**
  * Why a check of the service stopped, where its code means something narrower than for other tasks (harness-bridge.ts
  * `checkFailure`): which church a sign-in belongs to, and a sign-in that was busy or a Mac's storage that was locked.
@@ -123,6 +135,11 @@ export const ASK_FAILURES = Object.freeze({
   egress: "That question includes details Ozzie keeps on this Mac, so Ozzie stopped before sending them. Try asking again in other words, or ask about the role instead of the person.",
   fidelity: "Ozzie couldn't back that answer up with what it read, so it isn't shown. Try asking about one role or one thing at a time, or ask “What can you do?”",
   /**
+   * The AI's answer chose only ids it had read, but more than an answer holds (native `too-many-facts`), on any route or
+   * question Ozzie doesn't answer itself (review L4): the true reason, never "couldn't back that answer up".
+   */
+  tooMany: `The AI's answer listed more than ${MAX_FACTS} facts, more than Ozzie checks in one answer, so it isn't shown. Try asking about one role or one thing at a time, or ask “What can you do?”`,
+  /**
    * After `fidelity`, when the AI is a model on this Mac (measured 2026-11-18, onboarding-native-contract.md "AI on this
    * Mac: Ask's own policy"): it misses more often than an AI company's (the same question asked again rarely passes, so
    * that isn't suggested); asking about one thing at a time, which the sentence before says, and a key are what help.
@@ -130,6 +147,15 @@ export const ASK_FAILURES = Object.freeze({
   fidelityHere: "AI on this Mac misses more often than an AI company's. A key from an AI company, in Settings › AI help, gives steadier answers.",
   invalid: "Ozzie couldn't prepare that question in a safe form. Nothing was sent. Try different wording.",
   denied: "The AI asked to use something Ozzie doesn't allow, so Ozzie stopped. Nothing was sent or changed.",
+  /**
+   * The AI asked for a lookup with arguments the tool doesn't take (native `invalid-arguments`; seen with AI on this Mac:
+   * the open roles asked for one role). Nothing in the question was the matter. Asking the same way again isn't
+   * suggested: measured 2026-11-18, "Is Greeter covered this Sunday?" and "Does Greeter still need people this Sunday?"
+   * made the same call 5 times in 5 each, while other words for the same thing passed 10 of 10
+   * (onboarding-native-contract.md).
+   */
+  // "That lookup": an earlier step of the same question may have read something (review L3).
+  arguments: "The AI asked to look something up in a way Ozzie doesn't allow, so that lookup didn't happen and there's no answer this time. Try asking in other words.",
   steps: "That needed more steps than Ozzie allows for one question. Try asking about one thing at a time.",
   today: "Ozzie has reached today's allowance for AI help, so it didn't ask the AI. Everything else still works, and it can ask again tomorrow.",
   /** The same, when the account says when the day's allowance comes back (`paused_until`, re-check Low). */
@@ -189,6 +215,19 @@ const heading = (d: DayWords) => alsoOnPage(d).replace(/, needing a decision:$/u
 /** "See how this works" for items Ozzie added, naming the heading as the answer says it for this service's day (review H4). */
 export const addedHow = (d: DayWords) => `Ozzie added the items under “${heading(d)}” itself, from the same check; the AI didn't choose them, and background checks never reach it.`;
 export const ADDED_HOW = addedHow(SUNDAY_WORDS);
+/**
+ * Under an answer Ozzie wrote itself because the AI's answer chose more facts than Ozzie checks in one answer (AI on this
+ * Mac, a decision question; harness-bridge.ts `overviewAnswer`). The AI was asked, so never "without the AI". It covers
+ * the whole service even when the question named one person or team ("What still needs a decision about Riley?"), so it
+ * says so (review L6).
+ */
+export const COMPOSED_NOTE = `Ozzie wrote this answer itself from what it read, and it covers the whole service. The AI's answer listed more than ${MAX_FACTS} facts, more than Ozzie checks in one answer, so it isn't shown.`;
+/** "See how this works" for that answer, naming the service's own page. */
+export const composedHow = (d: DayWords) => "The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such as [Person 1] and [Role 1]. " +
+  `The AI's answer listed more than ${MAX_FACTS} facts, more than Ozzie checks in one answer, so Ozzie set it aside and wrote this answer itself on this Mac from the same check: its counts, then each open decision in the order ${dayPage(d)} shows them. ` +
+  "Background checks never reach the AI. Nothing was sent to anyone, and nothing in Planning Center changed.";
+/** How that answer ended, in its short account. */
+export const COMPOSED_ENDED = `The AI's answer listed more than ${MAX_FACTS} facts, so Ozzie wrote this answer itself from what it read.`;
 export const KEPT_STEP = "Looked at background checks, kept on this Mac";
 
 /** The steps of an answer written on this Mac: each read-only tool it read, and the background checks it kept here. */
@@ -215,6 +254,8 @@ export function askFailureText(code: FailureCode | null, native?: string, paused
   if (native === "background-check") return ASK_FAILURES.background;
   if (native === "rate-limited") return ASK_FAILURES.slowDown;
   if (code === "egress") return ASK_FAILURES.egress;
+  if (code === "invalid-arguments") return ASK_FAILURES.arguments;
+  if (native === "too-many-facts") return ASK_FAILURES.tooMany;
   if (code === "fidelity") return ASK_FAILURES.fidelity;
   if (code === "invalid-task") return ASK_FAILURES.invalid;
   if (code === "denied") return ASK_FAILURES.denied;
@@ -249,6 +290,7 @@ export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow[
       if (outcome === "stop") return `${asked}; it chose the facts for the answer`;
       if (outcome === "tool_calls") return `${asked}; it asked to look something up`;
       if (outcome === "length") return `${asked}; its reply ran too long`;
+      if (outcome === "too-many-facts") return `${asked}; ${TOO_MANY_FACTS}`;
       return `${asked}; ${reason(outcome)}`;
     }
     case "verified": return kind === "check" ? "Finished the check" : "Checked the facts it chose against what was read";
@@ -391,7 +433,7 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
     title = row.kind === "ask" ? row.state === "verified" ? options.trigger === "on-this-mac" ? "Answered on this Mac" : "Answered a question" : "A question" : procedure!;
     outcome = row.state === "verified" ? `checked · ${things(tools.length)}` : null;
   }
-  if (row.state === "failed") outcome = `Couldn't finish: ${reasonFor(row.kind, row.failure)}`;
+  if (row.state === "failed") outcome = `Couldn't finish: ${tooManyFacts(row) ? TOO_MANY_FACTS : reasonFor(row.kind, row.failure)}`;
   if (row.state === "cancelled") outcome = "You stopped it";
   if (row.state === "admitted" || row.state === "running" || row.state === "proposed") outcome = "Still running";
   return [title, outcome, at].filter(Boolean).join(" · ");
@@ -455,7 +497,8 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
       else ended = row.kind === "ask" ? "Answered." : job ? "Finished. Ozzie wrote up the facts the AI chose, and the write-up is with this job." : "Finished. Ozzie wrote up the facts the AI chose.";
       break;
     case "failed":
-      ended = row.failure === "fidelity" ? "The AI's answer didn't check out against what Ozzie read, so nothing was shown."
+      ended = tooManyFacts(row) ? "The AI's answer listed more facts than Ozzie checks in one answer, so it wasn't shown."
+        : row.failure === "fidelity" ? "The AI's answer didn't check out against what Ozzie read, so nothing was shown."
         : row.failure === "limit" ? "Stopped at its limit." : `Couldn't finish: ${reasonFor(row.kind, row.failure)}.`;
       break;
     // Pausing or stopping a job, or stopping a question: a person did it either way (review H, L12).
