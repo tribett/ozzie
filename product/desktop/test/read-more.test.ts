@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 import { installFakeDom } from "./fake-dom.js";
 import { text } from "./harness-fakes.js";
 import {
-  MORE_BUTTON, MORE_CHECK, MORE_HIDDEN, MORE_HIDE, MORE_LEAD, MORE_PEOPLE_TO, moreAccess, moreHeld, moreTitle, productsAdminMessage, ReadMore,
+  MORE_AGAIN, MORE_BUTTON, MORE_CHECK, MORE_HIDDEN, MORE_HIDE, MORE_LEAD, MORE_LOST, MORE_NOT_NOW, MORE_PEOPLE_TO, moreAccess, moreHeld, moreTitle, productsAdminMessage, ReadMore,
   readMoreNeed, readMoreStore, refusedProducts, type ReadMoreNeed,
 } from "../src/read-more.js";
 import { resetOperationsReads, useOperationsReads, wantedAfter } from "../src/operations-reads.js";
@@ -92,6 +92,83 @@ describe("when it is offered", () => {
     expect(readMoreNeed({ status: WAITING, readsOn: false, checked: true, hidden: false })).toBeNull();
     expect(readMoreNeed({ status: null, readsOn: false, checked: true, hidden: false })).toBeNull();
     expect(readMoreNeed({ status: { ...SERVICES, state: "disconnected" }, readsOn: false, checked: true, hidden: false })).toBeNull();
+  });
+});
+
+describe("the reads on, the access gone after a sign-in (review 2026-11-18, late)", () => {
+  // Settings' Connect again used to ask for Services alone; and Planning Center lets an administrator narrow what a
+  // sign-in is given. Either way the switch still says on while Calendar, People and Groups aren't held: said once,
+  // plainly, where the offer would be, never the first-time offer as if nothing happened.
+  it("is its own need: never the first-time offer", () => {
+    expect(readMoreNeed({ status: SERVICES, readsOn: true, checked: true, hidden: false })).toBe("lost");
+    expect(readMoreNeed({ status: at("services+check-ins+registrations"), readsOn: true, checked: true, hidden: false })).toBe("lost");
+    // Off, or native couldn't say: the offer as before.
+    expect(readMoreNeed({ status: SERVICES, readsOn: false, checked: true, hidden: false })).toBe("sign-in");
+    expect(readMoreNeed({ status: SERVICES, readsOn: null, checked: true, hidden: false })).toBe("sign-in");
+    // Hidden for good, or before the first check: nothing here (Settings still says it).
+    expect(readMoreNeed({ status: SERVICES, readsOn: true, checked: true, hidden: true })).toBeNull();
+    expect(readMoreNeed({ status: SERVICES, readsOn: true, checked: false, hidden: false })).toBeNull();
+  });
+  it("says what happened in one sentence, with the way to allow it again and a message for the administrator", () => {
+    expect(MORE_LOST).toBe("Your last Planning Center sign-in didn't include Calendar, People and Groups, so Ozzie can't check rooms, follow-ups and group events until they're allowed again.");
+    for (const place of ["service", "today"] as const) {
+      const t = text(html("lost", place));
+      expect(t).toContain(MORE_LOST);
+      expect(t).not.toContain(MORE_LEAD);
+      expect(t).not.toContain("Check the rooms booked for");
+      expect(t).toContain(moreAccess());
+      expect(t).toContain(ADMIN_COPY);
+      // Its button names what the person does: allowing again what the church had, not the first-time offer's.
+      expect(MORE_AGAIN).toBe("Allow Calendar, People and Groups again in my browser");
+      expect(t).toContain(MORE_AGAIN);
+      expect(t).not.toContain(MORE_BUTTON);
+      expect(t).not.toMatch(FORBIDDEN);
+    }
+    // A status, said once: no "Not now" to fold it, only "Don't show this again".
+    expect(text(html("lost", "service"))).toContain(MORE_HIDE);
+    expect(text(html("lost", "service"))).not.toContain(MORE_NOT_NOW);
+  });
+  it("isn't folded away by an earlier Not now for the offer (review 2026-11-19)", () => {
+    const m = memory({ "ozzie.finish-list.v1": JSON.stringify({ notNow: ["more"] }) });
+    const folded = (need: ReadMoreNeed) => text(renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() }, React.createElement(ReadMore, {
+      need, place: "service", status: SERVICES, settings: SETTINGS, onStatus: () => {}, church: "Fictional Grace Church", oneClick: true, store: m.store, finish: m.finish,
+    }))));
+    expect(folded("sign-in")).not.toContain(MORE_LEAD);
+    expect(folded("lost")).toContain(MORE_LOST);
+  });
+  it("after a church switch, the earlier church's switch is never taken for the new one's (review 2026-11-19)", async () => {
+    native.reads = true;
+    const m = await mount(memory(), SERVICES, {});
+    expect(text(dom.seen())).toContain(MORE_LOST);
+    // Another church, Services only, whose own switch native hasn't answered yet: nothing is said about its access.
+    native.reads = null;
+    let answer: (v: boolean) => void = () => {};
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementationOnce(async (command: string) => {
+      native.calls.push({ command, args: {} });
+      return new Promise(r => { answer = r as (v: boolean) => void; });
+    });
+    await m.show(at("services", { organization: "2002" }));
+    expect(text(dom.seen())).not.toContain(MORE_LOST);
+    answer(false);
+    await m.show(at("services", { organization: "2002" }));
+    expect(text(dom.seen())).toContain(MORE_LEAD);
+    await m.unmount();
+  });
+  it("Settings' granted line says the same, and nothing else does while the reads are off", async () => {
+    const { grantedCopy } = await import("../src/connection-page.js");
+    expect(grantedCopy(SERVICES, true)).toBe(`Granted: Services only. ${MORE_LOST}`);
+    expect(grantedCopy(SERVICES, false)).toBe("Granted: Services only. Rooms, follow-ups and group events aren't checked.");
+    expect(grantedCopy(SERVICES, null)).toBe("Granted: Services only. Rooms, follow-ups and group events aren't checked.");
+    expect(grantedCopy(GRANTED, true)).toBe("Granted: Services, Calendar, People and Groups. Ozzie reads rooms, follow-ups and group events.");
+  });
+  it("pressing it asks for the access as the offer does", async () => {
+    native.reads = true;
+    const m = await mount(memory(), SERVICES, {});
+    expect(text(dom.seen())).toContain(MORE_LOST);
+    await m.press(MORE_AGAIN);
+    expect(native.calls.filter(c => c.command === "connect_planning_center_app").map(c => c.args)).toEqual([{ operations: true, purpose: "operations" }]);
+    await m.unmount();
   });
 });
 

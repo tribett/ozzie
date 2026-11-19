@@ -21,7 +21,7 @@ import { dayWords, SUNDAY_WORDS, UNKNOWN_WORDS, type DayWords } from "../../src/
 import { wednesdayWithEverything } from "../fixtures/service-days/wednesday.js";
 import type { CorrectionEntry } from "../../src/finding-feedback.js";
 import { applyDecisions, decide } from "../../src/sunday-decisions.js";
-import { allEnvelopes, FIXTURES, FRESH, harnessData, KIDS_RULES, LEAD_RULES, RULES } from "./fixtures.js";
+import { allEnvelopes, crowded, FIXTURES, FRESH, harnessData, KIDS_RULES, LEAD_RULES, RULES } from "./fixtures.js";
 
 const skills = await bundledSkills();
 const signal = new AbortController().signal;
@@ -353,6 +353,24 @@ describe("kids teams and background checks, answered on this Mac without the AI"
 });
 
 describe("a decision question: open decisions the answer left out are added on this Mac", () => {
+  it("an overview cut for length: every open decision on the page, each said as its own finding, none mistaken for another (review item 6)", async () => {
+    const data = crowded();
+    const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
+    const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
+    const listed = (await openDecisions(tools, signal)).paragraphs;
+    expect(listed[0]).toBe(onPage(SUNDAY_WORDS));
+    const items = listed.slice(1);
+    expect(items).toHaveLength(shown.decisions);
+    // The roles in the page's order, then the room and the follow-up from their own tools.
+    const roles = items.filter(t => t.startsWith("Needs a decision: "));
+    expect(roles).toHaveLength(shown.decisions - 2);
+    for (const t of roles) expect(t).toMatch(/^Needs a decision: \[Role \d+\] at .+ still needs 1 more person, by Planning Center's count\.$/u);
+    const usher = (n: number) => { const target = tools.session.target(/\[Role \d+\]/u.exec(roles[n]!)![0]); return target?.kind === "role" ? target.name : null; };
+    // The three the leader settled are left out; the rest in order, then the fictional Sunday's own two roles.
+    expect(roles.map((_, i) => usher(i))).toEqual([...Array.from({ length: 9 }, (_, i) => `Usher ${i + 4}`), "Greeter", "Nursery"]);
+    expect(items.slice(-2)).toEqual([expect.stringMatching(/^Room use needs review: /u), expect.stringMatching(/ has no owner\.$/u)]);
+  });
+
   it("What still needs a decision this Sunday? The answer's own items, then the background checks, the follow-up and the room overlap it left out", async () => {
     const data = kidsData();
     // As Ozzie's AI answered live (2026-11-18): the roles and kids teams that need a decision, not the room or the follow-up.
@@ -415,7 +433,8 @@ describe("a decision question: open decisions the answer left out are added on t
     // Said once: a decision question's answer that chose them gets nothing added for them.
     expect((await decisionsLeftOut(tools, every, [overview], signal)).paragraphs).toEqual([]);
     // "Based on" names where the room, follow-up and group meeting came from, not only the overview's Services.
-    expect(chosenSources(every, [overview], data.operations!.checked_at).map(s => s.source)).toEqual(["Planning Center Calendar", "Planning Center People", "Planning Center Groups"]);
+    expect(chosenSources(every, [overview], tools.rowSources())).toEqual(["Planning Center Calendar", "Planning Center People", "Planning Center Groups"]
+      .map(source => ({ source, check_time: tools.rowSources()!.check_time, completeness: "complete" })));
     expect(chosenSources(JSON.stringify({ answer: "facts", facts: [p.fact] }), [overview], null)).toEqual([]);
     // Without a Church room rule: the overlap is worth a look, with one line for what couldn't be confirmed.
     const unruled = new HarnessTools(harnessData({ mode: "live", rules: { ...RULES, rooms: [] } }), new HarnessSession(), { now: () => FRESH });

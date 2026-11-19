@@ -40,7 +40,7 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
       <p className="bold">{procedureTitle(p.title, d) ?? p.title}</p>
       <p className="small">{procedurePurpose(p.purpose, d)}</p>
       <details className="listen-more" open={focus === p.id}>
-        <summary><Icon name="info" small />See how this works</summary>
+        <summary><Icon name="chev" small />See how this works</summary>
         <ProcedureBody body={p.body} />
       </details>
     </div>)}
@@ -90,7 +90,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     <p className="lede">These are your church's choices. Changing one updates {pageRef(d)} right away using what was already read. Nothing in Planning Center changes.</p>
     {keptElsewhere.length > 0 && <p className="banner"><Icon name="info" small /><span>Rules you set for the teams and rooms of {churchList(keptElsewhere)} are kept for {keptElsewhere.length === 1 ? "that church" : "those churches"} and don't apply here. They come back if Ozzie uses {keptElsewhere.length === 1 ? "that church" : "one of them"} again.</span></p>}
     <section className="find">
-      <h2 className="h3">Check in after weeks in a row</h2>
+      <h2 className="h3">Serving many weeks in a row</h2>
       <p className="find-body">Flag anyone confirmed this many weeks in a row, so a person can check in. It's about care, not performance.</p>
       <div className="row rule-row">
         <label htmlFor="streak">Weeks in a row</label>
@@ -139,7 +139,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
           </div>
         </div>;
       })}
-      {rooms.length > 0 && <p className="small">For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records: an overlap Calendar lists as not yet resolved shows as Room use needs review. Overlaps in a room with no rule set, or that Ozzie can't confirm, show as Worth a look.</p>}
+      {rooms.length > 0 && <p className="small">For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records. An overlap Calendar lists as not yet resolved shows as Room use needs review. Overlaps in a room with no rule set, or that Ozzie can't confirm, show as Worth a look.</p>}
     </section>
     {notice}
     <FromYourCards feedback={controls} />

@@ -1,8 +1,8 @@
 // Every word on the AI screens (onboarding spec §3 S6–S10 and §4.4), in one place, so the screens and their tests share
 // them. Sentences are chosen by closed codes only (onboarding-native-contract.md N5–N7): nothing a native reply or an AI
 // company wrote is ever shown. `{Day}` in the spec is the watched service's real day (day-words.tsx `useDay`).
-import type { Company, DownloadRefusal, KeyProvider, KeyVerdict, LocalAdvice, LocalApp, LocalVerdict, ModelEnd, ModelPhase, ModelRemoved, ModelSize, OtherAi, PaidEnd,
-  Provider } from "./onboarding-bridge.js";
+import type { Company, DownloadRefusal, KeyProvider, KeyVerdict, LocalAdvice, LocalApp, LocalVerdict, ModelEnd, ModelPhase, ModelRemoved, ModelSize, OllamaEnd,
+  OllamaPhase, OllamaRefusal, OllamaReveal, OtherAi, PaidEnd, Provider } from "./onboarding-bridge.js";
 import { answersLeft, calendarDay, monthLimitText, NO_PLAN_TEXT, noPlan, paused, pausedLine, pausedWhen, resetDay, type ManagedAccount, type ModelStatus } from "./model.js";
 
 /** The three companies Ozzie knows, by their product and company names (spec S8a's cards). */
@@ -72,6 +72,8 @@ export const CHOICE = {
   noneCost: "Free. Everything you just saw keeps working.",
   noneCostSettings: "Free. Everything else in Ozzie keeps working.",
   small: "You can change this any time in Settings.",
+  /** On the card (and the next screen's card) of the way Ozzie uses AI now; none before a way works (live, 2026-11-19). */
+  inUse: "In use now",
   /** First run's quiet way out: not an answer, so "Finish setting up" keeps the choice (review M1). */
   later: "Decide later",
   noneFailed: "Ozzie couldn't turn AI off just now. Nothing changed. Try again.",
@@ -323,17 +325,39 @@ export function keySaid(verdict: KeyVerdict, p: KeyProvider, looksLike?: Company
 export const sizeText = (bytes: number | null) => bytes === null ? null : `${(bytes / 1e9).toFixed(1)} GB`;
 /** A model's name as a person reads it: "llama3.2:latest" as "llama3.2". */
 export const modelName = (id: string) => id.replace(/:latest$/u, "");
+/** Where a model the app lists runs when it isn't on this Mac: Ollama's are its cloud models (its servers). */
+const away = (app: LocalApp) => app === "ollama" ? "Ollama's servers" : "another computer";
+/**
+ * AI on this Mac's model runs elsewhere (native `not-on-this-mac`: Ollama's cloud models, or any model its app serves from
+ * another computer): Ozzie never asks it anything (2026-11-19). Null app: native didn't say which app.
+ */
+export const notOnThisMac = (id: string, app: LocalApp | null) => `${modelName(id)} runs on ${app ? away(app) : "another computer"}, not on this Mac, so Ozzie doesn't use it here.`;
 export const MAC = {
   title: "AI on this Mac",
   looking: "Looking for AI on this Mac…",
   found: (app: LocalApp, n: number) => `Found ${APP_NAME[app]} on this Mac, with ${n} AI model${n === 1 ? "" : "s"} ready.`,
   ollamaClosed: "Ollama is on this Mac but isn't open.",
+  /**
+   * Ollama's own program is running but its server doesn't answer (native `open`): still starting, or stuck (live,
+   * 2026-11-19). Never "isn't open" for an Ollama that is open. Quitting it is the person's to do: Ozzie never quits another
+   * company's app.
+   */
+  ollamaQuiet: "Ollama is open, but it isn't answering yet. If it doesn't answer in a minute, quit Ollama from the llama picture at the top of your screen, then press Open Ollama.",
+  /** After "Open Ollama", while Ozzie waits for its server (at most two minutes, as after installing it). */
+  opening: "Opening Ollama…",
   openApp: (app: LocalApp) => `Open ${APP_NAME[app]}`,
   /** Without native's own `start_hint` for LM Studio. */
   lmServerOff: "LM Studio is on this Mac, but its server isn't turned on. In LM Studio, turn on its local server, then press Look again.",
   /** With native's `start_hint`, which says how that app's server starts. */
   lmOn: "LM Studio is on this Mac.",
   ollamaNoModels: "Ollama is open but has no AI models yet.",
+  /** Ollama lists only models that run elsewhere (`elsewhere`), none on this Mac. */
+  ollamaNoModelsHere: "Ollama is open but has no AI models on this Mac yet.",
+  /**
+   * Models the app lists that don't run on this Mac (native `elsewhere`: Ollama's cloud models, served from its servers):
+   * never listed, and said once so the person knows why (2026-11-19). LM Studio's is said as "another computer".
+   */
+  elsewhere: (app: LocalApp, n: number) => `${n === 1 ? "One model" : `${n} models`} in ${APP_NAME[app]} ${n === 1 ? "runs" : "run"} on ${away(app)}, not on this Mac, so Ozzie doesn't list ${n === 1 ? "it" : "them"}.`,
   lmNoModels: "LM Studio's server is on, but it has no AI models yet. In LM Studio, download a model, then press Look again.",
   nothing: "Ozzie didn't find AI on this Mac.",
   /** After Look again (or "I've opened Ollama") still finds nothing, in the polite status line: the look did happen. */
@@ -535,9 +559,151 @@ export function localSaid(verdict: LocalVerdict, app: LocalApp, id: string, day:
     case "too-slow": return problem(`${seconds === undefined ? "It didn't answer within two minutes." : "It answered the first question, but didn't answer the second within a minute."} This Mac may be too busy, or the model too large for it. Try again when this Mac is less busy, or use a key from an AI company.`);
     case "stopped": return problem(`${APP_NAME[app]} stopped answering. Open ${APP_NAME[app]}, then try again.`);
     case "not-found": return problem(`${APP_NAME[app]} doesn't list that model any more. Press Look again, then choose a model.`);
+    case "not-on-this-mac": return problem(`${notOnThisMac(id, app)} Choose a model on this Mac.`);
     // It answered, but another choice of AI was made while it was checked: Ozzie didn't switch to it (review M-2).
     case "choice-changed": return problem(`${modelName(id)} answers, but you chose something else while Ozzie was checking it, so Ozzie didn't switch to it. To use it, press Check that it answers again.`);
     case "unavailable": return problem("Ozzie couldn't check AI on this Mac just now. Nothing changed. Try again in a minute.");
+  }
+}
+
+// ---- S9c Getting Ollama itself (owner's request, 2026-11-18; decision 25; contract N6 "Ozzie gets Ollama") -----------
+
+/** A download's size as "229 MB", or "1.0 GB" from a gigabyte. */
+export const bytesText = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`;
+/** Ollama taking its time to answer after it was opened (also said while Ozzie waits after "Open Ollama"). */
+const OLLAMA_STILL = "Ollama is still starting. The first time can take a minute.";
+/** Ollama's own first window and its own password question, said before they appear. */
+const OLLAMA_WINDOW = "Ollama may open its own window and ask for your Mac's password to add a tool of its own. Ozzie doesn't need either, so you can close that window.";
+/**
+ * Ollama registers itself to start at login (its FAQ: "Ollama for Windows and macOS register as a login item"; seen live,
+ * 2026-11-19: "using v13+ SMAppService for login registration"), and the way to turn that off in its FAQ's own words
+ * ("Open Settings and search for Login Items. find the Ollama entry under Allow in the Background, then click the
+ * slider to disable."). Its docs name no setting of its own for it, so none is promised.
+ */
+const OLLAMA_LOGIN = "Ollama starts by itself whenever you sign in to this Mac.";
+const OLLAMA_LOGIN_OFF = "To stop that, search System Settings for Login Items and turn off Ollama under Allow in the Background.";
+/** Says that verification failed or the download went wrong: the way to install it themselves is offered with it. */
+const MYSELF = "You can install Ollama yourself from ollama.com.";
+export const OLLAMA = {
+  /** Only where Ozzie found no AI on this Mac and this Mac can run a model Ozzie offers (16 GB or more). */
+  offerTitle: "Ozzie can get Ollama for you",
+  /**
+   * Up front, scannable (live, 2026-11-19: title and five paragraphs were too long): who makes it, from where, where it
+   * goes; then `then` (what comes next, with the model's size); then `facts`, a short list; the checks under one fold.
+   */
+  offer: [
+    "Ollama is a free app from another company, also called Ollama, that runs AI on this Mac.",
+    "Ozzie downloads it from ollama.com, checks it, and puts it in your Applications folder.",
+  ],
+  facts: [
+    "Nothing about your church leaves this Mac: the AI models Ozzie sets up in Ollama run here.",
+    "You see the download's size as it starts, and you can stop it.",
+    `${OLLAMA_LOGIN} ${OLLAMA_LOGIN_OFF}`,
+  ],
+  checksTitle: "What Ozzie checks before installing",
+  checks: [
+    "Ozzie downloads Ollama only from ollama.com, Ollama's own website, and stops if the download is sent somewhere Ozzie doesn't trust.",
+    "Before anything is opened, Ozzie checks that Ollama's makers signed it and that Apple checked it. If either check fails, Ozzie deletes it and installs nothing.",
+  ],
+  /** What follows once Ollama answers: the existing model offer (S9b), with the size native gives for this Mac's model. */
+  then: (bytes: number | null) => `Then Ozzie offers the AI model that suits this Mac${bytes ? ` (about ${sizeText(bytes)})` : ""}, downloads it and sets it up for you.`,
+  install: "Download Ollama and set it up",
+  /** Opens ollama.com's download page in the browser and shows today's guide. */
+  myself: "I'll install it myself",
+  reveal: "Show Ollama in Finder",
+  /** Under the bar. */
+  progressLabel: "Downloading Ollama",
+  amount: (done: number, total: number) => total >= 1e9 ? `${(done / 1e9).toFixed(1)} of ${bytesText(total)} downloaded` : `${Math.floor(done / 1e6)} of ${bytesText(total)} downloaded`,
+  /**
+   * Ollama shows its own window the first time it opens, and may ask for the Mac's password to add its command line
+   * (its docs, "macOS"): that is Ollama asking, not Ozzie, and Ozzie needs neither (review, 2026-11-19).
+   */
+  windowNote: OLLAMA_WINDOW,
+  /** The polite status line, one per step: a screen reader hears each step once, never each byte. */
+  step(phase: OllamaPhase, total: number): string {
+    switch (phase) {
+      case "starting": return "Starting the download of Ollama from ollama.com…";
+      case "downloading": return total > 0 ? `Downloading Ollama (${bytesText(total)}) from ollama.com…` : "Downloading Ollama from ollama.com…";
+      case "checking": return "Downloaded. Checking that Ollama's makers signed it and that Apple checked it…";
+      case "installing": return "Putting Ollama in your Applications folder…";
+      case "opening": return `Opening Ollama. ${OLLAMA_WINDOW}`;
+      case "still-starting": return `${OLLAMA_STILL} ${OLLAMA_WINDOW}`;
+    }
+  },
+  ready: "Ollama is installed and open.",
+  /** While Ozzie waits after "Open Ollama", once 20 seconds have passed (as after installing it). */
+  still: OLLAMA_STILL,
+  // Settings › AI help, while an Ollama Ozzie installed is in Applications (native `installed_at_ms`).
+  settingsTitle: "Ollama, which Ozzie installed",
+  settingsBody: (on: string) => `Ozzie downloaded Ollama from ollama.com and put it in your Applications folder on ${on}. Ollama is another company's app, with its own settings and its own updates. Ozzie doesn't remove other companies' apps.`,
+  settingsLogin: `${OLLAMA_LOGIN} ${OLLAMA_LOGIN_OFF}`,
+  settingsRemove: "To remove it, quit Ollama from the llama picture at the top of your screen, then drag Ollama from Applications to the Trash. The AI models it keeps are in the .ollama folder in your home folder (a hidden folder: in Finder, press Command, Shift and period to see it); move that folder to the Trash to remove them too.",
+  // What happened.
+  historyTitle: "Getting Ollama",
+} as const;
+/**
+ * How getting Ollama ended. `myself`: offer "I'll install it myself" with it (the download or its checks failed in a way
+ * pressing again won't fix); `reveal`: offer "Show Ollama in Finder" (Applications needs a password).
+ */
+export function ollamaEndSaid(end: OllamaEnd): { text: string; tone: "ok" | "calm" | "problem"; myself: boolean; reveal: boolean } {
+  const say = (text: string, over: Partial<{ tone: "ok" | "calm" | "problem"; myself: boolean; reveal: boolean }> = {}) =>
+    ({ text, tone: "problem" as const, myself: false, reveal: false, ...over });
+  switch (end) {
+    case "ready": return say(OLLAMA.ready, { tone: "ok" });
+    case "cancelled": return say("The download is stopped, and Ozzie deleted what came. Nothing was installed.", { tone: "calm" });
+    case "offline": return say("Ozzie couldn't reach ollama.com. Check that this Mac is online, then press Download Ollama and set it up again.");
+    case "redirected": return say(`Ollama's website sent the download somewhere Ozzie doesn't trust, so Ozzie stopped. Nothing was installed. ${MYSELF}`, { myself: true });
+    case "too-large": return say(`The download was larger than the Ollama app should be, so Ozzie stopped and deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    case "stalled": return say("The download hasn't moved for a minute, so Ozzie stopped it and deleted what came. Check this Mac's internet connection, then press Download Ollama and set it up again.");
+    case "download-failed": return say("The download didn't finish, so Ozzie deleted what came. Nothing was installed. Press Download Ollama and set it up again in a minute.");
+    case "no-room": return say("This Mac doesn't have enough free space to download and check Ollama. Free up some space, then press Download Ollama and set it up again.");
+    case "bad-archive": return say(`The download wasn't the Ollama app Ozzie expected, so Ozzie deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    case "not-signed": return say(`The download isn't signed by Ollama's makers, so Ozzie deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    case "wrong-team": return say(`The download is signed by someone other than Ollama's makers, so Ozzie deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    case "wrong-app": return say(`The download is signed by Ollama's makers, but it isn't the Ollama app, so Ozzie deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    case "not-notarized": return say(`Apple hasn't checked this download, so Ozzie deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    // Ollama's own app, but older than the one Ozzie installs: an old build served in place of the current one.
+    case "outdated": return say(`The download is an older Ollama than Ozzie installs, so Ozzie deleted it. Nothing was installed. ${MYSELF}`, { myself: true });
+    // The screen looks again: "Ollama is on this Mac but isn't open." and "Open Ollama" follow.
+    case "already-installed": return say("Ollama is already in your Applications folder, so Ozzie didn't replace it.", { tone: "calm" });
+    case "cant-install": return say("Adding apps to the Applications folder on this Mac needs an administrator's password, and Ozzie never asks for one. Ozzie checked Ollama and kept it for you: press Show Ollama in Finder, drag Ollama into Applications, open it, then press Look again.", { tone: "calm", reveal: true });
+    case "install-failed": return say(`Ozzie couldn't put Ollama in your Applications folder, so nothing was installed. ${MYSELF}`, { myself: true });
+    case "wont-open": return say("Ollama is in your Applications folder now, but it didn't open.");
+    case "not-answering": return say("Ollama is in your Applications folder now, but it hasn't started answering yet.", { tone: "calm" });
+    case "failed": return say("Ozzie couldn't set up Ollama just now. Nothing was installed. Press Download Ollama and set it up again in a minute.");
+  }
+}
+/** Why getting Ollama couldn't start. */
+export function ollamaRefusedSaid(refusal: OllamaRefusal): string {
+  switch (refusal) {
+    case "busy": return "Ozzie is already getting Ollama. Wait for it to finish, or stop it first.";
+    case "too-small": return "AI on this Mac needs a Mac with 16 GB of memory or more, so Ozzie doesn't get Ollama for this one.";
+    case "already-installed": return "Ollama is already on this Mac, so Ozzie didn't download it again.";
+    case "already-running": return "Ollama is already running on this Mac, so Ozzie didn't download it again.";
+    case "unavailable": return "Ozzie couldn't start the download just now. Nothing changed. Try again in a minute.";
+  }
+}
+/** "Show Ollama in Finder" didn't show it. */
+export function ollamaRevealSaid(reveal: Exclude<OllamaReveal, "shown">): string {
+  switch (reveal) {
+    case "not-there": return `Ozzie no longer has the checked copy of Ollama. Press Download Ollama and set it up again. ${MYSELF}`;
+    case "finder-unavailable": return "Finder didn't open. Press Show Ollama in Finder again.";
+    case "busy": return "Ozzie is already getting Ollama. Wait for it to finish.";
+  }
+}
+/** What happened's line for each ending: what Ozzie did, plainly; never a folder or file name. */
+export function ollamaDoneSaid(end: OllamaEnd): string {
+  switch (end) {
+    case "ready": case "wont-open": case "not-answering":
+      return "Downloaded Ollama from ollama.com, checked that Ollama's makers signed it and that Apple checked it, and put it in Applications.";
+    case "cancelled": return "Stopped downloading Ollama when you pressed Stop, and deleted what came. Nothing was installed.";
+    case "bad-archive": case "not-signed": case "wrong-team": case "wrong-app": case "not-notarized": case "outdated":
+      return "Downloaded Ollama from ollama.com, but it didn't pass Ozzie's check, so Ozzie deleted it. Nothing was installed.";
+    case "redirected": return "Stopped downloading Ollama because ollama.com sent the download somewhere Ozzie doesn't trust. Nothing was installed.";
+    case "cant-install": return "Downloaded Ollama from ollama.com and checked it, but adding apps to Applications on this Mac needs a password, so Ozzie kept it for you to add.";
+    case "already-installed": return "Downloaded Ollama from ollama.com and checked it, but Ollama was already in Applications, so Ozzie didn't replace it.";
+    case "offline": case "too-large": case "stalled": case "download-failed": case "no-room": case "install-failed": case "failed":
+      return "Tried to download Ollama from ollama.com, but it didn't finish. Nothing was installed.";
   }
 }
 
@@ -699,6 +865,9 @@ export const LIMIT = {
   oldKey: "A key saved the old way, in Terminal, isn't tied to the company's address, so Ozzie doesn't use it. Paste the key here instead and Ozzie keeps it safely on this Mac.",
   addKey: "Paste my key",
   localNotChecked: "AI on this Mac is chosen, but Ozzie hasn't checked that it answers yet.",
+  /** The model chosen runs elsewhere (native `not-on-this-mac`): never used; the way to another model. */
+  localElsewhere: (id: string | null, app: LocalApp | null) => `${id ? notOnThisMac(id, app) : "The model chosen doesn't run on this Mac, so Ozzie doesn't use it here."} Choose a model on this Mac, or another way to use AI.`,
+  chooseLocal: "Choose a model on this Mac",
   localChecked: (at: string) => `Answered Ozzie's check on ${at}. Nothing leaves this Mac.`,
   checkLocal: "Check that it answers",
   // "No AI for now" from Settings (contract N5 `set_no_ai`): no route, and what stays on this Mac or on the account.
@@ -718,7 +887,7 @@ export const monthDay = (s: ModelStatus) => s.month ? calendarDay(s.month.resets
 /** The model on this Mac, from native's fixed local label "AI model on this Mac (llama3.2:latest)": a model id only. */
 export const localModel = (label: string): string | null => /^AI model on this Mac \(([\w.:/@+-]{1,120})\)$/u.exec(label)?.[1] ?? null;
 /** "AI: ChatGPT, your key" and its trouble, if any: " · paused", " · not answering", " · not checked yet". */
-export function aiLine(status: ModelStatus | null, now = Date.now()): { text: string; trouble: "paused" | "not answering" | "not checked yet" | "not offered any more" | null } {
+export function aiLine(status: ModelStatus | null, now = Date.now()): { text: string; trouble: "paused" | "not answering" | "not checked yet" | "not offered any more" | "not used" | null } {
   if (!status || status.route === "none" || !["own", "managed", "local"].includes(status.route)) return { text: "AI: none", trouble: null };
   if (status.route === "own") {
     const p = status.provider && Object.hasOwn(COMPANY, status.provider) ? status.provider : null;
@@ -732,6 +901,8 @@ export function aiLine(status: ModelStatus | null, now = Date.now()): { text: st
     return { text: "AI: Ozzie's AI", trouble };
   }
   const id = localModel(typeof status.label === "string" ? status.label : "");
+  // The model runs elsewhere (Ollama's cloud models): never "on this Mac", and never used (2026-11-19).
+  if (status.setup === "not-on-this-mac") return { text: id ? `AI: ${modelName(id)}, not on this Mac` : "AI: a model not on this Mac", trouble: "not used" };
   return { text: id ? `AI: on this Mac (${modelName(id)})` : "AI: on this Mac",
     // A model Ozzie no longer offers keeps working; the line says so in its row's words (review L-4).
     trouble: status.setup === "not-checked" ? "not checked yet" : !(status.configured && status.setup === "ready") ? "not answering"

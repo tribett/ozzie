@@ -22,11 +22,19 @@ import { ChurchNotes } from "./church-notes.js";
 import { Icon } from "./icons.js";
 import "./church-lists.css";
 
+/** The page's name (the sidebar's, spec §6), as its eyebrow; LISTS_HEADING is its title (owner's polish pass, 2026-11-18). */
 export const LISTS_TITLE = "Church lists";
+export const LISTS_HEADING = "Your church's own lists and notes";
 /** The one sentence before the first button (audit item 26); how to save a list is folded under HOW_LISTS. */
 export const LISTS_BODY = "Add a list your church keeps, such as who holds which keys, and Ozzie shows its rows beside the cards you match it to.";
 export const HOW_LISTS = "How to save a list";
-export const LISTS_STAYS = "Your lists and notes stay on this Mac. Ozzie reads each one from its file or link when you add it, when you open your service's page or this page (the first time after Ozzie starts, then at most once an hour), and when you ask, never with the window closed or hidden, and never changes it. They aren't sent to AI help, shared with other AI apps or Siri, or put in any notice.";
+/**
+ * What stays on this Mac, the promise first and then when Ozzie reads a list or notes, in short sentences (it was one
+ * sentence of 60 words; polish pass). Re-read on opening a page: church-sources.ts, the first time, then once an hour.
+ */
+export const LISTS_STAYS = "Your lists and notes stay on this Mac.";
+export const LISTS_PRIVATE = "They aren't sent to AI help, shared with other AI apps or Siri, or put in any notice. Ozzie never changes them.";
+export const LISTS_WHEN = "Ozzie reads each one from its file or link when you add it and when you ask. It also reads them when you open your service's page or this page: the first time after Ozzie starts, then at most once an hour. It never reads them while the window is closed or hidden.";
 export const LIST_FRAME = "This is your church's own list. Ozzie shows it as written and doesn't check it.";
 export const ADD_LIST = "Add a list from this Mac";
 export const ADD_LINK = LINK_TITLE;
@@ -323,7 +331,8 @@ export function ChurchListsPage({ sources, positions }: {
   };
   const list = state.sources ?? [];
   return <div className="col church-lists">
-    <h1 className="h1">{LISTS_TITLE}</h1>
+    <p className="eyebrow">{LISTS_TITLE}</p>
+    <h1 className="h1">{LISTS_HEADING}</h1>
     {/* One sentence, then the buttons; the file-format detail is folded away and what stays on this Mac follows. */}
     <p className="lede">{LISTS_BODY}</p>
     <div className="row">
@@ -332,7 +341,10 @@ export function ChurchListsPage({ sources, positions }: {
       {!linking && <button type="button" className="btn btn-secondary" onClick={() => { setLinking(true); setProblem(null); }}>{ADD_LINK}</button>}
     </div>
     <details className="listen-more"><summary><Icon name="chev" small />{HOW_LISTS}</summary><p className="small">{ADD_HELP}</p></details>
-    <p className="banner"><Icon name="lock" small /><span>{LISTS_STAYS}</span></p>
+    <div className="banner"><Icon name="lock" small /><div className="stack-tight">
+      <span><strong>{LISTS_STAYS}</strong> {LISTS_PRIVATE}</span>
+      <span>{LISTS_WHEN}</span>
+    </div></div>
     {problem && <p role="alert" className="problem">{problem}</p>}
     {linking && <LinkForm sources={sources} onDone={() => setLinking(false)} />}
     {state.linksUnreadable && <ForgetLinks sources={sources} />}

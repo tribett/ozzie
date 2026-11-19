@@ -57,6 +57,23 @@ export function harnessData(options: DataOptions = {}): HarnessData {
 }
 
 /**
+ * A big church's Sunday, too long for one overview (HARNESS_LIMITS.envelopeChars): the fictional live check with `looks`
+ * more check-ins suggested, then `needs` more roles that still need people, `settled` of them decided by the leader, all
+ * listed before the fictional Sunday's own findings. A cut from the end of the list would leave decisions out first.
+ */
+export function crowded(looks = 50, needs = 12, settled = 3): HarnessData {
+  const data = harnessData({ mode: "live" });
+  const brief = data.brief!;
+  const need = brief.findings.find(f => f.kind === "needs-people")!, streak = brief.findings.find(f => f.kind === "streak")!;
+  const more = [
+    ...Array.from({ length: looks }, (_, i) => ({ ...streak, id: `crowded-streak-${i}`, key: `crowded-streak-${i}`, person_id: `9${String(i).padStart(4, "0")}` })),
+    ...Array.from({ length: needs }, (_, i) => ({ ...need, id: `crowded-need-${i}`, key: `crowded-need-${i}`, position: { ...need.position!, name: `Usher ${i + 1}` } })),
+  ];
+  const decisions = more.filter(f => f.kind === "needs-people").slice(0, settled).map(f => decide(f, "covered-outside", "Covered by the youth group", CHECKED));
+  return { ...data, brief: { ...brief, findings: [...more, ...brief.findings] }, decisions };
+}
+
+/**
  * People already scheduled with blockouts in Planning Center: the confirmed greeter away all day, the pending lyrics
  * volunteer away from 10:00, and the confirmed nursery volunteer with a weekly blockout Ozzie can't place on a date.
  */

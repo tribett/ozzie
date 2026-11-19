@@ -26,10 +26,11 @@ export async function setOperationsReadsAfter(status: ConnectionStatus | null, o
 
 /** A sign-in that asked for Calendar, People and Groups: started ("asked"), in the browser ("waiting"), or none. */
 export type Wanted = false | "asked" | "waiting";
-const shared: { on: boolean | null; wanted: Wanted } = { on: null, wanted: false };
+/** `church`: the organization native's answer was for, so another church's switch is never taken for it (review 2026-11-19). */
+const shared: { on: boolean | null; church: string | null; wanted: Wanted } = { on: null, church: null, wanted: false };
 const listeners = new Set<() => void>();
 const changed = () => { for (const l of listeners) l(); };
-const put = (on: boolean | null) => { shared.on = on; changed(); };
+const put = (on: boolean | null, church: string | null) => { shared.on = on; shared.church = church; changed(); };
 // A sign-in for anything else replaced the one that asked (native stops it): its grant is not the one asked for.
 onSignInStart(purpose => { if (purpose !== "operations" && shared.wanted) { shared.wanted = false; changed(); } });
 
@@ -56,22 +57,23 @@ export function useOperationsReads(status: ConnectionStatus | null, { read = tru
     listeners.add(again);
     return () => { listeners.delete(again); };
   }, []);
-  useEffect(() => { if (read) void onboarding.operationsReads().then(put, () => undefined); }, [read, status?.organization]);
+  const church = status?.organization || null;
+  useEffect(() => { if (read) void onboarding.operationsReads().then(on => put(on, church), () => undefined); }, [read, church]);
   // Before paint, so a page never shows the access as granted but off for a moment while the switch goes on.
   useLayoutEffect(() => {
     const next = wantedAfter(shared.wanted, status);
     if (next.wanted !== shared.wanted) { shared.wanted = next.wanted; changed(); }
     if (!next.turnOn) return;
-    put(true);
-    void setOperationsReadsAfter(status, true, "after-sign-in").then(v => put(v ?? false), () => put(false));
+    put(true, church);
+    void setOperationsReadsAfter(status, true, "after-sign-in").then(v => put(v ?? false, church), () => put(false, church));
   }, [status?.state, status?.scopes, status?.organization, status?.revision]);
   return {
-    /** Native's switch for the church in use; null until native has said (or when it couldn't). */
-    on: shared.on,
+    /** Native's switch for the church in use; null until native has said for this church (or when it couldn't). */
+    on: shared.church === church ? shared.on : null,
     /** A sign-in that asked for the access is under way. */
     asking: shared.wanted !== false,
     /** A person's press: turns the reads on (only once granted) or off. Resolves with the switch, or null when it wasn't set. */
-    switchReads: (want: boolean) => setOperationsReadsAfter(status, want, "pressed").then(v => { if (v !== null) put(v); return v; }),
+    switchReads: (want: boolean) => setOperationsReadsAfter(status, want, "pressed").then(v => { if (v !== null) put(v, church); return v; }),
   };
 }
 
@@ -92,4 +94,4 @@ export async function askForOperations(control: ConnectionControl, status: Conne
 }
 
 /** Tests only: forget what this page knew of the switch and any sign-in under way. */
-export function resetOperationsReads() { shared.on = null; shared.wanted = false; changed(); }
+export function resetOperationsReads() { shared.on = null; shared.church = null; shared.wanted = false; changed(); }

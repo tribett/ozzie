@@ -17,7 +17,7 @@ import { readShared, sharedCheckPath } from "../../mcp/file.js";
 import { NOT_SHARED } from "../../mcp/render.js";
 import { INSTRUCTIONS, MAX_BATCH, MAX_LINE, McpServer, PROTOCOL_VERSIONS, serveStream, TOOLS, type Response } from "../../mcp/server.js";
 import { checkedAtOf, ON_FILE, parseSharedCheck, SHARED_TOOLS, sharedCheckText, sharedEnvelopes, type SharedTask } from "../../mcp/snapshot.js";
-import { FIXTURES, FRESH, harnessData, sourceStrings } from "../harness/fixtures.js";
+import { crowded, FIXTURES, FRESH, harnessData, sourceStrings } from "../harness/fixtures.js";
 
 const skills: ReadonlyMap<string, Skill> = await bundledSkills();
 const SHARED_AT = "2026-11-20T15:06:00Z";
@@ -177,13 +177,43 @@ describe("every tool's words, over every kind of check", () => {
   it("says where Sunday stands in Ozzie's sentences, with labels, sources and check times written out", async () => {
     const { text } = await sharedFor(harnessData({ mode: "live" }));
     const out = textOf(call(serverOver(() => text), "sunday_readiness"));
-    expect(out).toContain("## Overview (from Planning Center Services, checked ");
+    // Its room, follow-up and group meeting come from Calendar, People and Groups, read in the same check (review item 5).
+    expect(out).toContain("## Overview (from Planning Center Services, Calendar, People and Groups, checked ");
     expect(out).toMatch(/\[Role \d+\]/u);
     expect(out).toMatch(/\[Person \d+\]/u);
     expect(out).toContain("Pending is not the same as asked.");
     expect(out).not.toMatch(/\d{4}-\d{2}-\d{2}T/u);
     // Fact ids and raw JSON stay inside: the words are Ozzie's own.
     expect(out).not.toMatch(/"fact"|\bf\d+\b/u);
+  });
+
+  it("heads the overview with every source its rows come from, not Services alone (review item 5)", async () => {
+    const heading = (out: string) => /## Overview \(from ([^\n]*)\)\n/u.exec(out)?.[1];
+    const readiness = async (data: HarnessData, edit?: (e: ToolEnvelope[]) => void) => {
+      const { envelopes } = await sharedFor(data);
+      edit?.(envelopes);
+      return textOf(call(serverOver(() => sharedCheckText(envelopes, TASKS, SHARED_AT, COPY)), "sunday_readiness"));
+    };
+    // The room, the follow-up and the group meeting: Calendar, People and Groups, read in the same check as Services.
+    const all = await readiness(harnessData({ mode: "live" }));
+    expect(heading(all)).toMatch(/^Planning Center Services, Calendar, People and Groups, checked [^;]+$/u);
+    // Nothing but Services findings: Services alone, as before.
+    const services = heading(await readiness(harnessData({ mode: "live", operationsOff: true })));
+    expect(services).toMatch(/^Planning Center Services, checked [^;]+$/u);
+    expect(services).not.toMatch(/Calendar|People|Groups/u);
+    // Only the row for details that couldn't be confirmed, about a room: Calendar, not People.
+    const unsure = await readiness(harnessData({ mode: "live", rules: { sundayLeads: [], checkInAfterSundaysInARow: 3, rooms: [] } }), envelopes => {
+      const p = envelopes.find(e => e.tool === "sunday.overview")!.payload as { findings: { kind: string }[] };
+      p.findings = p.findings.filter(f => !["room use needs review", "needs an owner", "group meets while serving"].includes(f.kind));
+    });
+    expect(heading(unsure)).toMatch(/^Planning Center Services and Calendar, checked [^;]+$/u);
+  });
+
+  it("says an overview too long for the copy was cut, never that Planning Center couldn't be read (review item 6)", async () => {
+    const { text } = await sharedFor(crowded());
+    const overview = textOf(call(serverOver(() => text), "sunday_readiness")).split("\n## ")[1]!;
+    expect(overview).toMatch(/^Overview \(from [^\n]+\)\nWorth a look: the list was too long to say in full, so \d+ findings were left out of this copy\.\n/u);
+    expect(overview).not.toContain("couldn't be read");
   });
 
   it("says when the facts were checked (not when the copy was saved), which copy it is, and that labels hold only within it", async () => {

@@ -7,6 +7,7 @@
 // and won't see.
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, useEffect, useState } from "react";
+import { Icon } from "./icons.js";
 import { SETUP_APPS, setupApp, usablePath, type SetupApp, type SetupAppId } from "../../../core/mcp/setup.js";
 
 export const SETUP_SEES = "That app sees Ozzie's last check with labels like [Person 1] instead of names, the Church rules, and a list of what Ozzie ran and how it ended.";
@@ -86,7 +87,7 @@ function ForClaude({ app, path, add }: { app: SetupApp; path: string; add: () =>
     {state === "opened" && <p role="status" className="small">{ADD_OPENED}</p>}
     {typeof state === "object" && <p role="alert" className="problem">{state.problem}</p>}
     <details className="listen-more">
-      <summary>{ADD_BY_HAND}</summary>
+      <summary><Icon name="chev" small />{ADD_BY_HAND}</summary>
       <div className="stack-tight"><ByHand app={app} path={path} /></div>
     </details>
   </>;

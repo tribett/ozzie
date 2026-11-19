@@ -300,12 +300,23 @@ describe("rooms and follow-ups slot", () => {
     expect(t).toContain("Room use needs review");
     expect(t).toContain("Fellowship Hall has overlapping bookings from");
     expect(t).toContain("counting the 30 minutes of setup your Church rules set for this room");
-    expect(t).toContain("Review these room bookings in your church tools.");
+    // The next step names where to do it: these were read from Planning Center Calendar and People (polish pass).
+    expect(t).toContain("Next step Review these room bookings in Planning Center Calendar.");
     expect(t).toContain("Follow-up needs an owner");
     expect(t).toContain("“Call a first-time guest” has no owner.");
     expect(t).toContain("Why I flagged this");
-    expect(t).toContain("Choose who will handle this follow-up in your church tools.");
+    expect(t).toContain("Next step Choose who will handle this follow-up in Planning Center People.");
+    expect(t).not.toContain("church tools");
     expect(t).toContain("Checked");
+  });
+  it("keeps the general next step when a card doesn't say where it was read", () => {
+    const operations = fictionalOperations();
+    const unsourced = { ...operations, result: { ...operations.result, findings: operations.result.findings.map(f => ({ ...f, evidence: [] })) } };
+    const t = text(renderToStaticMarkup(React.createElement(OperationsSection, { operations: unsourced })));
+    expect(t).toContain("Next step Review these room bookings in your church tools.");
+    expect(t).toContain("Next step Choose who will handle this follow-up in your church tools.");
+    expect(t).not.toContain("in Planning Center Calendar.");
+    expect(t).not.toContain("in Planning Center People.");
   });
   it("uncertain operations are Worth a look, never a clear", () => {
     const operations = fictionalOperations();

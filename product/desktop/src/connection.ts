@@ -145,6 +145,23 @@ export const connection = {
       { ...(operations ? { operations: true } : {}), ...moreArgs(more), ...purposeArgs(purpose) })
       .then(status => { operationsAsked.set(operations); return status; });
   },
+  /**
+   * A sign-in again for `church` (its organization number) with Ozzie's own registration: Connect again, Sign in again
+   * once Planning Center stopped accepting the saved sign-in, first run's Connect for a church saved on this Mac, and
+   * "Sign in to {church} instead". Native asks Planning Center for exactly the access that church's sign-in on this Mac
+   * holds now, never more, and says it is for the rooms, follow-ups and group reads only while they are on for that church
+   * (main.rs `again_ask`; review 2026-11-18, late), so allowing it drops nothing and turns nothing on. With nothing saved
+   * for it, Services alone. What it asked for isn't known here, so `operationsAsked` keeps what it said.
+   */
+  connectAppAgain: (church: string) => {
+    signInStarting(undefined);
+    return invoke<ConnectionStatus>("connect_planning_center_app", { again: church });
+  },
+  /** The same with a registration typed under Advanced, for the church those IDs sign in to. */
+  connectAgain: (client_id: string, organization: string, registered: boolean) => {
+    signInStarting(undefined);
+    return invoke<ConnectionStatus>("connect_planning_center", { clientId: client_id, organization, registered, again: organization });
+  },
   /** Whether this build can connect in one click. */
   appAvailable: () => invoke<boolean>("planning_center_app").catch(() => false),
   /** An empty `client_id` means Ozzie's own registration. */
@@ -161,6 +178,19 @@ export const connection = {
   /** Removes from this Mac, without a revoke, the sign-ins Planning Center refused to sign Ozzie out of. */
   removeRefused: () => invoke<ConnectionStatus>("remove_refused_sign_ins"),
 };
+/**
+ * The church a sign-in again is for (`connectAppAgain`): the one Ozzie uses now, else the church the saved sign-in is
+ * bound to (one Planning Center stopped accepting, or that ended), else the one Settings name. Empty with none: a first
+ * sign-in, which asks for Services alone either way.
+ */
+export function againFor(status: Pick<ConnectionStatus, "state" | "organization" | "in_use"> | null | undefined, settings: { organization: string }): string {
+  const inUse = parseInUse(status?.in_use)?.organization;
+  if (inUse) return inUse;
+  if (status && status.state !== "disconnected" && orgId(status.organization)) return status.organization;
+  return orgId(settings.organization) ? settings.organization : "";
+}
+/** A one-click Connect or Connect again: a sign-in again for the church `againFor` names, else a first sign-in. */
+export const connectOneClick = (church: string) => church ? connection.connectAppAgain(church) : connection.connectApp();
 /** Fixed local copy only. Native/provider error text is never rendered. */
 export function connectionProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
@@ -474,7 +504,8 @@ export function parseLastAttempt(value: unknown): ConnectionStatus | undefined {
  * still the one Ozzie uses (review S4, M1).
  */
 export function attemptCopy(attempt: ConnectionStatus, inUse: { organization: string; name?: string | undefined }): string {
-  const still = `Ozzie still uses ${churchLabel(inUse.organization, inUse.name)}.`;
+  // The church by its name: a pastor doesn't need its organization number (live 0.3.1, review item 7).
+  const still = `Ozzie still uses ${churchShort(inUse.organization, inUse.name)}.`;
   if (attempt.state === "cancelled") return `Sign-in was cancelled on this Mac. ${still}`;
   if (attempt.state === "expired") return `Sign-in expired before it finished. ${still}`;
   return `${connectionStatusProblem(attempt) || "The sign-in couldn't be checked, so nothing changed."} ${still}`;

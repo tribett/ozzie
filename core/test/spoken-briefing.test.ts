@@ -160,7 +160,9 @@ describe("spoken briefing: rooms, follow-ups and group meetings, and what couldn
     const operations = sundayOperations(withOps, quiet)!;
     const s = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations }, { timeZone: tz });
     expect(section(s, "intro")).toEqual(["Here is today's briefing. 3 things need a decision, and 4 are worth a look."]);
-    expect(section(s, "decisions")).toContain("One follow-up has no owner and is past due. Choose who will handle it in your church tools.");
+    // Where to choose, named as its card names it: it was read from Planning Center People's workflows (polish pass).
+    expect(section(s, "decisions")).toContain("One follow-up has no owner and is past due. Choose who will handle it in Planning Center People.");
+    expect(s.text).not.toContain("church tools");
     expect(section(s, "looks")).toEqual(expect.arrayContaining(["Two room bookings overlap, and it's worth a look.",
       "One person on Sunday's plan has a group meeting at the same time they serve."]));
     // Counts only: no room, workflow, step or person name is spoken.
@@ -180,7 +182,12 @@ describe("spoken briefing: rooms, follow-ups and group meetings, and what couldn
     expect(shown).toMatchObject({ decisions: 4, looks: 5 });
     const s = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: more }, { timeZone: tz });
     expect(section(s, "intro")).toEqual(["Here is today's briefing. 4 things need a decision, and 5 are worth a look."]);
-    expect(section(s, "decisions")).toContain("2 follow-ups have no owner and are past due. Choose who will handle them in your church tools.");
+    expect(section(s, "decisions")).toContain("2 follow-ups have no owner and are past due. Choose who will handle them in Planning Center People.");
+    // One whose source isn't known: the generic words, for all of them.
+    const unknown = { ...more, result: { ...more.result, findings: more.result.findings.map(f => f.finding_id === `${followUp.finding_id}-2`
+      ? { ...f, evidence: f.evidence.map(e => ({ ...e, source: "church-rule" as const })) } : f) } };
+    const generic = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: unknown }, { timeZone: tz });
+    expect(section(generic, "decisions")).toContain("2 follow-ups have no owner and are past due. Choose who will handle them in your church tools.");
   });
 
   it("reads the rooms and follow-ups gaps, and the Groups gap when Groups couldn't be read (P8, L8)", () => {

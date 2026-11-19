@@ -5,7 +5,8 @@
 // anything a company wrote is never shown.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useDay } from "./day-words.js";
-import { AI, aiLine, CHOICE, LIMIT, localModel, MAC, monthDay, OZZIE } from "./ai-words.js";
+import { Icon } from "./icons.js";
+import { AI, aiLine, CHOICE, LIMIT, localModel, MAC, monthDay, OLLAMA, OZZIE } from "./ai-words.js";
 import { AiPlaceContext, Ok, Problem, Quiet, Sheet, SentSheet, Status, type AiPlace } from "./ai-parts.js";
 import { AiFlow, type AiStep } from "./ai-choice.js";
 import { AiLine } from "./ai-line.js";
@@ -69,6 +70,14 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
     return () => { live = false; };
   }, [bridge, status]);
   const many = (saved?.length ?? 0) > 1 || (kept ?? 0) > 1;
+  // When Ozzie installed the Ollama that is in Applications now (native `ollama_install_history`): said, with how to remove
+  // it, whichever way AI is used. Ozzie doesn't remove another company's app itself. null: it didn't, or native can't say.
+  const [ollamaAt, setOllamaAt] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    void bridge.ollamaHistory().then(h => { if (live) setOllamaAt(h?.installed_at_ms ?? null); });
+    return () => { live = false; };
+  }, [bridge, step]);
   const place: AiPlace = { bridge, mode: "settings", onCheckSetup, focus: false };
 
   if (step) return <div className="ai-settings" role="group" aria-labelledby={labelledBy}>
@@ -150,15 +159,23 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
         {status.setup !== "month-limit" && status.month && <Quiet onClick={() => setLimit(String(status.month!.limit))}>{LIMIT.change}</Quiet>}
         <button type="button" className="btn btn-secondary" onClick={() => setRemoving(true)}>{many ? LIMIT.removeMany : LIMIT.remove}</button>
       </div>}
-      <details className="ai-more"><summary>{AI.howTitle}</summary><p className="ai-small">{AI.how}</p></details>
+      <details className="ai-more"><summary><Icon name="chev" small />{AI.howTitle}</summary><p className="ai-small">{AI.how}</p></details>
     </>}
     {route === "local" && status?.not_offered && <p className="ai-body">{MAC.notOfferedInUse(localModel(status.label))}</p>}
-    {route === "local" && status && (status.setup === "not-checked" || !status.configured
+    {route === "local" && status?.setup === "not-on-this-mac" && <Problem text={LIMIT.localElsewhere(localModel(status.label), status.local_app ?? null)}>
+      <button type="button" className="btn btn-primary" onClick={() => open({ at: "mac" })}>{LIMIT.chooseLocal}</button>
+    </Problem>}
+    {route === "local" && status && status.setup !== "not-on-this-mac" && (status.setup === "not-checked" || !status.configured
       ? <Problem text={LIMIT.localNotChecked} calm><button type="button" className="btn btn-primary" onClick={() => open({ at: "mac" })}>{LIMIT.checkLocal}</button></Problem>
       : typeof status.checked_at_ms === "number" && Number.isFinite(status.checked_at_ms) ? <Ok lines={[LIMIT.localChecked(when(status.checked_at_ms))]} /> : null)}
     {route === "managed" && status && <OzzieAiState status={status} onStart={() => open({ at: "ozzie" })} onReconnect={() => open({ at: "ozzie", reconnect: true })}
       onAnother={() => open({ at: "choose" })} onChanged={shown} />}
     {problem && <Problem text={problem} />}
+    {loaded === "ok" && ollamaAt !== null && <details className="ai-more"><summary><Icon name="chev" small />{OLLAMA.settingsTitle}</summary>
+      <p className="ai-small">{OLLAMA.settingsBody(new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric" }).format(new Date(ollamaAt)))}</p>
+      <p className="ai-small">{OLLAMA.settingsLogin}</p>
+      <p className="ai-small">{OLLAMA.settingsRemove}</p>
+    </details>}
     <Status text={keyStays ? LIMIT.noneOwn(many) : note} />
     {planLink && <div className="ai-actions"><button type="button" className="btn btn-secondary" onClick={seePlan}>{OZZIE.seePlan}</button></div>}
     {loaded !== "loading" && <div className="ai-head">

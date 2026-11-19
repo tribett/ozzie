@@ -5,6 +5,7 @@ import type { ShortcutsSettings } from "./siri-shortcuts.js";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { moreOf, operationsGranted, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
 import { askForOperations, useOperationsReads } from "./operations-reads.js";
+import { MORE_LOST } from "./read-more.js";
 import { MoreFromPlanningCenter } from "./planning-center-more.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
@@ -40,7 +41,8 @@ export function grantedCopy(status: ConnectionStatus | null, readsOn: boolean | 
       : readsOn === false ? "Granted: Services, Calendar, People and Groups. Rooms, follow-ups and group events are off until you turn them on here."
         : "Granted: Services, Calendar, People and Groups.";
   }
-  if (status?.scopes) return "Granted: Services only. Rooms, follow-ups and group events aren't checked.";
+  // Turned on, but the last sign-in didn't include the access (review 2026-11-18, late): said, not left as "aren't checked".
+  if (status?.scopes) return readsOn === true ? `Granted: Services only. ${MORE_LOST}` : "Granted: Services only. Rooms, follow-ups and group events aren't checked.";
   return "What's granted shows here once the connection has been checked.";
 }
 
@@ -131,8 +133,13 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
  * and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and Check my setup, in
  * that order.
  */
-export function ConnectionPage({ status, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
+export function ConnectionPage({ status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
+  /**
+   * The church's last confirmed connection while a sign-in for that church is under way, or after one ended with it back
+   * in use (App): Settings keep saying it is connected and keep its plans (review item 7). Null otherwise.
+   */
+  kept?: ConnectionStatus | null;
   recordingCount?: number; onDeleteRecordings?: () => void; onModel?: (configured: boolean) => void;
   /** A way chosen, or No AI for now, in AI help (ai-settings.tsx `onAnswer`): App keeps it as setup's AI answer. */
   onAiAnswer?: ((how: "chosen" | "none") => void) | undefined;
@@ -236,8 +243,10 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
   const candidates = SETTINGS_SECTIONS.filter(s => (s.id !== "other-ai-title" || others) && (s.id !== "check-setup" || onSetup || onCheckSetup)
     && (s.id !== "calendars-title" || calendars) && (s.id !== "updates-title" || updates));
   return <div className="col settings" ref={page}>
-    <h1 className="h1">Settings</h1>
-    <p className="lede">How Ozzie reads your church's Planning Center, and what it keeps on this Mac.</p>
+    {/* Headed like every other page: the sidebar's name small above, then a title that says something (polish pass). */}
+    <p className="eyebrow">Settings</p>
+    <h1 className="h1">How Ozzie is set up on this Mac</h1>
+    <p className="lede">Which church and service Ozzie reads, how it uses AI and tells you things, and what it keeps here.</p>
     <SettingsIndex sections={shown ? candidates.filter(s => shown.includes(s.id)) : candidates} onGo={go} />
 
     <section className="settings-sec" aria-labelledby="pco-title">
@@ -245,18 +254,18 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
       <div className="banner"><Icon name="lock" small /><div className="stack-tight">
         <span><strong>{promise("readsShort")}</strong> {CONNECTION_WORDING} {promise("still")} The connection is kept safely on this Mac.</span>
         <details className="listen-more">
-          <summary>See how this works</summary>
+          <summary><Icon name="chev" small />See how this works</summary>
           <p className="small">{CONNECTION_HOW}</p>
         </details>
       </div></div>
       <section className="find" aria-labelledby="signin-title">
         <h3 id="signin-title" className="settings-t">Sign in</h3>
-        <ConnectForm status={status} settings={settings} onSettings={onSettings} control={control} cards={cards} onDiscardCards={onDiscardCards} />
+        <ConnectForm status={status} kept={kept} settings={settings} onSettings={onSettings} control={control} cards={cards} onDiscardCards={onDiscardCards} />
       </section>
       <section className="find" aria-labelledby="sunday-title">
         <h3 id="sunday-title" className="settings-t">Which service Ozzie watches</h3>
         {/* The same picker as guided setup: upcoming plans once connected, with typing the plan by hand folded below. */}
-        <SundayPicker connected={status?.state === "connected"} settings={settings} onSettings={onSettings} />
+        <SundayPicker connected={status?.state === "connected" || Boolean(kept)} waiting={pending} settings={settings} onSettings={onSettings} />
       </section>
       <section className="find" aria-labelledby="operations-title">
         <h3 id="operations-title" className="settings-t">Rooms, follow-ups and group events</h3>
@@ -329,7 +338,7 @@ export function ConnectionPage({ status, settings, onSettings, onStatus, recordi
         </div>
         <OtherAiAppsSetup on={sharing.on} />
         <details className="listen-more">
-          <summary>See how this works</summary>
+          <summary><Icon name="chev" small />See how this works</summary>
           <ul className="small">{SHARE_HOW.map(line => <li key={line}>{line}</li>)}</ul>
         </details>
       </section>}

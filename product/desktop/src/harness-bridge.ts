@@ -43,7 +43,7 @@ const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 /** agent_step's closed error vocabulary (agent.rs AgentError), as Tauri rejects with it: a bare string. */
 export type AgentErrorCode = "egress" | "denied" | "limit" | "invalid-task" | "ledger-unavailable" | "not-configured" | "budget" | "daily-limit"
   | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail"
-  | "background-check" | "month-limit" | "no-credit" | "thought-only" | "too-many-facts" | "invalid-arguments";
+  | "background-check" | "month-limit" | "no-credit" | "thought-only" | "too-many-facts" | "invalid-arguments" | "not-on-this-mac";
 /** The FailureCodes a model step can end a task with (the loops keep exactly these from a step's error). */
 export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity" | "invalid-arguments";
 /**
@@ -78,6 +78,9 @@ const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   "background-check": "egress",
   // The church's own key reached its monthly limit (contract N5): AI help is paused until next month, never retried.
   "month-limit": "limit",
+  // AI on this Mac whose model runs elsewhere (Ollama's cloud models; native asks its app before every step): nothing was
+  // sent, and the route can't be used, so the Ask panel shows its way to choose how Ozzie uses AI.
+  "not-on-this-mac": "no-model",
 });
 const nativeCode = (error: unknown): AgentErrorCode | null => {
   const raw = typeof error === "string" ? error : typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -619,8 +622,12 @@ export type AskTurn =
  * Ozzie's order, then names and times restored here. A draft is only ever the drafting tool's own text, restored with
  * first names. The same for Ask and for a responsibility's prepared summary.
  */
-/** The sources of the overview's rooms, follow-ups and group meetings the answer chose, at the operations check's time. */
-const rowSources = (harness: Harness, outcome: TaskOutcome) => chosenSources(outcome.answer ?? "", outcome.evidence, harness.data.operations?.checked_at ?? null);
+/**
+ * The sources of the overview's rooms, follow-ups and group meetings the answer chose, at the operations check's time and
+ * each with its own completeness (review item 5): named under "Based on", and said under Worth a look when that source's
+ * reads didn't all complete.
+ */
+const rowSources = (harness: Harness, outcome: TaskOutcome) => chosenSources(outcome.answer ?? "", outcome.evidence, harness.tools.rowSources());
 
 export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: Skill | undefined, sender: string): ShownAnswer {
   // The watched service's own day words, so an answer names Wednesday and "the Wednesday page" (review H4).
@@ -631,7 +638,7 @@ export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: S
     draft: composed.draft ? harness.restore(composed.draft, { sender, firstNames: true }) : null,
     notCovered: composed.kind === "not-covered" || outcome.evidence.length === 0,
     basedOn: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
-    gaps: evidenceGaps(outcome.evidence, mode),
+    gaps: evidenceGaps([...outcome.evidence, ...rowSources(harness, outcome)], mode),
     procedure: procedure ? { title: procedure.title, body: procedure.body } : null,
     steps: outcomeSteps(outcome.events, outcome.evidence, mode),
     aiSteps: modelSteps(outcome.events),
@@ -650,7 +657,7 @@ export function keptWriteup(harness: Harness, outcome: TaskOutcome): { lines: st
   const mode = harness.data.mode;
   return {
     lines: composed.paragraphs.map(p => harness.keep(p)), based_on: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
-    gaps: evidenceGaps(outcome.evidence, mode), steps: outcomeSteps(outcome.events, outcome.evidence, mode),
+    gaps: evidenceGaps([...outcome.evidence, ...rowSources(harness, outcome)], mode), steps: outcomeSteps(outcome.events, outcome.evidence, mode),
   };
 }
 

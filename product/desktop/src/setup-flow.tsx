@@ -4,7 +4,7 @@
 // pressed; it is never a trap: Back on the browser step, Cancel while waiting, "Not now" wherever a step can wait, and
 // the sidebar leaves it without forgetting it. Escape closes only sheets; it never cancels a sign-in or a check.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { churchShort, connection, parseSwitchQuestion, switchProblem, switchSettings, type ConnectionStatus, type SwitchDecision, type SwitchQuestion } from "./connection.js";
+import { againFor, churchShort, connectOneClick, connection, parseSwitchQuestion, switchProblem, switchSettings, type ConnectionStatus, type SwitchDecision, type SwitchQuestion } from "./connection.js";
 import { loadRules } from "./sunday-source.js";
 import { loadRulesByChurch, rulesAtStake } from "./church-in-use.js";
 import type { Settings } from "./sunday-source.js";
@@ -113,7 +113,8 @@ export function FirstRun({ status, settings, onSettings, onStatus, start, read, 
     memory.set({ lastAttempt: "cancelled" });
     try {
       if (pending) await connection.cancel().catch(() => undefined);
-      onStatus(await connection.connectApp());
+      // For a church saved on this Mac (Sign in again, Connect again), what it holds now (review 2026-11-18, late).
+      onStatus(await connectOneClick(againFor(status, settings)));
     } catch (error) { setThrown(connectFailure(error)); }
     finally { setWorking(false); }
   };
@@ -178,7 +179,7 @@ function SwitchStep({ question, settings, onSettings, onStatus, cards }: {
     setWorking(true); setProblem("");
     void connection.answerSwitch(decision, question.id).then(async done => {
       onSettings(switchSettings(settings, done));
-      onStatus(decision === "sign-in" ? await connection.connectApp() : done.status);
+      onStatus(decision === "sign-in" ? await connection.connectAppAgain(question.to) : done.status);
     }).catch(error => {
       setProblem(switchProblem(error, question));
       void connection.status().then(now => { if (now) onStatus(now); }, () => undefined);

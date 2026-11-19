@@ -83,6 +83,7 @@ export function aiFrom(m: ModelStatus | null): AiCode {
   if (m.route === "none" || setup === "no-route") return "none";
   if (setup === "no-key" || setup === "own-key-not-bound") return "no-key";
   if (setup === "not-checked") return "not-checked";
+  if (setup === "not-on-this-mac") return "not-on-this-mac";
   if (setup === "month-limit") return "month-limit";
   if (setup === "not-connected") return "not-connected";
   if (setup === "reconnect") return "reconnect";
@@ -146,6 +147,7 @@ export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: strin
       : ai === "no-key" ? `${firm} has no key saved on this Mac`
       : ai === "key-refused" ? `${firm} didn't accept the key`
       : ai === "not-checked" ? "AI on this Mac hasn't been checked yet"
+      : ai === "not-on-this-mac" ? "AI on this Mac: the model chosen doesn't run on this Mac, so Ozzie doesn't use it"
       : ai === "month-limit" ? `${label}: ${until ? `paused until ${until}` : "this month's limit is reached"}`
       : ai === "paused" ? `${label}: ${until ? `paused until ${until}` : "paused for now"}`
       : ai === "not-connected" ? "Ozzie's AI isn't connected on this Mac"

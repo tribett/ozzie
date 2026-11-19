@@ -29,6 +29,8 @@ use tauri::{Emitter, Manager};
 use ozzie_native_auth::lifetime;
 // The onboarding's AI screens: AI on this Mac (and Check my setup, Ozzie's AI offer).
 mod ai_setup;
+// AI on this Mac: getting Ollama itself, when the person asks (core `ollama_install`).
+mod ollama_setup;
 // H6: keeps running with the window closed (menu bar, timer, App Nap, open at login, responsibilities).
 mod always_on;
 // The macOS app menu: the default one, with a "Quit Ozzie" (Command-Q) that asks first (review P, M1).
@@ -253,6 +255,8 @@ async fn connection_status(
 /// (`answer_church_switch`); while that question is open, sign-ins wait (`switch-pending`).
 /// `purpose` (optional) says what the sign-in is for (`SignInFor`): only one started for the rooms,
 /// follow-ups and group reads lets its grant turn their switch on (`set_operations_reads`).
+/// `again` (optional, the organization signed in to, which it must name) makes it a sign-in again for that church: it
+/// asks for what the church's saved sign-in holds now, in place of the three choices and `purpose` (`again_ask`).
 // Tauri passes each IPC argument by name; grouping them would change what the webview sends.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -266,15 +270,26 @@ async fn connect_planning_center(
     check_ins: Option<bool>,
     registrations: Option<bool>,
     purpose: Option<SignInFor>,
+    again: Option<String>,
 ) -> Result<ConnectionStatus, ConsumerError> {
     let consumer = consumer.inner().clone();
-    let scopes = Scopes::asked(
-        operations.unwrap_or(false),
-        check_ins.unwrap_or(false),
-        registrations.unwrap_or(false),
-    );
+    let ask = match again {
+        // A sign-in again is for the church these IDs sign in to, never another one's access.
+        Some(church) if church != organization => {
+            return Err(AuthError::InvalidConfiguration.into());
+        }
+        Some(church) => Ask::Again(church),
+        None => Ask::Chosen(
+            Scopes::asked(
+                operations.unwrap_or(false),
+                check_ins.unwrap_or(false),
+                registrations.unwrap_or(false),
+            ),
+            purpose,
+        ),
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        sign_in(&consumer, &app, scopes, purpose, |consumer| {
+        sign_in(&consumer, &app, ask, |consumer| {
             Ok(consumer
                 .0
                 .prepare(client_id, organization, registered, Purpose::SignIn)?)
@@ -285,7 +300,11 @@ async fn connect_planning_center(
 }
 /// One-click connect: Ozzie's built-in registration; Planning Center names the organization
 /// after sign-in, and the connection is then bound to it (`Consumer::settle`). Same scopes,
-/// Keychain storage and read-only reads as `connect_planning_center`.
+/// Keychain storage and read-only reads as `connect_planning_center`. `again` (optional) names the
+/// church this is a sign-in again for (the church in use, or the one in "Sign in to {church}
+/// instead"): it asks for what that church's saved sign-in holds now (`again_ask`). For a church
+/// saved here other than the one in use it is bound to that church, with the same registration,
+/// so Planning Center can't give that church's access to another one (`bound_again`).
 #[tauri::command]
 async fn connect_planning_center_app(
     consumer: tauri::State<'_, Consumer>,
@@ -294,16 +313,35 @@ async fn connect_planning_center_app(
     check_ins: Option<bool>,
     registrations: Option<bool>,
     purpose: Option<SignInFor>,
+    again: Option<String>,
 ) -> Result<ConnectionStatus, ConsumerError> {
     let consumer = consumer.inner().clone();
-    let scopes = Scopes::asked(
-        operations.unwrap_or(false),
-        check_ins.unwrap_or(false),
-        registrations.unwrap_or(false),
-    );
+    let ask = match again {
+        Some(church) => Ask::Again(church),
+        None => Ask::Chosen(
+            Scopes::asked(
+                operations.unwrap_or(false),
+                check_ins.unwrap_or(false),
+                registrations.unwrap_or(false),
+            ),
+            purpose,
+        ),
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        sign_in(&consumer, &app, scopes, purpose, |consumer| {
-            Ok(consumer.0.prepare_finder()?)
+        let bound = match &ask {
+            Ask::Again(church) => bound_again(
+                church,
+                consumer.0.church_in_use().as_deref(),
+                consumer.0.held(church).is_some(),
+            )
+            .then(|| church.clone()),
+            Ask::Chosen(..) => None,
+        };
+        sign_in(&consumer, &app, ask, |consumer| match bound {
+            Some(church) => Ok(consumer
+                .0
+                .prepare(String::new(), church, true, Purpose::SignIn)?),
+            None => Ok(consumer.0.prepare_finder()?),
         })
     })
     .await
@@ -320,20 +358,30 @@ fn planning_center_app() -> bool {
 fn sign_in(
     consumer: &Consumer,
     app: &tauri::AppHandle,
-    scopes: Scopes,
-    purpose: Option<SignInFor>,
+    ask: Ask,
     prepare: impl FnOnce(&Consumer) -> Result<Arc<AuthController>, ConsumerError>,
 ) -> Result<ConnectionStatus, ConsumerError> {
     {
         // Before this sign-in can add a grant, the church in use gets its rooms-and-groups answer (re-check NH1).
         decide_for_current_church(consumer, app);
+        // Then what it asks for: a sign-in again reads that answer and what the church holds, before anything replaces it.
+        let (scopes, purpose, church) = match ask {
+            Ask::Chosen(scopes, purpose) => (scopes, purpose, None),
+            Ask::Again(church) => {
+                let (scopes, purpose) =
+                    again_for(consumer, app.path().app_data_dir().ok().as_deref(), &church);
+                (scopes, purpose, Some(church))
+            }
+        };
         let (_transition, generation) = consumer
             .1
             .enter()
             .ok_or(ConsumerError::Authentication(AuthError::Busy))?;
         let auth = prepare(consumer)?;
-        // This sign-in replaced any earlier one: from now on, its purpose is the one a grant is judged by.
-        app.state::<SignIns>().started(purpose, auth.clone());
+        // This sign-in replaced any earlier one: from now on, its purpose is the one a grant is judged by (for a sign-in
+        // again, only when Planning Center granted it for that church).
+        app.state::<SignIns>()
+            .started(purpose, auth.clone(), church);
         let url = auth.begin_with(scopes)?;
         if !consumer.1.current(generation) {
             auth.cancel();
@@ -699,13 +747,62 @@ fn current_church(consumer: &Consumer) -> Option<(String, bool)> {
         )
     })
 }
-/// Decides the church in use before a sign-in can add a grant.
+/// The church a sign-in decides before it can add a grant, and whether that may start its reads on: connected, from the
+/// scopes this session verified; otherwise the church in use (`church_in_use`, never a sign-in still in the browser or
+/// just cancelled for another church), when a sign-in is saved for it, as not held: a record this session hasn't
+/// verified never starts them on (review 2026-11-19), and Sign in again now asks for what that record holds, so the
+/// church is decided first. None with no church in use or nothing saved for it.
+fn church_before_grant(consumer: &Consumer) -> Option<(String, bool)> {
+    if let Some(connected) = current_church(consumer) {
+        return Some(connected);
+    }
+    let organization = consumer.0.church_in_use()?;
+    consumer.0.held(&organization)?;
+    Some((organization, false))
+}
+/// Decides the church in use before a sign-in can add a grant, connected or not (review 2026-11-18, late: a sign-in
+/// again after Planning Center stopped accepting the saved one asks for the access it holds, so it is decided first).
 fn decide_for_current_church(consumer: &Consumer, app: &tauri::AppHandle) {
     if let (Some((organization, held)), Ok(dir)) =
-        (current_church(consumer), app.path().app_data_dir())
+        (church_before_grant(consumer), app.path().app_data_dir())
     {
         decide_before_grant(&dir, &organization, held, &app.state::<SignIns>());
     }
+}
+/// What a browser sign-in asks Planning Center for and what it is for: as the page chose, or, for a sign-in again for a
+/// church (`again`), from what that church holds now (`again_for`).
+enum Ask {
+    Chosen(Scopes, Option<SignInFor>),
+    Again(String),
+}
+/// A sign-in again for `church` (Settings' Connect again, Sign in again once Planning Center stopped accepting the
+/// saved sign-in, first run's Connect for a church saved here, "Sign in to {church} instead"): the access its saved
+/// sign-in holds and whether its reads are on, both read here, never from the page (`again_ask`).
+fn again_for(
+    consumer: &Consumer,
+    dir: Option<&std::path::Path>,
+    church: &str,
+) -> (Scopes, Option<SignInFor>) {
+    let reads_on = dir.and_then(|dir| operations_reads_saved(dir, church));
+    again_ask(consumer.0.held(church), reads_on)
+}
+/// Whether a one-click sign-in again for `church` is bound to it: when a sign-in is saved for it and it isn't the church
+/// in use ("Sign in to {church} instead"), so a browser still signed in to the church in use can't give that one this
+/// church's access without a question (a grant for another church then fails, nothing saved; review 2026-11-19). For
+/// the church in use it stays one click, so signing in to another church asks "Switch Ozzie to this church?" as before.
+fn bound_again(church: &str, in_use: Option<&str>, saved: bool) -> bool {
+    saved && in_use != Some(church)
+}
+/// What a sign-in again asks for: exactly the access the church's sign-in on this Mac holds now (Services, and Calendar,
+/// People and Groups, Check-Ins and Registrations as each was granted), so Planning Center's page lists what the church
+/// already allowed and allowing it drops nothing; never more (review 2026-11-18, late). It is for the rooms, follow-ups
+/// and group reads (`purpose` "operations") only while their switch is on for that church and it holds the access;
+/// held with the reads off or undecided it is for nothing, so its grant can't turn them on (`decide_before_grant`,
+/// `reads_may_go_on`). Nothing saved (or unreadable): Services alone, for nothing.
+fn again_ask(held: Option<Scopes>, reads_on: Option<bool>) -> (Scopes, Option<SignInFor>) {
+    let held = held.unwrap_or(Scopes::Services);
+    let purpose = (held.operations() && reads_on == Some(true)).then_some(SignInFor::Operations);
+    (held, purpose)
 }
 /// What a browser sign-in was started for, as the page says (`connect_planning_center(_app)`'s `purpose`): the rooms,
 /// follow-ups and group reads (Settings' "Also check rooms, follow-ups and group events", the offer after the first
@@ -722,15 +819,23 @@ struct StartedSignIn {
     purpose: Option<SignInFor>,
     auth: Arc<AuthController>,
     granted: Option<String>,
+    /// A sign-in again's church (`again`): its purpose holds only for a grant for that church.
+    again: Option<String>,
 }
 #[derive(Clone, Default)]
 struct SignIns(Arc<Mutex<Option<StartedSignIn>>>);
 impl SignIns {
-    fn started(&self, purpose: Option<SignInFor>, auth: Arc<AuthController>) {
+    fn started(
+        &self,
+        purpose: Option<SignInFor>,
+        auth: Arc<AuthController>,
+        again: Option<String>,
+    ) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(StartedSignIn {
             purpose,
             auth,
             granted: None,
+            again,
         });
     }
     /// Settles the church the last sign-in was granted for, once its status says it connected (or, for a one-click
@@ -743,6 +848,15 @@ impl SignIns {
             && (status.state == ConnectionState::Connected || started.auth.handed_over())
             && !status.organization.is_empty()
         {
+            // A sign-in again whose one click Planning Center gave to another church is for nothing there: that
+            // church's switch never let it be for the reads (review 2026-11-19).
+            if started
+                .again
+                .as_deref()
+                .is_some_and(|church| church != status.organization)
+            {
+                started.purpose = None;
+            }
             started.granted = Some(status.organization);
         }
     }
@@ -1043,6 +1157,13 @@ fn model_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, ModelError> {
 /// Keys and the device token are only checked for presence, never returned.
 fn full_status(dir: &std::path::Path) -> ModelStatus {
     let mut status = model_route::status(dir, &KeychainKeys);
+    // AI on this Mac: its app is asked, on this Mac only, whether the model still runs here (Ollama's cloud models never
+    // do); one that doesn't is never ready (`not-on-this-mac`). Every question asks again before it goes.
+    if status.route == "local"
+        && let Ok(local) = ozzie_native_auth::local_ai::NativeLocalHttp::new(ozzie_native_auth::local_ai::SHOW_WAIT)
+    {
+        ozzie_native_auth::local_ai::mark_elsewhere(&mut status, model_route::load_config(dir).as_ref(), &local);
+    }
     let hosted = HostedConfig::current();
     let account = hosted::account(&hosted, &KeychainKeys, dir, sunday_check::unix_ms());
     hosted::attach(&mut status, account);
@@ -1574,6 +1695,7 @@ fn main() {
         .manage(SundayChecks::default())
         .manage(SessionNames::default())
         .manage(ai_setup::ModelJob::default())
+        .manage(ollama_setup::OllamaJob::default())
         .manage(CheckedPeople::default())
         .manage(Ledger::default())
         .manage(ManagedConnect::default())
@@ -1603,6 +1725,8 @@ fn main() {
                 // The copy for Siri and Shortcuts, by the same rule.
                 let _ = ozzie_native_auth::shortcuts_check::startup(&dir);
             }
+            // What a quit left of getting Ollama (a partial download, an unpacked copy) is removed at every start.
+            ollama_setup::startup(app.handle());
             updater::setup(app);
             phone_notice::setup(app);
             always_on::setup(app)?;
@@ -1664,11 +1788,17 @@ fn main() {
             key_sheet::own_key_count,
             ai_setup::local_ai_find,
             ai_setup::local_ai_open,
+            ai_setup::come_forward,
             ai_setup::local_ai_check,
             ai_setup::local_model_download,
             ai_setup::local_model_progress,
             ai_setup::local_model_cancel,
             ai_setup::local_model_remove,
+            ollama_setup::ollama_install,
+            ollama_setup::ollama_install_progress,
+            ollama_setup::ollama_install_cancel,
+            ollama_setup::ollama_reveal,
+            ollama_setup::ollama_install_history,
             ai_setup::managed_offer,
             ai_setup::managed_account_now,
             ai_setup::notification_permission,
@@ -1945,7 +2075,7 @@ mod tests {
             1
         );
         assert!(main.contains("match sign_in_end(&status, auth.handed_over()) {"));
-        assert_eq!(main.matches("sign_in(&consumer, &app, scopes,").count(), 2);
+        assert_eq!(main.matches("sign_in(&consumer, &app, ask,").count(), 2);
     }
 
     #[test]
@@ -2180,7 +2310,7 @@ mod tests {
             let sign_ins = SignIns::default();
             decide_before_grant(&dir, "2002", false, &sign_ins);
             // The To sheet's grant, bound to the church the browser was signed in to ("1001" here), with the wide access.
-            sign_ins.started(Some(SignInFor::PeopleForTo), found.clone());
+            sign_ins.started(Some(SignInFor::PeopleForTo), found.clone(), None);
             assert_eq!(
                 sign_ins.granted_for("1001"),
                 Some(Some(SignInFor::PeopleForTo))
@@ -2202,12 +2332,12 @@ mod tests {
             decide_before_grant(&dir, "1001", true, &sign_ins);
             assert_eq!(operations_reads_saved(&dir, "1001"), Some(false));
             let _ = std::fs::remove_dir_all(&dir);
-            sign_ins.started(None, found.clone());
+            sign_ins.started(None, found.clone(), None);
             decide_before_grant(&dir, "1001", true, &sign_ins);
             assert_eq!(operations_reads_saved(&dir, "1001"), Some(false));
             // A sign-in started for these reads and granted for this church may start it on.
             let _ = std::fs::remove_dir_all(&dir);
-            sign_ins.started(Some(SignInFor::Operations), found.clone());
+            sign_ins.started(Some(SignInFor::Operations), found.clone(), None);
             decide_before_grant(&dir, "1001", true, &sign_ins);
             assert_eq!(operations_reads_saved(&dir, "1001"), Some(true));
             // Another church's grant says nothing about this one: the earlier rule, from the scopes its saved sign-in holds.
@@ -2274,19 +2404,19 @@ mod tests {
                 )
                 .unwrap(),
             );
-            sign_ins.started(Some(SignInFor::Operations), left_waiting);
+            sign_ins.started(Some(SignInFor::Operations), left_waiting, None);
             assert!(!reads_may_go_on(&church, false, &sign_ins));
-            sign_ins.started(Some(SignInFor::PeopleForTo), connected.clone());
+            sign_ins.started(Some(SignInFor::PeopleForTo), connected.clone(), None);
             sign_ins.note();
             assert!(!reads_may_go_on(&church, false, &sign_ins));
             // A sign-in with no stated purpose (Sign in again, Check-Ins or Registrations) is no ask either.
-            sign_ins.started(None, connected.clone());
+            sign_ins.started(None, connected.clone(), None);
             assert!(!reads_may_go_on(&church, false, &sign_ins));
             // Settings' switch, pressed with the access held, is allowed after any of them.
             assert!(reads_may_go_on(&church, true, &sign_ins));
             // A sign-in that asked for these reads and was granted them: the page's after-a-sign-in call is allowed,
             // for that church only.
-            sign_ins.started(Some(SignInFor::Operations), connected.clone());
+            sign_ins.started(Some(SignInFor::Operations), connected.clone(), None);
             assert!(reads_may_go_on(&church, false, &sign_ins));
             assert!(!reads_may_go_on(
                 &("2002".to_owned(), true),
@@ -2321,9 +2451,200 @@ mod tests {
             let sign_in = &main[main.find("fn sign_in(").unwrap()..];
             assert!(
                 sign_in
-                    .find("app.state::<SignIns>().started(purpose, auth.clone());")
+                    .find(".started(purpose, auth.clone(), church);")
                     .unwrap()
                     < sign_in.find("/usr/bin/open").unwrap()
+            );
+        }
+        /// A sign-in again asks for exactly what the church holds, and is for the rooms, follow-ups and group reads only
+        /// while they are on (review 2026-11-18, late): Settings' Connect again asked for Services alone, so allowing it
+        /// dropped Calendar, People and Groups, Check-Ins and Registrations while the switch still said on.
+        #[test]
+        fn a_sign_in_again_asks_for_what_the_church_holds_and_for_the_reads_only_while_on() {
+            let every = [false, true];
+            for operations in every {
+                for check_ins in every {
+                    for registrations in every {
+                        let held = Scopes::asked(operations, check_ins, registrations);
+                        for reads_on in [Some(true), Some(false), None] {
+                            let (asked, purpose) = again_ask(Some(held), reads_on);
+                            // Never more, never less.
+                            assert_eq!(asked, held, "{held:?} {reads_on:?}");
+                            // For the reads only with the access held and the switch on; never the To line's purpose.
+                            assert_eq!(
+                                purpose,
+                                (operations && reads_on == Some(true))
+                                    .then_some(SignInFor::Operations),
+                                "{held:?} {reads_on:?}"
+                            );
+                        }
+                    }
+                }
+            }
+            // Nothing saved for the church (or unreadable): Services alone, for nothing, whatever its switch says.
+            for reads_on in [Some(true), Some(false), None] {
+                assert_eq!(again_ask(None, reads_on), (Scopes::Services, None));
+            }
+
+            // Read here, never from the page: what the church's saved sign-in holds and its own switch.
+            let dir =
+                std::env::temp_dir().join(format!("ozzie-sign-in-again-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let wide = Scopes::asked(true, true, false);
+            let (consumer, pco, clock) =
+                launched_with(r#","scopes":"services-and-operations+check-ins""#);
+            assert_eq!(again_for(&consumer, Some(&dir), "1001"), (wide, None));
+            assert!(set_switch(&dir, "1001", false));
+            assert_eq!(again_for(&consumer, Some(&dir), "1001"), (wide, None));
+            assert!(set_switch(&dir, "1001", true));
+            assert_eq!(
+                again_for(&consumer, Some(&dir), "1001"),
+                (wide, Some(SignInFor::Operations))
+            );
+            // Another church's switch says nothing about this one; a church with nothing saved asks for Services.
+            assert!(set_switch(&dir, "3003", true));
+            assert_eq!(
+                again_for(&consumer, Some(&dir), "3003"),
+                (Scopes::Services, None)
+            );
+            assert_eq!(again_for(&consumer, None, "1001"), (wide, None));
+
+            // Planning Center stopped accepting the saved sign-in: the record still says what it holds, so Sign in again
+            // asks for that. The church in use is decided first, as before any sign-in; from a record this session never
+            // verified it starts off, never on (review 2026-11-19), so the ask is for nothing until a press.
+            struct LastUsed;
+            impl ozzie_native_auth::in_use::UseHistory for LastUsed {
+                fn load(&self) -> Option<ozzie_native_auth::in_use::UsedChurch> {
+                    Some(ozzie_native_auth::in_use::UsedChurch {
+                        organization: "1001".into(),
+                        client_id: "fictional-client".into(),
+                        leaving: Vec::new(),
+                    })
+                }
+                fn save(&self, _: &ozzie_native_auth::in_use::UsedChurch) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            consumer.0.keep_use_history(Arc::new(LastUsed));
+            let _ = std::fs::remove_dir_all(&dir);
+            pco.refuse.store(true, Ordering::SeqCst);
+            clock.store(2 * HOUR + 60_000, Ordering::SeqCst);
+            assert!(read_renewing(&consumer, |_| Ok(())).is_err());
+            assert_eq!(current_church(&consumer), None);
+            let sign_ins = SignIns::default();
+            let (church, held) = church_before_grant(&consumer).unwrap();
+            assert_eq!((church.as_str(), held), ("1001", false));
+            decide_before_grant(&dir, &church, held, &sign_ins);
+            assert_eq!(operations_reads_saved(&dir, "1001"), Some(false));
+            assert_eq!(again_for(&consumer, Some(&dir), "1001"), (wide, None));
+            // A church whose reads are on keeps them, and its sign-in again is for them.
+            assert!(set_switch(&dir, "1001", true));
+            decide_before_grant(&dir, &church, held, &sign_ins);
+            assert_eq!(
+                again_for(&consumer, Some(&dir), "1001"),
+                (wide, Some(SignInFor::Operations))
+            );
+            // Only the church in use is decided: never one a sign-in still in the browser is for (pasted IDs for 2002,
+            // whose saved sign-in holds the access too).
+            let _ = std::fs::remove_dir_all(&dir);
+            let waiting = consumer
+                .0
+                .prepare(
+                    "fictional-client".into(),
+                    "2002".into(),
+                    true,
+                    Purpose::SignIn,
+                )
+                .unwrap();
+            assert_eq!(waiting.bound_to().1, "2002");
+            assert_eq!(consumer.0.held("2002"), Some(wide));
+            assert_eq!(
+                church_before_grant(&consumer),
+                Some(("1001".to_owned(), false))
+            );
+            // Connected, from the scopes this session verified, as before.
+            let (services, _, _) = launched_with("");
+            assert_eq!(
+                church_before_grant(&services),
+                Some(("1001".to_owned(), false))
+            );
+            let (held_wide, _, _) = launched_with(r#","scopes":"services-and-operations""#);
+            assert_eq!(
+                church_before_grant(&held_wide),
+                Some(("1001".to_owned(), true))
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+
+            // One click stays one click for the church in use, so signing in to another church still asks which church
+            // Ozzie uses; "Sign in to {church} instead" for a church saved here is bound to it (review 2026-11-19).
+            assert!(!bound_again("1001", Some("1001"), true));
+            assert!(bound_again("2002", Some("1001"), true));
+            assert!(bound_again("2002", None, true));
+            assert!(!bound_again("2002", Some("1001"), false));
+            // A sign-in again whose one click Planning Center gave to another church is for nothing there.
+            let elsewhere = SignIns::default();
+            let connected = held_wide.0.current().unwrap();
+            elsewhere.started(
+                Some(SignInFor::Operations),
+                connected.clone(),
+                Some("2002".into()),
+            );
+            assert_eq!(elsewhere.granted_for("1001"), Some(None));
+            assert!(!reads_may_go_on(
+                &("1001".to_owned(), true),
+                false,
+                &elsewhere
+            ));
+            elsewhere.started(Some(SignInFor::Operations), connected, Some("1001".into()));
+            assert_eq!(
+                elsewhere.granted_for("1001"),
+                Some(Some(SignInFor::Operations))
+            );
+
+            // Where: both commands turn `again` into this ask in place of the page's choices, the one with pasted IDs only
+            // for the church those IDs sign in to; and every sign-in decides the church, then reads its ask, before the
+            // purpose is recorded and the browser opens.
+            let main = include_str!("main.rs")
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap();
+            for command in [
+                "async fn connect_planning_center(",
+                "async fn connect_planning_center_app(",
+            ] {
+                let body = &main[main.find(command).unwrap()..];
+                let body = &body[..body.find("\n}\n").unwrap()];
+                assert!(body.contains("again: Option<String>,"));
+                assert!(body.contains("Some(church) => Ask::Again(church),"));
+                assert!(body.contains("sign_in(&consumer, &app, ask,"));
+            }
+            let app_command = &main[main.find("async fn connect_planning_center_app(").unwrap()..];
+            let app_command = &app_command[..app_command.find("\n}\n").unwrap()];
+            assert!(app_command.contains("Ask::Again(church) => bound_again("));
+            assert!(
+                app_command.contains(".prepare(String::new(), church, true, Purpose::SignIn)?")
+            );
+            let pasted = &main[main.find("async fn connect_planning_center(").unwrap()..];
+            assert!(
+                pasted
+                    .find("Some(church) if church != organization => {")
+                    .unwrap()
+                    < pasted.find("Some(church) => Ask::Again(church),").unwrap()
+            );
+            let sign_in = &main[main.find("fn sign_in(").unwrap()..];
+            let decided = sign_in
+                .find("decide_for_current_church(consumer, app);")
+                .unwrap();
+            let again = sign_in
+                .find("again_for(consumer, app.path().app_data_dir()")
+                .unwrap();
+            let prepared = sign_in.find("let auth = prepare(consumer)?;").unwrap();
+            assert!(decided < again && again < prepared);
+            assert!(
+                prepared
+                    < sign_in
+                        .find(".started(purpose, auth.clone(), church);")
+                        .unwrap()
             );
         }
         /// A Planning Center that is never reached.

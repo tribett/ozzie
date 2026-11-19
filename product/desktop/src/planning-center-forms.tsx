@@ -3,7 +3,7 @@
 // button beside every refusal that says an administrator can give access.
 import { useEffect, useId, useState } from "react";
 import {
-  attemptCopy, churchShort, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
+  againFor, attemptCopy, churchShort, connectOneClick, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
   missingCopy, parseDeclined, parseInUse, parseLastAttempt, parseSwitchQuestion, parseUnretired, signInInstead, switchCopy, switchProblem,
   switchSettings, disconnectNote, type ConnectionStatus, type MoreProducts, type RulesAtStake, type SignInPurpose,
   type SwitchDecision, type SwitchQuestion, type Unretired,
@@ -110,7 +110,7 @@ function OwnRegistration({ settings, onSettings, control, connected }: {
     <label className="confirmation"><input type="checkbox" checked={registered} onChange={e => setRegistered(e.target.checked)} disabled={locked} /><span>This Public registration uses that exact return address.</span></label>
     <div className="row form-actions">
       <button className={`btn ${connected || builtIn ? "btn-secondary" : "btn-primary"}`} disabled={!ready || locked}
-        onClick={() => { void run(() => connection.connect(settings.clientId, settings.organization, registered)); }}>{builtIn ? "Connect with these IDs" : "Connect Planning Center"}</button>
+        onClick={() => { void run(() => connection.connectAgain(settings.clientId, settings.organization, registered)); }}>{builtIn ? "Connect with these IDs" : "Connect Planning Center"}</button>
     </div>
     {/* Says why Connect is off, rather than leaving a grey button to guess at. */}
     {!ready && !connected && !pending && <p className="input-help">To connect, enter both IDs and tick the box confirming the return address.</p>}
@@ -123,8 +123,14 @@ function OwnRegistration({ settings, onSettings, control, connected }: {
  * `firstRun` only changes how a missing connection reads ("Not connected yet.").
  * Buttons carry no `type`: this is not a form, and nothing here submits.
  */
-export function ConnectForm({ status, settings, onSettings, control, firstRun = false, stake, cards = 0, onDiscardCards }: {
+export function ConnectForm({ status, kept = null, settings, onSettings, control, firstRun = false, stake, cards = 0, onDiscardCards }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; control: ConnectionControl; firstRun?: boolean;
+  /**
+   * The church's last confirmed connection while a sign-in for that church is under way, or after one ended (cancelled,
+   * expired, refused) with it back in use (App): still "Connect again" and its Connected line, never "Connect Planning
+   * Center" for a church Ozzie still uses (review item 7). Null for a first connection.
+   */
+  kept?: ConnectionStatus | null;
   /** Visitor cards open (a count only): "Switch Ozzie to this church?" and Disconnect say first that they discard them. */
   cards?: number;
   /** Disconnect was chosen with cards open: App ends them (cards-page.tsx `KeptCards`). */
@@ -135,6 +141,8 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
   const { working, pending, asking, builtIn, ownIds, canCheck, registered, run } = control;
   const problem = control.problem?.from === "sign-in" ? control.problem.text : "";
   const connected = status?.state === "connected";
+  // Ozzie still uses the church: connected, or kept through a sign-in for it (`kept`).
+  const confirmed = connected ? status : kept;
   const saved = Boolean(status && status.state !== "disconnected" && !pending);
   const question = parseSwitchQuestion(status?.switch);
   const unretired = parseUnretired(status?.unretired);
@@ -169,9 +177,10 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
         onSettings(switchSettings(settings, done));
         setAnswered({ decision, question: asked, stake: stakeNow });
         if (decision === "sign-in") {
+          // A sign-in again for that church: it asks for what its saved sign-in holds (review 2026-11-18, late).
           const start = signInInstead(settings, asked.to, registered, builtIn);
-          if (start === "one-click") return await connection.connectApp();
-          if (start) return await connection.connect(start.clientId, start.organization, start.registered);
+          if (start === "one-click") return await connection.connectAppAgain(asked.to);
+          if (start) return await connection.connectAgain(start.clientId, start.organization, start.registered);
         }
         return done.status;
       } catch (error) {
@@ -200,8 +209,8 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
       ? <>
         <p className="find-body">Sign in to Planning Center in your browser and choose Allow. Ozzie finds your church itself; there's nothing to copy or paste.</p>
         <div className="row form-actions">
-          <button className={`btn ${connected || asking ? "btn-secondary" : "btn-primary"}`} disabled={working || pending || asking}
-            onClick={() => { void run(() => connection.connectApp()); }}>{connected ? "Connect again" : "Connect Planning Center"}</button>
+          <button className={`btn ${confirmed || asking ? "btn-secondary" : "btn-primary"}`} disabled={working || pending || asking}
+            onClick={() => { void run(() => connectOneClick(againFor(confirmed ?? status, settings))); }}>{confirmed ? "Connect again" : "Connect Planning Center"}</button>
           {saved && <button className="btn btn-secondary" disabled={!canCheck || working} onClick={() => { void run(control.checkSaved); }}>{CHECK_CONNECTION}</button>}
           {/* While the question is open a check of the church still in use may run; it isn't a sign-in to cancel. */}
           {pending && !asking && <button className="btn btn-quiet" onClick={() => { void run(() => connection.cancel()); }}>Cancel sign-in</button>}
@@ -214,9 +223,9 @@ export function ConnectForm({ status, settings, onSettings, control, firstRun = 
           {pending && !asking && <button className="btn btn-quiet" onClick={() => { void run(() => connection.cancel()); }}>Cancel sign-in</button>}
         </div>}
       </>}
-    {connected
-      ? <p className="panel-ok" role="status"><Icon name="check" small /><span>Connected. Planning Center confirmed {churchShort(status.organization, status.organization_name)}{status.checked_at_ms != null ? ` at ${at(status.checked_at_ms)}` : ""}.</span></p>
-      : <p aria-live="polite">{state}</p>}
+    {/* While a sign-in is under way its own line says what is happening; once it ended, how, beside the church still in use. */}
+    {confirmed && !pending && <p className="panel-ok" role="status"><Icon name="check" small /><span>Connected. Planning Center confirmed {churchShort(confirmed.organization, confirmed.organization_name)}{confirmed.checked_at_ms != null ? ` at ${at(confirmed.checked_at_ms)}` : ""}.</span></p>}
+    {!connected && <p aria-live="polite">{confirmed && !pending ? attempt?.state !== "failed" ? attemptLine : "" : state}</p>}
     {shownProblem && <p role="alert" className="problem">{shownProblem}</p>}
     {disconnectNote(status) && <p className="small">{disconnectNote(status)}</p>}
     {saved && !asking && <DisconnectButton cards={cards} working={working} onDiscardCards={onDiscardCards} onDisconnect={async () => {

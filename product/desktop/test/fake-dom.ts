@@ -55,6 +55,12 @@ class FakeElement extends FakeNode {
   readonly style: Record<string, unknown> = { setProperty() {}, removeProperty() {} };
   constructor(readonly tagName: string, readonly namespaceURI: string, doc: FakeDocument) { super(1, tagName, doc); }
   get localName() { return this.tagName.toLowerCase(); }
+  /** A select's options, in order, as React reads them to mark the chosen one (Keeping watch's "Every" choice). */
+  get options(): FakeNode[] | undefined {
+    if (this.tagName !== "SELECT") return undefined;
+    const all = (n: FakeNode): FakeNode[] => n.childNodes.flatMap(c => [c, ...all(c)]);
+    return all(this).filter(n => (n as FakeElement).tagName === "OPTION");
+  }
   setAttribute(name: string, value: unknown) { this.attributes.set(name, String(value)); }
   setAttributeNS(_ns: string | null, name: string, value: unknown) { this.setAttribute(name, value); }
   removeAttribute(name: string) { this.attributes.delete(name); }

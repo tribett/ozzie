@@ -8,7 +8,7 @@ import { granted } from "./connection.js";
 
 export type PlanningCenterCode = "connected" | "sign-in-again" | "unreachable" | "not-connected" | "unknown";
 export type ServiceCode = "watching" | "passed" | "waiting" | "none" | "unknown";
-export type AiCode = "ready" | "none" | "no-key" | "key-refused" | "not-checked" | "month-limit" | "paused" | "not-connected" | "reconnect" | "not-answering" | "unknown";
+export type AiCode = "ready" | "none" | "no-key" | "key-refused" | "not-checked" | "not-on-this-mac" | "month-limit" | "paused" | "not-connected" | "reconnect" | "not-answering" | "unknown";
 export type NoticesCode = "allowed" | "denied" | "not-asked" | "unknown";
 export type StartCode = "on" | "off" | "unknown";
 export type PhoneCode = "on" | "off";
@@ -45,7 +45,7 @@ export interface ReportInput {
 const ROWS = {
   "planning-center": ["connected", "sign-in-again", "unreachable", "not-connected", "unknown"],
   service: ["watching", "passed", "waiting", "none", "unknown"],
-  ai: ["ready", "none", "no-key", "key-refused", "not-checked", "month-limit", "paused", "not-connected", "reconnect", "not-answering", "unknown"],
+  ai: ["ready", "none", "no-key", "key-refused", "not-checked", "not-on-this-mac", "month-limit", "paused", "not-connected", "reconnect", "not-answering", "unknown"],
   notices: ["allowed", "denied", "not-asked", "unknown"],
   "start-with-mac": ["on", "off", "unknown"],
   phone: ["on", "off"],

@@ -11,7 +11,7 @@ import {
   applyDecisions, changeText, decide, decisionsStorageKey, loadDecisions, REASON_MAX, saveDecisions, withDecision, withoutDecision,
   type DecidedItem, type DecisionChoice, type DecisionHistory, type SundayDecision,
 } from "../../../core/src/sunday-decisions.js";
-import { model, modelProblem, REWORD_NEEDS_AI } from "./model.js";
+import { model, modelProblem, REWORD_NEEDS_AI, REWORD_NOT_ON_MAC } from "./model.js";
 import { ChooseAiButton } from "./ai-line.js";
 import { NEEDS_AI } from "./ai-words.js";
 import { alwaysFor, briefTarget, canCorrect, canDemote, canPromote, followUpTarget, groupTarget, roomTarget, stopScopes, type FeedbackTarget } from "../../../core/src/finding-feedback.js";
@@ -434,7 +434,7 @@ export function Draft({ finding, person, names, sender, sunday, canReword, onClo
     {canReword && edited && <p className="small">Rewording starts from Ozzie's last version. Your own changes stay on this Mac and are never sent.</p>}
     {/* Calm, not red (audit item 29): the note is unchanged and nothing broke; the words say what happened. */}
     {problem && <div role="status" className="panel-info reword-note"><Icon name="info" small /><p>{problem}</p></div>}
-    {problem === REWORD_NEEDS_AI && <ChooseAiButton />}
+    {(problem === REWORD_NEEDS_AI || problem === REWORD_NOT_ON_MAC) && <ChooseAiButton />}
   </DraftBox>;
 }
 
@@ -797,6 +797,18 @@ export function OpsWhy({ evidence, why, reads, defaultOpen = false }: { evidence
   return <SourceWhy sources={sources} at={at} why={why} reads={reads} defaultOpen={defaultOpen} />;
 }
 
+/**
+ * A room or follow-up card's next step, naming where to do it when the card says where it was read (polish pass,
+ * 2026-11-18): bookings from Planning Center Calendar, follow-ups from Planning Center People's workflows, as Why I
+ * flagged this names them. Otherwise the core's own words, which name no product ("…in your church tools.").
+ */
+export function nextStep(f: RoomFinding | FollowUpFinding): string {
+  if (f.kind === "room-overlap") {
+    return f.evidence.some(e => e.source === "normalized-calendar") ? "Review these room bookings in Planning Center Calendar." : f.next_action;
+  }
+  return f.evidence.some(e => e.source === "normalized-workflow") ? "Choose who will handle this follow-up in Planning Center People." : f.next_action;
+}
+
 const CLEAR: Record<string, string> = {
   "rooms,follow-ups": "No room overlaps or follow-ups without an owner in what was read",
   rooms: "No room overlaps in what was read", "follow-ups": "No follow-ups without an owner in what was read",
@@ -853,7 +865,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
       <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap)}.</h3>
       {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original)}) and {label(b.booking_id, "another booking")} ({span(b.original)}) overlap
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
-      <div className="find-next"><span className="find-next-l">Next step</span><span>{f.next_action}</span></div>
+      <div className="find-next"><span className="find-next-l">Next step</span><span>{nextStep(f)}</span></div>
       <FeedbackChoices target={roomTarget(f, occurrence, labels)} feedback={feedback} />
       <OpsWhy evidence={f.evidence} why={why} reads={readsFor({ kind: "rooms" })} defaultOpen={whyOpen} />
     </article>;
@@ -862,7 +874,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />{f.label}</span>
       <span className="find-where">{label(f.workflow_id, "A follow-up")}</span></div>
     <h3 className="find-title">“{label(f.step_id, "A follow-up step")}” has no owner. It was due {time(f.due_at)}.</h3>
-    <div className="find-next"><span className="find-next-l">Next step</span><span>{f.next_action}</span></div>
+    <div className="find-next"><span className="find-next-l">Next step</span><span>{nextStep(f)}</span></div>
     <FeedbackChoices target={followUpTarget(f, occurrence, labels)} feedback={feedback} />
     <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${time(f.due_at)}, has passed.`]}
       reads={readsFor({ kind: "follow-ups" })} defaultOpen={whyOpen} />

@@ -147,6 +147,9 @@ body { background: #FAF6EE; }
 .oz .cards-field .input-help { margin-top: 0; }
 .oz .cards-end { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 14px; border-top: 1px solid var(--line); }
 .oz .cards-first a { color: var(--ink); }
+/* Kept on this Mac: when the cards end, folded under the title and its two sentences (polish pass, 2026-11-18). */
+.oz .limits-more > p { margin-top: 2px; }
+.oz .limits-more > ul { margin: 6px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 @media (max-width: 760px) { .oz .cards-item { grid-template-columns: minmax(0, 1fr); } .oz .cards-photo { position: static; } }
 /* Guided setup */
 .oz .setup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -182,6 +185,8 @@ body { background: #FAF6EE; }
 /* Settings: one section per heading, in a fixed order */
 .oz .settings { gap: 12px; }
 .oz .settings > .lede { margin-bottom: 4px; }
+/* Its eyebrow and title sit where every other page's do: 16px apart, as .col's gap, though its sections sit closer. */
+.oz .settings > .h1 { margin: 4px 0; }
 .oz .settings-sec { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }
 .oz .settings-t { font: 600 17px/1.3 var(--f-ui); color: var(--ink); margin-bottom: 12px; }
 .oz .ai-settings { display: flex; flex-direction: column; gap: 10px; }
@@ -244,7 +249,12 @@ body { background: #FAF6EE; }
 .oz .ask-steps li { display: list-item; }
 .oz .log.recent > li { display: block; padding: 0; }
 .oz .log.recent .recent-steps li { display: flex; gap: 8px; align-items: flex-start; border-top: 0; padding: 3px 0; }
-.oz .recent-task > summary { min-height: 44px; padding: 10px 16px; cursor: pointer; font-size: var(--t-sm); list-style-position: inside; }
+/* A row of recent work opens with the app's chevron, turned when open, like every other fold (polish pass, 2026-11-18). */
+.oz .recent-task > summary { display: flex; align-items: flex-start; gap: 8px; min-height: 44px; padding: 10px 16px; cursor: pointer; font-size: var(--t-sm); list-style: none; }
+.oz .recent-task > summary::-webkit-details-marker { display: none; }
+.oz .recent-task > summary .ic { flex: none; margin-top: 3px; transition: transform .12s ease-out; }
+.oz .recent-task[open] > summary .ic { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .oz .recent-task > summary .ic { transition: none; } }
 .oz .recent-task[open] > summary { border-bottom: 1px solid var(--line); }
 .oz .recent-steps { padding: 10px 16px 12px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .recent-quiet { display: flex; gap: 8px; align-items: flex-start; }
@@ -259,7 +269,12 @@ body { background: #FAF6EE; }
 .oz .resp-problems { margin-top: 8px; font-size: var(--t-sm); color: var(--ink-2); }
 .oz .responsibility .find-next .small { color: var(--ink-2); }
 .oz .template-list li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
-.oz .resp-ended > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: var(--t-sm); color: var(--ink-2); }
+.oz .resp-ended > summary { display: flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; font-size: var(--t-sm); color: var(--ink-2); list-style: none; }
+/* Opens with the app's chevron, turned when open, like every other fold (polish pass, 2026-11-18). */
+.oz .resp-ended > summary::-webkit-details-marker { display: none; }
+.oz .resp-ended > summary .ic { transition: transform .12s ease-out; }
+.oz .resp-ended[open] > summary .ic { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .oz .resp-ended > summary .ic { transition: none; } }
 /* What runs automatically: the regular Sunday check and Keep Sunday covered, grouped as one Sunday item */
 .oz .sunday-watch { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; background: var(--sunken); border: 1px solid var(--line); }
 .oz .sunday-watch-h { font: 500 20px/1.25 var(--f-display); color: var(--ink); }

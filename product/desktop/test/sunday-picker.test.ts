@@ -235,6 +235,43 @@ describe("the picker's reads never trip over each other", () => {
     expect(shown(choices)).toEqual({ types: "idle", typeId: "", plans: "idle" });
     expect(native.calls).toEqual(["types"]);
   });
+  it("through a sign-in for the church in use: keeps what it shows, sends nothing meanwhile, then reads again once it ends (review of item 7)", async () => {
+    const native = nativeReads();
+    const choices = sundayChoices(native.source, "1500", true, serialReads());
+    choices.follow(true, false);
+    await flush();
+    await native.settle("types", types);
+    // Planning Center refused the plans; the pastor's administrator fixes the access, and the pastor presses Connect again.
+    await native.settle("plans:1500", { "sunday-choices": "denied" }, true);
+    const refused = shown(choices).plans;
+    choices.follow(true, true);
+    choices.follow(true, true);
+    // While the browser waits: the same list and the same words, and nothing sent.
+    expect(shown(choices)).toEqual({ types: ["1500", "1502"], typeId: "1500", plans: refused });
+    await flush();
+    expect(native.pending()).toEqual([]);
+    // The sign-in ends with the church connected: both lists are read again, and the refusal goes.
+    choices.follow(true, false);
+    choices.follow(true, false);
+    await flush();
+    await native.settle("types", types);
+    await native.settle("plans:1500", plansOf("1500"));
+    expect(shown(choices)).toEqual({ types: ["1500", "1502"], typeId: "1500", plans: ["Plans of 1500"] });
+    expect(native.calls).toEqual(["types", "plans:1500", "types", "plans:1500"]);
+  });
+  it("a read under way when a sign-in starts is dropped, never left loading; a sign-in that ends unconnected clears the list", async () => {
+    const native = nativeReads();
+    const choices = sundayChoices(native.source, "", true, serialReads());
+    choices.follow(true, false);
+    await flush();
+    choices.follow(true, true);
+    await native.settle("types", types);
+    expect(shown(choices)).toEqual({ types: "idle", typeId: "", plans: "idle" });
+    choices.follow(false, false);
+    await flush();
+    expect(shown(choices)).toEqual({ types: "idle", typeId: "", plans: "idle" });
+    expect(native.calls).toEqual(["types"]);
+  });
   it("tells subscribers when what is shown changes", async () => {
     const native = nativeReads();
     const choices = sundayChoices(native.source, "", false, serialReads());

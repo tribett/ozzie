@@ -104,7 +104,9 @@ describe("ready-made setup for each app", () => {
     expect(ADD_WARNING).toContain("the part of Ozzie that reads Ozzie's copy and nothing else");
     expect(ADD_OPENED).toContain("choose Install, then Install again to confirm");
     expect(ADD_OPENED).toMatch(/If nothing appears in Claude, set it up by hand below\.$/u);
-    const folded = html.indexOf(`<summary>${ADD_BY_HAND}</summary>`);
+    // Folded like every other fold, its chevron first (polish pass, 2026-11-18).
+    const folded = html.search(new RegExp(`<summary><svg class="ic ic-sm" [^>]*><path d="m9 6 6 6-6 6"></path></svg>${ADD_BY_HAND}</summary>`, "u"));
+    expect(folded).toBeGreaterThan(-1);
     expect(folded).toBeGreaterThan(html.indexOf(ADD_TO_CLAUDE));
     expect(html.indexOf("<ol")).toBeGreaterThan(folded);
     // Nothing is said to have happened before the button is pressed.

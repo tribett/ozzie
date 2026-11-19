@@ -147,7 +147,11 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
 function operationsLines(ops: SundayOperations | null | undefined, d: DayWords): { decisions: string[]; looks: string[]; counted: { decisions: number; looks: number } } {
   if (!ops || ops.stale) return { decisions: [], looks: [], counted: { decisions: 0, looks: 0 } };
   const findings = ops.result?.findings ?? [];
-  const owners = findings.filter(f => f.kind === "unowned-overdue").length;
+  const unowned = findings.filter(f => f.kind === "unowned-overdue");
+  const owners = unowned.length;
+  // Where to choose, named as the follow-up's card names it once it was read from Planning Center People's workflows
+  // (sunday-page.tsx `nextStep`); otherwise the core's own words, which name no product.
+  const where = unowned.every(f => f.evidence.some(e => e.source === "normalized-workflow")) ? "Planning Center People" : "your church tools";
   const review = findings.filter(f => f.kind === "room-overlap" && f.certainty === "confirmed").length;
   const overlaps = findings.filter(f => f.kind === "room-overlap" && f.certainty !== "confirmed").length;
   const unchecked = new Set(ops.result?.unchecked_scope_ids ?? []);
@@ -155,7 +159,7 @@ function operationsLines(ops: SundayOperations | null | undefined, d: DayWords):
   const meetings = ops.group_meetings.length;
   const plan = d.kind === "weekday" ? `${d.day}'s plan` : "the plan";
   const decisions = [
-    ...(owners ? [`${owners === 1 ? "One follow-up has" : `${owners} follow-ups have`} no owner and ${owners === 1 ? "is" : "are"} past due. Choose who will handle ${owners === 1 ? "it" : "them"} in your church tools.`] : []),
+    ...(owners ? [`${owners === 1 ? "One follow-up has" : `${owners} follow-ups have`} no owner and ${owners === 1 ? "is" : "are"} past due. Choose who will handle ${owners === 1 ? "it" : "them"} in ${where}.`] : []),
     ...(review ? [`${review === 1 ? "One room use needs" : `${review} room uses need`} review: bookings overlap in a room your Church rules say isn't shared.`] : []),
   ];
   const looks = [

@@ -48,6 +48,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "set_operations_reads": native.reads = args.on === true; return native.reads;
       // A sign-in starts in the browser: native waits for Allow, a newer status than any read before it.
       case "connect_planning_center_app": native.status = { ...native.status, state: "waiting", problem: null, revision: ++native.revision }; return native.status;
+      // Cancel sign-in: native puts the church it replaced back in use (its saved sign-in, not checked again yet) and keeps
+      // how the attempt ended (connections.rs `abandoned`).
+      case "cancel_connection": native.status = { ...native.keychain, state: "stored-unchecked", checked_at_ms: null, scopes: undefined, problem: null,
+        last_attempt: { state: "cancelled", organization: "", checked_at_ms: null, source: "", problem: null }, revision: ++native.revision }; return null;
       default: return new Promise(() => {});
     }
   }),
@@ -232,6 +236,106 @@ describe("Services only, after the first check", () => {
     expect(sent("set_operations_reads")).toEqual([{ on: true, pressed: false }]);
     expect(native.reads).toBe(true);
     expect(page()).not.toContain(BUTTON);
+  }, 90_000);
+});
+
+describe("a sign-in for the church already connected (review items 4 and 7)", () => {
+  const button = (label: string) => all(tagged("MAIN")).find(n => n.tagName === "BUTTON" && n.textContent === label) as (El & { hasAttribute(name: string): boolean }) | undefined;
+  /** Whether the button is shown and can't be pressed (React marks it with the attribute). */
+  const off = (label: string) => button(label)?.hasAttribute("disabled");
+  it("Settings' Connect again: nothing says Planning Center isn't connected while it is in the browser, nor after Cancel sign-in", async () => {
+    const app = await launch();
+    await go(app, "Keeping watch");
+    expect(page()).toContain("On schedule");
+    const checks = () => sent("check_sunday").length;
+    await go(app, "Settings");
+    await waitFor(app, "Connected. Planning Center confirmed Fictional Grace Church");
+    await press(app, "Connect again");
+    // A sign-in again for the church in use: native asks for what it holds now, with no stated purpose from the page
+    // (review 2026-11-18, late; it used to ask for Services alone).
+    expect(sent("connect_planning_center_app")).toEqual([{ again: ORG }]);
+    await waitFor(app, "Finish signing in in your browser.");
+    const before = checks();
+    const { act } = await import("react");
+    for (let i = 0; i < 6; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await app.settle(5); }
+    // Settings: still "Connect again" (pressed, so off while the browser waits), Cancel sign-in beside it, and the service list.
+    expect(off("Connect again")).toBe(true);
+    expect(button("Connect Planning Center")).toBeUndefined();
+    expect(button("Cancel sign-in")).toBeDefined();
+    expect(page()).not.toContain("Connect Planning Center first");
+    // The sidebar: the church by name, and setup doesn't come back.
+    expect(tagged("ASIDE").textContent).toContain("Planning Center: Fictional Grace Church");
+    expect(tagged("ASIDE").textContent).not.toContain("Planning Center not connected");
+    expect(tagged("ASIDE").textContent).not.toContain("Setting up");
+    // Keeping watch says what was true before it started (review item 4).
+    await go(app, "Keeping watch");
+    expect(page()).toContain("On schedule");
+    expect(page()).not.toContain("Waiting for setup");
+    expect(page()).not.toContain("Not running yet");
+    expect(page()).not.toContain("After Planning Center is connected");
+    // A job's plan doesn't say Planning Center isn't connected either.
+    await press(app, "Set up something new");
+    await press(app, "Keep Sunday covered");
+    expect(page()).toContain("Looks good — start it");
+    expect(page()).not.toContain("Planning Center isn't connected yet");
+    // Words only: the checks still waited while the sign-in was in the browser.
+    expect(checks()).toBe(before);
+
+    // Cancel sign-in: as before it started, with no need to press "Check the connection".
+    await go(app, "Settings");
+    const rechecks = sent("check_saved_connection").length;
+    await press(app, "Cancel sign-in");
+    await waitFor(app, "Sign-in was cancelled on this Mac. Ozzie still uses Fictional Grace Church.");
+    expect(page()).not.toContain("(organization 1001)");
+    expect(off("Connect again")).toBe(false);
+    expect(button("Connect Planning Center")).toBeUndefined();
+    expect(page()).toContain("Connected. Planning Center confirmed Fictional Grace Church");
+    expect(page()).not.toContain("Connect Planning Center first");
+    expect(page()).not.toContain("hasn't been checked yet");
+    expect(sent("check_saved_connection").length).toBe(rechecks);
+    expect(tagged("ASIDE").textContent).toContain("Planning Center: Fictional Grace Church");
+  }, 90_000);
+
+  it("never shows a Connected line from before a check of the saved sign-in failed (review of item 7)", async () => {
+    const app = await launch();
+    await go(app, "Settings");
+    await waitFor(app, "Connected. Planning Center confirmed Fictional Grace Church");
+    // A later check of the saved sign-in fails; then a sign-in is started from Settings, and cancelled.
+    native.status = { ...CHECKED, state: "failed", problem: "provider-failure", checked_at_ms: null, scopes: undefined, revision: ++native.revision };
+    const { act } = await import("react");
+    for (let i = 0; i < 4; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await app.settle(5); }
+    expect(page()).not.toContain("Connected. Planning Center confirmed");
+    await press(app, "Connect Planning Center");
+    await waitFor(app, "Finish signing in in your browser.");
+    await press(app, "Cancel sign-in");
+    await waitFor(app, "Sign-in was cancelled on this Mac. Ozzie still uses Fictional Grace Church.");
+    expect(page()).not.toContain("Connected. Planning Center confirmed");
+  }, 90_000);
+});
+
+describe("the reads on, and a later sign-in without the access (review 2026-11-18, late)", () => {
+  // An administrator narrowed what the account is given, or a sign-in asked for less: the switch still says on while
+  // Calendar, People and Groups aren't held. Said plainly where the offer would be, in Settings and in What happened,
+  // never the first-time offer as if nothing had happened.
+  const LOST = "Your last Planning Center sign-in didn't include Calendar, People and Groups, so Ozzie can't check rooms, follow-ups and group events until they're allowed again.";
+  it("the service's page, Settings and What happened each say so", async () => {
+    native.reads = true;
+    const app = await launch();
+    await go(app, "Sunday");
+    await waitFor(app, LOST);
+    expect(page()).not.toContain("Right now Ozzie doesn't read Calendar, People or Groups");
+    expect(page()).toContain("Copy a message for your administrator");
+    await go(app, "Settings");
+    await waitFor(app, `Granted: Services only. ${LOST}`);
+    expect(page()).not.toContain("Rooms, follow-ups and group events aren't checked.");
+    await go(app, "What happened");
+    await waitFor(app, "Not asked — Planning Center didn't grant this");
+    expect(page()).not.toContain("Not asked — turned off in Settings");
+    // Asking again is the offer's own sign-in, for these reads.
+    await go(app, "Sunday");
+    await waitFor(app, LOST);
+    await press(app, "Allow Calendar, People and Groups again in my browser");
+    expect(sent("connect_planning_center_app")).toEqual([{ operations: true, purpose: "operations" }]);
   }, 90_000);
 });
 

@@ -19,6 +19,8 @@ const native = vi.hoisted(() => ({
   find: null as Record<string, unknown> | null,
   /** How the last download and set-up ended, as native remembers it (`local_model_progress`). */
   progress: null as Record<string, unknown> | null,
+  /** How getting Ollama last ended, as native remembers it (`ollama_install_progress`). */
+  ollama: null as Record<string, unknown> | null,
   /** Every command the page sent, in order. */
   sent: [] as string[],
   /** Native's events, by name: each listener the page holds (review M-1). */
@@ -54,6 +56,9 @@ vi.mock("@tauri-apps/api/core", () => ({
       // "Download and set up": the first step at once; the rest comes as ozzie:local-model events, sent by the test.
       case "local_model_download": return { model: args.model, phase: "starting", done_bytes: 0, total_bytes: 5_225_388_164, end: null, check: null };
       case "local_model_progress": return native.progress;
+      // "Download Ollama and set it up": the first step at once; the rest comes as ozzie:ollama-install events.
+      case "ollama_install": return { phase: "starting", done_bytes: 0, total_bytes: 0, end: null };
+      case "ollama_install_progress": return native.ollama;
       // No AI for now (contract N5 `set_no_ai`): no route at all.
       case "set_no_ai": native.model = { configured: false, route: "none", label: "No AI model set up", setup: "no-route" }; return native.model;
       default: return new Promise(() => {});
@@ -101,7 +106,7 @@ beforeEach(() => {
   native.saved.set(path, { ...nov22Capture(), kind: "recording" });
   native.keychain = { ...CHECKED }; native.status = null;
   native.model = { ...OWN_OPENAI }; native.works = { ...CLAUDE }; native.check = null; native.enter = null;
-  native.find = null; native.progress = null; native.sent = []; native.listeners.clear();
+  native.find = null; native.progress = null; native.ollama = null; native.sent = []; native.listeners.clear();
 });
 afterEach(async () => {
   await unmount?.(); unmount = null; vi.useRealTimers();
@@ -498,6 +503,72 @@ describe("a download and set-up that ends after its screen was left (review M-1,
     expect(dom.seen()).toContain("Ozzie will use qwen3:8b on this Mac.");
     await press(app, "Back to Today");
     expect(main().textContent).not.toContain("is downloaded and set up");
+  }, 60_000);
+});
+
+describe("getting Ollama that ends after its screen was left (2026-11-19)", () => {
+  const nobody = (app: string) => ({ app, installed: false, running: false, start_hint: "", models: [] });
+  const NOTHING = { memory_gb: 16, advice: "medium", recommended: "qwen3:8b", recommended_size_bytes: 5_225_388_164, free_bytes: null, catalogue: [],
+    apps: [nobody("ollama"), nobody("lm-studio")] };
+  const at = (phase: string, end: string | null = null) => ({ phase, done_bytes: 0, total_bytes: 229_245_253, end });
+  async function emit(app: Mounted, payload: unknown) {
+    await app.act(async () => { for (const handle of native.listeners.get("ozzie:ollama-install") ?? []) handle({ payload }); await tick(); });
+    await app.settle();
+  }
+  async function getThenLeave(app: Mounted) {
+    await sidebarChange(app);
+    await press(app, "Your church's own AI");
+    await press(app, "AI on this Mac");
+    await press(app, "Download Ollama and set it up");
+    await emit(app, at("downloading"));
+    expect(dom.seen()).toContain("Downloading Ollama");
+    await press(app, "Back");
+    await press(app, "Back");
+    await press(app, "Back to Today");
+    expect(dom.seen()).toContain(TODAY);
+  }
+
+  it("says how it ended on Today in the install's own words, with the way back to AI on this Mac", async () => {
+    native.find = NOTHING;
+    const app = await launch();
+    await getThenLeave(app);
+    await emit(app, at("opening", "ready"));
+    // Ollama answers now: the model offer comes next, on AI on this Mac.
+    expect(main().textContent).toContain("Ollama is installed and open.");
+    native.ollama = at("opening", "ready");
+    await press(app, "Open AI on this Mac");
+    expect(dom.seen()).toContain("AI on this Mac");
+    expect(main().textContent).not.toContain("Ollama is installed and open.Open AI on this Mac");
+  }, 60_000);
+
+  it("one that didn't finish says why, and Close takes the line away", async () => {
+    native.find = NOTHING;
+    const app = await launch();
+    await getThenLeave(app);
+    await emit(app, at("downloading", "offline"));
+    expect(main().textContent).toContain("Ozzie couldn't reach ollama.com. Check that this Mac is online, then press Download Ollama and set it up again.");
+    expect(inPage("Open AI on this Mac")).not.toBeNull();
+    await press(app, "Close");
+    expect(main().textContent).not.toContain("Ozzie couldn't reach ollama.com.");
+  }, 60_000);
+
+  it("a Stop says nothing on Today, and an ending while the screen is open says it there only", async () => {
+    native.find = NOTHING;
+    const app = await launch();
+    await getThenLeave(app);
+    await emit(app, at("downloading", "cancelled"));
+    expect(main().textContent).not.toContain("The download is stopped");
+    expect(inPage("Open AI on this Mac")).toBeNull();
+    await sidebarChange(app);
+    await press(app, "Your church's own AI");
+    await press(app, "AI on this Mac");
+    await press(app, "Download Ollama and set it up");
+    await emit(app, at("downloading", "offline"));
+    expect(dom.seen()).toContain("Ozzie couldn't reach ollama.com.");
+    await press(app, "Back");
+    await press(app, "Back");
+    await press(app, "Back to Today");
+    expect(main().textContent).not.toContain("Ozzie couldn't reach ollama.com.");
   }, 60_000);
 });
 

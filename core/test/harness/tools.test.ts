@@ -10,7 +10,7 @@ import { applyDecisions, decide } from "../../src/sunday-decisions.js";
 import { buildSundayBrief, sundayShownCount } from "../../src/sunday-brief.js";
 import type { SundayCapture } from "../../src/sunday-capture.js";
 import { wednesdayCapture } from "../fixtures/service-days/wednesday.js";
-import { FIXTURES, FRESH, harnessData, LEAD_RULES, sourceStrings, withScheduledBlockouts } from "./fixtures.js";
+import { crowded, FIXTURES, FRESH, harnessData, LEAD_RULES, sourceStrings, withScheduledBlockouts } from "./fixtures.js";
 
 const signal = new AbortController().signal;
 const tools = (data: HarnessData = harnessData(), now = FRESH) => new HarnessTools(data, new HarnessSession(), { now: () => now });
@@ -179,8 +179,15 @@ describe("Sunday tools", () => {
   it("not checked: what the check couldn't read, never an all-clear", async () => {
     const p = (await run(tools(), "sunday.not_checked")).payload as { services: string[]; rooms_follow_ups_groups: string[] };
     expect(p.services).toContain("Whether someone is willing to serve isn't something Planning Center records.");
-    const off = (await run(tools(harnessData({ granted: ["services"] })), "sunday.not_checked")).payload as typeof p;
+    // Neither held by the connection nor read by this check.
+    const off = (await run(tools(harnessData({ granted: ["services"], operationsOff: true })), "sunday.not_checked")).payload as typeof p;
     expect(off.rooms_follow_ups_groups).toEqual(["Rooms, follow-ups and group meetings are not part of this connection."]);
+    // A Services-only connection now, with a check on screen that read them: the Sunday page's own lines for that check
+    // (review of 00d38d00, item 1), here none, since the fictional check read all of them.
+    const older = harnessData({ granted: ["services"] });
+    const said = (await run(tools(older), "sunday.not_checked")).payload as typeof p;
+    expect(said.rooms_follow_ups_groups).toEqual(older.operations!.not_checked);
+    expect(said.rooms_follow_ups_groups).not.toContain("Rooms, follow-ups and group meetings are not part of this connection.");
   });
 
   it("decisions a person made show as fixed words, never the reason they typed", async () => {
@@ -227,15 +234,17 @@ describe("rooms, follow-ups and group meetings", () => {
 
   it("are in the overview as facts of their own, so its counts are the Sunday page's, Today's and the sidebar's (live review 2026-11-18)", async () => {
     // Every fixture: needs a decision and worth a look as the page counts them (sunday-brief.ts sundayShownCount), less only
-    // the background checks the overview keeps on this Mac (and says so). Rooms, follow-ups and group meetings count only
-    // when the connection holds Calendar, People and Groups, as their own tools; a leader's settled decision never counts.
+    // the background checks the overview keeps on this Mac (and says so). Rooms, follow-ups and group meetings count as the
+    // page counts them from the check on screen, whatever the connection holds since (review of 00d38d00, item 1); a
+    // leader's settled decision never counts.
     const decidedNeed = harnessData().brief!.findings.find(f => f.kind === "needs-people")!;
     const cases: [string, HarnessData][] = [...FIXTURES.map(([name, make]) => [name, make()] as [string, HarnessData]),
       ["a settled decision", harnessData({ decisions: [decide(decidedNeed, "covered-outside", "A parent is covering", CHECKED)] })],
-      ["no Church room rule", harnessData({ rules: { ...LEAD_RULES, rooms: [] } })]];
+      ["no Church room rule", harnessData({ rules: { ...LEAD_RULES, rooms: [] } })],
+      ["Services only, a check that never read them", harnessData({ granted: ["services"], operationsOff: true })]];
     for (const [name, data] of cases) {
       const view = applyDecisions(data.brief!, data.decisions);
-      const shown = sundayShownCount(view, data.granted.includes("operations") ? data.operations : null);
+      const shown = sundayShownCount(view, data.operations);
       const kept = view.items.filter(i => i.state !== "resolved" && i.finding.kind === "background-check");
       const env = await run(tools(data), "sunday.overview");
       const p = env.payload as { needs_a_decision: number; worth_a_look: number; findings: Record<string, unknown>[] };
@@ -260,18 +269,32 @@ describe("rooms, follow-ups and group meetings", () => {
     const unruled = ((await run(tools(harnessData({ rules: { ...LEAD_RULES, rooms: [] } })), "sunday.overview")).payload as { findings: Record<string, unknown>[] }).findings;
     expect(unruled.filter(r => ["room use needs review", "a detail couldn't be verified"].includes(r["kind"] as string)).map(r => [r["kind"], r["tone"]]))
       .toEqual([["room use needs review", "worth a look"], ["a detail couldn't be verified", "worth a look"]]);
-    // Not granted, turned off or out of date: none of them.
-    for (const data of [harnessData({ granted: ["services"] }), harnessData({ operationsOff: true }), harnessData({ mode: "live", now: "2026-11-20T17:00:00Z" })]) {
+    // Never read, turned off or out of date: none of them.
+    const OPS_KINDS = ["room use needs review", "needs an owner", "group meets while serving", "a detail couldn't be verified"];
+    for (const data of [harnessData({ granted: ["services"], operationsOff: true }), harnessData({ operationsOff: true }), harnessData({ mode: "live", now: "2026-11-20T17:00:00Z" })]) {
       const kinds = ((await run(tools(data, "2026-11-20T17:00:00Z"), "sunday.overview")).payload as { findings: { kind: string }[] }).findings.map(f => f.kind);
-      expect(kinds.filter(k => ["room use needs review", "needs an owner", "group meets while serving", "a detail couldn't be verified"].includes(k))).toEqual([]);
+      expect(kinds.filter(k => OPS_KINDS.includes(k))).toEqual([]);
+    }
+    // A later Services-only sign-in, the check on screen still the one that read them: as the Sunday page shows them.
+    const older = ((await run(tools(harnessData({ granted: ["services"] })), "sunday.overview")).payload as { findings: { kind: string }[] }).findings.map(f => f.kind);
+    expect(older.filter(k => OPS_KINDS.includes(k))).toEqual(["room use needs review", "needs an owner", "group meets while serving"]);
+  });
+
+  it("are denied when the connection doesn't hold Calendar, People and Groups and the check never read them", async () => {
+    for (const name of ["rooms.conflicts", "followups.unowned", "groups.clashes"]) {
+      const env = await run(tools(harnessData({ granted: ["services"], operationsOff: true })), name);
+      expect(env.completeness, name).toBe("denied");
+      expect(env.payload, name).toEqual({ status: "not granted" });
     }
   });
 
-  it("are denied when the connection wasn't granted Calendar, People and Groups", async () => {
-    for (const name of ["rooms.conflicts", "followups.unowned", "groups.clashes"]) {
-      const env = await run(tools(harnessData({ granted: ["services"] })), name);
-      expect(env.completeness, name).toBe("denied");
-      expect(env.payload, name).toEqual({ status: "not granted" });
+  it("describe the check on screen when it read them, after a later Services-only sign-in (review of 00d38d00, item 1)", async () => {
+    // As the Sunday page shows them from that check; the AI is still offered none of these tools (host.test.ts).
+    const sources = { "rooms.conflicts": "Planning Center Calendar", "followups.unowned": "Planning Center People", "groups.clashes": "Planning Center Groups" };
+    for (const [name, source] of Object.entries(sources)) {
+      const [held, older] = [await run(tools(harnessData()), name), await run(tools(harnessData({ granted: ["services"] })), name)];
+      expect(older, name).toMatchObject({ source, completeness: "complete" });
+      expect(older.payload, name).toEqual(held.payload);
     }
   });
 
@@ -279,6 +302,32 @@ describe("rooms, follow-ups and group meetings", () => {
     const env = await run(tools(harnessData({ operationsOff: true })), "rooms.conflicts");
     expect(env.completeness).toBe("partial");
     expect((env.payload as { status: string }).status).toBe("not fully checked");
+  });
+});
+
+describe("an overview too long for one answer (review item 6)", () => {
+  it("leaves out settled findings first, then worth a look, keeps every decision in order, and its totals stay the full ones", async () => {
+    const data = crowded();
+    const env = await tools(data).run("sunday.overview", {}, signal);
+    const p = env.payload as { fact: string; needs_a_decision: number; worth_a_look: number; left_out_for_length?: number; findings: Record<string, unknown>[] };
+    expect(JSON.stringify({ tool: "x".repeat(24), source: env.source, check_time: env.check_time, completeness: env.completeness, payload: p }).length)
+      .toBeLessThanOrEqual(HARNESS_LIMITS.envelopeChars);
+    expect(p.left_out_for_length).toBeGreaterThan(0);
+    expect(env.completeness).toBe("partial");
+    // The totals are the Sunday page's, whatever was left out.
+    const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
+    expect([p.needs_a_decision, p.worth_a_look]).toEqual([shown.decisions, shown.looks]);
+    const settled = (r: Record<string, unknown>) => typeof r["decision"] === "string" && r["changed_since_decision"] !== true;
+    // Every decision is still there (rooms and follow-ups included); the settled ones went first, then some worth a look.
+    expect(p.findings.filter(r => !settled(r) && r["tone"] === "needs a decision")).toHaveLength(shown.decisions);
+    expect(p.findings.filter(settled)).toEqual([]);
+    const looks = p.findings.filter(r => r["tone"] === "worth a look").length;
+    expect(looks).toBeGreaterThan(0);
+    expect(looks).toBeLessThan(shown.looks);
+    expect(p.left_out_for_length).toBe(3 + shown.looks - looks);
+    // What's kept is in the overview's own order.
+    const ids = p.findings.map(r => Number(String(r["fact"]).slice(1)));
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
   });
 });
 

@@ -55,6 +55,9 @@ struct Ollama {
     chats: Mutex<u32>,
     /// What "the person" does on another screen as the check begins.
     on_check: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Models Ollama serves from ollama.com (a cloud model, or a copy made from one): its list and `/api/show` say
+    /// `remote_host`. A pull or a create of that name makes it a model on this Mac again, as Ollama replaces its manifest.
+    remote: Mutex<Vec<String>>,
     /// How many lines `heard` took before it closed the stream.
     heard_lines: Mutex<usize>,
     closed_early: Mutex<bool>,
@@ -80,7 +83,15 @@ impl Ollama {
             .lock()
             .unwrap()
             .iter()
-            .map(|m| json!({"name": m, "model": m, "size": 5_225_388_164u64}))
+            .map(|m| {
+                let mut row = json!({"name": m, "model": m, "size": 5_225_388_164u64, "digest": "a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"});
+                if self.remote.lock().unwrap().contains(m) {
+                    row["size"] = json!(384);
+                    row["remote_host"] = json!("https://ollama.com:443");
+                    row["remote_model"] = json!(m);
+                }
+                row
+            })
             .collect();
         json!({ "models": rows }).to_string()
     }
@@ -119,12 +130,14 @@ impl LocalHttp for Ollama {
             "/api/show" => {
                 let name = value["model"].as_str().unwrap();
                 match self.rooms.lock().unwrap().get(name) {
-                    Some(room) => Ok((
-                        200,
-                        json!({"parameters": format!("num_ctx                        {room}\nstop                           \"<|im_end|>\"\ntemperature                    0.6")})
-                            .to_string()
-                            .into_bytes(),
-                    )),
+                    Some(room) => {
+                        let mut show = json!({"parameters": format!("num_ctx                        {room}\nstop                           \"<|im_end|>\"\ntemperature                    0.6")});
+                        if self.remote.lock().unwrap().iter().any(|m| m == name) {
+                            show["remote_host"] = json!("https://ollama.com:443");
+                            show["remote_model"] = json!(name);
+                        }
+                        Ok((200, show.to_string().into_bytes()))
+                    }
                     None => Ok((404, format!(r#"{{"error":"model '{name}' not found"}}"#).into_bytes())),
                 }
             }
@@ -138,6 +151,7 @@ impl LocalHttp for Ollama {
                 if !models.contains(&name) {
                     models.push(name.clone());
                 }
+                self.remote.lock().unwrap().retain(|m| *m != name);
                 self.rooms.lock().unwrap().insert(name, room);
                 Ok((200, br#"{"status":"success"}"#.to_vec()))
             }
@@ -197,10 +211,12 @@ impl PullHttp for Ollama {
             };
             // Ollama has the model by the time it says success, whether or not anyone reads on.
             if self.pulled_adds && matches!(say, Say::Line(l) if l.contains("success")) {
-                self.models
-                    .lock()
-                    .unwrap()
-                    .push(value["model"].as_str().unwrap().into());
+                let model = value["model"].as_str().unwrap();
+                self.remote.lock().unwrap().retain(|m| m != model);
+                let mut models = self.models.lock().unwrap();
+                if !models.iter().any(|m| m == model) {
+                    models.push(model.into());
+                }
             }
             if !go_on {
                 *self.closed_early.lock().unwrap() = true;
@@ -709,6 +725,46 @@ fn a_model_the_person_already_has_is_set_up_without_a_download_and_never_recorde
     assert_eq!(end.end, Some(End::Done));
     assert!(ollama.posts.lock().unwrap().iter().all(|(p, _)| p != "/api/create"));
     assert!(ollama.pulls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_model_ollama_serves_from_elsewhere_is_never_taken_as_downloaded_set_up_from_or_kept() {
+    // `qwen3:8b` in Ollama's list as one it serves from ollama.com: not "on this Mac", so Ozzie downloads the real one
+    // (Ollama's pull replaces it) rather than set up a copy that would be served from there too.
+    let dir = Dir::new("remote-catalogue");
+    let ollama = Ollama {
+        stream: lines(qwen3_8b_lines()),
+        pulled_adds: true,
+        remote: Mutex::new(vec!["qwen3:8b".into()]),
+        ..Ollama::up(&["qwen3:8b"])
+    };
+    let found = find(&dir.0, &ollama, |_| true, 16 * GIB, Some(100_000_000_000));
+    let medium = found.catalogue.iter().find(|row| row.id == "qwen3:8b").unwrap();
+    assert!(!medium.downloaded && !medium.set_up);
+    assert_eq!(found.apps[0].elsewhere, 1);
+    let cancel = AtomicBool::new(false);
+    let clock = || 1u64;
+    let end = run(&job_with(&dir.0, &ollama, &cancel, model::route_generation(&dir.0), &clock), &mut |_| {});
+    assert_eq!((end.end, end.check.map(|c| c.verdict)), (Some(End::Done), Some(Verdict::Answers)));
+    assert_eq!(ollama.pulls.lock().unwrap().len(), 1);
+    assert_eq!(model::usable_config(&dir.0).unwrap().model, "ozzie-qwen3:8b");
+    // Ozzie's copy, but served from elsewhere (made from a cloud model): made again from the model on this Mac.
+    let ollama = Ollama {
+        remote: Mutex::new(vec!["ozzie-qwen3:8b".into()]),
+        ..Ollama::up(&["qwen3:8b"]).with_copy("ozzie-qwen3:8b", ROOM)
+    };
+    assert_eq!(set_up("qwen3:8b", &ollama), Ok(()));
+    let creates = ollama.posts.lock().unwrap().iter().filter(|(p, _)| p == "/api/create").count();
+    assert_eq!(creates, 1);
+    assert!(ollama.remote.lock().unwrap().is_empty());
+    // A record of Ozzie's download that Ollama now lists only as served elsewhere is forgotten, never removed by Ozzie.
+    let dir = Dir::new("remote-kept");
+    std::fs::write(dir.0.join(KEPT_FILE), r#"{"downloaded":["qwen3:8b"]}"#).unwrap();
+    let ollama = Ollama { remote: Mutex::new(vec!["qwen3:8b".into()]), ..Ollama::up(&["qwen3:8b"]) };
+    let removal = remove(&dir.0, "qwen3:8b", &ollama).unwrap();
+    assert_eq!(removal.removed, Removed::None);
+    assert!(ollama.deletes.lock().unwrap().iter().all(|d| d["model"] != "qwen3:8b"));
+    assert!(kept(&dir.0).downloaded.is_empty());
 }
 
 #[test]

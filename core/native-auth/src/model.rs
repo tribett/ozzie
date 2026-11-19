@@ -130,6 +130,9 @@ pub enum ModelError {
     /// The church's own key: this UTC month's AI requests (model.json `month_limit`) are spent; AI pauses until
     /// the next month. Nothing was sent.
     MonthLimit,
+    /// AI on this Mac: the model chosen doesn't run on this Mac (Ollama's cloud models, a model served from another
+    /// computer), or Ozzie can't tell it does (`local_ai::on_this_mac`). Nothing was sent, and it is never chosen.
+    NotOnThisMac,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1208,13 +1211,25 @@ impl NativeModelHttp {
         self.until = Some(self.until.map_or(end, |until| until.min(end)));
         self
     }
-    /// The client for a request on `route`: the managed route's may reach a debug build's 127.0.0.1
-    /// server for Ozzie managed (`HostedConfig::https_only`); every other route's is `new`'s.
-    pub(crate) fn for_route(route: Route, hosted: &HostedConfig) -> Result<Self, ModelError> {
-        if route == Route::Managed {
-            Self::build(hosted.https_only(), request_wait(route))
+    /// The client for a request on `config`'s route: the managed route's may reach a debug build's 127.0.0.1
+    /// server for Ozzie managed (`HostedConfig::https_only`); every other route's is `new`'s. A model on this Mac gets
+    /// one only once its app says, now, that the model runs on this Mac (`local_ai::confirm_route`): every question on
+    /// that route (rewording, Ask, a job's step) comes through here, so one pointed elsewhere since it was checked is
+    /// never asked (`not-on-this-mac`).
+    pub(crate) fn for_route(config: &RouteConfig, hosted: &HostedConfig) -> Result<Self, ModelError> {
+        Self::for_route_after(config, hosted, &*this_mac_for(config)?)
+    }
+    /// `for_route`, asking `local` whether a model on this Mac runs here.
+    pub(crate) fn for_route_after(
+        config: &RouteConfig,
+        hosted: &HostedConfig,
+        local: &dyn crate::local_ai::LocalHttp,
+    ) -> Result<Self, ModelError> {
+        crate::local_ai::confirm_route(config, local)?;
+        if config.route == Route::Managed {
+            Self::build(hosted.https_only(), request_wait(config.route))
         } else {
-            Self::new(route)
+            Self::new(config.route)
         }
     }
     /// One own-key check (own_key.rs): https only, and a shorter wait than a real answer's.
@@ -1367,8 +1382,19 @@ pub fn reword(
     request_body(config, request)?;
     check_draft(request, names)?;
     check_model(config, names)?;
-    let http = NativeModelHttp::for_route(config.route, &hosted)?;
+    let http = NativeModelHttp::for_route(config, &hosted)?;
     reword_with(config, ledger, request, keys, names, &http, &hosted)
+}
+/// What asks the app on this Mac whether `config`'s model runs here (`local_ai::confirm_route`): the real client, to
+/// 127.0.0.1 only, for a model on this Mac; nothing for any other route, which is never asked.
+pub(crate) fn this_mac_for(
+    config: &RouteConfig,
+) -> Result<Box<dyn crate::local_ai::LocalHttp>, ModelError> {
+    Ok(if config.route == Route::Local {
+        Box::new(crate::local_ai::NativeLocalHttp::new(crate::local_ai::SHOW_WAIT)?)
+    } else {
+        Box::new(crate::local_ai::NoLocalHttp)
+    })
 }
 /// When every request through a client gives up, if it does (agent_tests.rs).
 #[cfg(test)]
@@ -1636,7 +1662,9 @@ pub fn load_config(dir: &Path) -> Option<RouteConfig> {
 pub fn usable_config(dir: &Path) -> Option<RouteConfig> {
     load_config(dir).filter(|config| {
         config.route != Route::Local
-            || (config.checked_at_ms.is_some() && local_base_allowed(&config.base_url))
+            || (config.checked_at_ms.is_some()
+                && local_base_allowed(&config.base_url)
+                && !crate::local_ai::cloud_name(&config.model))
     })
 }
 /// The two addresses a model on this Mac may have (local_ai.rs).
@@ -1706,6 +1734,10 @@ pub fn save_config(
     model: Option<&str>,
 ) -> Result<RouteConfig, ModelError> {
     let config = RouteConfig::new(route, base_url, model)?;
+    // A model Ollama sends to its own servers is never chosen as AI on this Mac (`local_ai::cloud_name`).
+    if config.route == Route::Local && crate::local_ai::cloud_name(&config.model) {
+        return Err(ModelError::NotOnThisMac);
+    }
     route_choice().save(dir, config, None)
 }
 /// "Check that it answers" passed: the local route at this address and model, checked at `at_ms`, for a check that
@@ -1718,6 +1750,9 @@ pub fn save_local_checked(
     began: u64,
 ) -> Result<Option<RouteConfig>, ModelError> {
     let config = RouteConfig::new(Route::Local, Some(base_url), Some(model))?;
+    if crate::local_ai::cloud_name(model) {
+        return Err(ModelError::NotOnThisMac);
+    }
     let mut choice = route_choice();
     if choice.generation(dir) != began {
         return Ok(None);
@@ -1818,6 +1853,9 @@ pub struct ModelStatus {
     /// The local route is a catalogue model Ozzie no longer offers, or Ozzie's copy of one (providers.json `offered`:
     /// the small model, withdrawn 2026-11-18). It keeps working; the page says so (review L-4).
     pub not_offered: bool,
+    /// The local route's app, by its exact address: "ollama" or "lm-studio"; None on every other route, and for an
+    /// address that is neither (never used: `usable_config`).
+    pub local_app: Option<&'static str>,
 }
 #[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct MonthView {
@@ -1872,6 +1910,7 @@ pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u
             month: None,
             checked_at_ms: None,
             not_offered: false,
+            local_app: None,
         };
     };
     let host = config.host().unwrap_or_default();
@@ -1907,6 +1946,7 @@ pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u
             month: None,
             checked_at_ms: None,
             not_offered: false,
+            local_app: None,
         };
     }
     let has_key = key_for(&config, keys).is_ok();
@@ -1916,7 +1956,11 @@ pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u
     let spent = month.as_ref().is_some_and(|m| m.used >= m.limit);
     // Presence only: a key under the old unbound account is looked at, never used.
     let unbound = || matches!(keys.key(LEGACY_OWN_ACCOUNT), Ok(Some(key)) if usable_key(&key));
+    // A model Ollama sends to its own servers is never ready as AI on this Mac, however it was saved (by its name here;
+    // its app is asked as well where the app reads the status: `local_ai::mark_elsewhere`).
+    let elsewhere = config.route == Route::Local && crate::local_ai::cloud_name(&config.model);
     let setup = match (has_key, config.route) {
+        _ if elsewhere => "not-on-this-mac",
         (true, _) if !checked => "not-checked",
         (true, _) if spent => "month-limit",
         (true, _) => "ready",
@@ -1934,7 +1978,7 @@ pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u
         ),
     };
     ModelStatus {
-        configured: has_key && checked,
+        configured: has_key && checked && !elsewhere,
         route: config.route.name(),
         label,
         setup,
@@ -1948,6 +1992,13 @@ pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u
             .filter(|_| config.route == Route::Local),
         not_offered: config.route == Route::Local
             && crate::local_models::no_longer_offered(&config.model),
+        local_app: (config.route == Route::Local)
+            .then(|| crate::local_ai::route_app(&config))
+            .flatten()
+            .map(|app| match app {
+                crate::local_ai::App::Ollama => "ollama",
+                crate::local_ai::App::LmStudio => "lm-studio",
+            }),
     }
 }
 

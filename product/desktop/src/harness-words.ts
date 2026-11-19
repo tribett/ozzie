@@ -230,9 +230,27 @@ export const composedHow = (d: DayWords) => "The names Ozzie read from Planning 
 export const COMPOSED_ENDED = `The AI's answer listed more than ${MAX_FACTS} facts, so Ozzie wrote this answer itself from what it read.`;
 export const KEPT_STEP = "Looked at background checks, kept on this Mac";
 
+/**
+ * How many of the overview's findings were left out of what the AI was given, to fit (core tools.ts fit; review item 6),
+ * and whether that cut is all its "partial" means: its own Planning Center reads all completed. Services reads failing is
+ * the only other reason the overview is partial, and it counts them (`reads_not_completed`).
+ */
+export function overviewCut(e: Partial<Pick<ToolEnvelope, "tool" | "payload">>): { left: number; only: boolean } {
+  if (e.tool !== "sunday.overview") return { left: 0, only: false };
+  const p = (e.payload ?? {}) as { left_out_for_length?: unknown; reads_not_completed?: unknown };
+  const left = typeof p.left_out_for_length === "number" && p.left_out_for_length > 0 ? p.left_out_for_length : 0;
+  return { left, only: left > 0 && p.reads_not_completed === 0 };
+}
+/** Said under Worth a look for an overview cut to fit: rows left out of the answer, never that Planning Center couldn't be read. */
+export const leftOutOfAnswer = (source: string, n: number) =>
+  `${source}: the list was too long to say in full, so ${n === 1 ? "1 finding was" : `${n} findings were`} left out of this answer. ${n === 1 ? "It's" : "They're"} on the Sunday page.`;
+/** A step's words for how much of a read it had: an overview cut only to fit is "a shortened list", as who could help says it. */
+const stepStatus = (e: Pick<ToolEnvelope, "completeness"> & Partial<Pick<ToolEnvelope, "tool" | "payload">>, status: string) =>
+  status === "partial" && overviewCut(e).only ? "a shortened list" : STATUS_WORDS[status];
+
 /** The steps of an answer written on this Mac: each read-only tool it read, and the background checks it kept here. */
 export function localSteps(evidence: readonly ToolEnvelope[], keptHere: boolean): string[] {
-  return [...evidence.map(e => `${TOOL_PHRASES[e.tool as ToolName] ?? "Looked at the last check"} — ${STATUS_WORDS[e.completeness] ?? "didn't finish"}`),
+  return [...evidence.map(e => `${TOOL_PHRASES[e.tool as ToolName] ?? "Looked at the last check"} — ${stepStatus(e, e.completeness) ?? "didn't finish"}`),
     ...(keptHere ? [KEPT_STEP] : [])];
 }
 
@@ -323,6 +341,8 @@ export function outcomeSteps(events: readonly TaskEvent[], evidence: readonly To
       text = typeof payload["draft"] === "string" ? "Prepared a draft note" : "Asked for a draft note; none was prepared";
     }
     if (text && status === "stale" && mode === "recording") text = text.replace(STATUS_WORDS.stale!, "from a saved copy of a check");
+    // An overview cut only to fit was read in full: a shortened list, not a read that couldn't be finished (review item 6).
+    if (text && found && status === "partial") text = text.replace(STATUS_WORDS.partial!, stepStatus(found, status)!);
     return text ? [text] : [];
   });
 }
@@ -371,11 +391,15 @@ export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" |
 }
 
 /** What an answer's reads couldn't fully cover, as "Worth a look" lines. A saved copy of a check is already labelled as one. */
-export function evidenceGaps(evidence: readonly ToolEnvelope[], mode: "live" | "recording" | "fictional"): string[] {
+export function evidenceGaps(evidence: readonly (Pick<ToolEnvelope, "source" | "completeness"> & Partial<Pick<ToolEnvelope, "tool" | "payload">>)[],
+  mode: "live" | "recording" | "fictional"): string[] {
   const out = new Set<string>();
   for (const e of evidence) {
     const what = PLANNING_CENTER.test(e.source) ? e.source : e.source === IMPORT_SOURCE ? "The fictional email import" : "Part of this";
-    if (e.completeness === "partial") out.add(`${what}: part of this couldn't be read.`);
+    // An overview cut to fit is said as that (review item 6); "couldn't be read" only for reads that didn't complete.
+    const cut = overviewCut(e);
+    if (e.completeness === "partial" && !cut.only) out.add(`${what}: part of this couldn't be read.`);
+    if (cut.left) out.add(leftOutOfAnswer(what, cut.left));
     if (e.completeness === "stale" && mode !== "recording") out.add(`${what}: from a check that's too old to treat as current.`);
     if (e.completeness === "denied") out.add(`${what}: not shared with Ozzie.`);
   }

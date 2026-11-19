@@ -2,7 +2,7 @@
 // templates Ask Ozzie's answers use) for every fact in the shared tool results, with ISO times written out. Labels
 // stay labels: names live only in Ozzie on the leader's Mac, and nothing here could restore them.
 import type { Skill, ToolEnvelope } from "../src/harness/contract.js";
-import { composeAnswer, NOT_FREE, NOT_RANKED } from "../src/harness/compose.js";
+import { composeAnswer, NOT_FREE, NOT_RANKED, overviewRowSources } from "../src/harness/compose.js";
 import { answerText, idsIn, VOCABULARY } from "../src/harness/fixed.js";
 import { showTimes } from "../src/harness/session.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../src/harness/contract.js";
@@ -57,9 +57,41 @@ export function factsText(envelope: ToolEnvelope): string[] {
   return [...lines, ...[NOT_FREE, NOT_RANKED].filter(p => closing.has(p))].map(words);
 }
 
-function section(envelope: ToolEnvelope): string {
-  const head = `${HEADINGS[envelope.tool as SharedTool] ?? "From the check"} (from ${envelope.source}, checked ${when(envelope.check_time)})`;
-  const note = COMPLETENESS[envelope.completeness] ?? "";
+/** Each Planning Center product's own result in a copy, where the overview's rows about it are said in full. */
+const OWN_TOOL: Readonly<Record<string, string>> = {
+  "Planning Center Calendar": "rooms.conflicts", "Planning Center People": "followups.unowned", "Planning Center Groups": "groups.clashes",
+};
+/**
+ * Where a section's facts come from, with check times: the result's own source, and for the overview each source its
+ * rooms, follow-ups and group meetings come from (review item 5), at that source's own check time when the copy holds its
+ * result. Sources checked at the same time are said once: "Planning Center Services, Calendar and People, checked …".
+ */
+function sourcesOf(envelope: ToolEnvelope, all: readonly ToolEnvelope[]): string {
+  const own = (source: string) => all.find(e => e.tool === OWN_TOOL[source] && e.completeness !== "denied");
+  const worth = (source: string) => Number((own(source)?.payload as { worth_a_look?: unknown } | undefined)?.worth_a_look) > 0;
+  // The row for room or follow-up details that couldn't be confirmed is about whichever of the two has open questions.
+  const unsure = ["Planning Center Calendar", "Planning Center People"].filter(worth);
+  const rows = envelope.tool === "sunday.overview" ? (envelope.payload as { findings?: unknown }).findings : null;
+  const extra = Array.isArray(rows) ? rows.flatMap(r => overviewRowSources(r as Record<string, unknown>, unsure.length ? unsure : ["Planning Center Calendar", "Planning Center People"])) : [];
+  const times = new Map<string, string[]>();
+  for (const source of [envelope.source, ...new Set(extra)].filter((s, i, list) => list.indexOf(s) === i)) {
+    const at = when(own(source)?.check_time ?? envelope.check_time);
+    times.set(at, [...times.get(at) ?? [], source]);
+  }
+  const PC = "Planning Center ";
+  const named = (sources: string[]) => sources.every(s => s.startsWith(PC)) && sources.length > 1
+    ? `${PC}${sources.slice(0, -1).map(s => s.slice(PC.length)).join(", ")} and ${sources.at(-1)!.slice(PC.length)}` : sources.join(", ");
+  return [...times].map(([at, sources]) => `${named(sources)}, checked ${at}`).join("; ");
+}
+
+function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelope]): string {
+  const head = `${HEADINGS[envelope.tool as SharedTool] ?? "From the check"} (from ${sourcesOf(envelope, all)})`;
+  // An overview cut to fit is said as that, never as reads that didn't complete unless some didn't (review item 6).
+  const p = envelope.payload as { left_out_for_length?: unknown; reads_not_completed?: unknown };
+  const left = envelope.tool === "sunday.overview" && typeof p.left_out_for_length === "number" ? p.left_out_for_length : 0;
+  const cut = left > 0 ? `Worth a look: the list was too long to say in full, so ${left === 1 ? "1 finding was" : `${left} findings were`} left out of this copy.` : "";
+  const unread = envelope.completeness === "partial" && left > 0 && p.reads_not_completed === 0 ? "" : COMPLETENESS[envelope.completeness] ?? "";
+  const note = [unread, cut].filter(Boolean).join("\n");
   const body = factsText(envelope);
   return [`## ${head}`, ...(note ? [note] : []), ...(body.length ? body : ["Nothing to report here."])].join("\n");
 }
@@ -71,7 +103,7 @@ export function checkText(check: SharedCheck | null, tools: readonly SharedTool[
   // The facts' own check time, never when the copy was saved: a copy saved today can hold last week's check.
   const intro = `From Ozzie's last saved check, checked ${when(check.checked_at)} (copy ${check.copy_id}). ${aboutLabels(check.copy_id)} ${ONLY_DESCRIBES}`;
   if (!found.length) return `${intro}\n\nThe last saved check doesn't include this.`;
-  return [intro, ...found.map(section)].join("\n\n");
+  return [intro, ...found.map(e => section(e, check.envelopes))].join("\n\n");
 }
 
 /** The Church rules in words, then the procedures Ozzie follows (their titles and purposes, as shown in Ozzie). */

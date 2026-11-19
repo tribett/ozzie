@@ -13,9 +13,12 @@ const native = vi.hoisted(() => ({ invoke: null as null | ((command: string, arg
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn((command: string, args?: Record<string, unknown>) => native.invoke ? native.invoke(command, args) : new Promise(() => {})) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 import type { DownloadRefusal, KeyVerdict, LocalVerdict, ModelEnd, ModelPhase, ModelRemoved, PaidEnd } from "../src/onboarding-bridge.js";
-import { aiLine, CHOICE, COMPANIES, downloadSaid, downloadTime, endedAwaySaid, KEY, keySaid, LIMIT, localSaid, MAC, OZZIE, ozzieState, paidSaid, refusedSaid, removedSaid } from "../src/ai-words.js";
+import { aiLine, bytesText, CHOICE, COMPANIES, downloadSaid, downloadTime, endedAwaySaid, KEY, keySaid, LIMIT, localSaid, MAC, OLLAMA, ollamaDoneSaid, ollamaEndSaid,
+  ollamaRefusedSaid, ollamaRevealSaid, OZZIE, ozzieState, paidSaid, refusedSaid, removedSaid } from "../src/ai-words.js";
+import type { OllamaEnd, OllamaPhase, OllamaRefusal } from "../src/onboarding-bridge.js";
+import { ActivityPage } from "../src/activity-page.js";
 import { modelProblem, monthLimitText, NO_PLAN_TEXT, pausedLine, untilWhen, type ManagedAccount, type ModelStatus } from "../src/model.js";
-import { parseKeyResult, parseProviders } from "../src/onboarding-bridge.js";
+import { parseKeyResult, parseOllamaHistory, parseOllamaProgress, parseProviders } from "../src/onboarding-bridge.js";
 import { AiChoice } from "../src/ai-choice.js";
 import { AiLine } from "../src/ai-line.js";
 import { MacEndedLine } from "../src/ai-this-mac.js";
@@ -28,8 +31,8 @@ const FORBIDDEN = /\b(?:skills?|sessions?|agents?|logs?|connectors?|harness|Ozzi
 const KEY_VERDICTS: KeyVerdict[] = ["works", "refused", "no-credit", "unreachable", "wrong-kind", "not-a-key", "model-unavailable", "slow-down", "daily-limit",
   "not-saved", "empty", "cancelled", "too-many-checks", "failed", "needs-workspace", "wrong-address", "not-verified-yet", "not-an-ai-key", "admin-key", "region", "restricted-key", "provider-busy",
   "needs-project-setup", "auth-conflict", "confirm-unknown-shape", "needs-billing", "needs-organization", "sign-in-token", "choice-changed", "unavailable"];
-const LOCAL_VERDICTS: LocalVerdict[] = ["answers", "no-tools", "lost-start", "small-context", "thinks-too-long", "lookup-instead", "too-slow", "stopped", "not-found", "choice-changed",
-  "unavailable"];
+const LOCAL_VERDICTS: LocalVerdict[] = ["answers", "no-tools", "lost-start", "small-context", "thinks-too-long", "lookup-instead", "too-slow", "stopped", "not-found",
+  "not-on-this-mac", "choice-changed", "unavailable"];
 const PAID_ENDS: PaidEnd[] = ["payment-cancelled", "cancelled", "expired", "not-finished", "busy", "browser-unavailable", "refused", "keychain", "unreachable"];
 
 describe("what the key check said (spec S8c)", () => {
@@ -123,6 +126,11 @@ describe("what the local check said (spec S9)", () => {
     expect(localSaid("too-slow", "ollama", "x", "Sunday", 40).lines).toEqual(["It answered the first question, but didn't answer the second within a minute. This Mac may be too busy, or the model too large for it. Try again when this Mac is less busy, or use a key from an AI company."]);
     expect(localSaid("stopped", "lm-studio", "x", "Sunday").lines).toEqual(["LM Studio stopped answering. Open LM Studio, then try again."]);
     expect(localSaid("not-found", "ollama", "x", "Sunday").lines).toEqual(["Ollama doesn't list that model any more. Press Look again, then choose a model."]);
+    // A model the app lists that runs elsewhere: nothing was asked of it (2026-11-19).
+    expect(localSaid("not-on-this-mac", "ollama", "gpt-oss:120b-cloud", "Sunday").lines)
+      .toEqual(["gpt-oss:120b-cloud runs on Ollama's servers, not on this Mac, so Ozzie doesn't use it here. Choose a model on this Mac."]);
+    expect(localSaid("not-on-this-mac", "lm-studio", "far/model", "Sunday").lines)
+      .toEqual(["far/model runs on another computer, not on this Mac, so Ozzie doesn't use it here. Choose a model on this Mac."]);
     for (const v of LOCAL_VERDICTS) {
       const said = localSaid(v, "ollama", "llama3.2", "Sunday", 3);
       expect(said.tone).toBe(v === "answers" ? "ok" : "problem");
@@ -291,6 +299,34 @@ describe("the monthly limit and the AI line (spec S8, §4.4)", () => {
     expect(aiLine({ ...local, not_offered: false }).trouble).toBeNull();
   });
 
+  it("never calls a model that runs elsewhere AI on this Mac: the line, Settings, rewording and the setup check say it isn't used (2026-11-19)", async () => {
+    const away = { configured: false, route: "local" as const, label: "AI model on this Mac (gpt-oss:120b-cloud)", setup: "not-on-this-mac" as const, checked_at_ms: 1,
+      local_app: "ollama" as const };
+    expect(aiLine(away)).toEqual({ text: "AI: gpt-oss:120b-cloud, not on this Mac", trouble: "not used" });
+    expect(LIMIT.localElsewhere("gpt-oss:120b-cloud", "ollama"))
+      .toBe("gpt-oss:120b-cloud runs on Ollama's servers, not on this Mac, so Ozzie doesn't use it here. Choose a model on this Mac, or another way to use AI.");
+    expect(LIMIT.localElsewhere("far/model", "lm-studio"))
+      .toBe("far/model runs on another computer, not on this Mac, so Ozzie doesn't use it here. Choose a model on this Mac, or another way to use AI.");
+    expect(LIMIT.localElsewhere(null, null)).toBe("The model chosen doesn't run on this Mac, so Ozzie doesn't use it here. Choose a model on this Mac, or another way to use AI.");
+    expect(modelProblem("not-on-this-mac")).toBe("The AI model chosen for AI on this Mac doesn't run on this Mac, so Ozzie didn't send it anything. Your draft is unchanged.");
+    for (const said of [aiLine(away).text, LIMIT.localElsewhere("gpt-oss:120b-cloud", "ollama"), modelProblem("not-on-this-mac")]) expect(said).not.toMatch(FORBIDDEN);
+    const fake = fakeNative({ model_status: away, local_ai_find: FOUND });
+    native.invoke = fake.invoke as never;
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(dom.root as unknown as Element);
+    await act(async () => { root.render(React.createElement(AiSettings, { onChange() {} })); });
+    await settle();
+    unmount = async () => { await act(async () => { root.unmount(); }); };
+    expect(seen()).toContain("AI: gpt-oss:120b-cloud, not on this Mac · not used");
+    expect(seen()).toContain(LIMIT.localElsewhere("gpt-oss:120b-cloud", "ollama"));
+    expect(seen()).not.toContain(LIMIT.localNotChecked);
+    expect(seen()).not.toMatch(/Answered Ozzie's check/u);
+    expect(fake.calls.map(c => c.command).filter(c => /^(?:set_|save_|remove_|local_model_remove|managed_)/u.test(c))).toEqual([]);
+    await press("Choose a model on this Mac");
+    expect(seen()).toContain(MAC.title);
+  });
+
   it("Settings › AI help says plainly when AI on this Mac is a model Ozzie no longer offers, without switching it off (review L-4)", async () => {
     const STATUS = { configured: true, route: "local", label: "AI model on this Mac (qwen3:4b)", setup: "ready", checked_at_ms: 1_763_400_000_000, not_offered: true };
     const fake = fakeNative({ model_status: STATUS });
@@ -442,6 +478,31 @@ describe("S6: how should Ozzie use AI?", () => {
     await press("Decide later");
     expect(s.onDone).toHaveBeenCalledWith("later");
     expect(s.calls.some(c => c.command === "set_no_ai")).toBe(false);
+  });
+
+  it("marks the way in use now on its card, here and on the next screen, in first run and Settings alike (live, 2026-11-19)", async () => {
+    const cards = () => buttons().filter(b => /ai-card/u.test(b.getAttribute?.("class") ?? ""));
+    const tagged = () => cards().filter(c => all(c).some(n => n.getAttribute?.("class") === "ai-tag" && n.textContent === "In use now")).map(c => c.textContent.split("In use now")[0]);
+    const status = (route: string, configured: boolean, setup = "ready") => ({ configured, route, label: "x", setup });
+    const cases: [Record<string, unknown>, string[], string[]][] = [
+      [status("managed", true), ["Ozzie's AI"], []],
+      [status("own", true), ["Your church's own AI"], ["A key from an AI company"]],
+      [status("local", true), ["Your church's own AI"], ["AI on this Mac"]],
+      // Nothing chosen yet, or a way that doesn't work now: nothing marked.
+      [status("none", false, "no-route"), [], []],
+      [status("local", false, "not-checked"), [], []],
+      [status("local", false, "not-on-this-mac"), [], []],
+      [status("own", false, "no-key"), [], []],
+    ];
+    for (const mode of ["first-run", "settings"] as const) for (const [model_status, first, second] of cases) {
+      await mount(base({ model_status }), mode);
+      expect(tagged(), `${mode} ${JSON.stringify(model_status)}`).toEqual(first);
+      await press("Your church's own AI");
+      expect(tagged(), `${mode} ${JSON.stringify(model_status)}`).toEqual(second);
+      await unmount!(); unmount = null;
+    }
+    expect(CHOICE.inUse).toBe("In use now");
+    expect(CHOICE.inUse).not.toMatch(FORBIDDEN);
   });
 
   it("puts focus on the title when S6 opens, never on a card, and no card asks for focus (review M2b)", async () => {
@@ -823,6 +884,8 @@ describe("S9: AI on this Mac", () => {
     expect(seen()).toContain("Ozzie didn't find AI on this Mac.");
     // The first look says nothing more.
     expect(seen()).not.toContain(MAC.stillNothing);
+    // The person installs Ollama themselves (decision 25 keeps the guide behind "I'll install it myself").
+    await press("I'll install it myself");
     const finds = () => s.calls.filter(c => c.command === "local_ai_find").length;
     const before = finds();
     await press("Look again");
@@ -870,6 +933,14 @@ describe("S9: AI on this Mac", () => {
       expect(seen()).toContain(sentence);
       expect(seen()).not.toMatch(/for me|Terminal/u);
       if (sentence.startsWith("Ozzie didn't find")) {
+        // Ozzie offers to get Ollama first (decision 25); nothing is downloaded before the press, and the person's own
+        // way opens Ollama's download page and keeps today's guide.
+        expect(seen()).toContain(OLLAMA.offerTitle);
+        expect(s.calls.some(c => c.command === "ollama_install")).toBe(false);
+        expect(seen()).not.toContain("Download Ollama, a free app that runs AI on your Mac.");
+        await press("I'll install it myself");
+        expect(s.calls.at(-1)).toEqual({ command: "open_help_page", args: { page: "ollama-download" } });
+        expect(seen()).not.toContain(OLLAMA.offerTitle);
         expect(seen()).toContain("Download Ollama, a free app that runs AI on your Mac.");
         expect(seen()).toContain("If your Mac asks whether to open it, choose Open.");
         expect(seen()).toContain("Ozzie offers the model that suits this Mac (about 2.0 GB), downloads it from Ollama's library and sets it up for you.");
@@ -886,6 +957,39 @@ describe("S9: AI on this Mac", () => {
       allFullSize();
       await unmount!(); unmount = null;
     }
+  });
+});
+
+describe("S9: a model that runs elsewhere is never listed (2026-11-19)", () => {
+  const toMac = async () => { await press("Your church's own AI"); await press("AI on this Mac"); };
+  it("lists only models on this Mac and says once why the others aren't there, in Ollama's and LM Studio's words", async () => {
+    expect(MAC.elsewhere("ollama", 1)).toBe("One model in Ollama runs on Ollama's servers, not on this Mac, so Ozzie doesn't list it.");
+    expect(MAC.elsewhere("ollama", 3)).toBe("3 models in Ollama run on Ollama's servers, not on this Mac, so Ozzie doesn't list them.");
+    expect(MAC.elsewhere("lm-studio", 1)).toBe("One model in LM Studio runs on another computer, not on this Mac, so Ozzie doesn't list it.");
+    const withAway = (n: number) => ({ ...FOUND, apps: [{ ...FOUND.apps[0], elsewhere: n }, FOUND.apps[1]] });
+    await mount(base({ local_ai_find: withAway(2) }));
+    await toMac();
+    expect(seen()).toContain("Found Ollama on this Mac, with 2 AI models ready.");
+    expect(seen()).toContain(MAC.elsewhere("ollama", 2));
+    await unmount!(); unmount = null;
+    // None of the ones on this Mac: never "no AI models yet" over models it does list.
+    const onlyAway = { ...FOUND, apps: [{ app: "ollama", installed: true, running: true, models: [], elsewhere: 1 }, FOUND.apps[1]] };
+    await mount(base({ local_ai_find: onlyAway }));
+    await toMac();
+    expect(seen()).toContain(MAC.ollamaNoModelsHere);
+    expect(seen()).not.toContain(MAC.ollamaNoModels);
+    expect(seen()).toContain(MAC.elsewhere("ollama", 1));
+    await unmount!(); unmount = null;
+    // Nothing elsewhere: nothing said.
+    await mount(base());
+    await toMac();
+    expect(seen()).not.toMatch(/not on this Mac, so Ozzie doesn't list/u);
+  });
+
+  it("reads native's count only as a small whole number", async () => {
+    const { parseLocal } = await import("../src/onboarding-bridge.js");
+    const found = (elsewhere: unknown) => parseLocal({ ...FOUND, apps: [{ ...FOUND.apps[0], elsewhere }, FOUND.apps[1]] }).apps[0]!.elsewhere;
+    expect([found(2), found(undefined), found(-1), found("3"), found(2.5), found(1e9)]).toEqual([2, 0, 0, 0, 0, 0]);
   });
 });
 
@@ -977,6 +1081,31 @@ describe("S9: models Ozzie downloads and sets up itself (owner's request, 2026-1
     // The rows are read again (now on this Mac), and the way on is the screen's own.
     expect(s.calls.filter(c => c.command === "local_ai_find").length).toBe(finds + 1);
     expect(button("Next: open")).not.toBeNull();
+  });
+
+  it("keeps an ending native told before the press's own answer came, so the screen is never left at work (2026-11-19)", async () => {
+    // Native tells the job's first step, then can end it (Ollama not answering, a model already set up whose check fails
+    // at once) before "Download and set up"'s own answer reaches the page.
+    let fake: ReturnType<typeof fakeNative> | null = null;
+    const ended = progress("starting", 0, { end: "stopped" });
+    const s = await mount(base({ local_ai_find: SETUP, local_model_progress: null,
+      local_model_download: () => { fake!.emit("ozzie:local-model", ended); return progress("starting"); } }));
+    fake = s;
+    await toMac();
+    await press("Download and set up");
+    expect(seen()).toContain(downloadSaid("stopped", "qwen3:8b"));
+    expect(seen()).not.toContain("Starting the download of qwen3:8b");
+    expect(button("Stop the download")).toBeNull();
+    expect(isDisabled(button("Download and set up")!)).toBe(false);
+    // A step told before the answer stays too: it is newer than the first step.
+    let fake2: ReturnType<typeof fakeNative> | null = null;
+    await unmount!(); unmount = null;
+    const s2 = await mount(base({ local_ai_find: SETUP, local_model_progress: null,
+      local_model_download: () => { fake2!.emit("ozzie:local-model", progress("downloading", 1_200_000_000)); return progress("starting"); } }));
+    fake2 = s2;
+    await toMac();
+    await press("Download and set up");
+    expect(seen()).toContain("1.2 of 5.2 GB downloaded");
   });
 
   it("puts no line on Today for a download the person stopped (review L-7)", () => {
@@ -1186,7 +1315,7 @@ describe("S9: models Ozzie downloads and sets up itself (owner's request, 2026-1
 
     it("with nothing found, points to a model of their own, not to installing Ollama", async () => {
       const nothing = { ...EIGHT, catalogue: [], apps: [{ app: "ollama", installed: false, running: false, models: [] }, { app: "lm-studio", installed: false, running: false, models: [] }] };
-      await mount(base({ local_ai_find: nothing, local_model_progress: null }));
+      const s = await mount(base({ local_ai_find: nothing, local_model_progress: null }));
       await toMac();
       const text = seen();
       expect(text).toContain("Ozzie didn't find AI on this Mac.");
@@ -1194,7 +1323,349 @@ describe("S9: models Ozzie downloads and sets up itself (owner's request, 2026-1
       expect(text).toContain("AI on this Mac needs a Mac with 16 GB of memory or more.");
       expect(button("Open ollama.com")).toBeNull();
       expect(button("Look again")).not.toBeNull();
+      // The 16 GB rule: Ozzie never offers to get Ollama for a Mac that can't run a model it offers (decision 25).
+      expect(text).not.toContain(OLLAMA.offerTitle);
+      expect(button(OLLAMA.install)).toBeNull();
+      expect(s.calls.some(c => c.command === "ollama_install")).toBe(false);
     });
+  });
+});
+
+describe("S9c: Ozzie gets Ollama itself (owner's request, 2026-11-18; decision 25)", () => {
+  const toMac = async () => { await press("Your church's own AI"); await press("AI on this Mac"); };
+  const nobody = (name: string) => ({ app: name, installed: false, running: false, models: [] });
+  /** A 16 GB Mac with nothing on it: the offer to get Ollama. */
+  const NOTHING = { ...FOUND, recommended: "qwen3:8b", recommended_size_bytes: 5_225_388_164, apps: [nobody("ollama"), nobody("lm-studio")], free_bytes: null, catalogue: [] };
+  /** The same Mac once Ollama answers: the model offer of S9b, with the model for this Mac chosen. */
+  const ANSWERING = { ...NOTHING, free_bytes: 30_000_000_000, apps: [{ app: "ollama", installed: true, running: true, models: [] }, nobody("lm-studio")],
+    catalogue: [{ size: "medium", id: "qwen3:8b", size_bytes: 5_225_388_164, fits: true, offered: true, recommended: true, downloaded: false, set_up: false, disk: "enough", downloaded_by_ozzie: false }] };
+  const QUIET_ON_THIS_MAC = { ...NOTHING, apps: [{ app: "ollama", installed: true, running: false, models: [] }, nobody("lm-studio")] };
+  const at = (phase: OllamaPhase, done = 0, total = 0, end: OllamaEnd | null = null) => ({ phase, done_bytes: done, total_bytes: total, end });
+  const emit = async (s: { emit: (e: string, p: unknown) => void }, payload: unknown) => {
+    const { act } = await import("react");
+    await act(async () => { s.emit("ozzie:ollama-install", payload); });
+    await settle();
+  };
+  /** Native's finding, one after another (the last repeats). */
+  const finding = (...each: unknown[]) => { let n = 0; return () => each[Math.min(n++, each.length - 1)]; };
+  const ENDS: OllamaEnd[] = ["ready", "cancelled", "offline", "redirected", "too-large", "stalled", "download-failed", "no-room", "bad-archive", "not-signed",
+    "wrong-team", "wrong-app", "not-notarized", "outdated", "already-installed", "cant-install", "install-failed", "wont-open", "not-answering", "failed"];
+  const REFUSALS: OllamaRefusal[] = ["busy", "too-small", "already-installed", "already-running", "unavailable"];
+  const PHASES: OllamaPhase[] = ["starting", "downloading", "checking", "installing", "opening", "still-starting"];
+
+  it("asks first in plain words, with what Ollama is, where it comes from, how it is checked, and nothing downloaded before the press", async () => {
+    const s = await mount(base({ local_ai_find: NOTHING, open_help_page: null }));
+    await toMac();
+    const text = seen();
+    expect(text).toContain("Ozzie didn't find AI on this Mac.");
+    expect(text).toContain("Ozzie can get Ollama for you");
+    // Scannable (live, 2026-11-19): three short sentences up front (who makes it, from where, where it goes, what comes
+    // next with the model's size), a short list, and the checks under one fold in the app's style. Every promise kept.
+    const card = nodes().find(n => n.getAttribute?.("class") === "ai-get")!;
+    const up = card.childNodes.filter(n => n.tagName === "P").map(n => n.textContent);
+    expect(up).toEqual(["Ozzie can get Ollama for you",
+      "Ollama is a free app from another company, also called Ollama, that runs AI on this Mac.",
+      "Ozzie downloads it from ollama.com, checks it, and puts it in your Applications folder.",
+      "Then Ozzie offers the AI model that suits this Mac (about 5.2 GB), downloads it and sets it up for you."]);
+    const list = card.childNodes.find(n => n.tagName === "UL")!;
+    expect(list.childNodes.map(n => n.textContent)).toEqual([
+      "Nothing about your church leaves this Mac: the AI models Ozzie sets up in Ollama run here.",
+      "You see the download's size as it starts, and you can stop it.",
+      "Ollama starts by itself whenever you sign in to this Mac. To stop that, search System Settings for Login Items and turn off Ollama under Allow in the Background."]);
+    const fold = card.childNodes.find(n => n.tagName === "DETAILS")!;
+    expect(fold.getAttribute?.("class")).toBe("ai-more");
+    const summary = fold.childNodes.find(n => n.tagName === "SUMMARY")!;
+    expect(summary.textContent).toBe("What Ozzie checks before installing");
+    expect(all(summary).some(n => /\bic\b/u.test(n.getAttribute?.("class") ?? ""))).toBe(true);
+    expect(fold.textContent).toContain("Ozzie downloads Ollama only from ollama.com, Ollama's own website, and stops if the download is sent somewhere Ozzie doesn't trust.");
+    expect(fold.textContent).toContain("Before anything is opened, Ozzie checks that Ollama's makers signed it and that Apple checked it. If either check fails, Ozzie deletes it and installs nothing.");
+    for (const line of [...OLLAMA.offer, ...OLLAMA.facts, OLLAMA.checksTitle, ...OLLAMA.checks]) expect(line).not.toMatch(FORBIDDEN);
+    // No size in fixed words: the download's own size is shown once it starts.
+    expect([...OLLAMA.offer, ...OLLAMA.facts, ...OLLAMA.checks].join(" ")).not.toMatch(/\d+(\.\d+)? ?(MB|GB)/u);
+    // Two buttons, each naming the person and the effect; nothing is asked of native but a look.
+    expect(button("Download Ollama and set it up")).not.toBeNull();
+    expect(button("I'll install it myself")).not.toBeNull();
+    expect(button("Open ollama.com")).toBeNull();
+    expect(s.calls.map(c => c.command).filter(c => /^ollama_install$|^ollama_reveal$|^open_help_page$/u.test(c))).toEqual([]);
+    allFullSize();
+    // "I'll install it myself": Ollama's download page in the browser, today's guide, and still nothing downloaded.
+    await press("I'll install it myself");
+    expect(s.calls.at(-1)).toEqual({ command: "open_help_page", args: { page: "ollama-download" } });
+    expect(seen()).toContain(MAC.guide[0].text);
+    expect(seen()).not.toContain(OLLAMA.offerTitle);
+    expect(s.calls.some(c => c.command === "ollama_install")).toBe(false);
+  });
+
+  it("downloads with its real size, a bar and a Stop, says each step once, and hands over to the model offer when Ollama answers", async () => {
+    let answering = false;
+    const s = await mount(base({ local_ai_find: () => answering ? ANSWERING : NOTHING, ollama_install: at("starting"), ollama_install_cancel: true, local_model_progress: null }));
+    await toMac();
+    await press("Download Ollama and set it up");
+    expect(s.calls.find(c => c.command === "ollama_install")?.args).toEqual({});
+    const status = () => nodes().filter(n => n.getAttribute?.("role") === "status").map(n => n.textContent);
+    expect(status()).toContain("Starting the download of Ollama from ollama.com…");
+    // Nothing else is offered meanwhile; Stop is.
+    expect(button("Download Ollama and set it up")).toBeNull();
+    expect(button("I'll install it myself")).toBeNull();
+    expect(button("Stop the download")).not.toBeNull();
+    await emit(s, at("downloading", 12_400_000, 229_245_253));
+    const bar = nodes().find(n => n.tagName === "PROGRESS")!;
+    expect([bar.getAttribute?.("value"), bar.getAttribute?.("max"), bar.getAttribute?.("aria-label")]).toEqual(["12400000", "229245253", "Downloading Ollama"]);
+    expect(seen()).toContain("12 of 229 MB downloaded");
+    expect(status()).toContain("Downloading Ollama (229 MB) from ollama.com…");
+    expect(status().some(t => /MB downloaded/u.test(t))).toBe(false);
+    expect(seen()).toContain(MAC.keepsGoing);
+    await press("Stop the download");
+    expect(s.calls.at(-1)?.command).toBe("ollama_install_cancel");
+    // Checking, installing and opening take seconds: no bar and no Stop, never a spinner without words.
+    await emit(s, at("checking", 229_245_253, 229_245_253));
+    expect(status()).toContain("Downloaded. Checking that Ollama's makers signed it and that Apple checked it…");
+    expect(button("Stop the download")).toBeNull();
+    expect(nodes().some(n => n.tagName === "PROGRESS")).toBe(false);
+    await emit(s, at("installing", 229_245_253, 229_245_253));
+    expect(status()).toContain("Putting Ollama in your Applications folder…");
+    await emit(s, at("opening", 229_245_253, 229_245_253));
+    expect(status()).toContain("Opening Ollama. Ollama may open its own window and ask for your Mac's password to add a tool of its own. Ozzie doesn't need either, so you can close that window.");
+    await emit(s, at("still-starting", 229_245_253, 229_245_253));
+    expect(status()).toContain("Ollama is still starting. The first time can take a minute. Ollama may open its own window and ask for your Mac's password to add a tool of its own. Ozzie doesn't need either, so you can close that window.");
+    const finds = s.calls.filter(c => c.command === "local_ai_find").length;
+    answering = true;
+    await emit(s, at("opening", 229_245_253, 229_245_253, "ready"));
+    // Ollama answers: Ozzie looks again, and the model offer is there with this Mac's model chosen; its own press starts it.
+    expect(s.calls.filter(c => c.command === "local_ai_find").length).toBe(finds + 1);
+    expect(seen()).toContain("Ollama is installed and open.");
+    expect(seen()).toContain("Ollama is open but has no AI models yet.");
+    const rows = buttons().filter(b => /ai-row/u.test(b.getAttribute?.("class") ?? ""));
+    expect(rows.map(r => r.getAttribute?.("aria-pressed"))).toEqual(["true"]);
+    expect(button("Download and set up")).not.toBeNull();
+    expect(s.calls.some(c => c.command === "local_model_download")).toBe(false);
+    expect(seen()).not.toContain(OLLAMA.offerTitle);
+  });
+
+  it("says how each ending went in its own words, offers the person's own way where pressing again won't help, and Finder where Applications needs a password", async () => {
+    for (const end of ENDS.filter(e => e !== "ready")) {
+      const after = end === "already-installed" || end === "wont-open" || end === "not-answering" ? QUIET_ON_THIS_MAC : NOTHING;
+      const s = await mount(base({ local_ai_find: finding(NOTHING, after), ollama_install: at("starting"), open_help_page: null, local_ai_open: null,
+        ollama_reveal: () => { throw "not-there"; } }));
+      await toMac(); await press("Download Ollama and set it up");
+      await emit(s, at("downloading", 100, 229_245_253, end));
+      const said = ollamaEndSaid(end);
+      // Once the look after it shows Ollama on this Mac, its card says how it is now: "it didn't open" and "it hasn't
+      // started answering" aren't said over it (live, 2026-11-19); "already in Applications" still says why nothing came.
+      const replaced = end === "wont-open" || end === "not-answering";
+      if (replaced) expect(seen(), end).not.toContain(said.text); else expect(seen(), end).toContain(said.text);
+      expect(seen(), end).not.toMatch(/\/Users|\/Applications|codesign|spctl|ditto|Team ID|3MU9H2V9Y9|github/u);
+      if (after === QUIET_ON_THIS_MAC) {
+        // What is on this Mac now says the next step: Ollama is there but quiet, so "Open Ollama".
+        expect(seen(), end).toContain("Ollama is on this Mac but isn't open.");
+        expect(button("Open Ollama"), end).not.toBeNull();
+      }
+      if (said.reveal) {
+        expect(button("Download Ollama and set it up"), end).toBeNull();
+        await press("Show Ollama in Finder");
+        expect(s.calls.at(-1)?.command).toBe("ollama_reveal");
+        expect(seen()).toContain(ollamaRevealSaid("not-there"));
+        expect(button("Look again")).not.toBeNull();
+      } else if (after === NOTHING) {
+        // The offer stays, to press again or to install it themselves.
+        expect(button("Download Ollama and set it up"), end).not.toBeNull();
+      }
+      if (said.myself) {
+        expect(seen(), end).toContain("You can install Ollama yourself from ollama.com.");
+        await press("I'll install it myself");
+        expect(s.calls.at(-1), end).toEqual({ command: "open_help_page", args: { page: "ollama-download" } });
+        expect(seen(), end).toContain(MAC.guide[0].text);
+      }
+      await unmount!(); unmount = null;
+    }
+    // The exact words of the checks that fail, each its own.
+    expect(ollamaEndSaid("not-signed").text).toBe("The download isn't signed by Ollama's makers, so Ozzie deleted it. Nothing was installed. You can install Ollama yourself from ollama.com.");
+    expect(ollamaEndSaid("wrong-team").text).toBe("The download is signed by someone other than Ollama's makers, so Ozzie deleted it. Nothing was installed. You can install Ollama yourself from ollama.com.");
+    expect(ollamaEndSaid("wrong-app").text).toBe("The download is signed by Ollama's makers, but it isn't the Ollama app, so Ozzie deleted it. Nothing was installed. You can install Ollama yourself from ollama.com.");
+    expect(ollamaEndSaid("not-notarized").text).toBe("Apple hasn't checked this download, so Ozzie deleted it. Nothing was installed. You can install Ollama yourself from ollama.com.");
+    expect(ollamaEndSaid("outdated").text).toBe("The download is an older Ollama than Ozzie installs, so Ozzie deleted it. Nothing was installed. You can install Ollama yourself from ollama.com.");
+    expect(ollamaEndSaid("cant-install").text).toBe("Adding apps to the Applications folder on this Mac needs an administrator's password, and Ozzie never asks for one. Ozzie checked Ollama and kept it for you: press Show Ollama in Finder, drag Ollama into Applications, open it, then press Look again.");
+    expect(ollamaEndSaid("not-answering").text).toBe("Ollama is in your Applications folder now, but it hasn't started answering yet.");
+    expect(ollamaEndSaid("cancelled").text).toBe("The download is stopped, and Ozzie deleted what came. Nothing was installed.");
+  });
+
+  it("says Ollama is open but not answering when its program runs, never that it isn't open (live, 2026-11-19)", async () => {
+    const OPEN_NOT_ANSWERING = { ...NOTHING, apps: [{ app: "ollama", installed: true, running: false, open: true, models: [] }, nobody("lm-studio")] };
+    expect(MAC.ollamaQuiet).toBe("Ollama is open, but it isn't answering yet. If it doesn't answer in a minute, quit Ollama from the llama picture at the top of your screen, then press Open Ollama.");
+    const s = await mount(base({ local_ai_find: finding(NOTHING, OPEN_NOT_ANSWERING), ollama_install: at("starting"), local_ai_open: null }));
+    await toMac(); await press("Download Ollama and set it up");
+    await emit(s, at("opening", 0, 229_245_253, "not-answering"));
+    expect(seen()).toContain(MAC.ollamaQuiet);
+    expect(seen()).not.toContain(MAC.ollamaClosed);
+    expect(seen()).not.toContain(ollamaEndSaid("not-answering").text);
+    expect(button("Open Ollama")).not.toBeNull();
+    expect(button("Look again")).not.toBeNull();
+    for (const line of [MAC.ollamaQuiet, MAC.opening, OLLAMA.still]) expect(line).not.toMatch(FORBIDDEN);
+  });
+
+  it("after Open Ollama, waits for it and shows the model offer by itself, with Ozzie back in front (live, 2026-11-19)", async () => {
+    vi.useFakeTimers();
+    let up = false;
+    const s = await mount(base({ local_ai_find: () => up ? ANSWERING : QUIET_ON_THIS_MAC, ollama_install_progress: at("opening", 0, 229_245_253, "not-answering"), local_ai_open: null, come_forward: null }));
+    await toMac();
+    expect(seen()).toContain(MAC.ollamaClosed);
+    // Ozzie's window had the keyboard when Open Ollama was pressed; Ollama's own then came in front.
+    let front = true;
+    (document as unknown as { hasFocus: () => boolean }).hasFocus = () => front;
+    await press("Open Ollama");
+    expect(s.calls.find(c => c.command === "local_ai_open")?.args).toEqual({ app: "ollama" });
+    expect(seen()).toContain(MAC.opening);
+    expect(seen()).not.toContain(MAC.ollamaClosed);
+    expect(button("Open Ollama")).toBeNull();
+    front = false;
+    const { act } = await import("react");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    await settle();
+    expect(seen()).toContain(MAC.opening);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    await settle();
+    // Still not answering after 20 seconds: the same words as after installing it.
+    expect(seen()).toContain(OLLAMA.still);
+    up = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    await settle();
+    // Ollama answers: the model offer, without Look again, and nothing stale above it.
+    expect(seen()).toContain("Ozzie can download a model that suits this Mac and set it up for you.");
+    expect(seen()).not.toContain(OLLAMA.still);
+    expect(seen()).not.toContain(ollamaEndSaid("not-answering").text);
+    expect(s.calls.filter(c => c.command === "come_forward")).toHaveLength(1);
+    const asked = s.calls.filter(c => c.command === "local_ai_find").length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(s.calls.filter(c => c.command === "local_ai_find").length).toBe(asked);
+    delete (document as unknown as { hasFocus?: unknown }).hasFocus;
+  });
+
+  it("stops waiting after two minutes and says how Ollama is then; Ozzie isn't brought forward when it stayed in front", async () => {
+    vi.useFakeTimers();
+    const OPEN_NOT_ANSWERING = { ...NOTHING, apps: [{ app: "ollama", installed: true, running: false, open: true, models: [] }, nobody("lm-studio")] };
+    const s = await mount(base({ local_ai_find: OPEN_NOT_ANSWERING, local_ai_open: null, come_forward: null }));
+    await toMac();
+    await press("Open Ollama");
+    const { act } = await import("react");
+    await act(async () => { await vi.advanceTimersByTimeAsync(121_000); });
+    await settle();
+    expect(seen()).toContain(MAC.ollamaQuiet);
+    expect(seen()).not.toContain(OLLAMA.still);
+    expect(button("Open Ollama")).not.toBeNull();
+    const asked = s.calls.filter(c => c.command === "local_ai_find").length;
+    expect(asked).toBeLessThanOrEqual(1 + 61);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(s.calls.filter(c => c.command === "local_ai_find").length).toBe(asked);
+    expect(s.calls.some(c => c.command === "come_forward")).toBe(false);
+  });
+
+  it("says why it couldn't start, and keeps today's guide when this build's native side can't get Ollama", async () => {
+    for (const refusal of REFUSALS) {
+      const s = await mount(base({ local_ai_find: NOTHING, ollama_install: () => { throw refusal; } }));
+      await toMac(); await press("Download Ollama and set it up");
+      expect(seen(), refusal).toContain(ollamaRefusedSaid(refusal));
+      // Already there: Ozzie looks again, so the next step shows.
+      const looks = s.calls.filter(c => c.command === "local_ai_find").length;
+      expect(looks, refusal).toBe(refusal === "already-installed" || refusal === "already-running" ? 2 : 1);
+      await unmount!(); unmount = null;
+    }
+    // No such command on this build: the guide, nothing downloaded and no browser opened by itself.
+    const s = await mount(base({ local_ai_find: NOTHING }));
+    await toMac(); await press("Download Ollama and set it up");
+    expect(seen()).toContain(MAC.guide[0].text);
+    expect(s.calls.some(c => c.command === "open_help_page")).toBe(false);
+  });
+
+  it("reads native's progress and record as closed words and numbers only, and an ending always gets through", () => {
+    expect(parseOllamaProgress(at("downloading", 5, 10))).toEqual(at("downloading", 5, 10));
+    // A word native doesn't have is a failure, never work still going on; numbers past the cap or broken don't hold it.
+    expect(parseOllamaProgress({ phase: "downloading", done_bytes: 1, total_bytes: 2, end: "finished-somehow" })?.end).toBe("failed");
+    expect(parseOllamaProgress({ phase: "who-knows", done_bytes: "x", total_bytes: 2e12, end: "ready" })).toEqual(at("starting", 0, 0, "ready"));
+    expect(parseOllamaProgress({ phase: "downloading", done_bytes: 9, total_bytes: 5, end: null })).toEqual(at("downloading", 5, 5));
+    expect(parseOllamaProgress({ phase: "who-knows", end: null })).toBeNull();
+    expect(parseOllamaProgress("ready")).toBeNull();
+    // The record keeps a time and a closed word per ending; anything else is dropped.
+    expect(parseOllamaHistory({ done: [{ at_ms: 1, end: "ready" }, { at_ms: 2, end: "/Applications/Ollama.app" }, { at_ms: -1, end: "ready" }, "x"], installed_at_ms: 1 }))
+      .toEqual({ done: [{ at_ms: 1, end: "ready" }], installed_at_ms: 1 });
+    expect(parseOllamaHistory({ done: "x", installed_at_ms: "soon" })).toEqual({ done: [], installed_at_ms: null });
+    expect(parseOllamaHistory(null)).toBeNull();
+  });
+
+  it("keeps an ending native told before the press's own answer came, so the screen is never left at work", async () => {
+    let fake: ReturnType<typeof fakeNative> | null = null;
+    const s = await mount(base({ local_ai_find: NOTHING, ollama_install: () => { fake!.emit("ozzie:ollama-install", at("starting", 0, 0, "offline")); return at("starting"); } }));
+    fake = s;
+    await toMac(); await press("Download Ollama and set it up");
+    expect(seen()).toContain(ollamaEndSaid("offline").text);
+    expect(button("Stop the download")).toBeNull();
+    expect(button("Download Ollama and set it up")).not.toBeNull();
+  });
+
+  it("picks up getting Ollama under way when the screen opens again", async () => {
+    const s = await mount(base({ local_ai_find: NOTHING, ollama_install_progress: at("downloading", 100_000_000, 229_245_253), ollama_install_cancel: true }));
+    await toMac();
+    expect(seen()).toContain("100 of 229 MB downloaded");
+    expect(button("Stop the download")).not.toBeNull();
+    expect(button("Download Ollama and set it up")).toBeNull();
+    expect(s.calls.some(c => c.command === "ollama_install")).toBe(false);
+  });
+
+  it("has words for every step, ending and refusal, none forbidden, none with a path or a tool's name", () => {
+    const all = [...PHASES.map(p => OLLAMA.step(p, 229_245_253)), ...ENDS.map(e => ollamaEndSaid(e).text), ...REFUSALS.map(ollamaRefusedSaid),
+      ...(["not-there", "finder-unavailable", "busy"] as const).map(ollamaRevealSaid), ...ENDS.map(ollamaDoneSaid), ...OLLAMA.offer, OLLAMA.then(5e9),
+      OLLAMA.settingsTitle, OLLAMA.settingsBody("November 18, 2026"), OLLAMA.settingsRemove, OLLAMA.windowNote, OLLAMA.install, OLLAMA.myself, OLLAMA.reveal];
+    for (const text of all) {
+      expect(text).not.toMatch(FORBIDDEN);
+      expect(text).not.toMatch(/\/Users|\/Applications|codesign|spctl|ditto|sudo|Terminal|3MU9H2V9Y9|github|undefined|null/u);
+      expect(text, text).toMatch(/^[A-Z]/u);
+    }
+    // Every ending has a sentence of its own on this screen.
+    const ends = ENDS.map(e => ollamaEndSaid(e).text);
+    expect(new Set(ends).size).toBe(ends.length);
+    expect(OLLAMA.step("downloading", 0)).toBe("Downloading Ollama from ollama.com…");
+    expect([bytesText(229_245_253), bytesText(1_000_000_000), bytesText(40_000)]).toEqual(["229 MB", "1.0 GB", "1 MB"]);
+    expect(OLLAMA.amount(0, 229_245_253)).toBe("0 of 229 MB downloaded");
+  });
+
+  it("Settings › AI help says Ollama was installed by Ozzie and how to remove it, only while it is", async () => {
+    const STATUS = { configured: true, route: "local", label: "AI model on this Mac (qwen3:8b)", setup: "ready", checked_at_ms: 1_763_500_000_000 };
+    const at_ms = Date.UTC(2026, 10, 18, 18);
+    for (const installed of [at_ms, null]) {
+      const fake = fakeNative({ model_status: STATUS, ollama_install_history: { done: [{ at_ms, end: "ready" }], installed_at_ms: installed } });
+      native.invoke = fake.invoke as never;
+      const { act } = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const root = createRoot(dom.root as unknown as Element);
+      await act(async () => { root.render(React.createElement(AiSettings, { onChange() {} })); });
+      await settle();
+      unmount = async () => { await act(async () => { root.unmount(); }); };
+      if (installed) {
+        expect(seen()).toContain("Ollama, which Ozzie installed");
+        expect(seen()).toContain("Ozzie downloaded Ollama from ollama.com and put it in your Applications folder on November 18, 2026. Ollama is another company's app, with its own settings and its own updates. Ozzie doesn't remove other companies' apps.");
+        expect(seen()).toContain(OLLAMA.settingsRemove);
+        // It starts at login, said with the way Ollama's own FAQ gives to turn that off (live, 2026-11-19).
+        expect(seen()).toContain("Ollama starts by itself whenever you sign in to this Mac. To stop that, search System Settings for Login Items and turn off Ollama under Allow in the Background.");
+        expect(OLLAMA.settingsRemove).toContain("drag Ollama from Applications to the Trash");
+        expect(OLLAMA.settingsRemove).toContain("the .ollama folder in your home folder");
+      } else expect(seen()).not.toContain("Ollama, which Ozzie installed");
+      // Showing it removes nothing and starts nothing.
+      expect(fake.calls.map(c => c.command).filter(c => /^ollama_install$|^ollama_reveal$|remove/u.test(c))).toEqual([]);
+      await unmount!(); unmount = null;
+    }
+  });
+
+  it("What happened has a plain line for each time, with no path", () => {
+    const html = renderToStaticMarkup(React.createElement(DayProvider, { value: UNKNOWN_WORDS }, React.createElement(ActivityPage, { capture: null, tasks: [],
+      ollama: [{ at_ms: Date.UTC(2026, 10, 18, 18), end: "wrong-team" }, { at_ms: Date.UTC(2026, 10, 18, 19), end: "ready" }] })));
+    const text = html.replace(/<[^>]+>/gu, " ").replace(/&#x27;/gu, "'").replace(/\s+/gu, " ");
+    expect(text).toContain("Getting Ollama");
+    expect(text).toContain("Downloaded Ollama from ollama.com, checked that Ollama's makers signed it and that Apple checked it, and put it in Applications.");
+    expect(text).toContain("Downloaded Ollama from ollama.com, but it didn't pass Ozzie's check, so Ozzie deleted it. Nothing was installed.");
+    // Newest first.
+    expect(text.indexOf("and put it in Applications")).toBeLessThan(text.indexOf("didn't pass Ozzie's check"));
+    expect(text).not.toMatch(/\/Users|\/Applications|Library|Caches/u);
+    // None yet: no section.
+    expect(renderToStaticMarkup(React.createElement(DayProvider, { value: UNKNOWN_WORDS }, React.createElement(ActivityPage, { capture: null, tasks: [], ollama: [] })))).not.toContain("Getting Ollama");
   });
 });
 

@@ -70,7 +70,7 @@ export function UpdatesSection({ state, nowMs, cards, asking = false }: {
         <p className="small">{view.automatic ? AUTOMATIC_HELP : AUTOMATIC_OFF}</p>
       </div>
       <details className="listen-more">
-        <summary>See how this works</summary>
+        <summary><Icon name="chev" small />See how this works</summary>
         <ul className="small">{UPDATE_HOW.map(l => <li key={l}>{l}</li>)}</ul>
       </details>
     </div>

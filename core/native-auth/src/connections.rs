@@ -40,11 +40,12 @@
 //! Planning Center requests and waiting for a controller all happen outside it, so status polling
 //! and reads never queue behind them (review S, L1).
 use crate::callback::CallbackServer;
-use crate::credentials::CredentialStore;
+use crate::credentials::{CredentialStore, read_private};
 use crate::in_use::{UseHistory, UsedChurch};
 use crate::oauth::{
     AuthController, AuthError, Binding, ConnectionState, ConnectionStatus, NotRetired, Provider,
-    RecordFingerprint, Retired, numeric_id, remove_saved_record, saved_record_fingerprint,
+    RecordFingerprint, Retired, Scopes, numeric_id, remove_saved_record, saved_record_fingerprint,
+    stored_scopes,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -526,6 +527,31 @@ impl Connections {
     }
     pub fn view_of(&self, status: ConnectionStatus) -> StatusView {
         self.decorate(status)
+    }
+    /// The church Ozzie uses, or used last before this launch's check (`used`), connected or not: the one church a
+    /// sign-in decides before it can add a grant, and the one a sign-in again stays one click for (the app's `again`).
+    pub fn church_in_use(&self) -> Option<String> {
+        self.lock()
+            .ok()?
+            .used
+            .as_ref()
+            .map(|used| used.organization.clone())
+    }
+    /// What the sign-in saved on this Mac for `organization` was granted, from its record's non-secret set; None when
+    /// none is saved or it can't be read. Nothing secret leaves here, and the lock isn't held for the Keychain read. A
+    /// sign-in again for that church asks Planning Center for exactly this (the app's `again`), so it neither drops
+    /// access the church has nor asks for more (review 2026-11-18, late).
+    pub fn held(&self, organization: &str) -> Option<Scopes> {
+        if !numeric_id(organization) {
+            return None;
+        }
+        let bytes = read_private(
+            self.store.as_ref(),
+            &format!("{}{organization}", self.prefix),
+            organization,
+        )
+        .ok()??;
+        stored_scopes(&bytes)
     }
     /// The session's controller as installed now, without handing over.
     pub fn current(&self) -> Option<Arc<AuthController>> {

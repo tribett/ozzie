@@ -3303,7 +3303,7 @@ fn a_managed_step_reaches_the_fake_ozzie_church_end_to_end() {
     let hosted = HostedConfig::from_env(true, Some(&server.base));
     let config = RouteConfig::managed();
     let keys = connected_keys();
-    let http = NativeModelHttp::for_route(model::Route::Managed, &hosted).unwrap();
+    let http = NativeModelHttp::for_route(&config, &hosted).unwrap();
     let bench = Bench::new("hosted-e2e");
     let env = StepEnv {
         keys: &keys,
@@ -4298,13 +4298,39 @@ fn review_m1_the_client_a_step_on_this_mac_goes_through_gives_up_when_its_task_h
     // What `StepEnv::check` leaves a step on this Mac: here, one second of its task's run.
     let left = std::time::Duration::from_secs(1);
     let began = std::time::Instant::now();
-    let deadline = step_client(&local, &hosted, Some(left))
+    let here = crate::local_ai::fake::OneModel::here("qwen3:8b");
+    let deadline = step_client(&local, &hosted, Some(left), &here)
         .unwrap()
         .deadline()
         .expect("a step on this Mac gives up when its task's time is gone");
     assert!(
         deadline <= began + left + std::time::Duration::from_millis(250),
         "the step waits {:?}, more than its task has left",
+        deadline.saturating_duration_since(began)
+    );
+    // Asking Ollama first spends some of that time: the step still gives up when the task's time is gone (review,
+    // 2026-11-19), never that much later.
+    struct Slow(crate::local_ai::fake::OneModel);
+    impl crate::local_ai::LocalHttp for Slow {
+        fn get(&self, url: &str, wait: std::time::Duration) -> Result<(u16, Vec<u8>), crate::local_ai::Failure> {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            self.0.get(url, wait)
+        }
+        fn post(&self, url: &str, body: &[u8], wait: std::time::Duration) -> Result<(u16, Vec<u8>), crate::local_ai::Failure> {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            self.0.post(url, body, wait)
+        }
+        fn delete(&self, url: &str, body: &[u8], wait: std::time::Duration) -> Result<(u16, Vec<u8>), crate::local_ai::Failure> {
+            self.0.delete(url, body, wait)
+        }
+    }
+    let slow = Slow(crate::local_ai::fake::OneModel::here("qwen3:8b"));
+    let began = std::time::Instant::now();
+    let deadline = step_client(&local, &hosted, Some(left), &slow).unwrap().deadline().unwrap();
+    assert!(began.elapsed() >= std::time::Duration::from_millis(450));
+    assert!(
+        deadline <= began + left + std::time::Duration::from_millis(250),
+        "the step waits {:?} from before its check, more than its task has left",
         deadline.saturating_duration_since(began)
     );
     // An AI company's route, and Ozzie's AI, have no time to keep (`check` gives them none): they wait as they always
@@ -4315,9 +4341,9 @@ fn review_m1_the_client_a_step_on_this_mac_goes_through_gives_up_when_its_task_h
         Some("vendor/model-1"),
     )
     .unwrap();
-    assert_eq!(step_client(&own, &hosted, None).unwrap().deadline(), None);
+    assert_eq!(step_client(&own, &hosted, None, &here).unwrap().deadline(), None);
     assert_eq!(
-        step_client(&RouteConfig::managed(), &hosted, None)
+        step_client(&RouteConfig::managed(), &hosted, None, &here)
             .unwrap()
             .deadline(),
         None

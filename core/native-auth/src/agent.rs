@@ -238,6 +238,9 @@ pub enum AgentError {
     /// step or network, or by ozzie.church before the AI. Nothing went to the AI; the loop fails the
     /// task as `egress`, the only thing the ledger records of it.
     BackgroundCheck,
+    /// AI on this Mac: the model chosen doesn't run on this Mac, or Ozzie can't tell it does (model.rs
+    /// `NotOnThisMac`). Asked of its app before every step; nothing was sent, spent or taken.
+    NotOnThisMac,
 }
 impl From<ModelError> for AgentError {
     fn from(error: ModelError) -> Self {
@@ -259,6 +262,7 @@ impl From<ModelError> for AgentError {
             ModelError::HiddenCharacter => Self::Egress,
             // ozzie.church counts the task's steps too: the same limit the ledger keeps here.
             ModelError::StepLimit => Self::Limit,
+            ModelError::NotOnThisMac => Self::NotOnThisMac,
         }
     }
 }
@@ -1528,20 +1532,24 @@ pub fn agent_step(
     };
     // Everything that can refuse without a client does so first, once.
     let checked = env.check(request)?;
-    let http = step_client(config, &hosted, checked.wait)?;
+    let http = step_client(config, &hosted, checked.wait, &*model::this_mac_for(config)?)?;
     env.send(request, checked, &http)
 }
 /// The client a step goes through: the route's own, giving up within `wait` when one is given (a model on this Mac:
 /// what is left of the task's run, `StepEnv::check`), so a step never outlives its task (review M4). Every other
-/// route has no wait here and waits as it always has.
+/// route has no wait here and waits as it always has. A model on this Mac gets one only once `local` (its app on this
+/// Mac) says the model still runs here (`NativeModelHttp::for_route_after`; `not-on-this-mac`).
 pub(crate) fn step_client(
     config: &RouteConfig,
     hosted: &HostedConfig,
     wait: Option<std::time::Duration>,
+    local: &dyn crate::local_ai::LocalHttp,
 ) -> Result<NativeModelHttp, AgentError> {
-    let http = NativeModelHttp::for_route(config.route, hosted)?;
+    // The task's time left counts from here: asking the app first spends some of it (review, 2026-11-19).
+    let began = std::time::Instant::now();
+    let http = NativeModelHttp::for_route_after(config, hosted, local)?;
     Ok(match wait {
-        Some(left) => http.within(left),
+        Some(left) => http.within(left.saturating_sub(began.elapsed())),
         None => http,
     })
 }

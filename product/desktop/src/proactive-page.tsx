@@ -94,9 +94,15 @@ function Entry({ entry, names, d }: { entry: HistoryEntry; names: Names; d: DayW
  * it found) beside Keep {day} covered as one item, then what changed and the schedule and quiet hours. Every sentence
  * names the service by its real day (the day words, spec §5).
  */
-export function ProactivePage({ view, names, organization, planId, readiness, busy, now, churchTimeZone = null, church = null, onCheckNow, onPause, onResume, onPrefs,
-  responsibilities = null }: {
+export function ProactivePage({ view, names, organization, planId, readiness, shownReadiness = readiness, busy, now, churchTimeZone = null, church = null, onCheckNow, onPause,
+  onResume, onPrefs, responsibilities = null }: {
   view: ProactiveView; names: Names; organization: string; planId: string; readiness: Readiness; busy: boolean; now: string;
+  /**
+   * What the page says about readiness: while a sign-in for a church already connected is in the browser, what was true
+   * before it started (App's useHeldWhile), never "Waiting for setup" (review item 4). `readiness` itself still decides
+   * what can be pressed.
+   */
+  shownReadiness?: Readiness;
   /** The church's name, when known: said instead of its organization number (spec §6). */
   church?: string | null;
   /** The church's IANA zone from the latest real check of this organization; null when no check has read it. */
@@ -121,7 +127,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
   const intervals = INTERVAL_CHOICES.includes(prefs.intervalMinutes) ? INTERVAL_CHOICES : [...INTERVAL_CHOICES, prefs.intervalMinutes].sort((a, b) => a - b);
 
   const state = schedule.paused ? <span className="badge b-muted">Paused</span>
-    : readiness !== "ready" ? <span className="badge b-look">Waiting for setup</span>
+    : shownReadiness !== "ready" ? <span className="badge b-look">Waiting for setup</span>
       : schedule.failures > 0 ? <span className="badge b-attn">Couldn't finish last time</span>
         : <span className="badge b-ok"><Icon name="check" small />On schedule</span>;
   const ran = (r: NonNullable<typeof last>) => `${time(r.finished_at)}${why[r.trigger] ? `, ${why[r.trigger]}` : ""}`;
@@ -130,8 +136,8 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
       : last.outcome === "interrupted" ? `${time(last.finished_at)}. Stopped when Ozzie closed.`
         : `${ran(last)}. Finished.${latest && !latest.fully_read ? " Some coverage couldn't be verified." : ""}`;
   const nextLine = schedule.paused ? `Paused. Ozzie doesn't look at ${day} until you resume.`
-    : readiness === "not-configured" ? "After you choose which service Ozzie watches under Settings."
-      : readiness === "not-connected" ? "After Planning Center is connected under Settings."
+    : shownReadiness === "not-configured" ? "After you choose which service Ozzie watches under Settings."
+      : shownReadiness === "not-connected" ? "After Planning Center is connected under Settings."
         : running ? "Checking now…"
           : schedule.next_run_at ? `${time(schedule.next_run_at)}${schedule.failures ? ", trying again after a problem" : ""}.` : "Not scheduled.";
 
@@ -143,8 +149,8 @@ export function ProactivePage({ view, names, organization, planId, readiness, bu
     {last?.outcome === "failed" && !schedule.paused && <p className="panel-warn" role="status"><Icon name="info" small />
       The last check couldn't finish. {last.problem} {schedule.next_run_at ? `Ozzie will try again ${time(schedule.next_run_at)}.` : ""}</p>}
     {last?.outcome === "failed" && !schedule.paused && last.problem === CHECK_REFUSED && <CopyForAdministrator />}
-    {readiness !== "ready" && !schedule.paused && <p className="panel-info"><Icon name="info" small />
-      {readiness === "not-configured" ? "Not running yet. Choose which service Ozzie watches under Settings." : "Not running yet. Connect Planning Center under Settings, then checks start on their own."}</p>}
+    {shownReadiness !== "ready" && !schedule.paused && <p className="panel-info"><Icon name="info" small />
+      {shownReadiness === "not-configured" ? "Not running yet. Choose which service Ozzie watches under Settings." : "Not running yet. Connect Planning Center under Settings, then checks start on their own."}</p>}
     {schedule.held && <p className="panel-info"><Icon name="clock" small />A notice is waiting until quiet hours end at {clock(prefs.quietEnd)}. Everything it's about is listed below.</p>}
 
     <section className="find" aria-labelledby="job-title">

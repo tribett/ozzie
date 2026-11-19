@@ -72,14 +72,32 @@ describe("the answer to \"sunday\"", () => {
   it("gives open spots across roles and who is pending, with when it was checked", async () => {
     const { text } = await copyFor(harnessData({ mode: "live" }));
     expect(ask(text, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. "
-      + "Checked in Planning Center today at 10:00 AM.");
+      + "1 room booking overlap and 1 overdue follow-up with no owner need a decision. Checked in Planning Center today at 10:00 AM.");
+  });
+
+  it("says the room overlaps and follow-ups that need a decision, as counts after the roles, never what they are (review item 3)", async () => {
+    // The fictional Sunday under a room rule: the overlap it confirms and the follow-up with no owner both need a decision
+    // on the Sunday page, so an answer leaving them out would be short of the page's count.
+    const { text, envelopes } = await copyFor(harnessData({ mode: "live" }));
+    const ROOMS = "1 room booking overlap and 1 overdue follow-up with no owner need a decision.";
+    expect(ask(text, FRESH)).toContain(`2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. ${ROOMS} Checked`);
+    expect(ask(text, "2026-11-20T15:31:00Z")).toContain("1 room booking overlap and 1 overdue follow-up with no owner needed a decision.");
+    // No room rule: the overlap is worth a look on the page, so only the follow-up is said, and the group meeting isn't.
+    const unruled = await copyFor(harnessData({ mode: "live", rules: { ...LEAD_RULES, rooms: [] } }));
+    expect(ask(unruled.text, FRESH)).toContain(" 1 overdue follow-up with no owner needs a decision. ");
+    expect(ask(unruled.text, FRESH)).not.toMatch(/room booking|group/u);
+    // Left out for length, the counts are a least.
+    const cut = edited(envelopes[0]!, p => { p["left_out_for_length"] = 1; }, "partial");
+    expect(ask(cut, FRESH)).toContain("At least 1 room booking overlap and at least 1 overdue follow-up with no owner need a decision.");
+    // Not read: nothing about them.
+    expect(ask((await copyFor(harnessData({ mode: "live", operationsOff: true }))).text, FRESH)).not.toMatch(/room booking|follow-up/u);
   });
 
   it("speaks of a check more than 30 minutes old in the past tense and says things may have changed", async () => {
     // Written while it was current; Ozzie was closed and nothing rewrote it.
     const { text } = await copyFor(harnessData({ mode: "live" }));
     expect(ask(text, "2026-11-20T15:31:00Z")).toBe("When Ozzie last checked, Sunday, November 22 had 2 open spots across 2 roles. "
-      + "1 person was pending, and Planning Center showed the request hadn't been sent yet. Checked in Planning Center today at 10:00 AM. Things may have changed since then; open Ozzie to see the latest.");
+      + "1 person was pending, and Planning Center showed the request hadn't been sent yet. 1 room booking overlap and 1 overdue follow-up with no owner needed a decision. Checked in Planning Center today at 10:00 AM. Things may have changed since then; open Ozzie to see the latest.");
     expect(ask(text, "2026-11-21T14:00:00Z")).toContain("Checked in Planning Center yesterday at 10:00 AM.");
     expect(ask(text, "2026-11-21T14:00:00Z")).toMatch(/^When Ozzie last checked, /u);
     // At exactly 30 minutes it is still current, as in Ozzie.
@@ -95,14 +113,14 @@ describe("the answer to \"sunday\"", () => {
   it("says a saved copy of a check is one, in the past tense", async () => {
     const { text } = await copyFor(harnessData({ mode: "recording" }));
     expect(ask(text, "2026-11-21T14:00:00Z")).toBe("This is from a saved copy of a check, not a live look at Planning Center. "
-      + "Sunday, November 22 had 2 open spots across 2 roles. 1 person was pending, and Planning Center showed the request hadn't been sent yet. Checked in Planning Center yesterday at 10:00 AM.");
+      + "Sunday, November 22 had 2 open spots across 2 roles. 1 person was pending, and Planning Center showed the request hadn't been sent yet. 1 room booking overlap and 1 overdue follow-up with no owner needed a decision. Checked in Planning Center yesterday at 10:00 AM.");
   });
 
   it("says the fictional example is an example, whenever it's asked", async () => {
     const { text } = await copyFor(harnessData());
     // No check of Planning Center is behind it, so no check time is said, whatever the clock (review K2 N2).
     const answer = "This is Ozzie's fictional example, not a real church; no check of Planning Center is behind it. "
-      + "Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet.";
+      + "Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. 1 room booking overlap and 1 overdue follow-up with no owner need a decision.";
     for (const now of ["2026-11-15T18:00:00Z", "2026-11-20T18:00:00Z", "2026-12-01T18:00:00Z"]) {
       expect(ask(text, now)).toBe(answer);
       expect(ask(text, now)).not.toMatch(/Checked|November 20|today|yesterday/u);
@@ -119,7 +137,7 @@ describe("the answer to \"sunday\"", () => {
     const data = FIXTURES.find(([label]) => label === "a read that didn't complete")![1]();
     const { text } = await copyFor(data);
     expect(ask(text, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. "
-      + "Worth a look: part of the check couldn't be read, so this may be incomplete. Checked in Planning Center today at 10:00 AM.");
+      + "1 room booking overlap and 1 overdue follow-up with no owner need a decision. Worth a look: part of the check couldn't be read, so this may be incomplete. Checked in Planning Center today at 10:00 AM.");
   });
 
   it("leaves out what the leader marked as handled, and counts teams without a confirmed lead", async () => {
@@ -127,14 +145,14 @@ describe("the answer to \"sunday\"", () => {
     const data = harnessData({ mode: "live", rules: LEAD_RULES, decisions: [decide(need, "covered-outside", "Avery's sister said yes, call 555-201-3344", CHECKED)] });
     const { text } = await copyFor(data);
     expect(ask(text, FRESH)).toBe("Sunday, November 22 has 1 open spot across 1 role. 1 team doesn't have a confirmed lead. 1 person is pending, and Planning Center shows the request hasn't been sent yet. "
-      + "You marked 1 as handled yourself. Checked in Planning Center today at 10:00 AM.");
+      + "1 room booking overlap and 1 overdue follow-up with no owner need a decision. You marked 1 as handled yourself. Checked in Planning Center today at 10:00 AM.");
   });
 
   it("counts kids teams short of confirmed people and says some findings are shown only in Ozzie, never what they are", async () => {
     const data = harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()) });
     const { text } = await copyFor(data);
     expect(ask(text, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 2 kids teams have fewer confirmed people than your Church rules ask. "
-      + "1 person is pending, and Planning Center shows the request hasn't been sent yet. Some findings are shown only in Ozzie. Checked in Planning Center today at 10:00 AM.");
+      + "1 person is pending, and Planning Center shows the request hasn't been sent yet. 1 room booking overlap and 1 overdue follow-up with no owner need a decision. Some findings are shown only in Ozzie. Checked in Planning Center today at 10:00 AM.");
   });
 
   it("says when no role still needs people, and counts roles when Planning Center's spot count isn't known", async () => {
@@ -162,7 +180,7 @@ describe("the answer to \"sunday\"", () => {
         pending("request sent, no answer yet", 1), pending("request sent, no answer yet", 2), pending("request not sent yet", 3)];
     });
     expect(ask(mixed, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 3 people are pending: 2 requests were sent with no answer yet, "
-      + "and Planning Center shows 1 request hasn't been sent yet. Checked in Planning Center today at 10:00 AM.");
+      + "and Planning Center shows 1 request hasn't been sent yet. 1 room booking overlap and 1 overdue follow-up with no owner need a decision. Checked in Planning Center today at 10:00 AM.");
     expect(ask(mixed, "2026-11-20T16:00:00Z")).toContain("3 people were pending: 2 requests had been sent with no answer yet, "
       + "and Planning Center showed 1 request hadn't been sent yet.");
     // One person pending for two roles is one person; only requests sent.
@@ -188,14 +206,14 @@ describe("the answer to \"sunday\"", () => {
     expect(JSON.parse(text).envelopes[0].completeness).toBe("stale");
     expect(ask(text, "2026-11-21T14:00:00Z")).toBe("This is from a saved copy of a check, not a live look at Planning Center. "
       + "Sunday, November 22 had 2 open spots across 2 roles. 1 person was pending, and Planning Center showed the request hadn't been sent yet. "
-      + "Worth a look: part of the check couldn't be read, so this may be incomplete. Checked in Planning Center yesterday at 10:00 AM.");
+      + "1 room booking overlap and 1 overdue follow-up with no owner needed a decision. Worth a look: part of the check couldn't be read, so this may be incomplete. Checked in Planning Center yesterday at 10:00 AM.");
   });
 
   it("says a list too long to say in full was too long, with every count as a least, never that it couldn't be read (review K M2)", async () => {
     const { envelopes } = await copyFor(harnessData({ mode: "live" }));
     const cut = edited(envelopes[0]!, p => { p["left_out_for_length"] = 30; }, "partial");
     expect(ask(cut, FRESH)).toBe("Sunday, November 22 has at least 2 open spots across at least 2 roles. At least 1 person is pending, and Planning Center shows the request hasn't been sent yet. "
-      + "Worth a look: the list was too long to say in full, so there may be more than this. Checked in Planning Center today at 10:00 AM.");
+      + "At least 1 room booking overlap and at least 1 overdue follow-up with no owner need a decision. Worth a look: the list was too long to say in full, so there may be more than this. Checked in Planning Center today at 10:00 AM.");
     expect(ask(cut, FRESH)).not.toContain("couldn't be read");
     // A recording cut for length (completeness stays "stale") says the same.
     const recording = (await copyFor(harnessData({ mode: "recording" }))).envelopes[0]!;
@@ -229,7 +247,7 @@ describe("the answer to \"sunday\"", () => {
         time: { starts_at: "2026-11-22T09:30-05:00", ends_at: "2026-11-22T10:30-05:00" } });
     });
     expect(ask(unsure, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 1 kids team has fewer confirmed people than your Church rules ask. "
-      + "1 person is pending, and Planning Center shows the request hasn't been sent yet. Worth a look: 1 kids team may have fewer confirmed people than your Church rules ask. "
+      + "1 person is pending, and Planning Center shows the request hasn't been sent yet. 1 room booking overlap and 1 overdue follow-up with no owner need a decision. Worth a look: 1 kids team may have fewer confirmed people than your Church rules ask. "
       + "Worth a look: 1 team has a lead scheduled whose answer or serving time couldn't be confirmed. Some findings are shown only in Ozzie. "
       + "Checked in Planning Center today at 10:00 AM.");
     expect(ask(unsure, "2026-11-20T16:00:00Z")).toContain("Worth a look: 1 kids team may have had fewer confirmed people than your Church rules ask. "
@@ -241,7 +259,7 @@ describe("the answer to \"sunday\"", () => {
     const { text, envelopes } = await copyFor(harnessData({ mode: "live", capture: withScheduledBlockouts(nov22Capture()) }));
     // The open spots are Planning Center's own, as without the blockouts.
     expect(ask(text, FRESH)).toBe("Sunday, November 22 has 2 open spots across 2 roles. 1 person is pending, and Planning Center shows the request hasn't been sent yet. "
-      + "Worth a look: 2 people scheduled have a blockout in Planning Center at their serving time. Checked in Planning Center today at 10:00 AM.");
+      + "1 room booking overlap and 1 overdue follow-up with no owner need a decision. Worth a look: 2 people scheduled have a blockout in Planning Center at their serving time. Checked in Planning Center today at 10:00 AM.");
     expect(ask(text, "2026-11-20T16:00:00Z")).toContain("Worth a look: 2 people scheduled had a blockout in Planning Center at their serving time.");
     const handled = edited(envelopes[0]!, p => {
       const findings = p["findings"] as Record<string, unknown>[];
@@ -281,6 +299,7 @@ const OWN_WORDS = new Set(`
   pending person is are was were with request sent no least list long full more whose answer or serving time
   later mac's clock tell current could can't it there's there shows showed none of count behind
   scheduled blockout in their
+  room booking overlap overdue follow-up owner decision
   monday tuesday wednesday thursday friday saturday
   january february march april may june july august september october november december
 `.split(/\s+/u).filter(Boolean));

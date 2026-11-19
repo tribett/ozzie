@@ -6,6 +6,8 @@ import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
 import { dayName, pageRef } from "./day-phrases.js";
 import { promise } from "./promises.js";
+import { OLLAMA, ollamaDoneSaid } from "./ai-words.js";
+import type { OllamaHistory } from "./onboarding-bridge.js";
 
 // What each read was, said without the day: an older check may have been of another week's service.
 const what: Record<string, string> = {
@@ -99,7 +101,7 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
     const account = taskAccount(row, { start, end: end(row.task_id), procedures, day, ...(now ? { now } : {}) });
     return <li key={row.task_id} className={row.state === "failed" ? "is-problem" : ""}>
       <details className="recent-task">
-        <summary>{line}</summary>
+        <summary><Icon name="chev" small /><span>{line}</span></summary>
         <TaskAccount account={account} />
       </details>
     </li>;
@@ -117,10 +119,12 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
 }
 
 /** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */
-export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, now }: {
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, now, ollama = null }: {
   capture: SundayCapture | null; notGranted?: boolean;
   tasks?: TaskRow[] | null | undefined; procedures?: ReadonlyMap<string, Skill> | null;
   trigger?: (taskId: string) => TaskStart | undefined; end?: (taskId: string) => TaskEnd | undefined; now?: Date;
+  /** Each time Ozzie got Ollama (native `ollama_install_history`), oldest first: a time and a closed word, never a path. */
+  ollama?: OllamaHistory["done"] | null;
 }) {
   const d = useDay();
   return <div className="col">
@@ -131,6 +135,13 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
       <h2 id="recent-title" className="h3">Recent work</h2>
       <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(now ? { now } : {})} />
     </section>
+    {ollama && ollama.length > 0 && <section className="stack" aria-labelledby="ollama-title">
+      <h2 id="ollama-title" className="h3">{OLLAMA.historyTitle}</h2>
+      <ol className="log">{[...ollama].reverse().map((o, i) => <li key={i}>
+        <span className="log-t">{new Date(o.at_ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+        <span>{ollamaDoneSaid(o.end)}</span>
+      </li>)}</ol>
+    </section>}
     <section className="stack" aria-labelledby="reads-title">
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
       {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {dayName(d)} is checked, or when you open the fictional example on {pageRef(d)}.</p>}

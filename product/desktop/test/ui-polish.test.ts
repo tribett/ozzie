@@ -66,7 +66,8 @@ describe("Settings", () => {
     status: null, settings, onSettings: () => {}, onStatus: () => {}, prefs: DEFAULT_PREFS, onAutomatic: () => {}, onSetup: () => {},
   }));
   it("is titled Settings, with its sections in a fixed order", () => {
-    expect(html).toContain("<h1 class=\"h1\">Settings</h1>");
+    // Named Settings as its eyebrow, under a title like every other page's (polish pass, 2026-11-18; page-polish.test.ts).
+    expect(html).toContain("<p class=\"eyebrow\">Settings</p><h1 class=\"h1\">How Ozzie is set up on this Mac</h1>");
     // In the order a leader meets them (audit item 27); Your name on notes second, near the top (audit item 18).
     const order = ["Planning Center and which service Ozzie watches</h2>", "Sign in</h3>", "Which service Ozzie watches</h3>", "Rooms, follow-ups and group events</h3>",
       "Your name on notes</h2>", "AI help</h2>", "What Ozzie runs and notices</h2>", "Keeping watch</h3>", "A notice on your phone</h3>",

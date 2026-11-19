@@ -3,7 +3,7 @@
 // "Check my setup", and the "What the AI sees" sheet built from the real request for the fictional example church.
 import { createContext, useContext, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import { Icon } from "./icons.js";
-import { AI } from "./ai-words.js";
+import { AI, CHOICE } from "./ai-words.js";
 import type { OnboardingBridge } from "./onboarding-bridge.js";
 import { buildRewordRequest, templateDraft } from "../../../core/src/draft-request.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
@@ -58,6 +58,10 @@ export const Quiet = ({ children, onClick, disabled }: { children: ReactNode; on
   <button type="button" className="ai-link" onClick={onClick} disabled={disabled}>{children}</button>;
 
 /** A line that says what is happening now, read out politely. Empty: nothing is said. */
+/** The way Ozzie uses AI now, when one works: its card says "In use now"; nothing before one does (live, 2026-11-19). */
+export type InUse = "managed" | "own" | "local" | null;
+/** The small tag on the card of the way in use, inside the card's button, so VoiceOver reads it with the card's name. */
+export const InUseTag = () => <span className="ai-tag">{CHOICE.inUse}</span>;
 export const Status = ({ text }: { text: string }) => <p className="ai-status" role="status" aria-live="polite">{text}</p>;
 
 /** What worked, with a check mark. */

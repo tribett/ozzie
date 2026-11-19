@@ -25,6 +25,7 @@ import { SUNDAY_WORDS } from "../../../core/src/service-day.js";
 import { sundayShownCount } from "../../../core/src/sunday-brief.js";
 import { applyDecisions } from "../../../core/src/sunday-decisions.js";
 import { sundayCount } from "../src/today-groups.js";
+import { crowded } from "../../../core/test/harness/fixtures.js";
 import { answer, BACKGROUND_IN_REQUEST, calls, draftTurns, everyRequest, fakeNative as fakeLedger, fictionalData, greeterTurns, payloadOf, row, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
@@ -877,6 +878,70 @@ describe("native invalid-arguments: the AI asked for a lookup in a way the tool 
     const notes = new StepNotes();
     const h = createAppHarness({ workspace_id: "fictional", data: fictionalData(), skills, session: new HarnessSession(), loop: "pi", step: agentStep(egress.invoke, notes) });
     expect(await askOzzie(h, "Why is Greeter flagged?", { skills, notes })).toEqual({ state: "problem", code: "egress", text: ASK_FAILURES.egress });
+  });
+});
+
+describe("where the overview's rooms, follow-ups and group meetings come from (review item 5)", () => {
+  type Rows = { fact: string; findings: { fact: string; kind: string }[] };
+  /** A live check of the fictional Sunday (no room rule) with these reads ending `outcome`. */
+  const live = (outcome: Record<string, string> = {}) => {
+    const capture = withFictionalOperations(nov22Capture());
+    capture.reads = capture.reads.map(r => outcome[r.collection] ? { ...r, outcome: outcome[r.collection]! } as typeof r : r);
+    return buildHarnessData({ capture, fictional: false, rules: RULES, decisions: [], status: null, configured: false, now: "2026-11-20T15:05:00Z" });
+  };
+  /** The overview read, then an answer choosing its rows of `kinds`. */
+  const choosing = async (data: ReturnType<typeof live>, kinds: string[]) => {
+    const turn = await askOzzie(harness(scripted([() => calls(["sunday.overview"]), r => {
+      const p = payloadOf(r, "sunday.overview") as Rows;
+      return answer(JSON.stringify({ answer: "facts", facts: p.findings.filter(f => kinds.includes(f.kind)).map(f => f.fact) }));
+    }]).model, undefined, data), "What about rooms and follow-ups?", { skills });
+    if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+    return turn.answer;
+  };
+
+  it("the row for details that couldn't be confirmed names its own source: a room's is Calendar", async () => {
+    const a = await choosing(live(), ["a detail couldn't be verified"]);
+    expect(a.body).toBe("Worth a look: Some room or follow-up details couldn't be confirmed.");
+    expect(a.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center Calendar, checked .+$/u);
+    expect(a.basedOn).not.toContain("People");
+  });
+
+  it("a row whose own Planning Center reads didn't all complete says so, by that source only", async () => {
+    // Calendar's conflict records timed out: the room row's source is said to be incomplete, the follow-up's isn't.
+    const calendar = live({ calendar_conflicts: "timeout" });
+    expect((await choosing(calendar, ["room use needs review"])).gaps).toEqual(["Planning Center Calendar: part of this couldn't be read."]);
+    expect((await choosing(calendar, ["needs an owner"])).gaps).toEqual([]);
+    // People's workflows timed out: the follow-up's source is.
+    expect((await choosing(live({ people_workflows: "timeout" }), ["needs an owner"])).gaps).toEqual(["Planning Center People: part of this couldn't be read."]);
+    expect((await choosing(live({ groups_group_events: "timeout" }), ["group meets while serving"])).gaps).toEqual(["Planning Center Groups: part of this couldn't be read."]);
+    // Every read complete: nothing to say.
+    expect((await choosing(live(), ["room use needs review", "needs an owner", "group meets while serving"])).gaps).toEqual([]);
+  });
+});
+
+describe("an overview too long for one answer (review item 6)", () => {
+  it("says the full totals, every decision, and that findings were left out of the answer, never that Planning Center couldn't be read", async () => {
+    const data = crowded();
+    const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
+    const every: Turn = r => { const p = payloadOf(r, "sunday.overview") as { fact: string; left_out_for_length: number; findings: { fact: string; tone: string }[] };
+      return answer(JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.filter(f => f.tone === "needs a decision").map(f => f.fact)] })); };
+    const turn = await askOzzie(harness(scripted([() => calls(["sunday.overview"]), every]).model, undefined, data), "What still needs a decision this Sunday?", { skills });
+    if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
+    const parts = turn.answer.body.split("\n\n");
+    expect(parts[0]).toBe(`For Sunday, November 22, this check found ${shown.decisions} items that need a decision and ${shown.looks} worth a look.`);
+    expect(parts.slice(1).filter(p => /^(?:Needs a decision|Room use needs review): |has no owner\.$/u.test(p))).toHaveLength(shown.decisions);
+    expect(turn.answer.added).toBeUndefined();
+    const cut = (turn.answer.gaps.join(" ").match(/so (\d+) findings were left out/u) ?? [])[1];
+    expect(turn.answer.gaps).toEqual([`Planning Center Services: the list was too long to say in full, so ${cut} findings were left out of this answer. They're on the Sunday page.`]);
+    expect(Number(cut)).toBeGreaterThan(0);
+    expect(turn.answer.steps).toContain("Looked at the overview of the service — a shortened list");
+    expect(JSON.stringify(turn.answer)).not.toContain("couldn't be read");
+    // A check whose reads didn't all complete still says so, beside the cut.
+    const failed = crowded();
+    failed.brief = { ...failed.brief!, sources: { ...failed.brief!.sources, failed: [{ collection: "team_members", outcome: "timeout" }] } };
+    const both = await askOzzie(harness(scripted([() => calls(["sunday.overview"]), every]).model, undefined, failed), "What still needs a decision this Sunday?", { skills });
+    if (both.state !== "answered") throw new Error(JSON.stringify(both));
+    expect(both.answer.gaps).toEqual(["Planning Center Services: part of this couldn't be read.", expect.stringMatching(/^Planning Center Services: the list was too long to say in full, so \d+ findings were left out of this answer\. They're on the Sunday page\.$/u)]);
   });
 });
 

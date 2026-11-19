@@ -14,7 +14,7 @@ import { captureToCoverage, type SundayCapture } from "../../../core/src/sunday-
 import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { captureRooms, sundayOperations } from "../../../core/src/operations-capture.js";
-import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
+import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { CHECKING_LINE, STUCK_LINE, SundayPage, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
@@ -46,7 +46,7 @@ import { decisionLines, type RegularCheck } from "./today-groups.js";
 import { DayProvider, dayWords, UNKNOWN_WORDS, type DayWords } from "./day-words.js";
 import { promise } from "./promises.js";
 import { AiChoice, AiFlow, type AiStep } from "./ai-choice.js";
-import { MacEndedLine, thisMacShown } from "./ai-this-mac.js";
+import { MacEndedLine, OllamaEndedLine, thisMacShown } from "./ai-this-mac.js";
 import { AiLine, ChooseAiContext } from "./ai-line.js";
 import { FinishSettingUp } from "./finish-list.js";
 import { kidsFacts, kidsTeamToAsk, moments } from "./moments.js";
@@ -57,7 +57,7 @@ import { PhoneMoment, phoneMomentNow } from "./phone-moment.js";
 import { CheckMySetup } from "./check-setup.js";
 import { hasPassed, moveOn, WAIT_AGAIN_MS, waitingText, type WatchedPlan } from "./move-on.js";
 import { dayName, noticeDayOf } from "./day-phrases.js";
-import { onboarding, type ModelProgress, type NoticeDay } from "./onboarding-bridge.js";
+import { onboarding, type ModelProgress, type NoticeDay, type OllamaHistory, type OllamaProgress } from "./onboarding-bridge.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { pausedWhen, type ModelStatus } from "./model.js";
 import { askedMark, askedMemory, askedText, holding, type AskedMark } from "./asked.js";
@@ -241,6 +241,13 @@ export function App() {
     if (p.end === "done" && p.check?.verdict === "answers") setupMemo.set({ aiOffered: true, aiAnswer: "chosen" });
     setMacEnded(thisMacShown() ? null : p);
   }), [readModel, setupMemo]);
+  // Getting Ollama carries on natively too (ollama_setup.rs): its ending, when no AI on this Mac screen showed it, is one
+  // line on Today in the install's own words, as for a model's download.
+  const [ollamaEnded, setOllamaEnded] = useState<OllamaProgress | null>(null);
+  useEffect(() => onboarding.onOllamaProgress(p => {
+    if (p.end === null) return;
+    setOllamaEnded(thisMacShown() ? null : p);
+  }), []);
   // Each opening starts fresh at its screen.
   const [setupKey, setSetupKey] = useState(0);
   const [statusRead, setStatusRead] = useState(false);
@@ -324,6 +331,8 @@ export function App() {
   const [triggers] = useState(() => localTriggers());
   // What happened: the task ledger, newest first. undefined while loading; null when it isn't available.
   const [tasks, setTasks] = useState<TaskRow[] | null | undefined>(undefined);
+  // What happened also lists each time Ozzie got Ollama (native `ollama_install_history`: times and closed words only).
+  const [ollamaDone, setOllamaDone] = useState<OllamaHistory["done"] | null>(null);
   const [ledgerVersion, setLedgerVersion] = useState(0);
 
   useEffect(() => {
@@ -444,6 +453,9 @@ export function App() {
         zone: s.zone, macZone: macZone(), quiet: { start: s.prefs.quietStart, end: s.prefs.quietEnd }, urgentDuringQuiet: s.prefs.urgentDuringQuiet,
         urgentWithinHours: s.prefs.urgentWithinHours,
         modelReady: s.modelReady,
+        // The leader's decisions about that check's Sunday, as the Sunday page applies them, so Keep Sunday covered counts
+        // what the page shows (review item 2). A live check and a saved copy of the same Sunday share them.
+        decisionsFor: c => { try { return loadDecisions(localStorage, decisionsStorageKey("live", c.organization, c.plan_id)); } catch { return []; } },
       };
     },
     // The same check as "Check Planning Center now" (one at a time, recorded in the task ledger as automatic).
@@ -678,6 +690,24 @@ export function App() {
   // A sign-in that only adds Calendar, People and Groups is in the browser (native says "waiting"): the church stays
   // connected meanwhile, so nothing offers to connect it, setup doesn't come back, and Today keeps its list.
   const addingAccess = operationsReads.asking && (status?.state === "waiting" || status?.state === "checking") && Boolean(org);
+  // Any sign-in for a church already connected (Settings' "Connect again" included): the church in use stays in use until a
+  // new sign-in replaces it, so the pages keep saying so, and its name, while it is in the browser or being checked (review
+  // items 4 and 7). Words and what is shown only: checks still wait, and native decides everything as before. A first
+  // connection has nothing to hold.
+  const signingIn = status?.state === "waiting" || status?.state === "checking";
+  const reconnecting = useHeldWhile(connected, signingIn) && signingIn && Boolean(org);
+  const heldInUse = useHeldWhile(inUse, signingIn);
+  const stillConnected = connected || addingAccess || reconnecting;
+  // The church's last confirmed connection, for Settings while such a sign-in is under way, or after one ended (cancelled,
+  // expired, refused) with that church back in use: "Connect again", its Connected line and its plans, with no need to press
+  // "Check the connection" first (review item 7).
+  const confirmed = useRef<ConnectionStatus | null>(null);
+  if (status?.state === "connected") confirmed.current = status;
+  // Gone once the saved sign-in itself is no longer confirmed (disconnected, or a check of it that failed or expired): a
+  // sign-in started after that has no confirmed church to keep.
+  else if (!status || status.state === "disconnected" || (["failed", "expired", "cancelled"].includes(status.state) && !status.last_attempt)) confirmed.current = null;
+  const backInUse = status?.state === "stored-unchecked" && Boolean(status.last_attempt) && inUse?.organization === confirmed.current?.organization;
+  const keptConnection = confirmed.current && confirmed.current.organization === org && (reconnecting || backInUse) ? confirmed.current : null;
   const moreNeed = readMoreNeed({ status, readsOn: operationsReads.on, checked: Boolean(ofWatched), hidden: readMoreMemory.hidden() });
   const moreOffered = useRef(false);
   if (moreNeed) moreOffered.current = true;
@@ -745,7 +775,10 @@ export function App() {
   useEffect(() => {
     if (page !== "activity") return;
     let alive = true;
-    const load = () => { void recorder.list(50).then(rows => { if (alive) setTasks(rows); }); };
+    const load = () => {
+      void recorder.list(50).then(rows => { if (alive) setTasks(rows); });
+      void onboarding.ollamaHistory().then(h => { if (alive) setOllamaDone(h?.done ?? null); });
+    };
     load();
     const timer = setInterval(load, 5000);
     return () => { alive = false; clearInterval(timer); };
@@ -800,7 +833,7 @@ export function App() {
   }, [setup, launched, launchChecked, statusRead, recordingsKnown]);
   const showSetup = setup !== "auto" && setup !== null;
   // Setup is unfinished while a required fact is unmet (once launch has decided): the sidebar's first entry leads back.
-  const setupAt = setup === "auto" || fictional || addingAccess ? null : firstRunScreen(facts);
+  const setupAt = setup === "auto" || fictional || addingAccess || reconnecting ? null : firstRunScreen(facts);
   // The sidebar's entry and the screen agree: it shows while setup is on screen (step 3's result included), and while a
   // required fact is unmet (0.3.0 live click-through).
   const setupEntry = showSetup || setupAt !== null;
@@ -868,7 +901,9 @@ export function App() {
   };
   const granted = grantedFor(fictional ? null : capture, false, status);
   const planContext: PlanContext = {
-    organization: org, granted, modelReady, connected: readiness === "ready", zone: scheduleZone, now: () => new Date().toISOString(), sunday: chosenSunday,
+    // Words only (a plan card's "isn't connected yet"): held through a sign-in, as Today's regular check (review item 4); a
+    // job started meanwhile says its first check waits for the sign-in, since none runs until then.
+    organization: org, granted, modelReady, connected: shownReadiness === "ready", signingIn, zone: scheduleZone, now: () => new Date().toISOString(), sunday: chosenSunday,
     existing: watch.items, pausedAll: watch.paused_all, church: inUse?.name ?? null,
   };
   const planActions: PlanActions = {
@@ -905,7 +940,9 @@ export function App() {
   const automaticCount = page !== "automatic" ? automatic.unseen + watch.unseen : 0;
   // The sidebar keeps its words at every width (audit item 22c); a narrow window puts them under Menu, which Escape closes.
   // Its two lines (reads only; the church in use) go under Menu too, and the church stays in the bar (review F, L-6).
-  const churchLine = checkingSaved && !connected ? CHECKING_LINE : checkStuck ? STUCK_LINE : !connected && !addingAccess ? "Planning Center not connected" : inUse?.name ? `Planning Center: ${inUse.name}` : "Planning Center connected";
+  // The church's name stays in the sidebar while a sign-in for it is in the browser (native names no church in use then).
+  const shownChurch = inUse ?? (reconnecting || addingAccess ? heldInUse : null);
+  const churchLine = checkingSaved && !connected ? CHECKING_LINE : checkStuck ? STUCK_LINE : !stillConnected ? "Planning Center not connected" : shownChurch?.name ? `Planning Center: ${shownChurch.name}` : "Planning Center connected";
   return <DayProvider value={day}><ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
       <aside ref={side} className={`side${menu ? " is-menu" : ""}`}>
@@ -959,15 +996,17 @@ export function App() {
         {page === "today" && <UpdateLine state={updateState} nowMs={Date.parse(now)} cards={openCards} />}
         {page === "today" && macEnded && <MacEndedLine progress={macEnded} onClose={() => setMacEnded(null)}
           onOpen={() => { setMacEnded(null); openAiAt({ at: "mac" }); }} />}
+        {page === "today" && ollamaEnded && <OllamaEndedLine progress={ollamaEnded} onClose={() => setOllamaEnded(null)}
+          onOpen={() => { setOllamaEnded(null); openAiAt({ at: "mac" }); }} />}
         {/* The fictional example is the whole of Today while it's on: its invented Sunday and email, and none of this Mac's
             own jobs, events or the regular check, so nothing of the church's sits under the example's band (audit item 2). */}
         {page === "today" && <TodayPage brief={brief} names={capture?.names} sundayDecisions={decisions} operations={operations} onSunday={() => setPage("sunday")}
           watch={fictional ? null : { view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={fictional} now={now}
-          notConnected={!connected && !addingAccess && !fictional && !checkingSaved && !checkStuck ? { onConnect: () => openSetup("browser"), onExample: showExample } : null}
+          notConnected={!stillConnected && !fictional && !checkingSaved && !checkStuck ? { onConnect: () => openSetup("browser"), onExample: showExample } : null}
           checking={checkingSaved && !connected} stuck={checkStuck ? checkConnection : null}
           regular={fictional ? null : regular} asked={askedLines} onSundayCard={key => { setSundayFocus(key); setPage("sunday"); }}
           startQuestion={null}
-          finish={!fictional && (connected || addingAccess) ? <FinishSettingUp facts={finishFacts} startFailed={startFailed} onStartWithMac={answerStart}
+          finish={!fictional && stillConnected ? <FinishSettingUp facts={finishFacts} startFailed={startFailed} onStartWithMac={answerStart}
             onChooseService={() => openSetup("service")} onKidsRules={() => setPage("rules")} onChooseAi={openAi}
             moreBody={<ReadMore {...moreProps} place="today" />} /> : undefined}
           waiting={fictional ? null : waitingLine ?? (connected && !configured && serviceLook === "waiting" ? waitingText(null) : null)}
@@ -976,7 +1015,7 @@ export function App() {
           church={<ChurchReadsToday capture={capture} rules={rules} names={capture?.names} feedback={feedback} now={now} />}
           calendar={!fictional && calendarsConnected(calendarState) ? { reads: calendarState.reads, reading: calendarState.reading, onSettings: () => setPage("connection") } : null} />}
         {page === "sunday" && <SundayPage brief={brief} names={capture?.names ?? {}} busy={busy} problem={problem} sender=""
-          connected={connected} adding={addingAccess} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady} checking={checkingSaved && !connected}
+          connected={connected} adding={addingAccess || reconnecting} configured={configured} hasRecording={Boolean(latest)} canReword={modelReady} checking={checkingSaved && !connected}
           stuck={checkStuck ? checkConnection : null}
           decisions={decisions} onDecisions={setDecisions} operations={operations}
           onCheck={() => { void check(); }}
@@ -997,12 +1036,12 @@ export function App() {
           procedures={orderedProcedures} focus={focusProcedure} church={<ChurchReadsRules rules={rules} onChange={setRules} capture={capture} status={status} />} />}
         {page === "lists" && <ChurchListsPage sources={churchSources} positions={positions} />}
         {page === "automatic" && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId} church={inUse?.name ?? null}
-          readiness={readiness} busy={busy} now={now} churchTimeZone={churchZone}
+          readiness={readiness} shownReadiness={shownReadiness} busy={busy} now={now} churchTimeZone={churchZone}
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={p => proactive.setPrefs(p)}
           responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} names={changeNames} />} />}
-        {page === "activity" && <ActivityPage capture={capture} notGranted={operationsAsked.get() && Boolean(status?.scopes) && !operationsGranted(status)}
-          tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} />}
-        {page === "connection" && <ConnectionPage openAt={settingsAt} onOpenAt={() => setSettingsAt(null)} status={status} settings={settings} onSettings={setSettings} onStatus={setStatus} cards={openCards} onDiscardCards={discardCards}
+        {page === "activity" && <ActivityPage capture={capture} notGranted={(operationsAsked.get() || operationsReads.on === true) && Boolean(status?.scopes) && !operationsGranted(status)}
+          tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} ollama={ollamaDone} />}
+        {page === "connection" && <ConnectionPage openAt={settingsAt} onOpenAt={() => setSettingsAt(null)} status={status} kept={keptConnection} settings={settings} onSettings={setSettings} onStatus={setStatus} cards={openCards} onDiscardCards={discardCards}
           recordingCount={recordings.length} onModel={setModelReady} onAiAnswer={how => setupMemo.set({ aiOffered: true, aiAnswer: how })} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}
           sharing={sharing.settings} siri={shortcuts.settings} updates={<UpdatesSection state={updateState} nowMs={Date.parse(now)} cards={openCards} />} calendars={<CalendarSettings calendars={calendars} />}
@@ -1017,7 +1056,7 @@ export function App() {
       </main>
       {quitAsk && <QuitQuestion ask={quitAsk} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
       <AskPanel key={askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
-        connection={connected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
+        connection={stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} plans={plans} />
     </div>
   </div></ChooseAiContext.Provider></DayProvider>;

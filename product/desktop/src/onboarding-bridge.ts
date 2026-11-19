@@ -169,7 +169,13 @@ const keyArgs = (t: KeyTarget) => ({ provider: t.provider, ...(t.provider === "o
 export type LocalApp = "ollama" | "lm-studio";
 export interface LocalModel { id: string; bytes: number | null; fits: boolean; recommended: boolean }
 /** `start_hint`: native's own sentence for starting that app (LM Studio's server doesn't start by itself). */
-export interface LocalAppState { app: LocalApp; installed: boolean; running: boolean; models: LocalModel[]; start_hint: string | null }
+/**
+ * `models`: only models that run on this Mac. `elsewhere`: how many more the app lists that don't (Ollama's cloud models,
+ * served from its servers) or that native can't tell do (native `on_this_mac`): never listed, only counted.
+ */
+export interface LocalAppState { app: LocalApp; installed: boolean; running: boolean; models: LocalModel[]; start_hint: string | null; elsewhere: number;
+  /** Its own program is running, its server answering or not (native `open`). */
+  open: boolean }
 /** "too-small": no model Ozzie offers fits this Mac's memory (AI on this Mac needs 16 GB or more); native local_ai.rs `advice`. */
 export type LocalAdvice = "too-small" | "medium" | "large" | "unknown";
 /** The three models Ozzie can download and set up itself (native `local_models`), by size word. */
@@ -203,7 +209,7 @@ function parseCatalogue(v: unknown): CatalogueModel[] {
   });
 }
 export function parseLocal(v: unknown): LocalFound {
-  const none = (app: LocalApp): LocalAppState => ({ app, installed: false, running: false, models: [], start_hint: null });
+  const none = (app: LocalApp): LocalAppState => ({ app, installed: false, running: false, models: [], start_hint: null, elsewhere: 0, open: false });
   if (!plain(v)) return { memory_gb: null, advice: null, recommended: null, recommended_bytes: null, apps: [none("ollama"), none("lm-studio")], free_bytes: null, catalogue: [] };
   const apps = (["ollama", "lm-studio"] as const).map(app => {
     const a = (Array.isArray(v.apps) ? v.apps : []).find(x => plain(x) && x.app === app);
@@ -212,7 +218,8 @@ export function parseLocal(v: unknown): LocalFound {
       const mid = plain(m) ? modelId(m.id) : null;
       return mid && plain(m) ? [{ id: mid, bytes: count(m.size_bytes, 2 ** 50), fits: m.fits !== false, recommended: m.recommended === true }] : [];
     });
-    return { app, installed: a.installed === true || a.running === true, running: a.running === true, models, start_hint: shortText(a.start_hint, 300) };
+    return { app, installed: a.installed === true || a.running === true, running: a.running === true, models, start_hint: shortText(a.start_hint, 300),
+      elsewhere: count(a.elsewhere, 1000) ?? 0, open: a.open === true || a.running === true };
   });
   return { memory_gb: count(v.memory_gb, 4096), advice: oneOf(v.advice, ["too-small", "medium", "large", "unknown"] as const), recommended: modelId(v.recommended),
     recommended_bytes: count(v.recommended_size_bytes, 2 ** 50), apps, free_bytes: count(v.free_bytes, 2 ** 53), catalogue: parseCatalogue(v.catalogue) };
@@ -248,9 +255,12 @@ export type ModelRemoved = "removed" | "none" | "stopped" | "failed" | "busy";
 const MODEL_REMOVED = ["removed", "none", "stopped", "failed"] as const;
 /** The model event's name (native `MODEL_EVENT`). */
 export const MODEL_EVENT = "ozzie:local-model";
-/** "choice-changed": it answers, but another choice of AI was made while it was checked, so it wasn't chosen (review M-2). */
+/**
+ * "choice-changed": it answers, but another choice of AI was made while it was checked, so it wasn't chosen (review M-2).
+ * "not-on-this-mac": the app lists it, but it runs elsewhere (Ollama's cloud models), so nothing was asked of it.
+ */
 export type LocalVerdict = "answers" | "no-tools" | "lost-start" | "small-context" | "thinks-too-long" | "lookup-instead" | "too-slow" | "stopped" | "not-found"
-  | "choice-changed" | "unavailable";
+  | "not-on-this-mac" | "choice-changed" | "unavailable";
 /**
  * `seconds`: how long the first question took, on `answers`, and on `too-slow` when the second one timed out.
  * `small_room`: on `answers` only, the app gave the model less room than Ozzie's longer questions need (B-2).
@@ -258,7 +268,7 @@ export type LocalVerdict = "answers" | "no-tools" | "lost-start" | "small-contex
 export interface LocalCheck { verdict: LocalVerdict; seconds?: number; status?: ModelStatus; small_room?: true }
 /** Every verdict native gives (local_ai.rs `Verdict`; a native test reads this list and fails if one is missing). */
 const LOCAL_VERDICTS = ["answers", "no-tools", "lost-start", "small-context", "thinks-too-long", "lookup-instead", "too-slow", "stopped", "not-found",
-  "choice-changed"] as const;
+  "not-on-this-mac", "choice-changed"] as const;
 export function parseLocalCheck(v: unknown): LocalCheck {
   if (!plain(v)) return { verdict: oneOf(v, LOCAL_VERDICTS) ?? "unavailable" };
   const verdict = oneOf(v.verdict, LOCAL_VERDICTS) ?? "unavailable";
@@ -266,6 +276,50 @@ export function parseLocalCheck(v: unknown): LocalCheck {
   const timed = verdict === "answers" || verdict === "too-slow";
   return { verdict, ...(timed && seconds !== null ? { seconds } : {}), ...(verdict === "answers" && plain(v.status) ? { status: v.status as unknown as ModelStatus } : {}),
     ...(verdict === "answers" && v.small_room === true ? { small_room: true as const } : {}) };
+}
+
+// ---- Getting Ollama itself (contract N6 "Ozzie gets Ollama"; native ollama_install.rs) -----------------------------
+
+/** The steps of "Download Ollama and set it up" (native `Phase`; a native test reads this list and fails if one is missing). */
+export type OllamaPhase = "starting" | "downloading" | "checking" | "installing" | "opening" | "still-starting";
+const OLLAMA_PHASES = ["starting", "downloading", "checking", "installing", "opening", "still-starting"] as const;
+/** How it ended (native `End`). */
+export type OllamaEnd = "ready" | "cancelled" | "offline" | "redirected" | "too-large" | "stalled" | "download-failed" | "no-room" | "bad-archive"
+  | "not-signed" | "wrong-team" | "wrong-app" | "not-notarized" | "outdated" | "already-installed" | "cant-install" | "install-failed" | "wont-open"
+  | "not-answering" | "failed";
+const OLLAMA_ENDS = ["ready", "cancelled", "offline", "redirected", "too-large", "stalled", "download-failed", "no-room", "bad-archive",
+  "not-signed", "wrong-team", "wrong-app", "not-notarized", "outdated", "already-installed", "cant-install", "install-failed", "wont-open",
+  "not-answering", "failed"] as const;
+/** Why it couldn't start (native `Refusal`); "unsupported": this build's native side doesn't get Ollama, so today's guide shows. */
+export type OllamaRefusal = "busy" | "too-small" | "already-installed" | "already-running" | "unavailable";
+const OLLAMA_REFUSALS = ["busy", "too-small", "already-installed", "already-running", "unavailable"] as const;
+/** What the one job is doing, or how it ended: numbers and closed words only. `total_bytes` is 0 until the download said its size. */
+export interface OllamaProgress { phase: OllamaPhase; done_bytes: number; total_bytes: number; end: OllamaEnd | null }
+/** The download is capped at a gigabyte natively (`MAX_DOWNLOAD_BYTES`). */
+const OLLAMA_MAX = 1_000_000_000;
+export function parseOllamaProgress(v: unknown): OllamaProgress | null {
+  if (!plain(v)) return null;
+  const phase = oneOf(v.phase, OLLAMA_PHASES);
+  const end = v.end === null || v.end === undefined ? null : oneOf(v.end, OLLAMA_ENDS) ?? "failed";
+  const total = count(v.total_bytes, OLLAMA_MAX) ?? 0, done = count(v.done_bytes, OLLAMA_MAX) ?? 0;
+  // An ending always gets through, whatever its numbers, so the page is never left at work.
+  if (!phase) return end === null ? null : { phase: "starting", done_bytes: 0, total_bytes: 0, end };
+  return { phase, done_bytes: Math.min(done, total), total_bytes: total, end };
+}
+/** The event native sends at each step (native `OLLAMA_EVENT`). */
+export const OLLAMA_EVENT = "ozzie:ollama-install";
+/** "Show Ollama in Finder" (native `ollama_reveal`). */
+export type OllamaReveal = "shown" | "not-there" | "finder-unavailable" | "busy";
+const OLLAMA_REVEALS = ["not-there", "finder-unavailable", "busy"] as const;
+/** What Ozzie did: each ending's time and word, oldest first; `installed_at_ms` while an Ollama Ozzie installed is in Applications. */
+export interface OllamaHistory { done: { at_ms: number; end: OllamaEnd }[]; installed_at_ms: number | null }
+export function parseOllamaHistory(v: unknown): OllamaHistory | null {
+  if (!plain(v)) return null;
+  const done = (Array.isArray(v.done) ? v.done : []).slice(-20).flatMap(d => {
+    const at = plain(d) ? count(d.at_ms, 2 ** 52) : null, end = plain(d) ? oneOf(d.end, OLLAMA_ENDS) : null;
+    return at !== null && end ? [{ at_ms: at, end }] : [];
+  });
+  return { done, installed_at_ms: count(v.installed_at_ms, 2 ** 52) };
 }
 
 // ---- Ozzie's AI (N7, with the website's offer W6) ------------------------------------------------------------------
@@ -300,7 +354,7 @@ export interface SetupCheck {
   planning_center: "connected" | "sign-in-again" | "unreachable" | "not-connected";
   church: string | null; checked_at_ms: number | null;
   service: "watching" | "passed" | "waiting" | "none" | "unknown";
-  ai: "ready" | "none" | "no-key" | "not-checked" | "month-limit" | "paused" | "not-connected" | "reconnect" | "unknown";
+  ai: "ready" | "none" | "no-key" | "not-checked" | "not-on-this-mac" | "month-limit" | "paused" | "not-connected" | "reconnect" | "unknown";
   ai_route: "managed" | "own" | "local" | "none";
   ai_provider: Company | null;
   notices: NoticePermission;
@@ -315,7 +369,7 @@ export function parseSetupCheck(v: unknown): SetupCheck | null {
   return {
     planning_center: pc, church: displayText(v.church), checked_at_ms: count(v.checked_at_ms, 2 ** 52),
     service: oneOf(v.service, ["watching", "passed", "waiting", "none", "unknown"] as const) ?? "unknown",
-    ai: oneOf(v.ai, ["ready", "none", "no-key", "not-checked", "month-limit", "paused", "not-connected", "reconnect"] as const) ?? "unknown",
+    ai: oneOf(v.ai, ["ready", "none", "no-key", "not-checked", "not-on-this-mac", "month-limit", "paused", "not-connected", "reconnect"] as const) ?? "unknown",
     ai_route: oneOf(v.ai_route, ["managed", "own", "local", "none"] as const) ?? "none",
     ai_provider: oneOf(v.ai_provider, COMPANIES),
     notices: oneOf(v.notices, ["allowed", "denied", "not-asked", "unknown"] as const) ?? "unknown",
@@ -437,6 +491,8 @@ export function createOnboardingBridge(invoke: Invoke = tauriInvoke as Invoke, l
     // and sets up itself (owner's request, 2026-11-18). A model is named only by a catalogue id native gave.
     findLocal: async (): Promise<LocalFound> => parseLocal(await invoke<unknown>("local_ai_find")),
     openLocal: (app: LocalApp) => invoke<void>("local_ai_open", { app }),
+    /** Ozzie's window to the front again (after "Open Ollama", once Ollama answers). Never fails the page. */
+    comeForward: () => invoke<void>("come_forward").catch(() => undefined),
     checkLocal: async (app: LocalApp, model: string): Promise<LocalCheck> => {
       try { return parseLocalCheck(await invoke<unknown>("local_ai_check", { app, model })); }
       catch (error) { return { verdict: missingCommand(error) ? "unavailable" : parseLocalCheck(reasonOf(error)).verdict }; }
@@ -461,6 +517,27 @@ export function createOnboardingBridge(invoke: Invoke = tauriInvoke as Invoke, l
     },
     /** Each step and the bytes of the download under way. Returns a function that stops listening. */
     onModelProgress: (handle: (p: ModelProgress) => void) => on(MODEL_EVENT, parseModelProgress, handle),
+
+    // Getting Ollama itself (N6 "Ozzie gets Ollama"): only after the person presses "Download Ollama and set it up".
+    /** The first step, or why it couldn't start; "unsupported" when this build's native side can't (today's guide then). */
+    installOllama: async (): Promise<{ progress: OllamaProgress } | { refused: OllamaRefusal | "unsupported" }> => {
+      try {
+        const progress = parseOllamaProgress(await invoke<unknown>("ollama_install"));
+        return progress ? { progress } : { refused: "unavailable" };
+      } catch (error) { return { refused: missingCommand(error) ? "unsupported" : oneOf(reasonOf(error), OLLAMA_REFUSALS) ?? "unavailable" }; }
+    },
+    /** Where getting Ollama got to, or how the last one ended (after the window was closed and opened again). */
+    ollamaProgress: async (): Promise<OllamaProgress | null> => { try { return parseOllamaProgress(await invoke<unknown>("ollama_install_progress")); } catch { return null; } },
+    /** "Stop the download": the partial file is deleted and nothing is installed. */
+    stopOllama: () => invoke<boolean>("ollama_install_cancel").then(() => undefined, () => undefined),
+    /** "Show Ollama in Finder": the checked app Ozzie kept, when Applications needed a password. */
+    revealOllama: async (): Promise<OllamaReveal> => {
+      try { await invoke<unknown>("ollama_reveal"); return "shown"; } catch (error) { return oneOf(reasonOf(error), OLLAMA_REVEALS) ?? "not-there"; }
+    },
+    /** What Ozzie did, for What happened and Settings; null when native can't say. */
+    ollamaHistory: async (): Promise<OllamaHistory | null> => { try { return parseOllamaHistory(await invoke<unknown>("ollama_install_history")); } catch { return null; } },
+    /** Each step and the bytes of getting Ollama. Returns a function that stops listening. */
+    onOllamaProgress: (handle: (p: OllamaProgress) => void) => on(OLLAMA_EVENT, parseOllamaProgress, handle),
 
     // Ozzie's AI (N7, with W6).
     offer: async (): Promise<Offer> => { try { return parseOffer(await invoke<unknown>("managed_offer")); } catch { return parseOffer(null); } },

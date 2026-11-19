@@ -6,15 +6,16 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
 import { AI, COMPANIES, COMPANY as COMPANY_WORDS, KEY, keySaid, OWN, type KeyStep } from "./ai-words.js";
-import { Ok, Problem, Quiet, Screen, SentSheet, Status, useAiPlace } from "./ai-parts.js";
+import { InUseTag, Ok, Problem, Quiet, Screen, SentSheet, Status, useAiPlace, type InUse } from "./ai-parts.js";
 import { COMPANIES as COMPANY_IDS, type Company, type KeyProvider, type KeyResult, type KeyTarget, type Provider } from "./onboarding-bridge.js";
 
 /** S7: a key from an AI company, or AI on this Mac. */
-export function OwnScreen({ onKey, onMac, onBack }: { onKey: () => void; onMac: () => void; onBack: () => void }) {
+/** S7. `inUse`: the way Ozzie uses AI now, when it is one of these two, is marked "In use now". */
+export function OwnScreen({ inUse = null, onKey, onMac, onBack }: { inUse?: InUse; onKey: () => void; onMac: () => void; onBack: () => void }) {
   return <Screen title={OWN.title}>
     <ul className="ai-cards">
-      <li><button type="button" className="ai-card" onClick={onKey}><span className="ai-card-t">{OWN.key}</span><span className="ai-card-d">{OWN.keyCost}</span></button></li>
-      <li><button type="button" className="ai-card" onClick={onMac}><span className="ai-card-t">{OWN.mac}</span><span className="ai-card-d">{OWN.macCost}</span></button></li>
+      <li><button type="button" className="ai-card" onClick={onKey}><span className="ai-card-t">{OWN.key}{inUse === "own" && <InUseTag />}</span><span className="ai-card-d">{OWN.keyCost}</span></button></li>
+      <li><button type="button" className="ai-card" onClick={onMac}><span className="ai-card-t">{OWN.mac}{inUse === "local" && <InUseTag />}</span><span className="ai-card-d">{OWN.macCost}</span></button></li>
     </ul>
     <div className="ai-actions"><Quiet onClick={onBack}>{AI.back}</Quiet></div>
   </Screen>;

@@ -3,7 +3,8 @@
 //!
 //! Only two addresses are ever asked, both this Mac's loopback: Ollama at `http://127.0.0.1:11434` and LM Studio at
 //! `http://127.0.0.1:1234`. Finding is GETs only with a 1-second wait (`/api/version`, `/api/tags`, `/v1/models`);
-//! the check is the same two GETs, two Chat Completions requests to the chosen app's own `/v1`, carrying only fixed
+//! the check is the same GETs and, at Ollama, `/api/show` for the model (`on_this_mac`, before it is asked anything),
+//! two Chat Completions requests to the chosen app's own `/v1`, carrying only fixed
 //! fictional text, and one GET for the room the app gave the model (`/api/ps`, `/api/v1/models`): when the second
 //! answer misses the check word, to say why, and when it passes, to say whether a larger church's question would fit.
 //! Each request waits only as long as its own wait, and the whole check ends within three minutes (`CHECK_WAIT`). No
@@ -13,6 +14,11 @@
 //! Every request to a model on this Mac asks it not to think first (providers.json `local.reasoning_effort`): a
 //! thinking model otherwise spends its whole answer thinking (owner's live test, Ollama 0.40.16 and qwen3:8b,
 //! 2026-11-18). An app that refuses the setting is asked once more without it, and that model is remembered.
+//!
+//! A model the app lists is not always on this Mac: Ollama lists its cloud models, and models it serves from another
+//! Ollama, and sends their questions there (2026-11-19, "Not on this Mac" in the native contract). Only a model Ozzie
+//! can tell runs here (`on_this_mac`) is listed, checked, chosen or asked; the rule is looked at again before every
+//! question (`confirm_route`), not only when it was chosen.
 use crate::model::{self, ModelError, ModelStatus, RouteConfig};
 use crate::name_guard::NameGuard;
 use serde::Serialize;
@@ -50,6 +56,15 @@ pub const CONTEXT_NEEDED: u64 = 8192;
 const MAX_BODY: u64 = 1_048_576;
 /// Models listed per app, at most.
 pub(crate) const MAX_MODELS: usize = 50;
+/// Rows of an app's list read, at most, before any is judged (its answer is at most `MAX_BODY` anyway).
+const MAX_ROWS: usize = 1_000;
+/// The least an Ollama model on this Mac weighs, in bytes. The smallest model that can answer is tens of megabytes;
+/// a cloud model's entry in `/api/tags` is only its few-hundred-byte description (its `size` is its manifest's), so a
+/// row below this isn't counted as a model on this Mac, whatever else it says.
+pub const MIN_LOCAL_BYTES: u64 = 1_000_000;
+/// How long `/api/show` may take when Ozzie asks whether a model runs on this Mac (it reads the model's own file
+/// header on this Mac's disk).
+pub const SHOW_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -194,6 +209,20 @@ impl LocalHttp for NativeLocalHttp {
     }
 }
 
+/// Nothing on this Mac to ask: for a route that isn't AI on this Mac, which `confirm_route` passes without asking.
+pub(crate) struct NoLocalHttp;
+impl LocalHttp for NoLocalHttp {
+    fn get(&self, _: &str, _: Duration) -> Result<(u16, Vec<u8>), Failure> {
+        Err(Failure::Unreachable)
+    }
+    fn post(&self, _: &str, _: &[u8], _: Duration) -> Result<(u16, Vec<u8>), Failure> {
+        Err(Failure::Unreachable)
+    }
+    fn delete(&self, _: &str, _: &[u8], _: Duration) -> Result<(u16, Vec<u8>), Failure> {
+        Err(Failure::Unreachable)
+    }
+}
+
 /// Models on this Mac whose app refused the thinking setting this session, as (address, model): asked without it.
 static NO_THINKING_SETTING: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 fn thinking_setting_refused(base: &str, model: &str) -> bool {
@@ -257,9 +286,16 @@ pub struct AppFound {
     pub installed: bool,
     /// Its server answered just now.
     pub running: bool,
+    /// Its own program is running on this Mac, whether or not its server answers (`app_running`; filled in by the app's
+    /// finding, false here): Ollama open but still starting, or not answering, is said as that, never "isn't open".
+    pub open: bool,
     /// How to start it when it is installed but not answering (LM Studio's server is started by hand).
     pub start_hint: &'static str,
+    /// Only models that run on this Mac (`on_this_mac`).
     pub models: Vec<LocalModelView>,
+    /// How many models the app lists that don't run on this Mac, or that Ozzie can't tell do (Ollama's cloud models):
+    /// never in `models`, counted so the page can say why they aren't there.
+    pub elsewhere: usize,
 }
 #[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct LocalFind {
@@ -321,38 +357,180 @@ fn model_id(id: &str) -> Option<String> {
     let probe = RouteConfig::new(model::Route::Local, Some(&App::Ollama.base()), Some(id));
     probe.ok().map(|_| id.to_owned())
 }
-/// The models an app lists right now, or None when it isn't answering.
-pub(crate) fn listed(app: App, http: &dyn LocalHttp) -> Option<Vec<(String, Option<u64>)>> {
-    let (path, rows, id, size) = match app {
+
+// ---- Not on this Mac (2026-11-19) ----------------------------------------------------------------------------------
+
+/// A name Ollama treats as one of its cloud models: `/v1/chat/completions` sends the question to ollama.com for it,
+/// whether or not it is listed on this Mac (Ollama's `internal/modelref`: the text after the last `:`, any case, is
+/// `cloud` or ends in `-cloud`, as in `gpt-oss:120b-cloud`, `glm-4.6:cloud`, `gpt-oss:20b:cloud`). Ozzie refuses wider:
+/// any part between colons so marked, the name before the tag included. Never asked about: no request ever names it.
+pub fn cloud_name(id: &str) -> bool {
+    id.to_ascii_lowercase()
+        .split(':')
+        .any(|part| part == "cloud" || part.ends_with("-cloud"))
+}
+/// A row of an app's list, or Ollama's `/api/show` answer, that says the model is served from somewhere else: Ollama's
+/// `remote_host` ("URL of the upstream Ollama host, if the model is remote") and `remote_model` ("Name of the upstream
+/// model"), and, for any app, any field named `remote…` that says anything.
+pub(crate) fn names_a_remote(value: &Value) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields.iter().any(|(key, said)| {
+            key.to_ascii_lowercase().starts_with("remote")
+                && !matches!(said, Value::Null | Value::Bool(false))
+                && said.as_str() != Some("")
+        })
+    })
+}
+/// One model an app lists, and whether Ozzie can tell it runs on this Mac.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Row {
+    pub id: String,
+    pub size: Option<u64>,
+    /// Not a cloud name, no remote field, and, at Ollama, a digest and at least `MIN_LOCAL_BYTES`: anything Ozzie can't
+    /// tell runs here counts as not here. LM Studio's list says no size or digest, so only the first two are judged
+    /// there.
+    pub here: bool,
+}
+/// Everything an app lists right now (at most `MAX_ROWS`), or None when it isn't answering.
+pub(crate) fn rows(app: App, http: &dyn LocalHttp) -> Option<Vec<Row>> {
+    rows_within(app, http, FIND_WAIT)
+}
+/// `rows`, each GET waiting at most `wait`.
+fn rows_within(app: App, http: &dyn LocalHttp, wait: Duration) -> Option<Vec<Row>> {
+    let (path, list, id) = match app {
         App::Ollama => {
             // Ollama answers its version first; the models come from its tags.
-            let (status, _) = http.get(&format!("{OLLAMA}/api/version"), FIND_WAIT).ok()?;
+            let (status, _) = http.get(&format!("{OLLAMA}/api/version"), wait).ok()?;
             if status != 200 {
                 return None;
             }
-            ("/api/tags", "models", "name", Some("size"))
+            ("/api/tags", "models", "name")
         }
-        App::LmStudio => ("/v1/models", "data", "id", None),
+        App::LmStudio => ("/v1/models", "data", "id"),
     };
     let (status, body) = http
-        .get(&format!("{}{path}", app.origin()), FIND_WAIT)
+        .get(&format!("{}{path}", app.origin()), wait)
         .ok()?;
     if status != 200 {
         return None;
     }
     let value: Value = serde_json::from_slice(&body).ok()?;
     Some(
-        value[rows]
+        value[list]
             .as_array()
             .map_or(&[][..], Vec::as_slice)
             .iter()
+            .take(MAX_ROWS)
             .filter_map(|row| {
                 let id = model_id(row[id].as_str()?)?;
-                Some((id, size.and_then(|key| row[key].as_u64())))
+                let size = row["size"].as_u64().filter(|_| app == App::Ollama);
+                let weighed = match app {
+                    App::Ollama => {
+                        row["digest"].as_str().is_some_and(|d| !d.trim().is_empty())
+                            && size.is_some_and(|size| size >= MIN_LOCAL_BYTES)
+                    }
+                    App::LmStudio => true,
+                };
+                let here = weighed && !cloud_name(&id) && !names_a_remote(row);
+                Some(Row { id, size, here })
             })
-            .take(MAX_MODELS)
             .collect(),
     )
+}
+/// The models an app lists right now that run on this Mac (at most `MAX_MODELS`), or None when it isn't answering.
+/// Every list Ozzie acts on is this one: a model that doesn't run here is never shown, counted as downloaded, set up
+/// from, kept or removed.
+pub(crate) fn listed(app: App, http: &dyn LocalHttp) -> Option<Vec<(String, Option<u64>)>> {
+    rows(app, http).map(here_only)
+}
+/// The rows that run on this Mac, as (id, size), at most `MAX_MODELS`.
+fn here_only(rows: Vec<Row>) -> Vec<(String, Option<u64>)> {
+    rows.into_iter()
+        .filter(|row| row.here)
+        .map(|row| (row.id, row.size))
+        .take(MAX_MODELS)
+        .collect()
+}
+/// Why a model can't be used as AI on this Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Away {
+    /// The app answers about it, but it runs somewhere else, or Ozzie can't tell it runs here.
+    Elsewhere,
+    /// The app doesn't list it (any more).
+    NotListed,
+    /// The app isn't answering.
+    NotAnswering,
+}
+/// Whether `model` runs on this Mac, asked of its app now: a cloud name is refused before any request; then the app's
+/// list must have it as a model here (`Row::here`); then, at Ollama, `/api/show` must answer for it with no remote
+/// field. Only GETs and that one `/api/show`, all to the app's own address on this Mac, each naming only the model.
+pub fn on_this_mac(app: App, model: &str, http: &dyn LocalHttp) -> Result<(), Away> {
+    on_this_mac_within(app, model, http, FIND_WAIT)
+}
+/// `on_this_mac`, its lists waiting at most `wait` each: before a question and for the status, `SHOW_WAIT`, so an app
+/// slow to list many models doesn't fail a question that would have been answered (review, 2026-11-19).
+fn on_this_mac_within(app: App, model: &str, http: &dyn LocalHttp, wait: Duration) -> Result<(), Away> {
+    if cloud_name(model) {
+        return Err(Away::Elsewhere);
+    }
+    let rows = rows_within(app, http, wait).ok_or(Away::NotAnswering)?;
+    let row = rows.iter().find(|row| row.id == model).ok_or(Away::NotListed)?;
+    if !row.here {
+        return Err(Away::Elsewhere);
+    }
+    if app == App::Ollama {
+        let body = serde_json::to_vec(&json!({ "model": model })).map_err(|_| Away::NotAnswering)?;
+        match http.post(&format!("{OLLAMA}/api/show"), &body, SHOW_WAIT) {
+            Ok((200, answer)) => {
+                let value: Value = serde_json::from_slice(&answer).unwrap_or(Value::Null);
+                if !value.is_object() || names_a_remote(&value) {
+                    return Err(Away::Elsewhere);
+                }
+            }
+            Ok(_) => return Err(Away::NotListed),
+            Err(_) => return Err(Away::NotAnswering),
+        }
+    }
+    Ok(())
+}
+/// The app a model on this Mac's route is at, by its exact address; None for any other.
+pub fn route_app(config: &RouteConfig) -> Option<App> {
+    [App::Ollama, App::LmStudio]
+        .into_iter()
+        .find(|app| config.base_url == app.base())
+}
+/// Before every question on a model on this Mac (rewording, every Ask and job step; `NativeModelHttp::for_route`): the
+/// model must still run on this Mac, asked of its app now, since a model can be pointed somewhere else after it was
+/// checked. `not-on-this-mac` when it doesn't (or Ozzie can't tell it does); `provider-failure` when its app isn't
+/// answering or no longer lists it, as the question itself would have been. Every other route passes untouched.
+pub fn confirm_route(config: &RouteConfig, http: &dyn LocalHttp) -> Result<(), ModelError> {
+    if config.route != model::Route::Local {
+        return Ok(());
+    }
+    if cloud_name(&config.model) {
+        return Err(ModelError::NotOnThisMac);
+    }
+    let app = route_app(config).ok_or(ModelError::NotConfigured)?;
+    match on_this_mac_within(app, &config.model, http, SHOW_WAIT) {
+        Ok(()) => Ok(()),
+        Err(Away::Elsewhere) => Err(ModelError::NotOnThisMac),
+        Err(Away::NotListed | Away::NotAnswering) => Err(ModelError::ProviderFailure),
+    }
+}
+/// The model status, marked when the route's model on this Mac doesn't run here (asked of its app now): not ready, in
+/// the closed word `not-on-this-mac`. Its app not answering, or no longer listing it, leaves the status as it was.
+pub fn mark_elsewhere(status: &mut ModelStatus, config: Option<&RouteConfig>, http: &dyn LocalHttp) {
+    let Some(config) = config.filter(|c| c.route == model::Route::Local) else {
+        return;
+    };
+    let elsewhere = cloud_name(&config.model)
+        || route_app(config).is_some_and(|app| {
+            on_this_mac_within(app, &config.model, http, SHOW_WAIT) == Err(Away::Elsewhere)
+        });
+    if elsewhere {
+        status.configured = false;
+        status.setup = "not-on-this-mac";
+    }
 }
 
 /// What is on this Mac now. `installed` says whether each app is in an Applications folder.
@@ -390,7 +568,12 @@ pub(crate) fn find_reading(
     let apps = [App::Ollama, App::LmStudio]
         .into_iter()
         .map(|app| {
-            let mut models = listed(app, http);
+            let all = rows(app, http);
+            // A model that doesn't run on this Mac is never listed, only counted (`on_this_mac`).
+            let elsewhere = all
+                .as_ref()
+                .map_or(0, |rows| rows.iter().filter(|row| !row.here).count());
+            let mut models = all.map(here_only);
             if app == App::Ollama {
                 ollama_listed = models.clone();
                 // Ozzie's own copies are shown as the catalogue's rows, never as a model the person brought.
@@ -407,6 +590,7 @@ pub(crate) fn find_reading(
                 app,
                 installed: installed(app) || models.is_some(),
                 running: models.is_some(),
+                open: models.is_some(),
                 models: models
                     .unwrap_or_default()
                     .into_iter()
@@ -417,6 +601,7 @@ pub(crate) fn find_reading(
                         size_bytes: size,
                     })
                     .collect(),
+                elsewhere,
             }
         })
         .collect();
@@ -448,11 +633,84 @@ pub fn memory_bytes() -> u64 {
 }
 /// Whether an app is in /Applications or the person's own Applications folder.
 pub fn installed_on_this_mac(app: App) -> bool {
-    let name = format!("{}.app", app.bundle());
+    installed_at(app).is_some()
+}
+/// Where the app is: /Applications first, then the person's own Applications folder; None when in neither.
+pub fn installed_at(app: App) -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    bundles(app, home.as_deref()).into_iter().find(|path| path.is_dir())
+}
+/// The app's bundle in each Applications folder Ozzie looks in.
+fn bundles(app: App, home: Option<&Path>) -> Vec<std::path::PathBuf> {
+    let name = format!("{}.app", app.bundle());
     std::iter::once(Path::new("/Applications").join(&name))
         .chain(home.map(|h| h.join("Applications").join(&name)))
-        .any(|path| path.is_dir())
+        .collect()
+}
+/// What "Open Ollama" / "Open LM Studio" gives `/usr/bin/open`: the app's exact path (never a name another app could
+/// answer to) and, for Ollama, its own `hidden` argument (Ollama's install script opens it so: `open -a Ollama --args
+/// hidden`; its app reads `hidden` and starts without showing its window), so Ollama starts quietly behind Ozzie (live,
+/// 2026-11-19: opened plainly, its window came in front of Ozzie's).
+pub fn open_args(app: App, at: &Path) -> Vec<std::ffi::OsString> {
+    let mut args = vec![at.as_os_str().to_owned()];
+    if app == App::Ollama {
+        args.extend(["--args".into(), "hidden".into()]);
+    }
+    args
+}
+/// Whether `path`, a running program's own file, is inside this app's bundle in an Applications folder Ozzie looks in:
+/// Ollama's app and the server it starts both live in `Ollama.app/Contents/`.
+pub fn app_executable(app: App, path: &Path, home: Option<&Path>) -> bool {
+    bundles(app, home)
+        .iter()
+        .any(|bundle| path.starts_with(bundle.join("Contents")))
+}
+/// Whether the app's own program is running on this Mac now, its server answering or not: from the system's list of
+/// processes and each one's program file (libproc), asking nothing of the app and starting no program.
+#[cfg(target_os = "macos")]
+pub fn app_running(app: App) -> bool {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    process_paths()
+        .iter()
+        .any(|path| app_executable(app, path, home.as_deref()))
+}
+#[cfg(not(target_os = "macos"))]
+pub fn app_running(_: App) -> bool {
+    false
+}
+/// Every running program's file this user may read the path of (others' fail, and are left out).
+#[cfg(target_os = "macos")]
+pub(crate) fn process_paths() -> Vec<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: a null buffer of size 0 only asks how many processes there are.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    let Ok(count) = usize::try_from(count) else {
+        return Vec::new();
+    };
+    // Room for some started since.
+    let mut pids: Vec<libc::c_int> = vec![0; count + 64];
+    let Ok(room) = libc::c_int::try_from(pids.len() * std::mem::size_of::<libc::c_int>()) else {
+        return Vec::new();
+    };
+    // SAFETY: `pids` is a buffer of `room` bytes that outlives the call, which writes at most that many.
+    let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), room) };
+    let Ok(got) = usize::try_from(got) else {
+        return Vec::new();
+    };
+    pids.truncate(got.min(pids.len()));
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    pids.into_iter()
+        .filter(|pid| *pid > 0)
+        .filter_map(|pid| {
+            // SAFETY: `buffer` holds PROC_PIDPATHINFO_MAXSIZE bytes, the most proc_pidpath writes; it is read only up to
+            // the length the call returns.
+            let len = unsafe {
+                libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32)
+            };
+            let len = usize::try_from(len).ok().filter(|len| *len > 0 && *len <= buffer.len())?;
+            Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..len])))
+        })
+        .collect()
 }
 
 /// The closed verdicts of "Check that it answers" (spec S9).
@@ -472,6 +730,9 @@ pub enum Verdict {
     TooSlow,
     Stopped,
     NotFound,
+    /// The app lists it, but it doesn't run on this Mac (Ollama's cloud models), or Ozzie can't tell it does
+    /// (`on_this_mac`): nothing is asked of it, and it is never chosen.
+    NotOnThisMac,
     /// It answers, but another choice of AI was made while it was checked (`model::route_generation`): Ozzie didn't
     /// switch to it, so the person's later choice stands (review M-2).
     ChoiceChanged,
@@ -662,11 +923,14 @@ pub fn check_since(
     // Every wait below counts from here, when the check began (`CHECK_WAIT`). A choice of AI made since `choices` was
     // read wins over this check's result (review M-2).
     let started = Instant::now();
-    let Some(models) = listed(app, http) else {
-        return Ok(verdict(Verdict::Stopped, None));
+    // Only a model that runs on this Mac is asked anything: a cloud name before any request, then the app's own word.
+    let away = |away| match away {
+        Away::NotAnswering => Verdict::Stopped,
+        Away::NotListed => Verdict::NotFound,
+        Away::Elsewhere => Verdict::NotOnThisMac,
     };
-    if !models.iter().any(|(id, _)| id == model_id) {
-        return Ok(verdict(Verdict::NotFound, None));
+    if let Err(not) = on_this_mac(app, model_id, http) {
+        return Ok(verdict(away(not), None));
     }
     let url = format!("{}/chat/completions", app.base());
     let base = app.base();
@@ -762,6 +1026,62 @@ pub fn check_since(
         small_room: room.is_some_and(|room| room < CONTEXT_NEEDED),
         ..verdict(Verdict::Answers, seconds)
     })
+}
+
+/// Ollama on this Mac as `on_this_mac` sees it, answering about one model, for tests elsewhere in the crate.
+#[cfg(test)]
+pub(crate) mod fake {
+    use super::*;
+    pub(crate) struct OneModel {
+        pub model: &'static str,
+        /// Served from ollama.com: `/api/tags` and `/api/show` carry `remote_host` and `remote_model`.
+        pub remote: bool,
+        /// Every address asked, in order.
+        pub asked: Mutex<Vec<String>>,
+    }
+    impl OneModel {
+        pub(crate) fn here(model: &'static str) -> Self {
+            Self { model, remote: false, asked: Mutex::new(Vec::new()) }
+        }
+        pub(crate) fn elsewhere(model: &'static str) -> Self {
+            Self { model, remote: true, asked: Mutex::new(Vec::new()) }
+        }
+        fn row(&self) -> Value {
+            let mut row = json!({"name": self.model, "model": self.model, "size": 5_225_388_164u64,
+                "digest": "a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"});
+            if self.remote {
+                row["remote_host"] = json!("https://ollama.com:443");
+                row["remote_model"] = json!(self.model);
+                row["size"] = json!(384);
+            }
+            row
+        }
+    }
+    impl LocalHttp for OneModel {
+        fn get(&self, url: &str, _: Duration) -> Result<(u16, Vec<u8>), Failure> {
+            assert!(loopback_only(url), "{url}");
+            self.asked.lock().unwrap_or_else(|e| e.into_inner()).push(url.into());
+            match url.strip_prefix(OLLAMA) {
+                Some("/api/version") => Ok((200, br#"{"version":"0.40.16"}"#.to_vec())),
+                Some("/api/tags") => Ok((200, json!({"models": [self.row()]}).to_string().into_bytes())),
+                _ => Err(Failure::Unreachable),
+            }
+        }
+        fn post(&self, url: &str, _: &[u8], _: Duration) -> Result<(u16, Vec<u8>), Failure> {
+            assert!(loopback_only(url), "{url}");
+            self.asked.lock().unwrap_or_else(|e| e.into_inner()).push(url.into());
+            assert_eq!(url, format!("{OLLAMA}/api/show"), "only /api/show is asked");
+            let mut show = json!({"parameters": "num_ctx 8192", "capabilities": ["completion", "tools"]});
+            if self.remote {
+                show["remote_host"] = json!("https://ollama.com:443");
+                show["remote_model"] = json!(self.model);
+            }
+            Ok((200, show.to_string().into_bytes()))
+        }
+        fn delete(&self, url: &str, _: &[u8], _: Duration) -> Result<(u16, Vec<u8>), Failure> {
+            panic!("never deletes: {url}")
+        }
+    }
 }
 
 #[cfg(test)]

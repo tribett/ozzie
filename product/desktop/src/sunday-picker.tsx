@@ -107,7 +107,7 @@ const problem = (error: unknown) => ({ state: "problem", text: choicesProblem(er
 export function sundayChoices(source: PickerSource, typeId: string, connected: boolean, queue: Queue = pickerReads) {
   // Typing by hand is the way in until Planning Center is connected, and whenever a list can't be read.
   let state: ChoicesState = { types: IDLE, typeId, plans: IDLE, handOpen: !connected };
-  let typesRead = 0, plansRead = 0;
+  let typesRead = 0, plansRead = 0, held = false;
   const listeners = new Set<() => void>();
   const set = (next: Partial<ChoicesState>) => { state = { ...state, ...next }; listeners.forEach(listener => listener()); };
   function loadPlans() {
@@ -128,28 +128,53 @@ export function sundayChoices(source: PickerSource, typeId: string, connected: b
       loadPlans();
     }, error => { if (read === typesRead) set({ types: problem(error), handOpen: true }); });
   }
+  function connect(now: boolean) {
+    if (now) { if (state.types.state === "idle") loadTypes(); return; }
+    typesRead += 1;
+    plansRead += 1;
+    if (state.types.state !== "idle" || state.plans.state !== "idle") set({ types: IDLE, plans: IDLE });
+  }
   return {
     view: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    connect(now: boolean) {
-      if (now) { if (state.types.state === "idle") loadTypes(); return; }
-      typesRead += 1;
-      plansRead += 1;
-      if (state.types.state !== "idle" || state.plans.state !== "idle") set({ types: IDLE, plans: IDLE });
-    },
+    connect,
     retry: () => loadTypes(),
+    /**
+     * Follows the connection (SundayPicker's effect). `waiting`: a sign-in is in the browser or being checked; what is
+     * shown stays, reads not yet sent are dropped and one under way is let go (never left loading), and nothing is read
+     * until it ends. Once it ends with the church connected, both lists are read again, so what the new sign-in allows
+     * replaces what the old one showed (a refusal included); unconnected, the lists are cleared as before (review of item 7).
+     */
+    follow(connected: boolean, waiting: boolean) {
+      if (waiting) {
+        if (held) return;
+        held = true;
+        typesRead += 1;
+        plansRead += 1;
+        if (state.types.state === "loading" || state.plans.state === "loading") {
+          set({ ...(state.types.state === "loading" ? { types: IDLE } : {}), ...(state.plans.state === "loading" ? { plans: IDLE } : {}) });
+        }
+        return;
+      }
+      if (held) { held = false; if (connected) { loadTypes(); return; } }
+      connect(connected);
+    },
     chooseType(id: string) { if (id !== state.typeId) { set({ typeId: id }); loadPlans(); } },
     setHand(open: boolean) { if (open !== state.handOpen) set({ handOpen: open }); },
   };
 }
 
-/** The picker, reading Planning Center when connected. Nothing it reads is kept; a pick stores two ids. */
-export function SundayPicker({ connected, settings, onSettings, source = sundaySource }: {
-  connected: boolean; settings: Settings; onSettings: (s: Settings) => void; source?: PickerSource;
+/**
+ * The picker, reading Planning Center when connected. Nothing it reads is kept; a pick stores two ids. `waiting`: a sign-in
+ * is in the browser or being checked, so it keeps what it shows and reads nothing until that ends (a read then would meet
+ * the sign-in, not the church in use; review item 7).
+ */
+export function SundayPicker({ connected, waiting = false, settings, onSettings, source = sundaySource }: {
+  connected: boolean; waiting?: boolean; settings: Settings; onSettings: (s: Settings) => void; source?: PickerSource;
 }) {
   const [choices] = useState(() => sundayChoices(source, settings.serviceTypeId, connected));
   const view = useSyncExternalStore(choices.subscribe, choices.view, choices.view);
-  useEffect(() => choices.connect(connected), [choices, connected]);
+  useEffect(() => choices.follow(connected, waiting), [choices, connected, waiting]);
   return <SundayChoicesView connected={connected} settings={settings} onSettings={onSettings} types={view.types} typeId={view.typeId}
     onType={choices.chooseType} plans={view.plans} onRetry={choices.retry} now={new Date().toISOString()} handOpen={view.handOpen} onHand={choices.setHand} />;
 }

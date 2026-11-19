@@ -7,11 +7,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useDay } from "./day-words.js";
 import { dayName } from "./day-phrases.js";
 import { AI, CHOICE } from "./ai-words.js";
-import { AiPlaceContext, Problem, Quiet, Screen, SentSheet, useAiPlace, type AiPlace } from "./ai-parts.js";
+import { AiPlaceContext, InUseTag, Problem, Quiet, Screen, SentSheet, useAiPlace, type AiPlace, type InUse } from "./ai-parts.js";
 import { CompaniesScreen, KeyScreen, OwnScreen } from "./ai-own-key.js";
 import { ThisMacScreen } from "./ai-this-mac.js";
 import { OzzieScreen } from "./ai-ozzie.js";
 import { onboarding, type KeyProvider, type Offer, type OnboardingBridge } from "./onboarding-bridge.js";
+import { model } from "./model.js";
 
 /** Where the way through the AI screens is. Settings may start further in (a missing key, a check, connecting again). */
 export type AiStep = { at: "choose" } | { at: "own" } | { at: "companies" } | { at: "key"; provider: KeyProvider } | { at: "mac" } | { at: "ozzie"; reconnect?: boolean };
@@ -47,6 +48,15 @@ export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboardin
     return () => { live = false; };
   }, [bridge]);
   const place = useMemo<AiPlace>(() => ({ bridge, mode, onCheckSetup, focus: focusOnMount || moved }), [bridge, mode, onCheckSetup, focusOnMount, moved]);
+  // Which way works now, read again as each screen opens (a way chosen on a later screen shows when the person comes back).
+  const [inUse, setInUse] = useState<InUse>(null);
+  useEffect(() => {
+    let live = true;
+    model.status().then(s => {
+      if (live) setInUse(s?.configured === true && (s.route === "managed" || s.route === "own" || s.route === "local") ? s.route : null);
+    }, () => { if (live) setInUse(null); });
+    return () => { live = false; };
+  }, [step.at]);
   const go = (s: AiStep) => { setStep(s); setMoved(true); };
   // The service's page as a sentence says it: "Next: open Sunday", "Next: open your service" (never "Your service").
   const done = mode === "settings" ? AI.backTo(backTo ?? "Settings") : AI.next(dayName(day));
@@ -61,9 +71,9 @@ export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboardin
   };
   let screen;
   switch (step.at) {
-    case "choose": screen = <ChooseScreen offer={offer} onOzzie={() => go({ at: "ozzie" })} onOwn={() => go({ at: "own" })} onNone={none} noneFailed={noneFailed} onLater={later}
+    case "choose": screen = <ChooseScreen offer={offer} inUse={inUse} onOzzie={() => go({ at: "ozzie" })} onOwn={() => go({ at: "own" })} onNone={none} noneFailed={noneFailed} onLater={later}
       backLabel={backTo ? AI.backTo(backTo) : AI.back} />; break;
-    case "own": screen = <OwnScreen onKey={() => go({ at: "companies" })} onMac={() => go({ at: "mac" })} onBack={back ?? (() => go({ at: "choose" }))} />; break;
+    case "own": screen = <OwnScreen inUse={inUse} onKey={() => go({ at: "companies" })} onMac={() => go({ at: "mac" })} onBack={back ?? (() => go({ at: "choose" }))} />; break;
     case "companies": screen = <CompaniesScreen onPick={p => go({ at: "key", provider: p })} onMac={() => go({ at: "mac" })} onBack={back ?? (() => go({ at: "own" }))} />; break;
     case "key": screen = <KeyScreen key={step.provider} provider={step.provider} onBack={back ?? (() => go({ at: "companies" }))} onLater={later} onModel={onModel} onDone={chosen} done={done}
       onCompanies={() => go({ at: "companies" })} onMac={() => go({ at: "mac" })} />; break;
@@ -86,8 +96,8 @@ export function AiChoice(props: AiChoiceProps) {
  * title, never on a card. Ozzie's AI, when it can't be bought, stays in the Tab order with `aria-disabled` so its reason
  * is heard (review L11).
  */
-function ChooseScreen({ offer, onOzzie, onOwn, onNone, noneFailed, onLater, backLabel }: {
-  offer: Offer | null; onOzzie: () => void; onOwn: () => void; onNone: () => void; noneFailed: boolean; onLater: () => void;
+function ChooseScreen({ offer, inUse, onOzzie, onOwn, onNone, noneFailed, onLater, backLabel }: {
+  offer: Offer | null; inUse: InUse; onOzzie: () => void; onOwn: () => void; onNone: () => void; noneFailed: boolean; onLater: () => void;
   /** Settings mode's quiet way back: "Back to Today" over a page, "Back" in Settings' own AI section. */
   backLabel: string;
 }) {
@@ -100,9 +110,11 @@ function ChooseScreen({ offer, onOzzie, onOwn, onNone, noneFailed, onLater, back
     <p className="ai-body">{settings ? CHOICE.bodySettings(day.day) : CHOICE.body(day.day)}</p>
     <ul className="ai-cards">
       <li><button type="button" className="ai-card" aria-disabled={open ? undefined : true} onClick={() => { if (open) onOzzie(); }}>
-        <span className="ai-card-t">{CHOICE.ozzie}</span><span className="ai-card-d">{open ?? shut}</span>
+        <span className="ai-card-t">{CHOICE.ozzie}{inUse === "managed" && <InUseTag />}</span><span className="ai-card-d">{open ?? shut}</span>
       </button></li>
-      <li><button type="button" className="ai-card" onClick={onOwn}><span className="ai-card-t">{CHOICE.own}</span><span className="ai-card-d">{CHOICE.ownCost}</span></button></li>
+      <li><button type="button" className="ai-card" onClick={onOwn}>
+        <span className="ai-card-t">{CHOICE.own}{(inUse === "own" || inUse === "local") && <InUseTag />}</span><span className="ai-card-d">{CHOICE.ownCost}</span>
+      </button></li>
       <li><button type="button" className="ai-card" onClick={onNone}>
         <span className="ai-card-t">{CHOICE.none}</span><span className="ai-card-d">{settings ? CHOICE.noneCostSettings : CHOICE.noneCost}</span>
       </button></li>

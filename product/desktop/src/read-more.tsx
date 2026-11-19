@@ -27,12 +27,17 @@ import type { Settings } from "./sunday-source.js";
 import type { SundayRead } from "../../../core/src/sunday-capture.js";
 import "./finish.css";
 
-/** What the offer needs: a new sign-in for Calendar, People and Groups, or only the switch (the access is held). */
-export type ReadMoreNeed = "sign-in" | "switch";
+/**
+ * What the offer needs: a new sign-in for Calendar, People and Groups, or only the switch (the access is held). "lost":
+ * the reads are on but a later sign-in didn't include the access (an administrator narrowed it, or a sign-in asked for
+ * less): said plainly, with the same sign-in, never the first-time offer as if nothing happened (review 2026-11-18, late).
+ */
+export type ReadMoreNeed = "sign-in" | "switch" | "lost";
 
 /**
  * Whether to offer, and what: only after a check of the church's own service (`checked`), with a connection checked this
- * session (its access known), not hidden. Services only: a sign-in. The access held with the reads off: the switch.
+ * session (its access known), not hidden. Services only: a sign-in, or, with the reads on, "lost". The access held with
+ * the reads off: the switch.
  */
 export function readMoreNeed({ status, readsOn, checked, hidden }: {
   status: ConnectionStatus | null; readsOn: boolean | null; checked: boolean; hidden: boolean;
@@ -40,7 +45,7 @@ export function readMoreNeed({ status, readsOn, checked, hidden }: {
   if (!checked || hidden || status?.state !== "connected") return null;
   const access = granted(status);
   if (!access) return null;
-  if (!access.operations) return "sign-in";
+  if (!access.operations) return readsOn === true ? "lost" : "sign-in";
   return readsOn === false ? "switch" : null;
 }
 
@@ -78,7 +83,11 @@ export const moreAccess = () => "Planning Center gives Calendar, People and Grou
  */
 export const MORE_PEOPLE_TO = `With People, Ozzie also fills in To on a note. ${PEOPLE_TO_READ}`;
 export const moreHeld = () => `Your connection already includes Calendar, People and Groups, so this needs no new sign-in. ${promise("connectAnd")}`;
+/** The reads are on, but the last sign-in didn't include the access they need ("lost"); Settings' granted line says it too. */
+export const MORE_LOST = "Your last Planning Center sign-in didn't include Calendar, People and Groups, so Ozzie can't check rooms, follow-ups and group events until they're allowed again.";
 export const MORE_BUTTON = "Let Ozzie read more in Planning Center";
+/** "lost"'s button: the same sign-in, named for what the person does, allowing again what the church had. */
+export const MORE_AGAIN = "Allow Calendar, People and Groups again in my browser";
 export const MORE_NOT_NOW = "Not now";
 export const MORE_HIDE = "Don't show this again";
 export const MORE_HIDDEN = "Ozzie won't offer this again. You can turn it on any time in Settings, under Rooms, follow-ups and group events.";
@@ -216,7 +225,8 @@ export function ReadMore({ need, place, status, settings, onStatus, church, read
     </>);
     return null;
   }
-  if (!waiting && place === "service" && later && !opened) {
+  // "Not now" folds the offer; "lost" is a status said once, never folded by an earlier "Not now" (review 2026-11-19).
+  if (!waiting && place === "service" && later && !opened && need !== "lost") {
     return <p className="read-more-later"><button type="button" className="finish-line-btn" aria-expanded={false} onClick={() => setOpened(true)}>
       <span>{moreTitle(church)}</span><Icon name="chev" small /></button></p>;
   }
@@ -224,20 +234,22 @@ export function ReadMore({ need, place, status, settings, onStatus, church, read
   const failed = end !== null && end !== "granted" && end !== "on";
   return wrap(<>
     {shown === "sign-in" && <p className="find-body">{MORE_LEAD}</p>}
-    <ul className="list read-more-lines">{moreLines(shown, d).map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>
-    <p className="small">{shown === "sign-in" ? moreAccess() : moreHeld()}</p>
+    {shown === "lost" && <p className="find-body">{MORE_LOST}</p>}
+    {shown !== "lost" && <ul className="list read-more-lines">{moreLines(shown, d).map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>}
+    <p className="small">{shown === "switch" ? moreHeld() : moreAccess()}</p>
     {shown === "sign-in" && <p className="small">{MORE_PEOPLE_TO}</p>}
     <p className="people-wait" aria-live="polite">{waiting && <><Icon name="spinner" small spin />{status?.state === "checking" ? PEOPLE_CHECKING : PEOPLE_WAITING}</>}</p>
     {failed && !waiting && <p role={end === "cancelled" ? undefined : "alert"} className={end === "cancelled" ? "small" : "problem"}>{moreEnd(end, d)}</p>}
-    {end === "not-granted" && !waiting && <CopyForAdministrator message={productsAdminMessage(ALL)} />}
+    {/* The access was there before: an administrator may have narrowed what this account is given. */}
+    {(end === "not-granted" || (shown === "lost" && !end)) && !waiting && <CopyForAdministrator message={productsAdminMessage(ALL)} />}
     {problem && <p role="alert" className="problem">{problem}</p>}
     <div className="finish-acts">
       {waiting
         ? <button type="button" className="btn btn-quiet" onClick={cancel}>Cancel</button>
         : <>
           <button type="button" className={`btn ${place === "today" ? "btn-primary" : "btn-secondary"}`}
-            disabled={shown === "switch" ? switching : !control.canSignIn || control.working || control.pending} onClick={allow}>{MORE_BUTTON}</button>
-          {place === "service" && <button type="button" className="btn btn-quiet" onClick={notNow}>{MORE_NOT_NOW}</button>}
+            disabled={shown === "switch" ? switching : !control.canSignIn || control.working || control.pending} onClick={allow}>{shown === "lost" ? MORE_AGAIN : MORE_BUTTON}</button>
+          {place === "service" && shown !== "lost" && <button type="button" className="btn btn-quiet" onClick={notNow}>{MORE_NOT_NOW}</button>}
           {place === "service" && <button type="button" className="btn btn-quiet btn-sm" onClick={hide}>{MORE_HIDE}</button>}
         </>}
     </div>

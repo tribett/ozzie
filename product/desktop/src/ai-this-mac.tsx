@@ -4,12 +4,18 @@
 // Ollama with a real progress bar and a Stop, sets it up with room for Ozzie's questions, and checks it (owner's request,
 // 2026-11-18). A model the person already has in Ollama, and LM Studio, keep today's path: choose, check, and Ollama's
 // Context length hint. Only loopback addresses are ever asked; nothing about the church leaves this Mac.
+// When nothing is found on a Mac that can run a model Ozzie offers, Ozzie offers to get Ollama itself (decision 25,
+// 2026-11-18): one card says what Ollama is, where it comes from and how Ozzie checks it, and nothing is downloaded
+// before "Download Ollama and set it up" is pressed; native proves it is Ollama's own signed and notarized app before
+// it is moved or opened, and once it answers, the model offer above takes over. "I'll install it myself" keeps the guide.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDay } from "./day-words.js";
 import { Icon } from "./icons.js";
-import { AI, CHOICE, downloadSaid, ENDED_AWAY, endedAwaySaid, localSaid, MAC, refusedSaid, removedSaid } from "./ai-words.js";
+import { AI, CHOICE, downloadSaid, ENDED_AWAY, endedAwaySaid, localSaid, MAC, OLLAMA, ollamaEndSaid, ollamaRefusedSaid, ollamaRevealSaid, refusedSaid,
+  removedSaid } from "./ai-words.js";
 import { Ok, Problem, Quiet, Screen, Sheet, Status, useAiPlace } from "./ai-parts.js";
-import type { CatalogueModel, DownloadRefusal, LocalApp, LocalAppState, LocalCheck, LocalFound, ModelProgress } from "./onboarding-bridge.js";
+import type { CatalogueModel, DownloadRefusal, LocalApp, LocalAppState, LocalCheck, LocalFound, ModelProgress, OllamaProgress,
+  OllamaRefusal } from "./onboarding-bridge.js";
 
 /**
  * How many AI on this Mac screens are open. One that is open shows a download's ending itself; with none open, the app
@@ -18,21 +24,34 @@ import type { CatalogueModel, DownloadRefusal, LocalApp, LocalAppState, LocalChe
 let screensOpen = 0;
 export const thisMacShown = () => screensOpen > 0;
 
+/** Today's one line for a job of AI on this Mac that ended while none of its screens was open (review M-1). */
+function EndedLine({ text, ok, open, onOpen, onClose }: { text: string; ok: boolean; open: boolean; onOpen: () => void; onClose: () => void }) {
+  return <section className="banner mac-ended" role="status">
+    <Icon name={ok ? "check" : "info"} small />
+    <div className="stack-tight">
+      <p>{text}</p>
+      <div className="ai-actions">
+        {open && <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>{ENDED_AWAY.open}</button>}
+        <button type="button" className="btn btn-quiet btn-sm" onClick={onClose}>{ENDED_AWAY.close}</button>
+      </div>
+    </div>
+  </section>;
+}
 /** Today's one line for a download and set-up that ended while no AI on this Mac screen was open (review M-1). */
 export function MacEndedLine({ progress, onOpen, onClose }: { progress: ModelProgress; onOpen: () => void; onClose: () => void }) {
   if (progress.end === null) return null;
   const said = endedAwaySaid(progress.end, progress.check?.verdict ?? null, progress.model);
   if (!said) return null;
-  return <section className="banner mac-ended" role="status">
-    <Icon name={said.ok ? "check" : "info"} small />
-    <div className="stack-tight">
-      <p>{said.text}</p>
-      <div className="ai-actions">
-        {!said.ok && <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>{ENDED_AWAY.open}</button>}
-        <button type="button" className="btn btn-quiet btn-sm" onClick={onClose}>{ENDED_AWAY.close}</button>
-      </div>
-    </div>
-  </section>;
+  return <EndedLine text={said.text} ok={said.ok} open={!said.ok} onOpen={onOpen} onClose={onClose} />;
+}
+/**
+ * Today's one line for getting Ollama, ended while no AI on this Mac screen was open (2026-11-19): the install's own
+ * ending words, and the way back to AI on this Mac, which shows the model offer once Ollama answers. A Stop says nothing.
+ */
+export function OllamaEndedLine({ progress, onOpen, onClose }: { progress: OllamaProgress; onOpen: () => void; onClose: () => void }) {
+  if (progress.end === null || progress.end === "cancelled") return null;
+  const said = ollamaEndSaid(progress.end);
+  return <EndedLine text={said.text} ok={said.tone === "ok"} open onOpen={onOpen} onClose={onClose} />;
 }
 
 /** Which of the spec's sentences fits what Ozzie found: the first that matches, in the spec's order. */
@@ -43,7 +62,8 @@ export type MacFound =
    */
   | { kind: "setup"; ollama: LocalAppState; catalogue: CatalogueModel[]; own: LocalAppState | null }
   | { kind: "models"; app: LocalAppState }
-  | { kind: "ollama-closed" } | { kind: "lm-server-off" }
+  /** "ollama-quiet": Ollama's own program is running, but its server isn't answering (still starting, or stuck). */
+  | { kind: "ollama-closed" } | { kind: "ollama-quiet" } | { kind: "lm-server-off" }
   | { kind: "ollama-no-models" } | { kind: "lm-no-models" } | { kind: "nothing" };
 export function macFound(found: LocalFound): MacFound {
   const ollama = found.apps.find(a => a.app === "ollama"), lm = found.apps.find(a => a.app === "lm-studio");
@@ -56,7 +76,7 @@ export function macFound(found: LocalFound): MacFound {
   }
   if (ollama?.running && ollama.models.length) return { kind: "models", app: ollama };
   if (lm?.running && lm.models.length) return { kind: "models", app: lm };
-  if (ollama?.installed && !ollama.running) return { kind: "ollama-closed" };
+  if (ollama?.installed && !ollama.running) return ollama.open ? { kind: "ollama-quiet" } : { kind: "ollama-closed" };
   if (lm?.installed && !lm.running) return { kind: "lm-server-off" };
   if (ollama?.running) return { kind: "ollama-no-models" };
   if (lm?.running) return { kind: "lm-no-models" };
@@ -69,6 +89,11 @@ const offered = (m: CatalogueModel) => m.offered && m.fits && m.disk !== "not-en
 const shown = (m: CatalogueModel) => m.offered || m.set_up || m.downloaded_by_ozzie;
 /** A row that can be chosen: to download and set up, or (one no longer offered) to remove. */
 const selectable = (m: CatalogueModel) => offered(m) || (!m.offered && shown(m));
+/** After "Open Ollama": how often Ozzie looks, when it says Ollama is still starting, and when it stops waiting (native's own
+ * wait after installing it: 20 seconds, then two minutes, `SERVER_WAIT`). */
+const OPEN_POLL_MS = 2_000, OPEN_STILL_MS = 20_000, OPEN_WAIT_MS = 120_000;
+/** Whether Ozzie's window has the keyboard (the page can't tell otherwise: yes). */
+const focused = () => typeof document === "undefined" || typeof document.hasFocus !== "function" || document.hasFocus();
 /** The download's own steps, while Stop the download still means something. */
 const downloading = (p: ModelProgress) => p.end === null && ["starting", "downloading", "verifying", "finishing"].includes(p.phase);
 
@@ -89,6 +114,15 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
   const [refused, setRefused] = useState<DownloadRefusal | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removed, setRemoved] = useState<{ text: string; ok: boolean } | null>(null);
+  // Getting Ollama itself (native's job, so it outlives this screen), why it couldn't start, and the person's own way.
+  const [ollama, setOllama] = useState<OllamaProgress | null>(null);
+  const [ollamaRefused, setOllamaRefused] = useState<OllamaRefusal | null>(null);
+  const [myself, setMyself] = useState(false);
+  const [revealProblem, setRevealProblem] = useState<string | null>(null);
+  // After "Open Ollama": Ozzie waits for its server itself (live, 2026-11-19), and whether it was pressed in Ozzie's window.
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  const [stillStarting, setStillStarting] = useState(false);
+  const pressedHere = useRef(false);
   const live = useRef(true);
   // The latest onModel, so the native event is listened to once for this screen, not again on every render above it.
   const onModelRef = useRef(onModel);
@@ -160,12 +194,75 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     });
     return stop;
   }, [bridge, refresh]);
+  // Getting Ollama under way, or how it ended, even after this window was closed and opened again. When it ends, what is
+  // on this Mac now decides what comes next: the model offer once Ollama answers, "Open Ollama" when it is there but quiet.
+  useEffect(() => {
+    void bridge.ollamaProgress().then(p => { if (p && live.current) setOllama(p); });
+    return bridge.onOllamaProgress(p => {
+      if (!live.current) return;
+      setOllama(p);
+      if (p.end !== null) refresh();
+    });
+  }, [bridge, refresh]);
+  /** "Download Ollama and set it up": nothing is downloaded before this press. */
+  const getOllama = () => {
+    setOllamaRefused(null); setRevealProblem(null); setOllama(null); setProblem("");
+    void bridge.installOllama().then(r => {
+      if (!live.current) return;
+      // A step or an ending native told before this answer came is newer than the first step: it stays (an ending
+      // replaced by "starting" would leave the screen at work).
+      if ("progress" in r) { setOllama(o => o ?? r.progress); return; }
+      // This build's native side can't: today's guide.
+      if (r.refused === "unsupported") { setMyself(true); return; }
+      setOllamaRefused(r.refused);
+      if (r.refused === "already-installed" || r.refused === "already-running") refresh();
+    });
+  };
+  /** "I'll install it myself": Ollama's download page in the browser, and today's guide. */
+  const installMyself = () => {
+    setMyself(true); setOllama(null); setOllamaRefused(null); setRevealProblem(null);
+    bridge.openHelpPage("ollama-download").catch(() => { if (live.current) setProblem(AI.browserFailed); });
+  };
+  const reveal = () => {
+    setRevealProblem(null);
+    void bridge.revealOllama().then(r => { if (live.current && r !== "shown") setRevealProblem(ollamaRevealSaid(r)); });
+  };
 
-  // "Open Ollama": open it, then look again after 5 seconds, when its server has started.
+  // "Open Ollama": Ollama opens quietly (native passes its own `hidden`), and Ozzie waits for its server itself, then shows
+  // the model offer (live, 2026-11-19: the screen used to stay as it was until Look again). "Open LM Studio": its server
+  // is turned on by hand, so one look after 5 seconds, as before.
   const openApp = (app: LocalApp) => {
     setProblem("");
-    bridge.openLocal(app).then(() => { wait.current = setTimeout(look, 5000); }, () => { if (live.current) setProblem(MAC.openFailed(app)); });
+    pressedHere.current = focused();
+    bridge.openLocal(app).then(() => {
+      if (!live.current) return;
+      if (app === "ollama") { setStillStarting(false); setOpenedAt(Date.now()); } else wait.current = setTimeout(look, 5000);
+    }, () => { if (live.current) setProblem(MAC.openFailed(app)); });
   };
+  useEffect(() => {
+    if (openedAt === null) return;
+    let stop = false, next: ReturnType<typeof setTimeout> | null = null;
+    const still = setTimeout(() => { if (!stop) setStillStarting(true); }, OPEN_STILL_MS);
+    const done = (f: LocalFound | null, answering: boolean) => {
+      setOpenedAt(null); setStillStarting(false);
+      if (f) { setFound(f); choose(f); }
+      // Ollama's app may have come in front of Ozzie's: Ozzie comes back, if the person pressed in it and it isn't in front.
+      if (answering && pressedHere.current && !focused()) void bridge.comeForward();
+    };
+    const poll = () => {
+      bridge.findLocal().then(f => {
+        if (stop || !live.current) return;
+        const answering = f.apps.some(a => a.app === "ollama" && a.running);
+        if (answering || Date.now() - openedAt >= OPEN_WAIT_MS) { done(f, answering); return; }
+        next = setTimeout(poll, OPEN_POLL_MS);
+      }, () => {
+        if (stop || !live.current) return;
+        if (Date.now() - openedAt >= OPEN_WAIT_MS) done(null, false); else next = setTimeout(poll, OPEN_POLL_MS);
+      });
+    };
+    next = setTimeout(poll, OPEN_POLL_MS);
+    return () => { stop = true; clearTimeout(still); if (next) clearTimeout(next); };
+  }, [openedAt, bridge, choose]);
   const runCheck = () => {
     if (pick?.kind !== "own") return;
     setChecking(true); setCheck(null);
@@ -184,7 +281,9 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     void bridge.downloadModel(pick.id).then(r => {
       if (!live.current) return;
       if ("refused" in r) setRefused(r.refused);
-      else setJob(j => j && j.model === r.progress.model && j.end === null ? j : r.progress);
+      // A step or an ending native told for this model before this answer came is newer than the first step: it stays
+      // (an ending replaced by "starting" would leave the screen at work), as for getting Ollama.
+      else setJob(j => j && j.model === r.progress.model ? j : r.progress);
     });
   };
   const remove = (id: string) => {
@@ -207,6 +306,10 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
   const answered = check?.verdict === "answers" || jobAnswered;
   /** Native's own sentence for starting an app that is on this Mac but not answering (contract N6 `start_hint`). */
   const hint = (app: LocalApp) => found && found !== "failed" ? found.apps.find(a => a.app === app)?.start_hint ?? null : null;
+  // Models the app lists that run elsewhere (Ollama's cloud models) are never listed: said once, so the list isn't a puzzle.
+  const elsewhere = (app: LocalApp) => found && found !== "failed" ? found.apps.find(a => a.app === app)?.elsewhere ?? 0 : 0;
+  const elsewhereLine = (app: LocalApp) => elsewhere(app) > 0 ? <p className="ai-small">{MAC.elsewhere(app, elsewhere(app))}</p> : null;
+  const noModels = elsewhere("ollama") > 0 ? MAC.ollamaNoModelsHere : MAC.ollamaNoModels;
   const said = check && pick?.kind === "own" ? localSaid(check.verdict, pick.app, pick.id, day.day, check.seconds, check.small_room === true) : null;
   // A model Ozzie set up carries its own room, so the advice about Ollama's Context length never applies to it.
   const jobSaid = ended?.end === "done" && ended.check ? localSaid(ended.check.verdict, "ollama", ended.model, day.day, ended.check.seconds, false) : null;
@@ -225,19 +328,47 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
       {!m.fits && <span className="ai-tag ai-tag-muted">{MAC.tooBig}</span>}
     </button></li>;
   })}</ul>;
+  // Getting Ollama: under way (nothing else is offered meanwhile), or how it ended.
+  const ollamaWorking = ollama !== null && ollama.end === null;
+  const ollamaSaid = ollama?.end ? ollamaEndSaid(ollama.end) : null;
+  const ollamaStoppable = ollamaWorking && (ollama.phase === "starting" || ollama.phase === "downloading");
   // With the three shown, one primary: for the row chosen (a model already set up is checked again through the same
   // steps, which skip what is done), or for the person's own model when one of those is chosen.
-  const primary = answered ? <button type="button" className="btn btn-primary ai-primary" onClick={onDone}>{done}</button>
+  const primary = ollamaWorking ? null : answered ? <button type="button" className="btn btn-primary ai-primary" onClick={onDone}>{done}</button>
     : what?.kind === "setup" && pick?.kind !== "own" ? (tooSmall || row?.offered === false ? null
       : <button type="button" className="btn btn-primary ai-primary" disabled={working || !row || !offered(row)} onClick={runDownload}>
         {row?.set_up ? MAC.check : row?.downloaded ? MAC.setUp : MAC.download}</button>)
     : what?.kind === "models" || what?.kind === "setup" ? <button type="button" className="btn btn-primary ai-primary" disabled={pick?.kind !== "own" || checking || working} onClick={runCheck}>{MAC.check}</button>
     : what?.kind === "ollama-no-models" || what?.kind === "lm-no-models" || found === "failed" ? lookButton(true)
-    : what?.kind === "ollama-closed" ? lookButton(false) : null;
+    : (what?.kind === "ollama-closed" || what?.kind === "ollama-quiet") && openedAt === null ? lookButton(false) : null;
   return <Screen title={MAC.title}>
-    <Status text={found === null ? MAC.looking : lookedAt !== null
+    <Status text={openedAt !== null ? (stillStarting ? OLLAMA.still : MAC.opening) : found === null ? MAC.looking : lookedAt !== null
       ? MAC.looked(Date.now() - lookedAt < 60_000 ? null : new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(lookedAt)) : ""} />
     {found === "failed" && <Problem text={MAC.lookFailed} />}
+    {ollamaWorking && <div className="ai-download">
+      <Status text={OLLAMA.step(ollama.phase, ollama.total_bytes)} />
+      {ollama.phase === "downloading" && ollama.total_bytes > 0 && <>
+        <progress className="ai-progress" max={ollama.total_bytes} value={ollama.done_bytes} aria-label={OLLAMA.progressLabel} />
+        <p className="ai-small">{OLLAMA.amount(ollama.done_bytes, ollama.total_bytes)}</p>
+        <p className="ai-small">{MAC.keepsGoing}</p>
+      </>}
+    </div>}
+    {/* Ollama answers now: the model offer below takes over. */}
+    {ollama?.end === "ready" && (what?.kind === "setup" || what?.kind === "ollama-no-models") && <Ok lines={[OLLAMA.ready]} />}
+    {/* How getting Ollama ended, while nothing newer says more: with Ollama on this Mac but not answering, the card below
+        says how it is now, so "it hasn't started answering" / "it didn't open" aren't said over it (live, 2026-11-19). */}
+    {ollamaSaid && ollama?.end !== "ready" && openedAt === null && (what?.kind === "nothing"
+      || ((what?.kind === "ollama-closed" || what?.kind === "ollama-quiet") && ollama?.end !== "not-answering" && ollama?.end !== "wont-open"))
+      && <Problem text={ollamaSaid.text} calm={ollamaSaid.tone === "calm"}>
+      {ollamaSaid.reveal && <>
+        <button type="button" className="btn btn-primary ai-primary" onClick={reveal}>{OLLAMA.reveal}</button>
+        {lookButton(false)}
+      </>}
+      {ollamaSaid.myself && !myself && <button type="button" className="btn btn-secondary" onClick={installMyself}>{OLLAMA.myself}</button>}
+    </Problem>}
+    {ollamaRefused && <Problem text={ollamaRefusedSaid(ollamaRefused)} />}
+    {revealProblem && <Problem text={revealProblem} />}
+    {!ollamaWorking && <>
     {tooSmall && <div className="ai-head">
       {memory && <p className="ai-body">{memory}</p>}
       <p className="ai-body">{MAC.tooSmallWays}</p>
@@ -248,7 +379,8 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     </div>}
     {what?.kind === "setup" && <>
       {/* Too small with no models: the 16 GB line above says what matters, never "no AI models yet" over nothing (review L-7). */}
-      {(what.ollama.models.length > 0 || !tooSmall) && <p className="ai-body">{what.ollama.models.length ? MAC.found("ollama", what.ollama.models.length) : MAC.ollamaNoModels}</p>}
+      {(what.ollama.models.length > 0 || !tooSmall) && <p className="ai-body">{what.ollama.models.length ? MAC.found("ollama", what.ollama.models.length) : noModels}</p>}
+      {elsewhereLine("ollama")}
       {memory && !tooSmall && <p className="ai-body">{memory}</p>}
       {!tooSmall && <p className="ai-body">{MAC.setupLede}</p>}
       {/* Too small: only a model of Ozzie's it no longer offers is shown, to remove it; every other row would be too big. */}
@@ -288,12 +420,14 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     </>}
     {what?.kind === "models" && <>
       <p className="ai-body">{MAC.found(what.app.app, what.app.models.length)}</p>
+      {elsewhereLine(what.app.app)}
       {memory && !tooSmall && <p className="ai-body">{memory}</p>}
       {ownRows(what.app)}
       {!answered && what.app.app === "ollama" && <p className="ai-body">{MAC.ollamaRoom}</p>}
       {!answered && <p className="ai-body">{MAC.pickHint}</p>}
     </>}
-    {what?.kind === "ollama-closed" && <Problem text={[MAC.ollamaClosed, hint("ollama")].filter(Boolean).join(" ")} calm>
+    {(what?.kind === "ollama-closed" || what?.kind === "ollama-quiet") && openedAt === null
+      && <Problem text={what.kind === "ollama-quiet" ? MAC.ollamaQuiet : [MAC.ollamaClosed, hint("ollama")].filter(Boolean).join(" ")} calm>
       <button type="button" className="btn btn-primary ai-primary" onClick={() => openApp("ollama")}>{MAC.openApp("ollama")}</button>
     </Problem>}
     {what?.kind === "lm-server-off" && <Problem text={hint("lm-studio") ? `${MAC.lmOn} ${hint("lm-studio")}` : MAC.lmServerOff} calm>
@@ -301,10 +435,11 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
       {lookButton(true)}
     </Problem>}
     {what?.kind === "ollama-no-models" && <>
-      <p className="ai-body">{MAC.ollamaNoModels}</p>
+      <p className="ai-body">{noModels}</p>
+      {elsewhereLine("ollama")}
       {!tooSmall && <p className="ai-body">{MAC.getModel(found !== "failed" ? found?.recommended_bytes ?? null : null)}</p>}
     </>}
-    {what?.kind === "lm-no-models" && <p className="ai-body">{MAC.lmNoModels}</p>}
+    {what?.kind === "lm-no-models" && <><p className="ai-body">{MAC.lmNoModels}</p>{elsewhereLine("lm-studio")}</>}
     {what?.kind === "nothing" && tooSmall && <>
       <p className="ai-body">{MAC.nothing}</p>
       <p className="ai-body">{MAC.ownStill}</p>
@@ -312,14 +447,31 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     </>}
     {what?.kind === "nothing" && !tooSmall && <>
       <p className="ai-body">{MAC.nothing}</p>
-      <ol className="ai-steps">
+      {/* The offer to get Ollama (decision 25): what it is, where from, how it is checked, and nothing before the press. A
+          checked app kept for the person to drag (Applications needed a password) isn't offered again. */}
+      {!myself && ollama?.end !== "cant-install" && <section className="ai-get" aria-labelledby="ai-get-title">
+        <p id="ai-get-title" className="ai-body ai-sub">{OLLAMA.offerTitle}</p>
+        {/* Three short sentences, a short list, and the checks under one fold (live, 2026-11-19). */}
+        {OLLAMA.offer.map(line => <p key={line} className="ai-body">{line}</p>)}
+        <p className="ai-body">{OLLAMA.then(found !== "failed" ? found?.recommended_bytes ?? null : null)}</p>
+        <ul className="ai-facts">{OLLAMA.facts.map(line => <li key={line}>{line}</li>)}</ul>
+        <details className="ai-more"><summary><Icon name="chev" small />{OLLAMA.checksTitle}</summary>
+          {OLLAMA.checks.map(line => <p key={line} className="ai-small">{line}</p>)}
+        </details>
+        <div className="ai-actions">
+          <button type="button" className="btn btn-primary ai-primary" onClick={getOllama}>{OLLAMA.install}</button>
+          <button type="button" className="btn btn-secondary" onClick={installMyself}>{OLLAMA.myself}</button>
+        </div>
+      </section>}
+      {myself && <ol className="ai-steps">
         <li><div><p>{MAC.guide[0].text}</p>
           <button type="button" className="btn btn-secondary" onClick={() => { bridge.openHelpPage("ollama-download").catch(() => { if (live.current) setProblem(AI.browserFailed); }); }}>{MAC.guide[0].button}</button></div></li>
         <li><div><p>{MAC.guide[1].text}</p>
           <button type="button" className="btn btn-primary ai-primary" onClick={look}>{MAC.guide[1].button}</button></div></li>
         <li><div><p>{MAC.getModel(found !== "failed" ? found?.recommended_bytes ?? null : null)}</p>
           {lookButton(false)}</div></li>
-      </ol>
+      </ol>}
+    </>}
     </>}
     {problem && <Problem text={problem} calm />}
     <Status text={checking && pick?.kind === "own" ? MAC.checking(pick.id) : ""} />
@@ -330,6 +482,7 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     <div className="ai-actions">
       {primary}
       {working && job && downloading(job) && <button type="button" className="btn btn-secondary" onClick={() => { void bridge.stopDownload(); }}>{MAC.stop}</button>}
+      {ollamaStoppable && <button type="button" className="btn btn-secondary" onClick={() => { void bridge.stopOllama(); }}>{MAC.stop}</button>}
       {!answered && <Quiet onClick={onBack}>{AI.back}</Quiet>}
     </div>
     {removing && row && <Sheet title={MAC.removeTitle(row.id)} onClose={() => setRemoving(false)}>

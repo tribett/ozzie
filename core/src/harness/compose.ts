@@ -20,7 +20,7 @@ import { applyDecisions, type DecidedItem } from "../sunday-decisions.js";
 import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
-import { FACT_LISTS, localIso, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, type HarnessData, type HarnessTools } from "./tools.js";
+import { FACT_LISTS, localIso, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources } from "./tools.js";
 
 export interface ComposedAnswer {
   kind: AnswerKind;
@@ -379,16 +379,30 @@ const ROW_SOURCES: Readonly<Record<string, string>> = {
   [OVERVIEW_ROOM]: "Planning Center Calendar", [OVERVIEW_FOLLOW_UP]: "Planning Center People", [OVERVIEW_GROUP]: "Planning Center Groups",
 };
 /**
- * Where the overview's rooms, follow-ups and group meetings an answer chose come from, at `checkedAt` (the operations
- * check's own read time, as their tools say it; the overview's when unknown): the overview's source is Planning Center
- * Services, so without these "Based on" wouldn't name the source of a follow-up it says.
+ * Where one of the overview's rows comes from beyond Planning Center Services: Calendar for a room, People for a
+ * follow-up, Groups for a group meeting, and for the row about room or follow-up details that couldn't be confirmed, the
+ * sources its open questions are about (`unconfirmed`). None for a Services row.
  */
-export function chosenSources(answer: string, evidence: readonly ToolEnvelope[], checkedAt: string | null): { source: string; check_time: string }[] {
-  const all = factsIn(evidence), out: { source: string; check_time: string }[] = [];
+export function overviewRowSources(row: Row, unconfirmed: readonly string[]): string[] {
+  const kind = str(row["kind"]) ?? "";
+  return kind === OVERVIEW_UNCONFIRMED ? [...unconfirmed] : ROW_SOURCES[kind] ? [ROW_SOURCES[kind]] : [];
+}
+/**
+ * Where the overview's rooms, follow-ups and group meetings an answer chose come from (review item 5), at the operations
+ * check's own read time and with each source's own completeness (`rows`, tools.ts rowSources; the overview's own when
+ * unknown): the overview's source is Planning Center Services, so without these "Based on" wouldn't name the source of a
+ * follow-up it says, and a Calendar read that didn't complete would go unsaid beside the room it left uncertain.
+ */
+export function chosenSources(answer: string, evidence: readonly ToolEnvelope[], rows: RowSources | null): Pick<ToolEnvelope, "source" | "check_time" | "completeness">[] {
+  const all = factsIn(evidence), out: Pick<ToolEnvelope, "source" | "check_time" | "completeness">[] = [];
+  const unconfirmed = rows?.unconfirmed ?? ["Planning Center Calendar", "Planning Center People"];
   for (const id of parseAnswer(answer)?.facts ?? []) {
     const f = all.get(id);
-    const source = f?.tool === "sunday.overview" && f.list === "findings" ? ROW_SOURCES[str(f.row["kind"]) ?? ""] : undefined;
-    if (f && source && !out.some(s => s.source === source)) out.push({ source, check_time: checkedAt ?? evidence[f.envelope]!.check_time });
+    if (!f || f.tool !== "sunday.overview" || f.list !== "findings") continue;
+    const envelope = evidence[f.envelope]!;
+    for (const source of overviewRowSources(f.row, unconfirmed)) {
+      if (!out.some(s => s.source === source)) out.push({ source, check_time: rows?.check_time ?? envelope.check_time, completeness: rows?.completeness[source] ?? envelope.completeness });
+    }
   }
   return out;
 }
@@ -646,7 +660,8 @@ export async function kidsAnswer(tools: HarnessTools, q: KidsQuestion, signal: A
   const shared = forModels(brief).findings, needs = shared.filter(f => NEED_KINDS.has(f.kind));
   const overview = background ? await run("sunday.not_checked") : await run("sunday.overview");
   const openNeeds = mine.some(f => NEED_KINDS.has(f.kind)) ? await run("sunday.open_needs") : null;
-  const overviewRows = background ? [] : rowsOf(overview, "findings"), needRows = rowsOf(openNeeds, "needs");
+  // Each finding's own row, by its place in the tool's list even when rows were left out for length (tools.ts rowAt).
+  const overviewRow = (i: number) => background ? undefined : rowAt(overview, "findings", i), needRow = (i: number) => rowAt(openNeeds, "needs", i);
   for (const f of mine) {
     const tone = toneWith(f, decisionsBy);
     if (f.kind === "background-check") {
@@ -656,7 +671,7 @@ export async function kidsAnswer(tools: HarnessTools, q: KidsQuestion, signal: A
       continue;
     }
     if (NEED_KINDS.has(f.kind)) {
-      const row = needRows[needs.findIndex(x => x.id === f.id)];
+      const row = needRow(needs.findIndex(x => x.id === f.id));
       const text = row && openNeeds ? sentenceFor(factOf(openNeeds, "needs", row), day) : null;
       if (text) out.paragraphs.push(`${tone}: ${text}`);
       const role = row ? str(row["role"]) : null;
@@ -670,7 +685,7 @@ export async function kidsAnswer(tools: HarnessTools, q: KidsQuestion, signal: A
       }
       continue;
     }
-    const row = overviewRows[shared.findIndex(x => x.id === f.id)];
+    const row = overviewRow(shared.findIndex(x => x.id === f.id));
     const text = row ? finding(row) : null;
     if (text) out.paragraphs.push(`${tone}: ${text}${decided(row!, day)}`);
   }
@@ -743,12 +758,13 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
   const overview = await read("sunday.overview"), rooms = await read("rooms.conflicts"), followUps = await read("followups.unowned");
   out.evidence = [overview, rooms, followUps].filter((e): e is ToolEnvelope => e !== null);
   const settled = new Set(applyDecisions(brief, decisions).items.filter(i => i.decision && i.state !== "reopened").map(i => i.finding.id));
-  const shared = forModels(brief).findings, rows = rowsOf(overview, "findings");
+  // Each finding's own row, by its place in the overview even when rows were left out for length (tools.ts rowAt).
+  const shared = forModels(brief).findings;
   const items: string[] = [], sources: { source: string; check_time: string }[] = [];
   for (const f of brief.findings) {
     if (f.tone !== "decision" || settled.has(f.id)) continue;
     if (f.kind === "background-check") { const k = kept(data, names, f, toneOf(f)); items.push(k.text); sources.push(k.source); continue; }
-    const row = rows[shared.findIndex(x => x.id === f.id)];
+    const row = rowAt(overview, "findings", shared.findIndex(x => x.id === f.id));
     if (!row || !overview || said.has(findingKey(str(row["kind"]), row))) continue;
     const text = sentenceFor(factOf(overview, "findings", row), day);
     if (text) items.push(text);

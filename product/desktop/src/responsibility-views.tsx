@@ -19,6 +19,7 @@ import { useDay } from "./day-words.js";
 import { dayName, keepTitle, watchTitle } from "./day-phrases.js";
 import type { DayWords } from "../../../core/src/service-day.js";
 import { fillPeople } from "../../../core/src/harness/session.js";
+import { onDayPage } from "../../../core/src/ask.js";
 import { aiText, jobStarted } from "./harness-words.js";
 import { TaskAccount } from "./activity-page.js";
 import { Icon } from "./icons.js";
@@ -37,6 +38,11 @@ export interface PlanContext {
   modelReady: boolean;
   /** A saved Planning Center connection and a chosen service. */
   connected: boolean;
+  /**
+   * A Planning Center sign-in is in the browser or being checked: the church may still be connected (`connected` holds),
+   * but no check runs until it is done, so a job never says it is checking meanwhile.
+   */
+  signingIn?: boolean;
   /** The church's zone when known, otherwise this Mac's. */
   zone: string;
   now: () => string;
@@ -163,6 +169,7 @@ export function PlanRows({ plan, context }: { plan: Plan; context: PlanContext }
 export function startedText(plan: Plan, context: PlanContext, d?: DayWords): string {
   const then = scheduleText(plan, at(plan, context), d).replace(/^Every/u, "every").replace(/\.$/u, "");
   const first = context.pausedAll ? `Everything is paused, so Ozzie won't check until you resume everything. Then ${then}.`
+    : context.signingIn ? `Ozzie will check once the Planning Center sign-in in your browser is done, then ${then}.`
     : !context.connected ? `Ozzie will check as soon as Planning Center is connected, then ${then}.`
       : `Ozzie is checking now, then ${then}.`;
   return `${first} ${ONLY_WHILE} ${STOP_TEXT}`;
@@ -340,7 +347,8 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {} }:
         <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now, reportFor(r.runs[0], view)) : "Not yet."}</span></div>
         {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
           <span>{back ? `It has used its checks for now. It can check again ${againText(back, now)}.` : next ? whenText(next, now)
-            : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
+            : context.signingIn ? "Once the Planning Center sign-in in your browser is done."
+              : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Today</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} checks used in the last 24 hours.</span></div>
       </div>}
     {!editing && lastItem && lastWriteup?.kind === "written" && <details className="listen-more today-writeup resp-writeup">
@@ -423,7 +431,7 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
     {picking
       ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
-    {ended.length > 0 && <details className="resp-ended"><summary>Ended recently</summary>
+    {ended.length > 0 && <details className="resp-ended"><summary><Icon name="chev" small />Ended recently</summary>
       <ul className="list">{ended.map(r => <li key={r.id}><Icon name="dot" small />{jobTitle(r, d)} · {lifetimeText(r.lifetime, r.template).replace(/ Then it stops on its own\.$/u, "")}</li>)}</ul>
     </details>}
   </section>;
@@ -450,7 +458,7 @@ export function WriteUpBlock({ item, writeup, names, now }: {
   return <section className="writeup" aria-label="Ozzie's write-up">
     <p className="writeup-head">{writeupHead(item, now, d)}</p>
     {(writeup.gaps?.length ?? 0) > 0 && <div className="stack-tight"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
-      <ul className="list">{writeup.gaps!.map(g => <li key={g}><Icon name="dot" small />{g}</li>)}</ul></div>}
+      <ul className="list">{writeup.gaps!.map(g => <li key={g}><Icon name="dot" small />{onDayPage(g, d)}</li>)}</ul></div>}
     <div className="writeup-lines">{(writeup.lines ?? []).map((l, i) => <p key={i}>{fillPeople(l, names)}</p>)}</div>
     {writeup.based_on && <p className="ask-based"><Icon name="check" small />{writeup.based_on}</p>}
     <button type="button" className="btn btn-quiet btn-sm ask-how" aria-expanded={how} onClick={() => setHow(!how)}><Icon name="info" small />See how this works</button>

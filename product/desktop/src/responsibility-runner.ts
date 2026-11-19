@@ -38,8 +38,9 @@ import {
 import type { FailureCode, ModelStep } from "../../../core/src/harness/contract.js";
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { inQuietHours, type QuietHours } from "../../../core/src/schedule.js";
-import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount } from "../../../core/src/sunday-brief.js";
 import { isOperationsRead, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
+import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { changeStillHolds, compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
 import { sundayOperations } from "../../../core/src/operations-capture.js";
 import {
@@ -216,6 +217,11 @@ export interface RunnerContext {
   urgentDuringQuiet?: boolean;
   urgentWithinHours: number;
   modelReady: boolean;
+  /**
+   * The leader's own decisions about a check's Sunday, as the Sunday page applies them (kept on this Mac), so Keep Sunday
+   * covered's report counts what the page shows. Absent: none.
+   */
+  decisionsFor?: (capture: SundayCapture) => readonly SundayDecision[];
 }
 export interface RunnerHooks {
   context(): RunnerContext;
@@ -365,9 +371,13 @@ export interface Found { decisions: number; looks: number; findings: NonNullable
 /**
  * What one fresh check shows for a template. Counts and keys (ids) only. The person's Church rules
  * already set aside what they asked Ozzie to stop flagging; notes their "Always do this" prepares count as drafts.
- * A room overlap counts as a decision only when a room rule confirms it, as the Sunday page labels it.
+ * A room overlap counts as a decision only when a room rule confirms it, as the Sunday page labels it. Keep Sunday
+ * covered's and the morning briefing's counts are the Sunday page's own (sundayShownCount, after the leader's
+ * `decisions`): rooms, follow-ups and group meetings the check read included, so "Keep Sunday covered: 2 things need a
+ * decision" never sits beside a page that says 3 (review item 2). What it announces is still only what it watches: the
+ * Services findings in `found`.
  */
-export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string): Found {
+export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string, decided: readonly SundayDecision[] = []): Found {
   const brief = buildSundayBrief(capture, rules, now);
   const ops = TEMPLATES[template].needs.includes("operations") || template === "morning-briefing" ? sundayOperations(capture, rules, { now }) : null;
   const rooms = ops?.result?.findings.filter(f => f.kind === "room-overlap") ?? [];
@@ -375,7 +385,7 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
   const roomCounts = { ...(confirmedRooms ? { rooms: confirmedRooms } : {}), ...(uncertainRooms ? { rooms_uncertain: uncertainRooms } : {}) };
   const followUps = ops?.result?.findings.filter(f => f.kind === "unowned-overdue") ?? [];
   const groups = ops?.group_meetings ?? [];
-  const decisions = brief.findings.filter(f => f.tone === "decision"), looks = brief.findings.filter(f => f.tone === "look");
+  const decisions = brief.findings.filter(f => f.tone === "decision");
   const entries = feedbackOf(rules);
   const always = brief.findings.filter(f => alwaysFor(entries, briefTarget(f, capture.plan_id))).length;
   const drafts = brief.findings.filter(f => f.kind === "needs-people" && (f.people?.suggestions.length ?? 0) > 0).length + always;
@@ -390,11 +400,13 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
       decisions: 0, looks: groups.length, findings: { groups: groups.length }, drafts: 0,
       ...keyed(groups.map((g): FoundKey => ({ key: `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`, kind: "group-meeting", tone: "look" }))),
     };
-    case "morning-briefing": return {
-      decisions: decisions.length, looks: looks.length, findings: { ...roomCounts, follow_ups: followUps.length, groups: groups.length },
-      ...keyed(decisionKeys), drafts,
-    };
-    default: return { decisions: decisions.length, looks: looks.length, findings: {}, ...keyed(decisionKeys), drafts };
+    // The morning briefing's run line says the Sunday page's count too (polish pass): its rooms, follow-ups and group
+    // meetings are in it, so they aren't listed beside it again.
+    case "morning-briefing":
+    default: {
+      const shown = sundayShownCount(applyDecisions(brief, decided), ops ?? sundayOperations(capture, rules, { now }));
+      return { decisions: shown.decisions, looks: shown.looks, findings: {}, ...keyed(decisionKeys), drafts };
+    }
   }
 }
 
@@ -768,7 +780,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       try { capture = await guard(check(trigger)); }
       catch (error) { if (error === CANCELLED) throw error; return await fail(checkFailure(error)); }
       const now = deps.now();
-      const found = findingsFor(r.template, capture, ctx.rules, now);
+      const found = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? []);
       // What changed since this responsibility last looked at the same Sunday.
       let changes: SundayChange[] = [];
       let memory = stateOf(r.id).memory;

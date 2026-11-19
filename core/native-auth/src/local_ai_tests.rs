@@ -20,6 +20,8 @@ struct Mac {
     /// What the person does on another screen while the first question waits for its answer.
     while_first_post: Option<Box<dyn Fn()>>,
     asked: Mutex<Vec<String>>,
+    /// The models `/api/show` was asked about, in order (kept apart from the questions in `posts`).
+    shows: Mutex<Vec<String>>,
 }
 impl Mac {
     fn with(mut self, url: &str, answer: Result<(u16, &str), Failure>) -> Self {
@@ -44,6 +46,17 @@ impl LocalHttp for Mac {
         self.answer(url)
     }
     fn post(&self, url: &str, body: &[u8], wait: Duration) -> Result<(u16, Vec<u8>), Failure> {
+        // Ollama's `/api/show` is answered from "SHOW" when a test gives one, else as for a model on this Mac (no remote
+        // field), and never counted among the questions.
+        if url == "http://127.0.0.1:11434/api/show" {
+            let value: Value = serde_json::from_slice(body).unwrap();
+            self.shows.lock().unwrap().push(value["model"].as_str().unwrap().to_owned());
+            self.asked.lock().unwrap().push(url.into());
+            return match self.answers.iter().find(|(u, _)| u == "SHOW") {
+                Some((_, answer)) => answer.clone().map(|(s, b)| (s, b.into_bytes())),
+                None => Ok((200, br#"{"parameters":"","capabilities":["completion","tools"]}"#.to_vec())),
+            };
+        }
         self.waits.lock().unwrap().push(wait);
         self.posts
             .lock()
@@ -69,13 +82,25 @@ impl LocalHttp for Mac {
     }
 }
 const GIB: u64 = 1_073_741_824;
+/// Ollama answering with `models` as its `/api/tags`. Ollama gives every row a digest and a size (its API reference):
+/// a row here without them gets fictional ones, so a test is about what it names; a test of a row without them, or of
+/// a cloud model's, builds its Mac with `Mac::with`.
 fn ollama_running(models: &str) -> Mac {
+    let mut tags: Value = serde_json::from_str(models).unwrap();
+    for row in tags["models"].as_array_mut().into_iter().flatten() {
+        if row.get("digest").is_none() {
+            row["digest"] = json!("a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f");
+        }
+        if row.get("size").is_none() {
+            row["size"] = json!(2_000_000_000u64);
+        }
+    }
     Mac::default()
         .with(
             "http://127.0.0.1:11434/api/version",
             Ok((200, r#"{"version":"0.12.0"}"#)),
         )
-        .with("http://127.0.0.1:11434/api/tags", Ok((200, models)))
+        .with("http://127.0.0.1:11434/api/tags", Ok((200, &tags.to_string())))
 }
 const TWO_MODELS: &str = r#"{"models":[{"name":"qwen3:8b","size":5225388164,"digest":"secret-canary"},{"name":"gpt-oss:20b","size":13780173839}]}"#;
 
@@ -1207,4 +1232,255 @@ fn b2_a_check_that_passed_where_the_app_gave_little_room_keeps_its_success_and_s
     assert_eq!(said["small_room"], true);
     // Past the three minutes there is no time to ask: unknown, and nothing more is said.
     assert_eq!(room_wait(CHECK_WAIT), None);
+}
+
+// ---- Not on this Mac (2026-11-19): Ollama's cloud models and models served from another Ollama -------------------
+
+/// `/api/tags` as Ollama 0.40.16 answers it (its API reference: `remote_model` "Name of the upstream model, if the model
+/// is remote", `remote_host` "URL of the upstream Ollama host, if the model is remote"), one row of each shape.
+const DIGEST: &str = "a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f";
+fn every_shape() -> String {
+    json!({"models": [
+        // On this Mac: a digest, its weights' size, no remote field (an empty one says nothing).
+        {"name": "qwen3:8b", "model": "qwen3:8b", "size": 5_225_388_164u64, "digest": DIGEST, "remote_host": "", "remote_model": null},
+        // A cloud model as `ollama pull gpt-oss:120b-cloud` leaves it: its description only, and where it runs.
+        {"name": "gpt-oss:120b-cloud", "model": "gpt-oss:120b-cloud", "size": 384, "digest": DIGEST,
+            "remote_model": "gpt-oss:120b", "remote_host": "https://ollama.com:443"},
+        // Ollama's newer cloud name, with nothing else to tell it: refused by its name alone.
+        {"name": "glm-4.6:cloud", "model": "glm-4.6:cloud", "size": 5_225_388_164u64, "digest": DIGEST},
+        // An ordinary name served from another Ollama (`/api/create` with `remote_host`).
+        {"name": "team-model:latest", "model": "team-model:latest", "size": 5_225_388_164u64, "digest": DIGEST,
+            "remote_host": "http://192.168.1.20:11434"},
+        {"name": "upstream:7b", "model": "upstream:7b", "size": 5_225_388_164u64, "digest": DIGEST, "remote_model": "llama3:70b"},
+        // Can't be told to run here: no digest, no size, or only a description's size.
+        {"name": "no-digest:7b", "model": "no-digest:7b", "size": 5_225_388_164u64},
+        {"name": "no-size:7b", "model": "no-size:7b", "digest": DIGEST},
+        {"name": "tiny:7b", "model": "tiny:7b", "size": 999_999, "digest": DIGEST},
+    ]})
+    .to_string()
+}
+fn ollama_saying(tags: &str) -> Mac {
+    Mac::default()
+        .with("http://127.0.0.1:11434/api/version", Ok((200, r#"{"version":"0.40.16"}"#)))
+        .with("http://127.0.0.1:11434/api/tags", Ok((200, tags)))
+}
+
+#[test]
+fn a_model_that_doesnt_run_on_this_mac_is_never_listed_only_counted() {
+    let tags = every_shape();
+    let found = find(&ollama_saying(&tags), |_| true, 32 * GIB);
+    let ollama = &found.apps[0];
+    assert_eq!(
+        ollama.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["qwen3:8b"]
+    );
+    assert_eq!(ollama.elsewhere, 7);
+    // The page reads the count as `elsewhere`; none of their names reaches it.
+    let said = serde_json::to_string(&found).unwrap();
+    assert!(said.contains(r#""elsewhere":7"#), "{said}");
+    for name in ["cloud", "team-model", "upstream", "no-digest", "no-size", "tiny", "ollama.com", "192.168"] {
+        assert!(!said.contains(name), "{name}: {said}");
+    }
+    // A catalogue model Ollama serves from elsewhere isn't "on this Mac": nothing would be set up from it.
+    let remote_qwen = json!({"models": [{"name": "qwen3:8b", "model": "qwen3:8b", "size": 384, "digest": DIGEST,
+        "remote_model": "qwen3:8b", "remote_host": "https://ollama.com:443"}]})
+    .to_string();
+    let found = find(&ollama_saying(&remote_qwen), |_| true, 32 * GIB);
+    let medium = found.catalogue.iter().find(|row| row.id == "qwen3:8b").unwrap();
+    assert!(!medium.downloaded && !medium.set_up);
+    assert_eq!((found.apps[0].models.len(), found.apps[0].elsewhere), (0, 1));
+    // LM Studio says no size or digest: its models are judged by their names and any remote field only.
+    let mac = Mac::default().with(
+        "http://127.0.0.1:1234/v1/models",
+        Ok((200, r#"{"data":[{"id":"qwen/qwen3-8b","object":"model"},{"id":"kimi-k2:1t-cloud","object":"model"},{"id":"far/model","object":"model","remote":true},{"id":"near/model","object":"model","remote":false}]}"#)),
+    );
+    let lm = &find(&mac, |_| false, 32 * GIB).apps[1];
+    assert_eq!(
+        lm.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["qwen/qwen3-8b", "near/model"]
+    );
+    assert_eq!(lm.elsewhere, 2);
+}
+
+#[test]
+fn ollamas_cloud_names_are_known_by_its_own_rule_and_wider() {
+    // Ollama's internal/modelref: the text after the last colon, any case, is "cloud" or ends in "-cloud".
+    for name in ["gpt-oss:120b-cloud", "glm-4.6:cloud", "gpt-oss:20b:cloud", "Kimi-K2:1T-CLOUD", "deepseek-v3.1:671b-cloud"] {
+        assert!(cloud_name(name), "{name}");
+    }
+    // Wider than Ollama on purpose: any part so marked.
+    for name in ["my-cloud", "my-cloud:latest", "cloud:7b"] {
+        assert!(cloud_name(name), "{name}");
+    }
+    for name in ["qwen3:8b", "ozzie-qwen3:8b", "gpt-oss:20b", "cloudy:7b", "llama3.2", "qwen/qwen3-8b", "mycloud:7b"] {
+        assert!(!cloud_name(name), "{name}");
+    }
+}
+
+#[test]
+fn the_check_asks_nothing_of_a_model_that_doesnt_run_on_this_mac() {
+    let tags = every_shape();
+    // Refused by its listing, or by its name before anything is asked at all: nothing is posted, nothing saved.
+    for model in ["gpt-oss:120b-cloud", "glm-4.6:cloud", "team-model:latest", "upstream:7b", "no-digest:7b", "no-size:7b", "tiny:7b"] {
+        let mac = ollama_saying(&tags).with("POST 1", Ok((200, CALLED))).with("POST 2", Ok((200, &said("HARBOR"))));
+        let (verdict, seconds, saved) = run(&mac, model);
+        assert_eq!((verdict, seconds), (Verdict::NotOnThisMac, None), "{model}");
+        assert!(saved.is_none(), "{model}");
+        assert!(mac.posts.lock().unwrap().is_empty(), "{model}");
+        assert!(mac.shows.lock().unwrap().is_empty(), "{model}");
+    }
+    // A cloud name is refused before any request, listed or not (Ollama sends it to ollama.com unlisted).
+    let mac = ollama_saying(&tags);
+    assert_eq!(run(&mac, "kimi-k2:1t-cloud").0, Verdict::NotOnThisMac);
+    assert!(mac.asked.lock().unwrap().is_empty());
+    // Listed as on this Mac, but Ollama's own answer about it names a remote host: refused, nothing posted.
+    let mac = ollama_saying(&tags)
+        .with("SHOW", Ok((200, r#"{"parameters":"","remote_model":"qwen3:8b","remote_host":"https://ollama.com:443"}"#)))
+        .with("POST 1", Ok((200, CALLED)));
+    assert_eq!(run(&mac, "qwen3:8b").0, Verdict::NotOnThisMac);
+    assert!(mac.posts.lock().unwrap().is_empty());
+    assert_eq!(*mac.shows.lock().unwrap(), ["qwen3:8b"]);
+    // Ollama no longer has it, or stopped answering, when asked about it.
+    let mac = ollama_saying(&tags).with("SHOW", Ok((404, r#"{"error":"model 'qwen3:8b' not found"}"#)));
+    assert_eq!(run(&mac, "qwen3:8b").0, Verdict::NotFound);
+    let mac = ollama_saying(&tags).with("SHOW", Err(Failure::Unreachable));
+    assert_eq!(run(&mac, "qwen3:8b").0, Verdict::Stopped);
+    // The model on this Mac: asked about once, then checked as before.
+    let mac = ollama_saying(&tags).with("POST 1", Ok((200, CALLED))).with("POST 2", Ok((200, &said("HARBOR"))));
+    let (verdict, _, saved) = run(&mac, "qwen3:8b");
+    assert_eq!(verdict, Verdict::Answers);
+    assert_eq!(saved.unwrap().model, "qwen3:8b");
+    assert_eq!(*mac.shows.lock().unwrap(), ["qwen3:8b"]);
+    // LM Studio: by its name and its fields.
+    let mac = Mac::default().with(
+        "http://127.0.0.1:1234/v1/models",
+        Ok((200, r#"{"data":[{"id":"kimi-k2:1t-cloud"},{"id":"far/model","remote":true}]}"#)),
+    );
+    for model in ["kimi-k2:1t-cloud", "far/model"] {
+        assert_eq!(run_at(App::LmStudio, &mac, model).0, Verdict::NotOnThisMac, "{model}");
+    }
+    assert!(mac.posts.lock().unwrap().is_empty());
+    // The page reads the word.
+    assert_eq!(serde_json::to_string(&Verdict::NotOnThisMac).unwrap(), r#""not-on-this-mac""#);
+}
+
+#[test]
+fn before_every_question_the_app_is_asked_again_whether_the_model_runs_here() {
+    use crate::local_ai::fake::OneModel;
+    let ollama = |model: &str| local_at(App::Ollama, model);
+    // Still on this Mac: the question may go. Ollama was asked about that model only, on this Mac only.
+    let here = OneModel::here("qwen3:8b");
+    assert_eq!(confirm_route(&ollama("qwen3:8b"), &here), Ok(()));
+    assert_eq!(
+        *here.asked.lock().unwrap(),
+        [
+            "http://127.0.0.1:11434/api/version",
+            "http://127.0.0.1:11434/api/tags",
+            "http://127.0.0.1:11434/api/show"
+        ]
+    );
+    // Pointed at Ollama's servers since it was checked: never asked.
+    let away = OneModel::elsewhere("qwen3:8b");
+    assert_eq!(confirm_route(&ollama("qwen3:8b"), &away), Err(ModelError::NotOnThisMac));
+    // A cloud name, however it was saved: refused before anything is asked.
+    let quiet = OneModel::here("gpt-oss:120b-cloud");
+    assert_eq!(confirm_route(&ollama("gpt-oss:120b-cloud"), &quiet), Err(ModelError::NotOnThisMac));
+    assert!(quiet.asked.lock().unwrap().is_empty());
+    // Before a question its lists get the longer wait: an Ollama slow to list many models doesn't fail a question.
+    let slow = ollama_saying(&every_shape());
+    assert_eq!(confirm_route(&ollama("qwen3:8b"), &slow), Ok(()));
+    assert!(slow.get_waits.lock().unwrap().iter().all(|(_, wait)| *wait == SHOW_WAIT));
+    // Ollama not answering, or no longer listing it: the question wouldn't have been answered either.
+    assert_eq!(confirm_route(&ollama("qwen3:8b"), &Mac::default()), Err(ModelError::ProviderFailure));
+    assert_eq!(confirm_route(&ollama("mistral:7b"), &here), Err(ModelError::ProviderFailure));
+    // Another route is never asked about.
+    let untouched = OneModel::here("qwen3:8b");
+    let own = model::RouteConfig::new(model::Route::Own, Some("https://api.example.invalid/v1"), Some("vendor/model-1")).unwrap();
+    assert_eq!(confirm_route(&own, &untouched), Ok(()));
+    assert_eq!(confirm_route(&model::RouteConfig::managed(), &untouched), Ok(()));
+    assert!(untouched.asked.lock().unwrap().is_empty());
+    // The client every question on this Mac goes through (rewording, Ask, a job's step) is made only after that answer.
+    let hosted = crate::hosted::HostedConfig::from_env(false, None);
+    assert_eq!(
+        model::NativeModelHttp::for_route_after(&ollama("qwen3:8b"), &hosted, &away).err(),
+        Some(ModelError::NotOnThisMac)
+    );
+    assert!(model::NativeModelHttp::for_route_after(&ollama("qwen3:8b"), &hosted, &here).is_ok());
+    assert_eq!(
+        crate::agent::step_client(&ollama("qwen3:8b"), &hosted, None, &away).err(),
+        Some(crate::agent::AgentError::NotOnThisMac)
+    );
+    assert_eq!(serde_json::to_string(&ModelError::NotOnThisMac).unwrap(), r#""not-on-this-mac""#);
+    assert_eq!(serde_json::to_string(&crate::agent::AgentError::NotOnThisMac).unwrap(), r#""not-on-this-mac""#);
+}
+
+#[test]
+fn every_question_on_this_mac_goes_through_the_one_client_that_asks_first() {
+    // Structure pin: rewording's and every step's client is made only by `for_route` / `step_client`, after the app on
+    // this Mac was asked (`this_mac_for`), and nothing else in the crate makes one for a model on this Mac.
+    let code = |source: &'static str| source.split("#[cfg(test)]").next().unwrap();
+    let model_rs = code(include_str!("model.rs"));
+    let agent_rs = code(include_str!("agent.rs"));
+    assert!(model_rs.contains("let http = NativeModelHttp::for_route(config, &hosted)?;"));
+    assert!(agent_rs.contains("let http = step_client(config, &hosted, checked.wait, &*model::this_mac_for(config)?)?;"));
+    assert!(agent_rs.contains("let http = NativeModelHttp::for_route_after(config, hosted, local)?;"));
+    let for_route_after = &model_rs[model_rs.find("pub(crate) fn for_route_after(").unwrap()..];
+    let body = &for_route_after[..for_route_after.find("\n    }\n").unwrap()];
+    assert!(body.trim_start().contains("crate::local_ai::confirm_route(config, local)?;"));
+    assert!(body.find("confirm_route").unwrap() < body.find("Self::new(config.route)").unwrap());
+    // The app sends no question to a model on this Mac of its own: its only requests there go through core.
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../product/desktop/src-tauri/src");
+    for entry in std::fs::read_dir(&app).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "rs") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(!text.contains("chat/completions"), "{}", path.display());
+        }
+    }
+    for (name, source) in [
+        ("model.rs", model_rs),
+        ("agent.rs", agent_rs),
+        ("hosted.rs", code(include_str!("hosted.rs"))),
+        ("own_key.rs", code(include_str!("own_key.rs"))),
+        ("anthropic.rs", code(include_str!("anthropic.rs"))),
+    ] {
+        let made = source.matches("NativeModelHttp::new(").count() + source.matches("Self::new(config.route)").count()
+            + source.matches("Self::new(route)").count();
+        let expected = usize::from(name == "model.rs");
+        assert_eq!(made, expected, "{name} makes a client for a route outside for_route_after");
+    }
+}
+
+#[test]
+fn open_ollama_names_its_exact_path_and_starts_it_quietly_and_its_program_is_found_by_its_file() {
+    // Ollama's own `hidden` (its install script: `open -a Ollama --args hidden`), so its window doesn't come in front of
+    // Ozzie's (live, 2026-11-19); LM Studio as it was, by its exact path.
+    let ollama = Path::new("/Applications/Ollama.app");
+    assert_eq!(open_args(App::Ollama, ollama), ["/Applications/Ollama.app", "--args", "hidden"]);
+    let lm = Path::new("/Applications/LM Studio.app");
+    assert_eq!(open_args(App::LmStudio, lm), ["/Applications/LM Studio.app"]);
+    // Its program, or the server it starts, inside its bundle in an Applications folder Ozzie looks in.
+    let home = Path::new("/fictional-home");
+    for path in [
+        "/Applications/Ollama.app/Contents/MacOS/Ollama",
+        "/Applications/Ollama.app/Contents/Resources/ollama",
+        "/fictional-home/Applications/Ollama.app/Contents/MacOS/Ollama",
+    ] {
+        assert!(app_executable(App::Ollama, Path::new(path), Some(home)), "{path}");
+    }
+    for path in [
+        "/usr/local/bin/ollama",
+        "/Applications/Ollama.app.old/Contents/MacOS/Ollama",
+        "/Applications/LM Studio.app/Contents/MacOS/LM Studio",
+        "/tmp/Applications/Ollama.app/Contents/MacOS/Ollama",
+        "/Applications/Ollama.app",
+    ] {
+        assert!(!app_executable(App::Ollama, Path::new(path), Some(home)), "{path}");
+    }
+    // The system's list of programs is read: this test's own program is in it.
+    #[cfg(target_os = "macos")]
+    {
+        let me = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert!(process_paths().iter().any(|path| path.canonicalize().ok().as_ref() == Some(&me)));
+    }
 }

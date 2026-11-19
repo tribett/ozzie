@@ -619,13 +619,14 @@ fn has_room(parameters: &str) -> bool {
         words.next() == Some("num_ctx") && words.next().and_then(|n| n.parse().ok()) == Some(ROOM)
     })
 }
-/// Ollama lists Ozzie's copy of `id` and it has the room Ozzie gives it.
+/// Ollama lists Ozzie's copy of `id` and it has the room Ozzie gives it, and it runs on this Mac (a copy made from a
+/// model served elsewhere is served from there too: it is made again from the model on this Mac).
 fn copy_ready(id: &str, http: &dyn LocalHttp) -> Result<bool, End> {
     let body = serde_json::to_vec(&json!({"model": setup_name(id)})).map_err(|_| End::Failed)?;
     match http.post(&format!("{}/api/show", local_ai::OLLAMA), &body, SETUP_WAIT) {
         Ok((200, answer)) => {
             let value: Value = serde_json::from_slice(&answer).unwrap_or(Value::Null);
-            Ok(value["parameters"].as_str().is_some_and(has_room))
+            Ok(value["parameters"].as_str().is_some_and(has_room) && !local_ai::names_a_remote(&value))
         }
         Ok(_) => Ok(false),
         Err(_) => Err(End::Stopped),

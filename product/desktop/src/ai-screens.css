@@ -48,6 +48,11 @@
    bar's edge is --control (3:1 against the page, as the rows'); its fill is the accent. No animation, so nothing moves
    that isn't a byte. */
 .oz .ai-download { display: flex; flex-direction: column; gap: 8px; }
+/* Ozzie's offer to get Ollama (decision 25): its plain lines, a short list, the checks under a fold, then its two
+   buttons, set apart from what was found. */
+.oz .ai-get { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.oz .ai-facts { margin: 0; padding-left: 1.25em; display: flex; flex-direction: column; gap: 4px; font: 400 var(--t-md)/1.55 var(--f-ui); color: var(--ink-2);
+  max-width: 34em; }
 .oz .ai-progress { -webkit-appearance: none; appearance: none; width: 100%; height: 12px; border-radius: 999px; border: 1.5px solid var(--control);
   background: var(--sunken); overflow: hidden; }
 .oz .ai-progress::-webkit-progress-bar { background: var(--sunken); border-radius: 999px; }

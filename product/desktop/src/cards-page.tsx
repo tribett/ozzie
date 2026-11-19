@@ -291,6 +291,9 @@ export function bindKeep(controller: CardReviewController, win: Pick<Window, "ad
 export const keptImages = () => ({ ...browserImages(), foreground: () => true });
 
 export const KEPT_TITLE = "Kept on this Mac until you discard them";
+/** All the box says up front, beside its title (owner's polish pass, 2026-11-18); when the cards end is under KEPT_MORE. */
+export const KEPT_PROMISE = "Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center. Keep your original photos.";
+export const KEPT_MORE = "When these cards end";
 export const KEPT_BODY = "These cards stay in Ozzie's memory while it is open: switching to another app, going to another page or closing the window keeps them. If the window was closed or minimized, the screen locked or the Mac slept, they wait behind Show the cards. They end when:";
 /** Every way the cards end, and which ask first: native app_menu.rs and always_on.rs (quitting), updates-view.tsx
  *  (updating), connection.ts `switchCopy` (switching churches). Nothing holds the Mac's own exits. */
@@ -301,7 +304,6 @@ export const KEPT_ENDS = [
   "Ozzie switches to another church, or you disconnect Planning Center. Ozzie asks first.",
   "You sign out of this Mac, restart or shut it down, choose Quit from the Dock, or Ozzie stops any other way. These don't ask.",
 ] as const;
-export const KEPT_AFTER = "Keep your original photos. Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.";
 export const SHOW_CARDS = "Show the cards";
 export const veiledText = (n: number) => `${n === 1 ? "1 visitor card is" : `${n} visitor cards are`} still open, kept in memory only. They're hidden because Ozzie's window was off screen.`;
 export const DISCARD_ASK = (n: number) => `Discard ${n === 1 ? "this card" : `these ${n} cards`}? Nothing from ${n === 1 ? "it" : "them"} is kept anywhere.`;
@@ -521,11 +523,16 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
     <p className="eyebrow">Visitor cards</p>
     <h1 className="h1">Read visitor cards</h1>
     <p className="lede">Choose photos of several cards at once. Each card stays beside its photo while you check it, then you copy the list or discard it.</p>
+    {/* The title and two short sentences up front; every way the cards end, before and while they're open, one click
+        away in the app's usual fold (owner's polish pass, 2026-11-18). */}
     <div className="limits" id="cards-limits">
-      <p className="limits-t"><Icon name="lock" small />{KEPT_TITLE}</p>
-      <p>{KEPT_BODY}</p>
-      <ul>{KEPT_ENDS.map(end => <li key={end}>{end}</li>)}</ul>
-      <p>{KEPT_AFTER}</p>
+      <p className="limits-t" id="cards-limits-t"><Icon name="lock" small />{KEPT_TITLE}</p>
+      <p id="cards-limits-promise">{KEPT_PROMISE}</p>
+      <details className="listen-more limits-more">
+        <summary><Icon name="chev" small />{KEPT_MORE}</summary>
+        <p>{KEPT_BODY}</p>
+        <ul>{KEPT_ENDS.map(end => <li key={end}>{end}</li>)}</ul>
+      </details>
     </div>
     {ui.recognizer === "not-available"
       ? <p className="panel-info"><Icon name="info" small />This Mac can't read card text, so please type each card.</p>
@@ -533,7 +540,7 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
     {ui.recognizer === "preparing" && <p className="small" role="status"><Icon name="spinner" small spin /> Getting this Mac ready to read cards. The first time can take a minute or two; nothing from your cards is used for this.</p>}
 
     {!open && <div className="row">
-      <button type="button" className="btn btn-primary" aria-describedby="cards-limits" onClick={onChoose}>Choose card photos</button>
+      <button type="button" className="btn btn-primary" aria-describedby="cards-limits-t cards-limits-promise" onClick={onChoose}>Choose card photos</button>
       <span className="small">PNG, JPEG or HEIC (iPhone photos) · up to 8 at a time · 8 MB each</span>
     </div>}
     <p className="small" role="status" aria-live="polite">{status === "choosing" ? "Choose the card photos in the window that opened."

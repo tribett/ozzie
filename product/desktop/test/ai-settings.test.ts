@@ -43,11 +43,12 @@ describe("AI settings", () => {
       // "Keychain" only inside "See how this works" (spec §6).
       expect(outsideHow, setup).not.toContain("Keychain");
       expect(text).not.toMatch(HIDDEN_WORDS);
-      // Reading the section asks native for its status, which companies' keys are kept (closed ids, for "Remove my
-      // key from this Mac") and how many keys removing would take (a count from the Keychain's list, review L-4), and
-      // nothing else; no call carries any argument, so none can carry a key.
-      expect(calls.map(c => c.command)).toEqual(["model_status", "own_key_saved", "own_key_count"]);
-      expect(calls.map(c => c.args)).toEqual([{}, {}, {}]);
+      // Reading the section asks native for its status, whether Ozzie installed Ollama (times and closed words only, for
+      // how to remove it; decision 25), which companies' keys are kept (closed ids, for "Remove my key from this Mac") and
+      // how many keys removing would take (a count from the Keychain's list, review L-4), and nothing else; no call
+      // carries any argument, so none can carry a key.
+      expect(calls.map(c => c.command)).toEqual(["model_status", "ollama_install_history", "own_key_saved", "own_key_count"]);
+      expect(calls.map(c => c.args)).toEqual([{}, {}, {}, {}]);
       await unmount!(); unmount = null;
     }
   });

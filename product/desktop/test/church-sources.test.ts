@@ -390,13 +390,23 @@ describe("the Church lists page", () => {
   it("says one sentence before its first button, with how to save a list and notes folded away (audit item 26)", async () => {
     const html = await renderPage({});
     const words = text(html);
-    // Before the first button: the title and one sentence, nothing else.
+    // Before the first button: the page's name, its title and one sentence, nothing else. Headed like every other page:
+    // the sidebar's name as the eyebrow, then the one h1 (owner's polish pass, 2026-11-18).
     const before = words.slice(0, words.indexOf(page.ADD_LIST));
-    expect(before.trim()).toBe(`${page.LISTS_TITLE} ${page.LISTS_BODY}`);
+    expect(before.trim()).toBe(`${page.LISTS_TITLE} ${page.LISTS_HEADING} ${page.LISTS_BODY}`);
+    expect(html).toMatch(new RegExp(`^<div class="col church-lists"><p class="eyebrow">${page.LISTS_TITLE}</p><h1 class="h1">${page.LISTS_HEADING.replaceAll("'", "&#x27;")}</h1>`, "u"));
+    expect(html.match(/<h1\b/gu)).toHaveLength(1);
     expect(page.LISTS_BODY.match(/[.!?](?:\s|$)/gu)).toHaveLength(1);
     expect(html).toMatch(new RegExp(`<details class="listen-more"><summary>.*?${page.HOW_LISTS}</summary><p class="small">${page.ADD_HELP}</p></details>`, "u"));
-    // What stays on this Mac is still said in full, after the buttons.
-    expect(words.indexOf(page.LISTS_STAYS)).toBeGreaterThan(words.indexOf(page.ADD_LIST));
+    // What stays on this Mac is still said in full, after the buttons: the promise first, then when Ozzie reads them, in
+    // short sentences (it was one sentence of 60 words; polish pass).
+    const stays = words.indexOf(page.LISTS_STAYS);
+    expect(stays).toBeGreaterThan(words.indexOf(page.ADD_LIST));
+    expect(words.slice(stays)).toContain(`${page.LISTS_STAYS} ${page.LISTS_PRIVATE} ${page.LISTS_WHEN}`);
+    expect(html).toContain(`<strong>${page.LISTS_STAYS}</strong>`);
+    for (const sentence of `${page.LISTS_STAYS} ${page.LISTS_PRIVATE} ${page.LISTS_WHEN}`.split(/(?<=[.!?])\s+/u)) {
+      expect(sentence.split(/\s+/u).length, sentence).toBeLessThanOrEqual(25);
+    }
     // Notes: one sentence before their button, the rest under "How to save notes".
     expect(notesPage.NOTES_BODY.match(/[.!?](?:\s|$)/gu)).toHaveLength(1);
     const notes = words.slice(words.indexOf(notesPage.NOTES_TITLE));
@@ -410,7 +420,7 @@ describe("the Church lists page", () => {
     clock = "2026-11-16T15:06:00.000Z";
     const html = await renderPage({});
     const words = text(html);
-    for (const line of [page.LISTS_TITLE, page.LISTS_BODY, page.LISTS_STAYS, page.LIST_FRAME, page.ADD_LIST, page.ADD_HELP, page.COLUMN_QUESTION, page.FIND_LABEL,
+    for (const line of [page.LISTS_TITLE, page.LISTS_HEADING, page.LISTS_BODY, page.LISTS_STAYS, page.LISTS_PRIVATE, page.LISTS_WHEN, page.LIST_FRAME, page.ADD_LIST, page.ADD_HELP, page.COLUMN_QUESTION, page.FIND_LABEL,
       page.SHOW_QUESTION, page.SHOW_NONE, page.READ_AGAIN, page.REMOVE_LIST, page.FORGET_ALL]) expect(words, line).toContain(line);
     expect(words).toMatch(/Read from key-holders\.csv at \d{1,2}:\d{2} (?:AM|PM)/u);
     // The table, in the file's order, with every column.
@@ -1095,8 +1105,14 @@ describe("plain words", () => {
     // Review S, L7: the match it keeps sits beside the choice, and each app's own way to save CSV.
     expect(page.KEEP_MATCH).toBe("Keep this match");
     expect(page.ADD_HELP).toBe("Choose a spreadsheet saved as CSV or tab-separated text, up to 2 MB. In Numbers choose File › Export To › CSV. In Excel choose File › Save As and pick CSV UTF-8.");
-    expect(page.LISTS_STAYS).toMatch(/stay on this Mac/u);
-    expect(page.LISTS_STAYS).toMatch(/aren't sent to AI help, shared with other AI apps or Siri, or put in any notice/u);
+    // What stays on this Mac, and exactly when Ozzie reads a list or notes: the same as the one long sentence it replaced
+    // (when you add it, when you ask, opening this page or the service's page the first time after Ozzie starts and then at
+    // most once an hour, never with the window closed or hidden, never changing it), in short sentences.
+    expect(page.LISTS_STAYS).toBe("Your lists and notes stay on this Mac.");
+    expect(page.LISTS_PRIVATE).toBe("They aren't sent to AI help, shared with other AI apps or Siri, or put in any notice. Ozzie never changes them.");
+    expect(page.LISTS_WHEN).toBe("Ozzie reads each one from its file or link when you add it and when you ask. It also reads them when you open your service's page or this page: the first time after Ozzie starts, then at most once an hour. It never reads them while the window is closed or hidden.");
+    expect(page.LISTS_TITLE).toBe("Church lists");
+    expect(page.LISTS_HEADING).toBe("Your church's own lists and notes");
   });
 });
 

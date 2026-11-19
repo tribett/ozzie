@@ -9,8 +9,9 @@ import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { AskPanel, type PlanHooks, type Turn } from "../src/ask-panel.js";
 import {
-  againText, AutostartToggle, checksBack, NoticedCard, PlanCard, PlanEditor, PlanTurn, ResponsibilityList, startedText, TemplatePicker, watchLine, type PlanActions, type PlanContext,
+  againText, AutostartToggle, checksBack, NoticedCard, PlanCard, PlanEditor, PlanTurn, ResponsibilityList, startedText, TemplatePicker, watchLine, WriteUpBlock, type PlanActions, type PlanContext,
 } from "../src/responsibility-views.js";
+import { leftOutOfAnswer } from "../src/harness-words.js";
 import { YourNameField } from "../src/connection-page.js";
 import type { NoticedItem, Runner, RunnerView } from "../src/responsibility-runner.js";
 import { TodayPage } from "../src/today-page.js";
@@ -189,6 +190,26 @@ describe("the plan Ozzie shows before taking something on", () => {
     expect(startedText(sunday(), context({ connected: false }))).toMatch(/^Ozzie will check as soon as Planning Center is connected, then every day at 7:00 AM/u);
     expect(startedText(sunday(), context({ pausedAll: true }))).toMatch(/^Everything is paused, so Ozzie won't check until you resume everything\. Then every day at 7:00 AM/u);
     for (const c of [context(), context({ connected: false }), context({ pausedAll: true })]) expect(startedText(sunday(), c)).not.toMatch(HIDDEN_WORDS);
+  });
+
+  it("started while a sign-in for the church is in the browser: says the first check waits for it, never that it is checking (review of items 4 and 7)", () => {
+    // The church is still connected (the words hold), but no check runs until the sign-in in the browser is done.
+    const signing = context({ signingIn: true });
+    expect(startedText(sunday(), signing)).toMatch(/^Ozzie will check once the Planning Center sign-in in your browser is done, then every day at 7:00 AM/u);
+    expect(startedText(sunday(), signing)).not.toMatch(/checking now|isn't connected|is connected/u);
+    const r = responsibility(sunday());
+    const page = render(React.createElement(ResponsibilityList, { view: view({ items: [r] }), context: signing, runner: fakeRunner(view()), actions }));
+    expect(page).toContain("Next check Once the Planning Center sign-in in your browser is done.");
+    expect(page).not.toContain("Not scheduled.");
+  });
+
+  it("a write-up's Worth a look lines name the watched service's own page (review of item 6)", () => {
+    const writeup = { item: "i", responsibility_id: "r", run_id: "x", organization: "1001", at: FRI, kind: "written" as const, lines: ["For Wednesday, this check found 2 items that need a decision and 40 worth a look."],
+      based_on: "Based on: Planning Center Services, checked Wed", gaps: [leftOutOfAnswer("Planning Center Services", 3)], steps: [], ai_steps: 1 };
+    const item = { template: "keep-sunday-covered" as const, at: FRI, trigger: "scheduled" as const };
+    const wed = render(React.createElement(DayProvider, { value: wednesdayWords() }, React.createElement(WriteUpBlock, { item, writeup, names: {}, now: FRI })));
+    expect(wed).toContain("so 3 findings were left out of this answer. They're on the Wednesday page.");
+    expect(wed).not.toContain("Sunday page");
   });
 
   it("one of each kind: a second plan for the same thing offers to change the one Ozzie already keeps an eye on", () => {

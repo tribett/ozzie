@@ -6,11 +6,12 @@
 // switch keeps.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { Icon } from "./icons.js";
 import { copySetup, temporaryPath } from "./other-ai-apps-setup.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
 
 export const SIRI_BODY = "Ask Ozzie from Spotlight without opening this window, for example \"Is Sunday covered?\" The answer comes from Ozzie's last saved check on this Mac and always says when that check was made.";
-export const SIRI_SEES = "Siri and Shortcuts hear counts and times from Ozzie's last check: open spots and how many roles they're in, how many people are pending, with and without a request sent, teams without a confirmed lead, kids teams with fewer confirmed people than your Church rules ask, what Ozzie isn't sure of as Worth a look, how many you marked as handled, whether part of the check couldn't be read or was too long to say in full, that some findings are shown only in Ozzie when your Church rules keep them there, and when it was checked.";
+export const SIRI_SEES = "Siri and Shortcuts hear counts and times from Ozzie's last check: open spots and how many roles they're in, how many people are pending, with and without a request sent, teams without a confirmed lead, kids teams with fewer confirmed people than your Church rules ask, how many room booking overlaps and overdue follow-ups with no owner need a decision, what Ozzie isn't sure of as Worth a look, how many you marked as handled, whether part of the check couldn't be read or was too long to say in full, that some findings are shown only in Ozzie when your Church rules keep them there, and when it was checked.";
 export const SIRI_NEVER = "They never hear a name, a role, team or room name, a background check or anything you asked Ozzie. Answering reads nothing from Planning Center, uses no AI help, and can't change or send anything. Siri hears your question as it hears any other; what Apple keeps is up to Apple.";
 export const SIRI_HOW = [
   "While this is on, Ozzie keeps a small copy of its last check's overview on this Mac. People and roles appear in it only as labels like [Role 1], and answers don't say even those, only counts and times.",
@@ -123,7 +124,7 @@ export function ShortcutsSetup({ on, path, actions, find = findHelper, findBundl
           <p className="small">{ACTIONS_SIRI}</p>
           <p className="small">{ACTIONS_NOT_FOUND}</p>
           <details className="listen-more">
-            <summary>{BY_HAND}</summary>
+            <summary><Icon name="chev" small />{BY_HAND}</summary>
             <div className="stack-tight"><ByHand found={found} /></div>
           </details>
         </>}
@@ -147,7 +148,7 @@ export function SiriShortcutsSection({ on, onChange, problem, path, actions }: S
       <p className="small" style={{ marginTop: 12 }}>{SIRI_SEES} {SIRI_NEVER}</p>
       <ShortcutsSetup on={on} {...(path !== undefined ? { path } : {})} {...(actions !== undefined ? { actions } : {})} />
       <details className="listen-more">
-        <summary>See how this works</summary>
+        <summary><Icon name="chev" small />See how this works</summary>
         <ul className="small">{SIRI_HOW.map(line => <li key={line}>{line}</li>)}</ul>
       </details>
   </section>;

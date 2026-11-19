@@ -7,7 +7,7 @@ import { CardReviewController } from "../../src/card-review/controller.js";
 import type { CardView } from "../../../core/src/card-review/lifecycle.js";
 import { readLines, reviewedList, type ReadLine } from "../../../core/src/card-fields.js";
 import {
-  bindKeep, cardPhotoFiles, CardsReview, checkCard, DISCARD_ASK, emptyUi, escapeCloses, keptImages, KEPT_AFTER, KEPT_BODY, KEPT_ENDS, listFor, lookFirst, pickCards, PICK_PROBLEM, placeLine,
+  bindKeep, cardPhotoFiles, CardsReview, checkCard, DISCARD_ASK, emptyUi, escapeCloses, keptImages, KEPT_BODY, KEPT_ENDS, KEPT_MORE, KEPT_PROMISE, KEPT_TITLE, listFor, lookFirst, pickCards, PICK_PROBLEM, placeLine,
   readCardsLocally, readingFor, SHOW_CARDS, veiledText, type CardsUi, type CardTextResult, type FieldSource, type ReadState,
 } from "../src/cards-page.js";
 
@@ -179,23 +179,55 @@ describe("checking and finishing", () => {
   });
 });
 
+/**
+ * The "Kept on this Mac" box: its title and the two short sentences are all it shows up front; every way the cards end is
+ * in it, under When these cards end, closed (owner's polish pass, 2026-11-18). Returns the box's markup.
+ */
+function keptBox(html: string): string {
+  const start = html.indexOf('<div class="limits" id="cards-limits">');
+  expect(start).toBeGreaterThanOrEqual(0);
+  const box = html.slice(start, html.indexOf("</details>", start) + "</details>".length);
+  const fold = box.indexOf("<details");
+  expect(fold).toBeGreaterThan(0);
+  const upFront = box.slice(0, fold).replace(/<[^>]+>/gu, " ").replaceAll("&#x27;", "'").replace(/\s+/gu, " ").trim();
+  expect(upFront).toBe(`${KEPT_TITLE} ${KEPT_PROMISE}`);
+  expect(KEPT_PROMISE.match(/[.!?](?:\s|$)/gu)).toHaveLength(2);
+  // The app's disclosure: the chevron, then its words; closed until asked for.
+  expect(box.slice(fold)).toMatch(new RegExp(`^<details class="listen-more limits-more"><summary><svg class="ic ic-sm" [^>]*>.*?</svg>${KEPT_MORE}</summary>`, "u"));
+  const folded = box.slice(fold);
+  expect(folded).toContain(KEPT_BODY.replaceAll("'", "&#x27;"));
+  for (const end of KEPT_ENDS) expect(folded).toContain(`<li>${end.replaceAll("'", "&#x27;")}</li>`);
+  expect(html).not.toMatch(/<details[^>]*\sopen/u);
+  return box;
+}
+
 describe("the review page", () => {
   const render = (controller: CardReviewController, ticket: number | null, ui: Partial<CardsUi> = {}, lines: Record<number, readonly ReadLine[]> = {}) =>
     renderToStaticMarkup(React.createElement(CardsReview, {
       controller, ticket, ui: { ...emptyUi, ...ui }, people, lines, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {},
     }));
 
+  it("keeps the same short box, with when the cards end one click away, while cards are open", async () => {
+    const { controller, ticket } = await openReview(2);
+    const html = render(controller, ticket);
+    expect(html).toContain("2 cards open for checking.");
+    keptBox(html);
+  });
+
   it("explains the temporary review before any photo is chosen", () => {
     const controller = new CardReviewController("fictional-test", { foreground: () => true, createURL: () => "blob:x", revokeURL() {}, decode: async () => true });
     const html = render(controller, null);
     expect(html).toContain("Read visitor cards");
     expect(html).toContain("Choose card photos");
-    // Kept until the leader discards them or quits Ozzie (audit item 20), and said so before any photo is chosen.
-    expect(html).toContain(KEPT_BODY.replaceAll("'", "&#x27;"));
-    for (const end of KEPT_ENDS) expect(html).toContain(`<li>${end.replaceAll("'", "&#x27;")}</li>`);
-    expect(html).toContain(KEPT_AFTER);
+    // Kept until the leader discards them or quits Ozzie (audit item 20), and said so before any photo is chosen: the
+    // title and two short sentences up front, and when the cards end under one fold (owner's polish pass, 2026-11-18).
+    keptBox(html);
     expect(html).not.toContain("discards these cards right away");
     expect(html).toContain("Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.");
+    // "Choose card photos" is described by the short part, never by the whole fold.
+    expect(html).toMatch(/<button[^>]*aria-describedby="cards-limits-t cards-limits-promise"[^>]*>Choose card photos<\/button>/u);
+    expect(html).toMatch(/<p class="limits-t" id="cards-limits-t">/u);
+    expect(html).toContain(`<p id="cards-limits-promise">${KEPT_PROMISE}</p>`);
     expect(render(controller, null, { recognizer: "not-available" })).toContain("This Mac can&#x27;t read card text, so please type each card.");
     expect(html).not.toContain("Getting this Mac ready");
     // The first preparation on a Mac can take a while; it never uses a card.
@@ -544,7 +576,10 @@ describe("cards are kept until the leader discards them or quits Ozzie (audit it
       "Ozzie switches to another church, or you disconnect Planning Center. Ozzie asks first.",
       "You sign out of this Mac, restart or shut it down, choose Quit from the Dock, or Ozzie stops any other way. These don't ask.",
     ]);
-    expect(KEPT_AFTER).toBe("Keep your original photos. Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center.");
+    // Up front, the promise first and two short sentences only; the rest is under When these cards end (polish pass).
+    expect(KEPT_TITLE).toBe("Kept on this Mac until you discard them");
+    expect(KEPT_PROMISE).toBe("Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center. Keep your original photos.");
+    expect(KEPT_MORE).toBe("When these cards end");
     const { controller, ticket } = await openReview(2);
     const asked = renderToStaticMarkup(React.createElement(CardsReview, {
       controller, ticket, ui: emptyUi, people, lines: {}, onChoose() {}, onCopy() {}, onDiscard() {}, onSource() {}, onRemoved() {}, askingToDiscard: true,

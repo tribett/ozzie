@@ -355,12 +355,12 @@ describe("a sign-in that didn't connect while a church was in use (review S4, M1
     organization_diagnostic: { version: 1 as const, stage: "organization-binding" as const, reason: "organization-mismatch" as const } };
   it("Sign in again, cancelled: says so where it always did, with the church Ozzie still uses", () => {
     const shown = text(page(restored({ state: "cancelled" })));
-    expect(shown).toContain("Sign-in was cancelled on this Mac. Ozzie still uses Fictional Grace Church (organization 1001).");
+    expect(shown).toContain("Sign-in was cancelled on this Mac. Ozzie still uses Fictional Grace Church.");
     expect(shown).not.toContain("hasn't been checked yet");
   });
   it("the rooms, follow-ups and group events opt-in, refused at Planning Center: said in the sign-in section as before", () => {
     const shown = text(page(restored({ state: "cancelled" })));
-    const line = shown.indexOf("Sign-in was cancelled on this Mac. Ozzie still uses Fictional Grace Church (organization 1001).");
+    const line = shown.indexOf("Sign-in was cancelled on this Mac. Ozzie still uses Fictional Grace Church.");
     expect(line).toBeGreaterThan(-1);
     expect(line).toBeLessThan(shown.indexOf("Rooms, follow-ups and group events"));
     expect(page(restored({ state: "cancelled" }))).toMatch(/<button class="btn btn-secondary">Also check rooms, follow-ups and group events<\/button>/);
@@ -371,11 +371,11 @@ describe("a sign-in that didn't connect while a church was in use (review S4, M1
       status: restored(mismatch, { in_use: { ...grace, client_id: "fictional-own-client" } }), settings: own, onSettings: () => {}, onStatus: () => {}, oneClick: false,
     }));
     expect(html).toContain('<p role="alert" class="problem">You signed in to a different Planning Center organization than the one in Ozzie&#x27;s settings.');
-    expect(text(html)).toContain("check the organization ID under Advanced. Nothing new was saved. Ozzie still uses Fictional Grace Church (organization 1001).");
+    expect(text(html)).toContain("check the organization ID under Advanced. Nothing new was saved. Ozzie still uses Fictional Grace Church.");
   });
   it("Sign in to X instead, left to expire: said in Settings", () => {
     // First run no longer has a sign-in form of its own for a church in use; Settings is where this attempt is started and said.
-    const line = "Sign-in expired before it finished. Ozzie still uses Fictional Grace Church (organization 1001).";
+    const line = "Sign-in expired before it finished. Ozzie still uses Fictional Grace Church.";
     expect(text(page(restored({ state: "expired" })))).toContain(line);
   });
   it("goes once native code clears it (a new sign-in or check started), and is shown only for an ended sign-in", () => {

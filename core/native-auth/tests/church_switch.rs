@@ -723,6 +723,75 @@ fn the_same_church_signing_in_again_is_never_asked() {
     assert_eq!(store.saved(), ["1001", "3003"]);
 }
 
+/// A sign-in again for a church asks Planning Center for what its saved sign-in holds (the app's `again`; review
+/// 2026-11-18, late): read from the record's non-secret set, whichever registration saved it, never a credential. With
+/// nothing saved, a record that can't be read, or something that isn't an organization number: nothing.
+#[test]
+fn what_a_saved_sign_in_holds_is_read_from_its_record_for_a_sign_in_again() {
+    let (store, pco, c) = on_1001();
+    assert_eq!(c.held("1001"), Some(Scopes::Services));
+    assert_eq!(c.church_in_use().as_deref(), Some("1001"));
+    // One click that asked for and was granted Calendar, People and Groups with Check-Ins.
+    let wide = Scopes::asked(true, true, false);
+    pco.signs_in_to("1001");
+    let finder = c.prepare_finder().unwrap();
+    let url = url::Url::parse(&finder.begin_with(wide).unwrap()).unwrap();
+    let state = url.query_pairs().find(|(k, _)| k == "state").unwrap().1;
+    finder
+        .callback(&format!("{REDIRECT_URI}?code=fictional-code&state={state}"))
+        .unwrap();
+    c.settle().unwrap();
+    assert_eq!(view(&c).status.scopes, Some(wide));
+    assert_eq!(c.held("1001"), Some(wide));
+    // Held as saved even once Planning Center stops accepting it: the record still says what was granted.
+    pco.dead.lock().unwrap().insert("1001".into());
+    let auth = c
+        .prepare(String::new(), "1001".into(), true, Purpose::Check)
+        .unwrap();
+    assert!(auth.refresh().is_err());
+    assert_eq!(c.held("1001"), Some(wide));
+    // Still the church in use: a sign-in starts from it.
+    assert_eq!(c.church_in_use().as_deref(), Some("1001"));
+    // The same for a registration typed under Advanced: one slot per church.
+    pco.dead.lock().unwrap().clear();
+    pasted(&c, &pco, OWN, "1001");
+    c.settle().unwrap();
+    assert_eq!(c.held("1001"), Some(Scopes::Services));
+    assert_eq!(c.held("2002"), None);
+    for not_a_church in ["", "0", "1001x", "../1001"] {
+        assert_eq!(c.held(not_a_church), None);
+    }
+    store.refuse("1001", StoreError::Locked);
+    assert_eq!(c.held("1001"), None);
+    *store.refuse.lock().unwrap() = None;
+    assert_eq!(c.disconnect().unwrap().state, ConnectionState::Disconnected);
+    assert_eq!(c.held("1001"), None);
+}
+
+/// "Sign in to {church} instead" with Ozzie's own registration is bound to that church (the app's `again` for a church
+/// other than the one in use; review 2026-11-19): Planning Center signing the browser in to the church in use instead
+/// fails as another organization, so that church's access is never asked of, or saved for, the church in use.
+#[test]
+fn a_one_click_sign_in_bound_to_a_found_church_never_widens_the_church_in_use() {
+    let (store, pco, c) = on_1001();
+    let wide = Scopes::asked(true, true, true);
+    // The browser is still signed in to 1001: Planning Center binds the grant to it.
+    pco.signs_in_to("1001");
+    let bound = c
+        .prepare(String::new(), "2002".into(), true, Purpose::SignIn)
+        .unwrap();
+    let url = url::Url::parse(&bound.begin_with(wide).unwrap()).unwrap();
+    let state = url.query_pairs().find(|(k, _)| k == "state").unwrap().1;
+    let _ = bound.callback(&format!("{REDIRECT_URI}?code=fictional-code&state={state}"));
+    c.settle().unwrap();
+    assert_eq!(bound.status().unwrap().state, ConnectionState::Failed);
+    // Nothing new was saved; 1001 holds what it held, and is still the church in use.
+    assert_eq!(store.saved(), ["1001"]);
+    assert_eq!(c.held("1001"), Some(Scopes::Services));
+    assert_eq!(c.church_in_use().as_deref(), Some("1001"));
+    assert!(view(&c).switch.is_none());
+}
+
 #[test]
 fn pasted_ids_for_another_church_are_asked_about_too() {
     let (store, pco, c) = on_1001();

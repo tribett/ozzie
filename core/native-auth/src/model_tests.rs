@@ -2929,3 +2929,51 @@ fn review_m4_asking_again_without_the_thinking_setting_shares_the_first_tries_de
         .saturating_duration_since(std::time::Instant::now());
     assert!(left <= Duration::from_secs(5), "{left:?}");
 }
+
+#[test]
+fn a_model_that_doesnt_run_on_this_mac_is_never_chosen_never_ready_and_never_asked() {
+    use crate::local_ai::fake::OneModel;
+    let ollama = "http://127.0.0.1:11434/v1";
+    // Never chosen by its name, from the page or by a check: nothing is written.
+    let dir = TempDir::new("cloud-choice");
+    assert_eq!(
+        save_config(&dir.0, Route::Local, Some(ollama), Some("gpt-oss:120b-cloud")).err(),
+        Some(ModelError::NotOnThisMac)
+    );
+    assert_eq!(
+        save_local_checked(&dir.0, ollama, "glm-4.6:cloud", 1, route_generation(&dir.0)).err(),
+        Some(ModelError::NotOnThisMac)
+    );
+    assert!(load_config(&dir.0).is_none());
+    // A saved choice that names one (written before this rule, or by hand): never usable, and said not to be on this Mac.
+    let stale = serde_json::json!({"route": "local", "base_url": ollama, "model": "gpt-oss:120b-cloud", "checked_at_ms": 1_763_400_000_000u64});
+    std::fs::write(dir.0.join(CONFIG_FILE), stale.to_string()).unwrap();
+    assert!(load_config(&dir.0).is_some());
+    assert!(usable_config(&dir.0).is_none());
+    let status = status_at(&dir.0, &keys(), false, 1_763_400_000_000);
+    assert_eq!((status.configured, status.setup, status.local_app), (false, "not-on-this-mac", Some("ollama")));
+    // Rewording on it is refused before any client or request exists, and nothing is spent.
+    let config = RouteConfig::new(Route::Local, Some(ollama), Some("gpt-oss:120b-cloud")).unwrap();
+    assert_eq!(
+        reword(&config, &dir.ledger(), &plain(), &keys(), &NameGuard::default()).err(),
+        Some(ModelError::NotOnThisMac)
+    );
+    assert!(!dir.ledger().exists());
+    // A checked model whose app now says it runs elsewhere (pointed at another Ollama since): the status asks its app.
+    let dir = TempDir::new("cloud-since");
+    save_local_checked(&dir.0, ollama, "qwen3:8b", 1, route_generation(&dir.0)).unwrap();
+    let config = load_config(&dir.0);
+    let mut status = status_at(&dir.0, &keys(), false, 1_763_400_000_000);
+    assert_eq!((status.configured, status.setup), (true, "ready"));
+    crate::local_ai::mark_elsewhere(&mut status, config.as_ref(), &OneModel::here("qwen3:8b"));
+    assert_eq!((status.configured, status.setup), (true, "ready"));
+    crate::local_ai::mark_elsewhere(&mut status, config.as_ref(), &OneModel::elsewhere("qwen3:8b"));
+    assert_eq!((status.configured, status.setup), (false, "not-on-this-mac"));
+    // Its app not answering says nothing new: the status stays as it was (the question itself would fail).
+    let mut status = status_at(&dir.0, &keys(), false, 1_763_400_000_000);
+    crate::local_ai::mark_elsewhere(&mut status, config.as_ref(), &crate::local_ai::NoLocalHttp);
+    assert_eq!((status.configured, status.setup), (true, "ready"));
+    // Another route is never asked about, and has no app.
+    let managed = status_at(&TempDir::new("cloud-none").0, &keys(), false, 1);
+    assert_eq!(managed.local_app, None);
+}

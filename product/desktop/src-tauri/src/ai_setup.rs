@@ -23,7 +23,7 @@ pub async fn local_ai_find(tauri_app: tauri::AppHandle) -> Result<LocalFind, Mod
 /// the app's data folder can't be read).
 fn found_now(tauri_app: &tauri::AppHandle, http: &NativeLocalHttp) -> LocalFind {
     let (memory, free) = (local_ai::memory_bytes(), local_models::ollama_free_bytes());
-    match crate::model_dir(tauri_app) {
+    let mut found = match crate::model_dir(tauri_app) {
         Ok(dir) => local_models::find(&dir, http, local_ai::installed_on_this_mac, memory, free),
         Err(_) => local_ai::find_with(
             http,
@@ -32,7 +32,12 @@ fn found_now(tauri_app: &tauri::AppHandle, http: &NativeLocalHttp) -> LocalFind 
             free,
             &local_models::Kept::default(),
         ),
+    };
+    // An app on this Mac whose server isn't answering: is its own program running (still starting, or stuck)?
+    for app in found.apps.iter_mut().filter(|a| a.installed && !a.running) {
+        app.open = local_ai::app_running(app.app);
     }
+    found
 }
 
 /// The one "Download and set up" at a time (contract N6): what it is doing now, or how the last one ended, and its
@@ -220,16 +225,15 @@ pub async fn local_model_remove(
     removed
 }
 
-/// "Open Ollama" / "Open LM Studio": `open -a` with the app's fixed name, only when it is installed.
+/// "Open Ollama" / "Open LM Studio": `/usr/bin/open` with the app's exact path, Ollama with its own `hidden` argument
+/// (`local_ai::open_args`), only when it is installed. The page then waits for its server itself.
 #[tauri::command]
 pub async fn local_ai_open(app: String) -> Result<(), &'static str> {
     let app = App::parse(&app).ok_or("unknown-app")?;
-    if !local_ai::installed_on_this_mac(app) {
-        return Err("not-installed");
-    }
+    let at = local_ai::installed_at(app).ok_or("not-installed")?;
     tauri::async_runtime::spawn_blocking(move || {
         let opened = std::process::Command::new("/usr/bin/open")
-            .args(["-a", app.bundle()])
+            .args(local_ai::open_args(app, &at))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
@@ -272,6 +276,15 @@ pub async fn local_ai_check(
     })
     .await
     .map_err(|_| ModelError::ProviderFailure)?
+}
+
+/// Ozzie's window to the front again: after "Open Ollama", once Ollama answers, in case its app came in front.
+#[tauri::command]
+pub fn come_forward(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_focus();
+    }
 }
 
 /// Ozzie's AI card (spec S6): open for sign-up, with the price and allowance in ozzie.church's own words, or
@@ -350,7 +363,8 @@ pub struct SetupCheck {
     pub checked_at_ms: Option<u64>,
     /// "watching" | "passed" | "waiting" | "none" | "unknown"
     pub service: &'static str,
-    /// "ready" | "none" | "no-key" | "not-checked" | "month-limit" | "paused" | "not-connected" | "reconnect"
+    /// "ready" | "none" | "no-key" | "not-checked" | "not-on-this-mac" | "month-limit" | "paused" | "not-connected"
+    /// | "reconnect"
     pub ai: &'static str,
     /// "managed" | "own" | "local" | "none"
     pub ai_route: &'static str,
@@ -481,6 +495,8 @@ fn ai_row(status: &ozzie_native_auth::model::ModelStatus) -> &'static str {
         "no-route" => "none",
         "no-key" | "own-key-not-bound" => "no-key",
         "not-checked" => "not-checked",
+        // AI on this Mac whose model runs elsewhere (Ollama's cloud models): never used.
+        "not-on-this-mac" => "not-on-this-mac",
         "month-limit" => "month-limit",
         "not-connected" => "not-connected",
         _ => "reconnect",
@@ -695,6 +711,22 @@ mod tests {
             "unknown"
         );
         assert_eq!(service_row(&[], "93000001", Some("2026-11-18")), "waiting");
+    }
+
+    #[test]
+    fn ai_on_this_mac_whose_model_runs_elsewhere_is_its_own_row_never_reconnect() {
+        // A saved choice naming one of Ollama's cloud models (2026-11-19): the status says so, and Check my setup's row
+        // says it in its own word, never Ozzie's AI's "reconnect".
+        let dir = std::env::temp_dir().join(format!("ozzie-ai-row-{}-{}", std::process::id(), ozzie_native_auth::sunday_check::unix_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = serde_json::json!({"route": "local", "base_url": "http://127.0.0.1:11434/v1", "model": "gpt-oss:120b-cloud", "checked_at_ms": 1});
+        std::fs::write(dir.join("model.json"), saved.to_string()).unwrap();
+        let status = ozzie_native_auth::model::status(&dir, &ozzie_native_auth::model::KeychainKeys);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((status.route, status.setup, status.configured), ("local", "not-on-this-mac", false));
+        assert_eq!(ai_row(&status), "not-on-this-mac");
+        let page = include_str!("../../src/onboarding-bridge.ts");
+        assert!(page.contains(r#""not-on-this-mac", "month-limit", "paused", "not-connected", "reconnect"] as const) ?? "unknown""#));
     }
 
     #[test]

@@ -24,6 +24,9 @@ pub mod local_models;
 pub mod model;
 pub mod name_guard;
 pub mod oauth;
+// Getting Ollama itself, when the person asks: its official macOS app from ollama.com, proved to be Ollama's own signed
+// and notarized app before it is moved into Applications or opened.
+pub mod ollama_install;
 // The church's own AI key: company presets (providers.json), request rules, the key check and its save.
 pub mod own_key;
 // "A notice on your phone": the fixed line, the channel and the one request to ntfy.sh.

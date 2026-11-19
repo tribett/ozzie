@@ -114,6 +114,12 @@ interface Overview {
   /** People scheduled with a blockout over their serving time (each once): worth a look, never an open spot. */
   blockedOut: number;
   handled: number;
+  /**
+   * Room overlaps a Church rule confirms and overdue follow-ups with no owner: the overview's rows for them (core
+   * tools.ts #operationsShown), which need a decision on the Sunday page (review item 3). Counts only.
+   */
+  rooms: number;
+  followUps: number;
 }
 const MODES: ReadonlySet<string> = new Set(["live", "recording", "fictional"]);
 const UNSURE = "worth a look";
@@ -158,6 +164,8 @@ function overviewOf(envelope: ToolEnvelope): Overview | null {
     unsent: pending.filter(f => f["request"] === "request not sent yet").length,
     blockedOut: blockedOut.size,
     handled: handled.length,
+    rooms: open.filter(f => f["kind"] === "room use needs review" && f["tone"] === "needs a decision").length,
+    followUps: open.filter(f => f["kind"] === "needs an owner").length,
   };
 }
 
@@ -192,6 +200,11 @@ function factLines(o: Overview, past: boolean): string[] {
       lines.push(capital(`${who}: ${the(o.sent)} ${past ? "had been" : o.sent === 1 ? "was" : "were"} sent and ${past ? "there was" : "there's"} no answer yet.`));
     } else if (o.unsent) lines.push(capital(`${who}, and ${shows} ${the(o.unsent)} ${notSent(o.unsent)}.`));
     else lines.push(capital(`${who}.`));
+  }
+  // What else on the Sunday page needs a decision, as counts, so an answer is never short of the page's own count.
+  if (o.rooms || o.followUps) {
+    const what = [...(o.rooms ? [n(o.rooms, "room booking overlap")] : []), ...(o.followUps ? [`${n(o.followUps, "overdue follow-up")} with no owner`] : [])];
+    lines.push(capital(`${what.join(" and ")} ${verb(o.rooms + o.followUps, "needs", "need", "needed")} a decision.`));
   }
   if (o.blockedOut) lines.push(`Worth a look: ${n(o.blockedOut, "person", "people")} scheduled ${verb(o.blockedOut, "has", "have", "had")} a blockout in Planning Center at their serving time.`);
   if (o.kidsUnsure) lines.push(`Worth a look: ${n(o.kidsUnsure, "kids team")} may ${past ? "have had" : "have"} fewer confirmed people than your Church rules ask.`);

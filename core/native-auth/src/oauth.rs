@@ -438,6 +438,21 @@ fn stored_name(bytes: &[u8]) -> Option<String> {
         .as_deref()
         .and_then(church_name)
 }
+/// The set a saved record was granted, from its non-secret `scopes` (absent: Services, as the default is saved); None
+/// when the bytes aren't a saved sign-in or name a set Ozzie doesn't know. Read only to ask Planning Center for the same
+/// set again (`Connections::held`), never to read anything with.
+pub(crate) fn stored_scopes(bytes: &[u8]) -> Option<Scopes> {
+    #[derive(serde::Deserialize)]
+    struct Held {
+        #[serde(default)]
+        scopes: Scopes,
+        #[serde(rename = "tokens")]
+        _tokens: serde::de::IgnoredAny,
+    }
+    serde_json::from_slice::<Held>(bytes)
+        .ok()
+        .map(|held| held.scopes)
+}
 /// Just enough of a saved record to sign out of it: the registration it was issued to and its
 /// tokens. Reads records of any registration or scope set, unlike `decode_stored`.
 #[derive(serde::Deserialize)]

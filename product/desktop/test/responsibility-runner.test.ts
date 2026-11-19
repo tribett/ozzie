@@ -9,17 +9,22 @@ import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { FICTIONAL_ROOM, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayChange } from "../../../core/src/sunday-changes.js";
+import { buildSundayBrief, sundayShownCount } from "../../../core/src/sunday-brief.js";
+import { sundayOperations } from "../../../core/src/operations-capture.js";
+import { applyDecisions, decide, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import type { FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import {
   allowanceSpent, createRunner, handChanges, nativeResponsibilities, refusalOf, responsibilityStep, WRITEUPS_KEPT_PER_JOB, type Prepared, type ResponsibilityNative, type RunnerContext,
 } from "../src/responsibility-runner.js";
-import { keptLines, noticedBadge, noticedChanges, noticedTitle } from "../src/responsibility-words.js";
+import { foundText, keptLines, noticedBadge, noticedChanges, noticedTitle } from "../src/responsibility-words.js";
 import { StepFailure, StepNotes } from "../src/harness-bridge.js";
 import { createProactive } from "../src/proactive.js";
 import { sundayProblem } from "../src/sunday-source.js";
 import { fakeNative as fakeInvoke } from "./harness-fakes.js";
 
 const ET = "America/New_York";
+/** The Church rules setup() gives the runner: no room rule, so the fictional room overlap is worth a look. */
+const CONTEXT_RULES = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
 // Friday 20 November 2026, 10:00 in New York: two days before the fictional Sunday.
 const FRI = "2026-11-20T15:00:00.000Z";
 const names = nov22Capture().names;
@@ -187,22 +192,66 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
   it("checks once as soon as it starts, prepares the work, and tells the person in Ozzie, not with a notice", async () => {
     const h = setup();
     await h.start(sunday());
-    expect(h.fake.calls).toEqual(["create keep-sunday-covered", "begin start", "end ok - 4 1"]);
+    // The Sunday page's counts (review item 2): two roles and the follow-up need a decision; two Services findings, the
+    // room overlap no rule confirms, its unconfirmed detail and the group meeting are worth a look.
+    expect(h.fake.calls).toEqual(["create keep-sunday-covered", "begin start", "end ok - 8 1"]);
     const item = h.runner.view().noticed[0]!;
-    expect(item).toMatchObject({ kind: "found", trigger: "start", decisions: 2, looks: 2, drafts: 1, notice: "in-app" });
+    expect(item).toMatchObject({ kind: "found", trigger: "start", decisions: 3, looks: 5, drafts: 1, notice: "in-app" });
     // Which run and which check it came from (ids and a time only), so Today can tell it is about the Sunday on screen.
     expect(item.run_id).toBe(h.runner.view().items[0]!.runs[0]!.run_id);
     expect(item.check).toEqual({ plan_id: nov22Capture().plan_id, completed_at: FRI });
     // A write-up is kept apart from the item (writeups), so the item never says whether one was written.
     expect(item).not.toHaveProperty("drafted");
     expect(item).not.toHaveProperty("summarized");
-    expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 2 things need a decision.");
+    expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 3 things need a decision.");
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.check).toHaveBeenCalledTimes(1);
     expect(h.lines).toContain("responsibility: created template=keep-sunday-covered lifetime=until:2026-11-22");
-    expect(h.lines).toContain("responsibility: run status=ok code=- noticed=4 drafts=1");
+    expect(h.lines).toContain("responsibility: run status=ok code=- noticed=8 drafts=1");
     // The native timer is asked to wake Ozzie for the next check: Friday 12:00 in New York.
     expect(h.nextDue).toHaveBeenLastCalledWith("2026-11-20T17:00:00.000Z");
+  });
+
+  it("Keep Sunday covered says the Sunday page's own count, the follow-up and the leader's decisions included (review item 2)", async () => {
+    // The live-style church: two roles that need people and a follow-up with no owner. The Sunday page says 3.
+    const page = (decisions: readonly SundayDecision[]) => {
+      const c = captureAt(FRI);
+      return sundayShownCount(applyDecisions(buildSundayBrief(c, CONTEXT_RULES, FRI), decisions), sundayOperations(c, CONTEXT_RULES, { now: FRI }));
+    };
+    expect(page([]).decisions).toBe(3);
+    const h = setup();
+    await h.start(sunday());
+    const item = h.runner.view().noticed[0]!;
+    expect(item).toMatchObject({ kind: "found", decisions: page([]).decisions, looks: page([]).looks });
+    expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 3 things need a decision.");
+    // A role the leader settled on the Sunday page isn't counted here either.
+    const need = buildSundayBrief(captureAt(FRI), CONTEXT_RULES, FRI).findings.find(f => f.kind === "needs-people")!;
+    const settled = [decide(need, "covered-outside", "A parent is covering", FRI)];
+    const d = setup({ decisionsFor: () => settled });
+    await d.start(sunday());
+    expect(d.runner.view().noticed[0]).toMatchObject({ decisions: page(settled).decisions, looks: page(settled).looks });
+    expect(page(settled).decisions).toBe(2);
+    expect(noticedTitle(d.runner.view().noticed[0]!, FRI)).toBe("Keep Sunday covered: 2 things need a decision.");
+  });
+
+  it("the morning briefing's run line says the Sunday page's count too, never Services alone beside its follow-ups (polish pass)", async () => {
+    const page = (decisions: readonly SundayDecision[]) => {
+      const c = captureAt(FRI);
+      return sundayShownCount(applyDecisions(buildSundayBrief(c, CONTEXT_RULES, FRI), decisions), sundayOperations(c, CONTEXT_RULES, { now: FRI }));
+    };
+    const h = setup();
+    await h.start({ ...defaultPlan("morning-briefing", FRI, ET), schedule: { time: "06:00", weekdays: [], on_change: false } });
+    const item = h.runner.view().noticed[0]!;
+    expect(item).toMatchObject({ kind: "briefing", decisions: page([]).decisions, looks: page([]).looks });
+    // Keeping watch's line: "Finished: 3 things to decide and 4 worth a look", as the Sunday page, Today and the sidebar.
+    expect(foundText(item)).toBe(`${page([]).decisions} things to decide and ${page([]).looks} worth a look`);
+    expect(foundText(item)).not.toContain("follow-up");
+    // A role the leader settled is left out here as on the page.
+    const need = buildSundayBrief(captureAt(FRI), CONTEXT_RULES, FRI).findings.find(f => f.kind === "needs-people")!;
+    const settled = [decide(need, "covered-outside", "A parent is covering", FRI)];
+    const d = setup({ decisionsFor: () => settled });
+    await d.start({ ...defaultPlan("morning-briefing", FRI, ET), schedule: { time: "06:00", weekdays: [], on_change: false } });
+    expect(d.runner.view().noticed[0]).toMatchObject({ decisions: page(settled).decisions, looks: page(settled).looks });
   });
 
   it("runs on schedule and sends one discreet notice when something new needs a decision", async () => {
@@ -211,9 +260,9 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     h.set("2026-11-20T17:00:00.000Z");
     h.changeTo(decline);
     await h.runner.tick();
-    // After the decline the fixed data shows 2 decisions and 1 worth a look (one fewer than before).
-    expect(h.fake.calls.slice(-2)).toEqual(["begin scheduled", "end ok - 3 1"]);
-    expect(h.runner.view().noticed[0]).toMatchObject({ decisions: 2, looks: 1 });
+    // After the decline the fixed data shows 3 decisions and 4 worth a look (one fewer than before), as the Sunday page.
+    expect(h.fake.calls.slice(-2)).toEqual(["begin scheduled", "end ok - 7 1"]);
+    expect(h.runner.view().noticed[0]).toMatchObject({ decisions: 3, looks: 4 });
     expect(h.notify).toHaveBeenCalledTimes(1);
     expect(h.notify).toHaveBeenCalledWith("needs-decision");
     const item = h.runner.view().noticed[0]!;
@@ -553,7 +602,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     const r = h.runner.view().items[0]!;
     await h.runner.pause(r.id);
     await run;
-    expect(h.fake.calls.filter(c => c.startsWith("end"))).toEqual(["end ok - 4 1", "end ok - 3 1"]);
+    expect(h.fake.calls.filter(c => c.startsWith("end"))).toEqual(["end ok - 8 1", "end ok - 7 1"]);
     expect(h.runner.view().noticed.find(i => i.trigger === "scheduled")).toMatchObject({ notice: "sent" });
     expect(Object.values(h.runner.view().writeups)).toHaveLength(1);
   });

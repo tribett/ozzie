@@ -22,19 +22,22 @@ export interface MonthUse { used: number; limit: number; resets_on: string }
  * Which AI route is set up on this Mac (native model.rs ModelStatus). Keys live only in the Keychain and never reach the
  * web view. `setup` says what is missing: "ready"; "no-route" (nothing chosen); "no-key" (no key saved for the route);
  * "own-key-not-bound" (a key saved the old way, tied to no address and never used); "not-checked" (AI on this Mac
- * chosen, "Check that it answers" never passed: never ready before it); "month-limit" (the church's own key reached
+ * chosen, "Check that it answers" never passed: never ready before it); "not-on-this-mac" (AI on this Mac chosen, but
+ * the model runs elsewhere, as Ollama's cloud models do: never used); "month-limit" (the church's own key reached
  * its monthly limit); for Ozzie's AI, "not-connected" or "reconnect". `provider`: the own route at a company Ozzie
  * knows. `month`: the own route's monthly count. `checked_at_ms`: when AI on this Mac last answered the check.
  * `label` is native's own description and is never shown: every word on screen comes from these closed codes.
  */
 export interface ModelStatus {
   configured: boolean; route: "managed" | "own" | "local" | "none"; label: string;
-  setup?: "ready" | "no-route" | "no-key" | "own-key-not-bound" | "not-checked" | "month-limit" | "not-connected" | "reconnect";
+  setup?: "ready" | "no-route" | "no-key" | "own-key-not-bound" | "not-checked" | "not-on-this-mac" | "month-limit" | "not-connected" | "reconnect";
   key_account?: string | null;
   managed?: "not-connected" | "connected" | "reconnect"; account?: ManagedAccount | null;
   provider?: "openai" | "anthropic" | "gemini" | null; month?: MonthUse | null; checked_at_ms?: number | null;
   /** The local route is a model Ozzie no longer offers, or Ozzie's copy of one; it keeps working (review L-4). */
   not_offered?: boolean;
+  /** The local route's app ("ollama" | "lm-studio"), by its address; null on every other route. */
+  local_app?: "ollama" | "lm-studio" | null;
 }
 export const model = {
   status: () => invoke<ModelStatus>("model_status"),
@@ -126,6 +129,7 @@ export function managedProblem(error: unknown): string {
 export function routeProblem(error: unknown): string {
   const known = JSON.stringify(error) ?? "";
   if (known.includes("name-present")) return "The model name looks like it holds a person's name, so Ozzie didn't save it. Check the model name and try again.";
+  if (known.includes("not-on-this-mac")) return "That model doesn't run on this Mac, so Ozzie didn't choose it. Nothing changed.";
   if (known.includes("not-configured") || known.includes("invalid")) return "Ozzie couldn't use that address. It needs the AI company's https address (not Planning Center's).";
   return "Ozzie couldn't save that choice. Nothing changed. Try again.";
 }
@@ -138,6 +142,11 @@ export const BACKGROUND_NOTE_TEXT = "Ozzie doesn't use AI help for notes with ba
 export const HIDDEN_NOTE_TEXT = "This note has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Your draft is unchanged.";
 /** Rewording with no AI that works (native `not-configured`): the note offers "Choose how Ozzie uses AI" under it. */
 export const REWORD_NEEDS_AI = "Rewording needs AI, but everything else in Ozzie works without it. Your draft is unchanged.";
+/**
+ * Rewording on AI on this Mac whose model runs elsewhere (native `not-on-this-mac`: Ollama's cloud models): nothing was
+ * sent; "Choose how Ozzie uses AI" under it, as for no AI.
+ */
+export const REWORD_NOT_ON_MAC = "The AI model chosen for AI on this Mac doesn't run on this Mac, so Ozzie didn't send it anything. Your draft is unchanged.";
 /** Ozzie's AI's allowance is spent (native `allowance-paused`): the same words wherever AI help was asked for. */
 export const PAUSED_TEXT = "Ozzie's AI is paused until this month's answers start again. Everything else in Ozzie still works.";
 /**
@@ -156,6 +165,7 @@ export function modelProblem(error: unknown, account?: unknown): string {
   // A day's limit (native `daily-limit`): until the account's time, or midnight UTC on this Mac's clock, never "in a
   // minute", and never "tomorrow" when that is this evening (re-check Low).
   if (known.includes("daily-limit")) return `Ozzie's AI has reached today's limit. It starts again ${when ?? dailyLimitEnds() ?? "within a day"}. Your draft is unchanged.`;
+  if (known.includes("not-on-this-mac")) return REWORD_NOT_ON_MAC;
   if (known.includes("not-configured")) return REWORD_NEEDS_AI;
   if (known.includes("name-present")) return "Ozzie stopped this request because it contained a person's name. Nothing was sent; your draft is unchanged.";
   if (known.includes("model-not-allowed")) return "The chosen AI model isn't available to this account. Your draft is unchanged.";

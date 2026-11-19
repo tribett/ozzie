@@ -23,8 +23,9 @@ import { hasContactDetail } from "../ask.js";
 import { ToolFailure } from "../broker.js";
 import type { AttentionReport } from "../attention-import/index.js";
 import { roomRules, type SundayOperations } from "../operations-capture.js";
+import type { OperationsResult } from "../operations-findings/index.js";
 import { shownUncertainties, type BriefPerson, type Finding, type SundayBrief } from "../sunday-brief.js";
-import { LIVE_CHECK_VALID_MS, type SundayCapture, type SundayRules } from "../sunday-capture.js";
+import { isOperationsRead, LIVE_CHECK_VALID_MS, type SundayCapture, type SundayRules } from "../sunday-capture.js";
 import { backgroundChecksOn, forModels } from "../kids-rules.js";
 import { applyDecisions, type DecidedItem, type DecisionChoice, type SundayDecision } from "../sunday-decisions.js";
 import { HARNESS_LIMITS, NATIVE_TOOL_ALLOWLIST, type Completeness, type ToolEnvelope, type ToolName, type ToolSpec } from "./contract.js";
@@ -170,6 +171,35 @@ export const OVERVIEW_ROOM = "room use needs review";
 export const OVERVIEW_FOLLOW_UP = "needs an owner";
 export const OVERVIEW_UNCONFIRMED = "a detail couldn't be verified";
 export const OVERVIEW_GROUP = "group meets while serving";
+const CALENDAR = "Planning Center Calendar", PEOPLE = "Planning Center People", GROUPS = "Planning Center Groups";
+/** Which Planning Center product each Calendar, People and Groups read of a check is from. */
+const READ_SOURCES: readonly [RegExp, string][] = [[/^calendar_/u, CALENDAR], [/^people_workflow/u, PEOPLE], [/^groups_/u, GROUPS]];
+/** Where the overview's room, follow-up and group-meeting rows come from (HarnessTools.rowSources). */
+export interface RowSources {
+  /** The operations check's own read time. */
+  check_time: string;
+  /** Each source's completeness, by its own reads in the check. */
+  completeness: Readonly<Record<string, Completeness>>;
+  /** The sources of the row for room or follow-up details that couldn't be confirmed. */
+  unconfirmed: readonly string[];
+}
+/** Uncertainty codes about a room's bookings or rule, and about a follow-up's card (operations-findings). */
+const ROOM_CODES: ReadonlySet<string> = new Set(["unknown-rule", "unknown-booking", "unknown-resolution"]);
+const CARD_CODES: ReadonlySet<string> = new Set(["unknown-card", "snooze-recheck"]);
+/**
+ * Where the overview's one row for room or follow-up details that couldn't be confirmed comes from: Calendar for a
+ * room's, People for a follow-up's, by the part each open question is about (its checked scope, else its code). One
+ * about neither names the parts the check read, as the Sunday page's own card does (sunday-page.tsx OpsWhy).
+ */
+export function unconfirmedSources(result: OperationsResult | null): string[] {
+  const parts = new Map((result?.checked_scopes ?? []).map(e => [e.scope_id, e.target.kind]));
+  const found = new Set<string>();
+  for (const u of shownUncertainties(result)) {
+    const part = (u.scope_id ? parts.get(u.scope_id) : undefined) ?? (ROOM_CODES.has(u.code) ? "room" : CARD_CODES.has(u.code) ? "step" : undefined);
+    for (const p of part ? [part] : parts.size ? parts.values() : ["room", "step"]) found.add(p);
+  }
+  return [...(found.has("room") ? [CALENDAR] : []), ...(found.has("step") ? [PEOPLE] : [])];
+}
 const UNDESCRIBED = "a part of the check Ozzie can't describe";
 const AGES = "confirmed people counted; ages not checked";
 const byLabel = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
@@ -207,7 +237,7 @@ export class HarnessTools {
     let result: Result;
     if (name === "planning_center.refresh") result = await this.#refresh(signal);
     else result = this.#read(name, checked);
-    return this.#seal(name, fit(numbered(name, result, this.#numberingFor(task))));
+    return this.#seal(name, fit(name, numbered(name, result, this.#numberingFor(task))));
   }
   #numberingFor(task: string): Numbering {
     let n = this.#numbering.get(task);
@@ -274,6 +304,15 @@ export class HarnessTools {
     return teams.size > 1 ? this.session.role(n, team) : this.session.role(n);
   }
   #role(f: Pick<Finding, "position">): string { return this.#roleOf(f.position?.name, f.position?.team_id); }
+  /**
+   * Whether rooms, follow-ups and group meetings are said from this check: the connection holds Calendar, People and
+   * Groups now, or this check read them. The Sunday page, Today and the sidebar show what the check on screen read
+   * whatever the connection holds since (a later Services-only sign-in, a saved check), so Ask says the same of it (review
+   * of 00d38d00, item 1). Which tools the AI is offered (host.ts) and what Ozzie reads next still follow the connection.
+   */
+  #operationsSaid(): boolean {
+    return this.#data.granted.includes("operations") || (this.#data.capture?.reads.some(r => isOperationsRead(r) && r.outcome !== "not-requested") ?? false);
+  }
   /** The needs-people findings a role label stands for: its name, and its team when it has one. */
   #needsFor(role: string): Finding[] {
     const target = this.session.target(role);
@@ -366,12 +405,13 @@ export class HarnessTools {
    * Rooms, follow-ups and group meetings as the Sunday page counts them, each a row in the overview's closed words: a
    * room overlap a Church rule confirms and a follow-up with no owner need a decision; an overlap no rule confirms, one row
    * for room or follow-up details that couldn't be confirmed, and each group meeting at a serving time are worth a look.
-   * Rooms, workflows, steps and people are this session's labels, the same ones their own tools give. Only when the
-   * connection holds Calendar, People and Groups (as those tools), and never from an out-of-date check (as the page).
+   * Rooms, workflows, steps and people are this session's labels, the same ones their own tools give. By the page's own
+   * rule (sundayShownCount): whatever this check holds of them, never from an out-of-date check, whatever the connection
+   * holds since (review of 00d38d00, item 1).
    */
   #operationsShown(zone: string | null): { rows: Record<string, unknown>[]; decisions: number; looks: number } {
     const ops = this.#data.operations;
-    if (!this.#data.granted.includes("operations") || !ops || ops.stale) return { rows: [], decisions: 0, looks: 0 };
+    if (!ops || ops.stale) return { rows: [], decisions: 0, looks: 0 };
     const where = ops.result?.churchTimeZone ?? zone;
     const found = ops.result?.findings ?? [];
     const tone = (decision: boolean) => decision ? "needs a decision" : "worth a look";
@@ -466,27 +506,55 @@ export class HarnessTools {
     return this.#servicesResult({
       reads: brief.sources.reads, reads_not_completed: brief.sources.failed.length, too_old_to_treat_as_current: this.#stale(brief.checked_at),
       services: fixed(brief.not_checked),
-      rooms_follow_ups_groups: !this.#data.granted.includes("operations") ? ["Rooms, follow-ups and group meetings are not part of this connection."]
+      // As the Sunday page's "What I didn't check" for this check, once it read them or the connection holds them.
+      rooms_follow_ups_groups: !this.#operationsSaid() ? ["Rooms, follow-ups and group meetings are not part of this connection."]
         : ops ? fixed(ops.not_checked) : ["Rooms, follow-ups and group meetings weren't part of this check."],
     });
   }
 
   // -- Calendar, People and Groups --
 
-  /** Not granted: "denied" and nothing else. Anything unread, uncertain or out of date is never "complete". */
+  /**
+   * Neither held by the connection nor read by this check (#operationsSaid): "denied" and nothing else. Anything unread,
+   * uncertain or out of date is never "complete".
+   */
   #operations(source: string): { ops: SundayOperations | null; completeness: Completeness; zone: string | null; result: (payload: Record<string, unknown>, list?: string) => Result } {
     const { brief } = this.#services();
     const ops = this.#data.operations;
     const zone = ops?.result?.churchTimeZone ?? brief.time_zone;
-    const check_time = checkTime(ops?.checked_at ?? brief.checked_at);
-    const granted = this.#data.granted.includes("operations");
-    const completeness: Completeness = !granted ? "denied"
-      : this.#stale(check_time) || ops?.stale ? "stale"
-        : !ops || !ops.result || ops.not_checked.length || ops.result.unchecked_scope_ids.length || ops.result.uncertainties.length ? "partial" : "complete";
+    const { check_time, completeness: read } = this.#operationsRead();
+    const granted = this.#operationsSaid();
+    const completeness: Completeness = granted ? read : "denied";
     return {
       ops: granted ? ops : null, completeness, zone,
       result: (payload, list) => ({ source, check_time, completeness, payload: granted ? payload : { status: "not granted" }, ...(list ? { list } : {}) }),
     };
+  }
+  /** When this check read Calendar, People and Groups, and how much of them: out of date, part unread or uncertain, or all of it. */
+  #operationsRead(): { check_time: string; completeness: Completeness } {
+    const { brief } = this.#services();
+    const ops = this.#data.operations;
+    const check_time = checkTime(ops?.checked_at ?? brief.checked_at);
+    const completeness: Completeness = this.#stale(check_time) || ops?.stale ? "stale"
+      : !ops || !ops.result || ops.not_checked.length || ops.result.unchecked_scope_ids.length || ops.result.uncertainties.length ? "partial" : "complete";
+    return { check_time, completeness };
+  }
+
+  /**
+   * Where the overview's rooms, follow-ups and group meetings come from, for "Based on" and what wasn't complete (review of
+   * 00d38d00, item 5): the operations check's own read time, each source's completeness by its own reads (a Calendar read
+   * that timed out says nothing about a follow-up), and the sources of the row for details that couldn't be confirmed.
+   * Null with no check, or when the overview holds none of those rows.
+   */
+  rowSources(): RowSources | null {
+    const ops = this.#data.operations, capture = this.#data.capture;
+    if (!ops || ops.stale || !this.#data.brief?.checked_at || !capture) return null;
+    let read: { check_time: string; completeness: Completeness };
+    try { read = this.#operationsRead(); } catch { return null; }
+    const of = (source: string): Completeness => read.completeness === "stale" ? "stale"
+      : capture.reads.some(r => isOperationsRead(r) && READ_SOURCES.find(([re]) => re.test(r.collection))?.[1] === source && r.outcome !== "ok" && r.outcome !== "not-requested")
+        ? "partial" : "complete";
+    return { check_time: read.check_time, completeness: Object.fromEntries([CALENDAR, PEOPLE, GROUPS].map(s => [s, of(s)])), unconfirmed: unconfirmedSources(ops.result) };
   }
 
   #rooms(): Result {
@@ -623,16 +691,43 @@ function stringsOf(value: unknown, out: string[] = []): string[] {
   return out;
 }
 
-/** Keeps a result within HARNESS_LIMITS.envelopeChars by leaving out entries at the end of its main list, and says how many. */
-function fit(r: Result): Result {
+/**
+ * Which of the overview's rows goes first when it is too long (review item 6): a finding the leader settled, then one
+ * worth a look, and a decision last, so the open decisions are the last thing ever left out.
+ */
+const keepRank = (row: unknown): number => {
+  const r = (row && typeof row === "object" ? row : {}) as Record<string, unknown>;
+  return typeof r["decision"] === "string" && r["changed_since_decision"] !== true ? 0 : r["tone"] === "needs a decision" ? 2 : 1;
+};
+/**
+ * Keeps a result within HARNESS_LIMITS.envelopeChars by leaving out entries of its main list, and says how many: from the
+ * end, and for the overview the lowest kept rank first (keepRank), the rest staying in order. Totals the payload states
+ * (the overview's needs_a_decision, worth_a_look) are counted before this and stay the full ones.
+ */
+function fit(tool: ToolName, r: Result): Result {
   const size = (x: Result) => JSON.stringify({ tool: "x".repeat(24), source: x.source, check_time: x.check_time, completeness: x.completeness, payload: x.payload }).length;
   if (!r.list || size(r) <= HARNESS_LIMITS.envelopeChars) return r;
   const list = [...(r.payload[r.list] as unknown[])];
+  const rank = tool === "sunday.overview" ? keepRank : () => 0;
   let dropped = 0;
   let out: Result = r;
   while (list.length && size(out) > HARNESS_LIMITS.envelopeChars) {
-    list.pop(); dropped++;
+    const ranks = list.map(rank), lowest = Math.min(...ranks);
+    list.splice(ranks.lastIndexOf(lowest), 1); dropped++;
     out = { ...r, completeness: r.completeness === "complete" ? "partial" : r.completeness, payload: { ...r.payload, [r.list]: [...list], left_out_for_length: dropped } };
   }
   return out;
+}
+
+/**
+ * Row `index` of a tool's first fact list as the tool gave it before anything was left out for length (fit): rows are
+ * numbered in order straight after the payload's own fact (numbered), so a row keeps its place by its fact number even
+ * when rows before it were left out. Undefined when that row was left out.
+ */
+export function rowAt(envelope: ToolEnvelope | null, list: string, index: number): Record<string, unknown> | undefined {
+  const payload = envelope?.payload as Record<string, unknown> | null | undefined;
+  const rows = payload?.[list];
+  const first = typeof payload?.["fact"] === "string" ? Number(payload["fact"].slice(1)) + 1 : NaN;
+  if (!Array.isArray(rows) || Number.isNaN(first) || index < 0) return undefined;
+  return (rows as Record<string, unknown>[]).find(r => r && r["fact"] === `f${first + index}`);
 }

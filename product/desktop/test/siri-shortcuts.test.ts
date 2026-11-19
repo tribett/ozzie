@@ -155,7 +155,7 @@ describe("Settings", () => {
 
   it("lists everything an answer can say (review K L3)", () => {
     for (const words of ["open spots", "roles", "how many people are pending", "with and without a request sent", "teams without a confirmed lead",
-      "kids teams with fewer confirmed people than your Church rules ask", "Worth a look", "how many you marked as handled",
+      "kids teams with fewer confirmed people than your Church rules ask", "room booking overlaps and overdue follow-ups with no owner need a decision", "Worth a look", "how many you marked as handled",
       "couldn't be read", "too long to say in full", "some findings are shown only in Ozzie", "when it was checked"]) {
       expect(SIRI_SEES).toContain(words);
     }
@@ -191,7 +191,8 @@ describe("Settings", () => {
     for (const step of [...ASK_STEPS, ...OPEN_STEPS]) expect(step).not.toMatch(/Ask Siri/u);
     expect(words.indexOf(ACTIONS_READY)).toBeLessThan(words.indexOf(SCRIPTS_SETTING));
     // The steps by hand, Allow Running Scripts with them, are folded away under the fallback.
-    const fallback = html.indexOf(`<details class="listen-more"><summary>${BY_HAND}</summary>`);
+    // Folded like every other fold, its chevron first (polish pass, 2026-11-18).
+    const fallback = html.search(new RegExp(`<details class="listen-more"><summary><svg class="ic ic-sm" [^>]*><path d="m9 6 6 6-6 6"></path></svg>${BY_HAND}</summary>`, "u"));
     expect(fallback).toBeGreaterThan(-1);
     for (const later of ["Before you start:", `<code>${OPEN_LINK}</code>`, "Allow Running Scripts"]) expect(html.indexOf(later)).toBeGreaterThan(fallback);
     for (const step of [...ASK_STEPS, ...OPEN_STEPS]) expect(words).toContain(step);

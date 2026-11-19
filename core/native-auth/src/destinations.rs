@@ -9,6 +9,9 @@
 //!
 //! Separately, pages Ozzie only opens in the person's browser (a company's sign-in or keys page, Ollama's download
 //! page) are listed in `BROWSER_PAGE_HOSTS`: Ozzie itself never contacts them.
+//!
+//! And one download that isn't an AI request: Ollama's own macOS app, only after the person presses "Download Ollama
+//! and set it up" (ollama_install.rs), from `APP_DOWNLOAD_HOSTS` over https, nothing about the church in it.
 
 /// The AI companies' API hosts, as providers.json names them.
 pub const AI_COMPANY_HOSTS: [&str; 3] = [
@@ -33,6 +36,8 @@ pub const BROWSER_PAGE_HOSTS: [&str; 4] = [
     "aistudio.google.com",
     "ollama.com",
 ];
+/// Getting Ollama (ollama_install.rs): the hosts its download passes through, https only, exactly.
+pub const APP_DOWNLOAD_HOSTS: [&str; 3] = crate::ollama_install::DOWNLOAD_HOSTS;
 
 #[cfg(test)]
 mod tests {
@@ -75,6 +80,17 @@ mod tests {
         for host in BROWSER_PAGE_HOSTS {
             assert!(!AI_COMPANY_HOSTS.contains(&host) && host != OZZIE_HOST);
         }
+        // Getting Ollama: its own site and GitHub's release hosts, over https, and never an AI request's destination.
+        assert_eq!(
+            APP_DOWNLOAD_HOSTS,
+            ["ollama.com", "github.com", "release-assets.githubusercontent.com"]
+        );
+        let policy = crate::ollama_install::Policy::official();
+        assert!(policy.https_only);
+        assert_eq!(policy.hosts, APP_DOWNLOAD_HOSTS);
+        for host in APP_DOWNLOAD_HOSTS {
+            assert!(!AI_COMPANY_HOSTS.contains(&host) && host != OZZIE_HOST);
+        }
         // Ozzie's own pages are on ozzie.church, https, and open only by their fixed word.
         for (word, url) in OZZIE_PAGES {
             assert!(url.starts_with("https://"));
@@ -93,6 +109,7 @@ mod tests {
         exact.extend(THIS_MAC.iter().map(|o| o.to_string()));
         exact.push(format!("https://{OZZIE_HOST}"));
         exact.extend(BROWSER_PAGE_HOSTS.iter().map(|h| format!("https://{h}")));
+        exact.extend(APP_DOWNLOAD_HOSTS.iter().map(|h| format!("https://{h}")));
         let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../product/desktop/src-tauri/src");
         let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -100,10 +117,12 @@ mod tests {
             core.join("own_key.rs"),
             core.join("local_ai.rs"),
             core.join("local_models.rs"),
+            core.join("ollama_install.rs"),
             core.join("hosted.rs"),
             core.join("anthropic.rs"),
             app.join("key_sheet.rs"),
             app.join("ai_setup.rs"),
+            app.join("ollama_setup.rs"),
         ] {
             let text = std::fs::read_to_string(&path).unwrap();
             let code = text.split("#[cfg(test)]").next().unwrap();
@@ -133,7 +152,10 @@ mod tests {
                     path.display()
                 );
             }
-            // The only programs these files start: the browser opener, the memory read, the macOS version read.
+            // The only programs these files start: the browser opener, the memory read, the macOS version read; and,
+            // only where Ollama is got (2026-11-18), Apple's unpacker and Gatekeeper's assessment, each with the path
+            // of Ozzie's own work folder as its only argument that isn't fixed.
+            let getting_ollama = path.ends_with("ollama_install.rs");
             for (at, _) in code.match_indices("Command::new(") {
                 let arg = &code[at + "Command::new(".len()..];
                 assert!(
@@ -143,6 +165,11 @@ mod tests {
                         "\"/usr/bin/sw_vers\""
                     ]
                     .iter()
+                    .chain(if getting_ollama {
+                        &["\"/usr/bin/unzip\"", "\"/usr/sbin/spctl\""][..]
+                    } else {
+                        &[][..]
+                    })
                     .any(|program| arg.starts_with(program)),
                     "{}: {}",
                     path.display(),
@@ -167,11 +194,13 @@ mod tests {
                 || THIS_MAC.iter().any(|origin| url.starts_with(origin))
                 || host == OZZIE_HOST
                 || BROWSER_PAGE_HOSTS.contains(&host.as_str())
+                || (url.starts_with("https://") && APP_DOWNLOAD_HOSTS.contains(&host.as_str()))
         };
         for (name, source) in [
             ("own_key.rs", include_str!("own_key.rs")),
             ("local_ai.rs", include_str!("local_ai.rs")),
             ("local_models.rs", include_str!("local_models.rs")),
+            ("ollama_install.rs", include_str!("ollama_install.rs")),
             ("providers.json", include_str!("providers.json")),
             ("destinations.rs", include_str!("destinations.rs")),
         ] {

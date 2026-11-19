@@ -20,8 +20,9 @@ describe("App's onboarding wiring", () => {
     expect(nav).toContain("if (!showSetup) openSetup(setupAt ?? undefined);");
     // The entry and the screen agree: it shows while setup is on screen, as well as while a fact is unmet.
     expect(app).toContain("const setupEntry = showSetup || setupAt !== null;");
-    // Not while a sign-in only adds Calendar, People and Groups to a connected church (decision 24; read-more-app.test.ts).
-    expect(app).toContain('const setupAt = setup === "auto" || fictional || addingAccess ? null : firstRunScreen(facts);');
+    // Not while a sign-in only adds Calendar, People and Groups to a connected church (decision 24), nor while any sign-in for
+    // a church already connected is in the browser (review item 7; both in read-more-app.test.ts).
+    expect(app).toContain('const setupAt = setup === "auto" || fictional || addingAccess || reconnecting ? null : firstRunScreen(facts);');
     expect(app).toMatch(/\{askShown && <div className="small side-ai"><AiLine /u);
     expect(app).toMatch(/\{askShown && <button type="button" ref=\{askEntry\}/u);
     expect(app).toContain("const askShown = resultSeen || setup === null;");

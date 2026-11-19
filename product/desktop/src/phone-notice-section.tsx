@@ -4,6 +4,7 @@
 // does, with its own fixed line.
 import { useEffect, useState } from "react";
 import { copySetup } from "./other-ai-apps-setup.js";
+import { Icon } from "./icons.js";
 import {
   COPY_BUTTON, KEEP_BUTTON, lastLine, NEW_BUTTON, NEW_CONFIRM, PHONE_BODY, PHONE_HOW, PHONE_OFF_NOTE, PHONE_QUIET, PHONE_RISK, PHONE_SEEN, PHONE_STEPS,
   PHONE_SWITCH, PHONE_TITLE, PHONE_UNREADABLE, PHONE_WHAT, PhoneControl, phoneInvoke, TEST_BUTTON, type Invoke, type PhoneState, type PhoneView,
@@ -69,7 +70,7 @@ export function PhoneNoticeSection({ invoke = phoneInvoke, initial, now = Date.n
       {shown.on && <PhoneSetup state={shown} control={control} now={now} />}
       {shown.note && <p role="status" className="small" style={{ marginTop: 8 }}>{shown.note}</p>}
       <details className="listen-more">
-        <summary>See how this works</summary>
+        <summary><Icon name="chev" small />See how this works</summary>
         <ul className="small">{PHONE_HOW.map(line => <li key={line}>{line}</li>)}</ul>
       </details>
   </section>;
