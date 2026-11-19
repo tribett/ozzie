@@ -94,6 +94,10 @@ fn release_builds_always_use_ozzie_church_and_debug_overrides_are_checked() {
         "http://preview.example.invalid",
         "https://api.planningcenteronline.com",
         "https://people.churchcenter.com.",
+        // Another church system's host is never Ozzie's AI, even in a debug build.
+        "https://api.churchapps.org",
+        "https://grace.breezechms.com",
+        "https://poxkspytrsaextyeurtg.supabase.co",
         "https://user:pw@preview.example.invalid",
         "https://preview.example.invalid/api",
         "https://preview.example.invalid?x=1",
@@ -860,6 +864,26 @@ fn ozzie_church_refusals_and_connect_errors_are_closed_vocabularies() {
         refusal(429, br#"{"error":"hidden-character"}"#),
         Some(ProviderFailure)
     );
+    // ozzie.church's own request check turned it down: its own word, never "couldn't be reached" (round 3).
+    assert_eq!(
+        refusal(400, br#"{"error":"invalid-request"}"#),
+        Some(NotAccepted)
+    );
+    for status in [402, 403, 422, 429, 500] {
+        assert_eq!(
+            refusal(status, br#"{"error":"invalid-request"}"#),
+            Some(ProviderFailure),
+            "{status}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&crate::agent::AgentError::from(NotAccepted)).unwrap(),
+        "\"not-accepted\""
+    );
+    assert_eq!(
+        serde_json::to_string(&NotAccepted).unwrap(),
+        "\"not-accepted\""
+    );
     for status in [402, 403, 429, 502] {
         assert_eq!(
             refusal(status, br#"{"error":"background-check"}"#),
@@ -874,10 +898,6 @@ fn ozzie_church_refusals_and_connect_errors_are_closed_vocabularies() {
     assert_eq!(
         serde_json::to_string(&crate::agent::AgentError::from(BackgroundCheck)).unwrap(),
         "\"background-check\""
-    );
-    assert_eq!(
-        refusal(400, br#"{"error":"invalid-request"}"#),
-        Some(ProviderFailure)
     );
     assert_eq!(
         refusal(400, br#"{"error":"step-limit"}"#),
@@ -1112,7 +1132,10 @@ fn a_paid_connect_names_the_plan_waits_an_hour_and_knows_no_payment_was_taken() 
         .err(),
         Some(ManagedError::Expired)
     );
-    assert_eq!(PAID_CONNECT_LIFETIME_MS, 3_600_000, "a paid connect waits an hour");
+    assert_eq!(
+        PAID_CONNECT_LIFETIME_MS, 3_600_000,
+        "a paid connect waits an hour"
+    );
     assert_eq!(
         CONNECT_LIFETIME_MS, 300_000,
         "Planning Center's sign-in keeps five minutes"

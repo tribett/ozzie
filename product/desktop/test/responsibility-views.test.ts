@@ -123,13 +123,13 @@ describe("the plan Ozzie shows before taking something on", () => {
     // The plan carries the zone it was made in (the church's, once a check has read it).
     const chicago = defaultPlan("keep-sunday-covered", FRI, "America/Chicago");
     const central = render(React.createElement(PlanCard, { plan: chicago, context: context({ zone: "America/Chicago", macZone: ET }), actions }));
-    expect(central).toMatch(/Every day at 7:00 AM, and sooner when something changes\. .*Times are the church's: Central Time \(America\/Chicago\)\./u);
+    expect(central).toMatch(/Every day at 7:00 AM, and sooner when something changes\. .*Times are the church's: Central Time \(Chicago\)\./u);
     expect(render(React.createElement(PlanCard, { plan: sunday(), context: context({ macZone: ET }), actions }))).not.toContain("Times are the church's");
     // A responsibility keeps its own clock, whatever the zone on screen is now.
     const kept = render(React.createElement(ResponsibilityList, {
       view: view({ items: [responsibility(chicago)] }), context: context({ macZone: ET }), runner: fakeRunner(view()), actions,
     }));
-    expect(kept).toContain("Times are the church's: Central Time (America/Chicago).");
+    expect(kept).toContain("Times are the church's: Central Time (Chicago).");
   });
 
   it("asks back, in plain words, when the request left something important unclear", () => {
@@ -426,7 +426,7 @@ describe("Keeping watch reads top to bottom: what is running, then how it works 
       "Ozzie keeps an eye on Sunday", "Runs by itself whenever Ozzie is open.", "When something gets worse, a private notice on this Mac",
       "It never includes names or details.", "It checks more often as Sunday gets close, and sooner when the check above finds a change.",
       "Reads only. It never sends messages.", "then compares them with the last check.",
-      "Planning Center Services, Harbor Example Church", "Time zone: Central Time (America/Chicago), the church's time zone in Planning Center.",
+      "Planning Center Services, Harbor Example Church", "Time zone: Central Time (Chicago), the church's time zone in Planning Center.",
       "Last check", "Next check", "Quiet hours 9:00 PM to 7:00 AM: notices wait until they end.",
     ];
     for (const page of [on, off]) for (const fact of facts) expect(text(page), fact).toContain(fact);

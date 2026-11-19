@@ -258,8 +258,8 @@ pub async fn set_month_limit(app: tauri::AppHandle, limit: u64) -> Result<ModelS
     .map_err(|_| ModelError::NotConfigured)?
 }
 
-/// The general pasteboard, on the main thread only.
-mod clipboard {
+/// The general pasteboard, on the main thread only (also church_systems.rs: a church system's key).
+pub(crate) mod clipboard {
     /// Its text, if it holds text. Never logged or echoed.
     #[cfg(target_os = "macos")]
     pub fn read() -> Option<String> {
@@ -287,10 +287,26 @@ mod clipboard {
     }
     #[cfg(not(target_os = "macos"))]
     pub fn clear_if_same(_: &ozzie_native_auth::own_key::KeyDesk) {}
+    /// After a church system's key worked: the clipboard is emptied only if its text is exactly that key (white space
+    /// around either ignored); anything else the person copied since is theirs to keep.
+    #[cfg(target_os = "macos")]
+    pub fn clear_if_equal(key: &str) {
+        use objc2_app_kit::NSPasteboard;
+        let Some(text) = read() else {
+            return;
+        };
+        let text = zeroize::Zeroizing::new(text);
+        if text.trim() == key.trim() {
+            NSPasteboard::generalPasteboard().clearContents();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    pub fn clear_if_equal(_: &str) {}
 }
 
-/// Ozzie's own key window: a modal alert with a secure field, on the main thread.
-mod window {
+/// Ozzie's own key window: a modal alert with a secure field, on the main thread (also church_systems.rs, with its own
+/// words: `ask_with`).
+pub(crate) mod window {
     pub enum Answer {
         Key(String),
         Empty,
@@ -342,6 +358,16 @@ mod window {
     }
     #[cfg(target_os = "macos")]
     pub fn ask(title: &str, host: &str) -> Answer {
+        ask_with(
+            title,
+            &format!(
+                "Ozzie sends it only to {host}: once now to check it, then with each AI request. If it works, Ozzie keeps it in this Mac's Keychain. It is never shown again."
+            ),
+        )
+    }
+    /// The same window with its own informative text (which says where the key goes).
+    #[cfg(target_os = "macos")]
+    pub fn ask_with(title: &str, info: &str) -> Answer {
         use objc2::MainThreadOnly;
         use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSSecureTextField};
         use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
@@ -350,9 +376,7 @@ mod window {
         };
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str(title));
-        alert.setInformativeText(&NSString::from_str(&format!(
-            "Ozzie sends it only to {host}: once now to check it, then with each AI request. If it works, Ozzie keeps it in this Mac's Keychain. It is never shown again."
-        )));
+        alert.setInformativeText(&NSString::from_str(info));
         alert.addButtonWithTitle(&NSString::from_str("Check this key"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
         let field = NSSecureTextField::initWithFrame(
@@ -377,6 +401,10 @@ mod window {
     }
     #[cfg(not(target_os = "macos"))]
     pub fn ask(_: &str, _: &str) -> Answer {
+        Answer::Cancelled
+    }
+    #[cfg(not(target_os = "macos"))]
+    pub fn ask_with(_: &str, _: &str) -> Answer {
         Answer::Cancelled
     }
 }

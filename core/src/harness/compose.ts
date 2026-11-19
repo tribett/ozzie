@@ -11,16 +11,18 @@
 // and the open decisions a decision question's answer left out (decisionsLeftOut). Both run the same read-only tools on
 // this Mac and add background checks from the brief itself, so nothing about one is ever in any request. Their names
 // are looked up on this Mac with labels of their own (KeptNames), never minted in the session shared with the AI.
-import { dayPage, DRAFT_ASK, mentionsBackgroundCheck, NOT_COVERED } from "../ask.js";
+import { dayPage, DRAFT_ASK, mentionsBackgroundCheck } from "../ask.js";
 import { fold } from "../draft-request.js";
 import { BACKGROUND_CHECKS, BACKGROUND_LINE, backgroundChecksOn, forModels, kidsTeams } from "../kids-rules.js";
 import { longDate, SUNDAY_WORDS, type DayWords } from "../service-day.js";
-import type { Finding } from "../sunday-brief.js";
+import { rosterNeedsYou, rosterSummary, type Finding, type RosterRole } from "../sunday-brief.js";
+import { canRemind } from "../reminder-draft.js";
 import { applyDecisions, type DecidedItem } from "../sunday-decisions.js";
 import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
-import { FACT_LISTS, localIso, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources } from "./tools.js";
+import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources } from "./tools.js";
+import { SYSTEMS } from "../church-systems/types.js";
 
 export interface ComposedAnswer {
   kind: AnswerKind;
@@ -39,7 +41,13 @@ export const NOT_FREE = "That doesn't mean they're free or willing; only they ca
 export const NOT_RANKED = "People are listed in no particular order, not ranked.";
 export const NOTHING_TO_DECIDE = "Nothing in this check needs a decision right now.";
 export const DRAFT_INTRO = "Here is a draft for you to read, change and send yourself. Nothing has been sent.";
-export const NOT_COVERED_MORE = "Here is what Ozzie did read:";
+/**
+ * An answer the facts don't cover, in Ozzie's voice: the tool is never a person, so never "I" (round 5; the model's own
+ * instruction, ask.ts NOT_COVERED, is pinned natively and isn't shown). Then what the check does say, which may be a
+ * limit ("Breeze doesn't tie a team to each role…"), so never "what Ozzie did read".
+ */
+export const CANT_TELL = "Ozzie can't tell from what it read.";
+export const NOT_COVERED_MORE = "What the check does say:";
 /** The Sunday page's tone for a finding the leader decided, until a later check reopens it (review Q L1). */
 const RESOLVED = "Resolved by you";
 
@@ -193,11 +201,26 @@ const toneOfRow = (row: Row) => settled(row) ? RESOLVED : row["tone"] === "needs
 /** One of the overview's rows without its tone, which the answer says once for its group (composeAnswer). */
 const overviewRow = (row: Row, day: Day, said: SaidDay = NO_DAY) => { const text = finding(row, said); return text ? `${text}${decided(row, day)}` : null; };
 
+/** The church systems other than Planning Center a Services tool's source may name (tools.ts HarnessData `source`). */
+const OTHER_SYSTEMS: ReadonlySet<string> = new Set(Object.values(SYSTEMS).map(s => s.name));
+/** The system an answer's Services facts came from, when it isn't Planning Center: every fact of one answer is one church's. */
+const otherSystemOf = (evidence: readonly ToolEnvelope[]): string | null => evidence.find(e => OTHER_SYSTEMS.has(e.source))?.source ?? null;
+/**
+ * Ozzie's sentences say where Services facts come from as Planning Center; for a church on another system (`system`) the
+ * same sentences name it instead ("by B1 Church's count", "B1 Church still counts them"). Planning Center's are unchanged.
+ */
+const inSystem = (text: string, system: string | null) => system ? text.replace(/Planning Center Services/gu, system).replace(/Planning Center/gu, system) : text;
+/** A role no one can be listed for, because the system ties no team to its roles (Breeze). */
+const noTeam = (role: string, system: string | null) => `${system ?? "This church system"} doesn't tie a team to each role, so Ozzie can't suggest who could help with ${role}.`;
+
 /** The sentence for one fact: a row of one of a tool's FACT_LISTS, or the payload itself (`list` null). */
-function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY): string | null {
+function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY, system: string | null = null): string | null {
   const { tool, list: key, row, payload } = f;
   const role = str(row["role"]) ?? "this role", person = str(row["person"]) ?? "Someone";
-  if (key === null) return summary(tool, payload, day);
+  if (key === null) {
+    if (tool === "sunday.who_could_help" && payload["people_listed"] === NO_TEAM) return noTeam(str((payload["asked_for"] as Row | null)?.["role"]) ?? "this role", system);
+    return summary(tool, payload, day);
+  }
   switch (`${tool} ${key}`) {
     case "sunday.overview findings": {
       const text = overviewRow(row, day, said);
@@ -210,7 +233,8 @@ function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY): string | null {
       const counts = [[p["no_overlap_found"], "with no overlap found"], [p["possible_conflict"], "with a possible conflict"],
         [p["needs_confirmation"], "whose availability needs confirmation"], [p["left_out"], "left out"]]
         .flatMap(([n, what]) => typeof n === "number" && n > 0 ? [`${n} ${what as string}`] : []);
-      return `${finding(row, said)}${confirmed.length ? ` Already confirmed: ${list(confirmed)}.` : ""}${counts.length ? ` On the team: ${list(counts)}.` : ""}${leaders(row)}${decided(row, day)}`;
+      const none = row["people_listed"] === NO_TEAM ? ` ${noTeam(role, system)}` : "";
+      return `${finding(row, said)}${confirmed.length ? ` Already confirmed: ${list(confirmed)}.` : ""}${counts.length ? ` On the team: ${list(counts)}.` : ""}${none}${leaders(row)}${decided(row, day)}`;
     }
     case "sunday.who_could_help times": return `${role}${at(row["time"], said)} ${needs(row)}.`;
     case "sunday.who_could_help people":
@@ -277,6 +301,8 @@ function summary(tool: string, p: Row, day: Day): string | null {
     case "sunday.who_could_help": {
       const role = str((p["asked_for"] as Row | null)?.["role"]) ?? "This role";
       if (p["open_need"] === "none in the last check") return `${role} has no open need in the last check.`;
+      // A church system's role whose need the check couldn't tell (tools.ts `#whoCouldHelp`, review of round 4, M1).
+      if (p["open_need"] === "not known") return `The check couldn't tell whether ${role} needs anyone, so Ozzie doesn't list anyone for it.`;
       // Everyone the check listed, those left out of a copy cut to fit included. No order is named: the app's card shows
       // them alphabetically and Ask in person-id order, each saying so beside the people it shows (review K).
       const n = (Array.isArray(p["people"]) ? p["people"].length : 0) + (num(p["left_out_for_length"]) ?? 0);
@@ -404,6 +430,7 @@ function grouped(rows: readonly { tone: string; text: string }[], lead: Row | nu
 
 /** Ozzie's lines for the chosen facts, in Ozzie's order, and the notes said after them. */
 function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[], day: Day): { lines: string[]; after: string[] } {
+  const system = otherSystemOf(evidence);
   const all = factsIn(evidence);
   const picked = facts.flatMap(id => all.get(id) ?? []);
   // A room or follow-up chosen both from the overview and from its own tool is said once, in its own tool's fuller words.
@@ -414,7 +441,7 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
   // what is said once; what is shown can leave out what the answer already said.
   const rendered = chosen.flatMap(f => {
     if (repeatsRows(f, chosen)) return [];
-    const key = sentenceFor(f, day);
+    const key = sentenceFor(f, day, NO_DAY, system);
     return key ? [{ f, key }] : [];
   });
   // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
@@ -435,10 +462,11 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
       blocks.get(r.f.envelope)!.push({ tone: toneOfRow(r.f.row), text });
       return;
     }
-    const text = sentenceFor(r.f, day, said(i));
+    const text = sentenceFor(r.f, day, said(i), system);
     if (text) entries.push({ text });
   });
-  const lines = entries.flatMap((e, i) => "text" in e ? [e.text] : grouped(blocks.get(e.block)!, leads.get(e.block) ?? null, i === entries.length - 1));
+  const lines = entries.flatMap((e, i) => "text" in e ? [e.text] : grouped(blocks.get(e.block)!, leads.get(e.block) ?? null, i === entries.length - 1))
+    .map(line => inSystem(line, system));
   const people = rendered.filter(r => r.f.list !== null && PERSON_LISTS.has(r.f.list));
   const after = [
     ...(rendered.some(r => r.f.tool === "sunday.who_could_help" && r.f.row["status"] === "no overlap found") ? [NOT_FREE] : []),
@@ -465,7 +493,7 @@ export function composeFacts(facts: readonly string[], evidence: readonly ToolEn
  */
 export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[], day: DayWords | null = null): ComposedAnswer {
   const parsed = parseAnswer(answer);
-  if (!parsed) return { kind: "not-covered", paragraphs: [NOT_COVERED], draft: null };
+  if (!parsed) return { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
   const { lines, after } = composeLines(parsed.facts, evidence, day);
   let draft: string | null = null;
   if (parsed.draft) {
@@ -474,13 +502,13 @@ export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[],
   }
   switch (parsed.answer) {
     case "facts":
-      return lines.length ? { kind: "facts", paragraphs: [...lines, ...after], draft: null } : { kind: "not-covered", paragraphs: [NOT_COVERED], draft: null };
+      return lines.length ? { kind: "facts", paragraphs: [...lines, ...after], draft: null } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
     case "not-covered":
-      return { kind: "not-covered", paragraphs: [NOT_COVERED, ...(lines.length ? [NOT_COVERED_MORE, ...lines, ...after] : [])], draft: null };
+      return { kind: "not-covered", paragraphs: [CANT_TELL, ...(lines.length ? [NOT_COVERED_MORE, ...lines, ...after] : [])], draft: null };
     case "nothing-needs-a-decision":
       return { kind: "nothing-needs-a-decision", paragraphs: [NOTHING_TO_DECIDE, ...lines, ...after], draft: null };
     case "draft":
-      return draft ? { kind: "draft", paragraphs: [DRAFT_INTRO, ...lines, ...after], draft } : { kind: "not-covered", paragraphs: [NOT_COVERED], draft: null };
+      return draft ? { kind: "draft", paragraphs: [DRAFT_INTRO, ...lines, ...after], draft } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
   }
 }
 
@@ -883,7 +911,8 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
     const row = rowAt(overview, "findings", shared.findIndex(x => x.id === f.id));
     if (!row || !overview || said.has(findingKey(str(row["kind"]), row))) continue;
     const text = overviewRow(row, day, onDay);
-    if (text) items.push(text);
+    // A church on another system: its own name where the sentence says where the facts are (inSystem).
+    if (text) items.push(inSystem(text, data.source ?? null));
   }
   for (const row of rowsOf(rooms, "rooms")) {
     if (row["label"] !== "Room use needs review" || said.has(roomKey(row))) continue;
@@ -909,4 +938,203 @@ export async function openDecisions(tools: HarnessTools, signal: AbortSignal): P
   const out = await decisionsLeftOut(tools, '{"answer":"not-covered"}', [], signal, { head: onPage(serviceDay(tools.data)), none: NOTHING_OPEN });
   out.gaps = (tools.data.brief?.not_checked ?? []).filter(l => l.startsWith(BACKGROUND_LINE) || /kids team/iu.test(l));
   return out;
+}
+
+// ---- A church system that ties no team to its roles (Breeze): who is on each role, answered on this Mac (round 5) ----
+
+/**
+ * What Ozzie can do instead, for a church system that ties no team to its roles (Breeze): only what works there, never
+ * "who on a team could help" (round 5). Planning Center and B1 Church keep harness-words.ts CAN_DO_INSTEAD.
+ */
+export const canDoWith = (system: string) =>
+  `With ${system}, Ozzie can tell you who is scheduled, who hasn't answered yet and why something is flagged, or prepare a note for you to copy. Ask “What can you do?” to see more.`;
+/** A question about who is on the service's roles, on a church system that ties no team to them. */
+export interface RosterQuestion { kind: "who-could-help" | "scheduled" | "not-answered" | "declined" | "note" | "decision"; roles: string[] }
+/** The system's name when it ties no team to its roles (Breeze), from what it is, never from what one check read. */
+const teamless = (data: HarnessData): string | null => {
+  const info = data.source ? Object.values(SYSTEMS).find(s => s.name === data.source) : undefined;
+  return info && !info.teamMembers ? info.name : null;
+};
+/** The system's info, when `data` is a church system's check that ties no team to its roles and lists who is on each. */
+const noTeams = (data: HarnessData) => {
+  const name = teamless(data);
+  return name && data.brief?.roster ? { name, roster: data.brief.roster } : null;
+};
+const WORD = (word: string) => new RegExp(`(?<![\\p{L}\\p{N}])${word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?![\\p{L}\\p{N}])`, "u");
+const NOT_ANSWERED = /(?:has|have|did|do)n'?t\s+(?:yet\s+)?(?:answered|replied|responded|confirmed|answer|reply|respond|confirm)|(?:has|have|did)\s+not\s+(?:yet\s+)?(?:answered|replied|responded|confirmed|answer|reply|respond|confirm)|no\s+answer|not\s+(?:answered|confirmed)|pending|waiting/u;
+const DECLINED = /\bsaid\s+no\b|\bdeclined\b|\bturned\s+(?:it\s+)?down\b|\bcan'?t\s+(?:make\s+it|come|serve)\b/u;
+/**
+ * Is a role covered, full, short or filled: a question about coverage, as decision questions are (review of round 5, H1).
+ * "Full" only as a role being full ("Is Greeter full?", "full yet"), never "the full service" (release review L2).
+ */
+const COVERAGE = /\b(?:covered|enough|filled|short|staffed|need(?:s|ed)?\s+(?:more|anyone|someone|people))\b|\bfull\b(?!\s+(?![Yy]et\b|[Nn]ow\b|[Uu]p\b|[Aa]lready\b|[Ff]or\b|[Tt]his\b|[Oo]n\b)\p{L})/u;
+/**
+ * Who could help with, who is scheduled for, who hasn't answered or said no for the service's roles, whether it is
+ * covered, or a note to someone who hasn't answered: on a church system that ties no team to its roles (Breeze), each
+ * is answered here from who is on each role (round 5: "Who could cover Greeter?" led with a limit, then said what Ozzie
+ * "did read" when it hadn't, then offered what Breeze can't do). Null for anything else, and for Planning Center and
+ * B1 Church. A role named only inside a longer role name ("Greeter" in "Lead Greeter") counts as the longer one; named on
+ * its own as well ("Greeter and Lead Greeter"), it counts too (release review L1).
+ */
+export function rosterQuestion(typed: string, data: HarnessData): RosterQuestion | null {
+  const sys = noTeams(data);
+  if (!sys) return null;
+  const text = fold(typed);
+  const matched = sys.roster.roles.map(r => r.name.trim()).filter(n => n && WORD(fold(n)).test(text));
+  const roles = [...new Set(matched.filter(n => {
+    const outer = matched.filter(m => m !== n && fold(m).includes(fold(n)));
+    if (!outer.length) return true;
+    const rest = outer.reduce((t, m) => t.replace(new RegExp(WORD(fold(m)).source, "gu"), " "), text);
+    return WORD(fold(n)).test(rest);
+  }))];
+  const waitingFirst = sys.roster.roles.flatMap(r => r.waiting).map(id => fold((data.capture?.names[id] ?? "").trim().split(/\s+/u)[0] ?? "")).filter(n => n.length > 1);
+  // A note to someone who hasn't answered: said so, or named; never any reminder at all (review of round 5, M4).
+  if (/\b(?:draft|write|prepare)\b/u.test(text) && /\b(?:note|message|reminder)\b/u.test(text) && (NOT_ANSWERED.test(text) || waitingFirst.some(n => WORD(n).test(text)))) {
+    return { kind: "note", roles };
+  }
+  if (/\bwho\b/u.test(text) && /\b(?:cover|covering|help|fill|step in|sub|substitute|replace|available)\b/u.test(text)) return { kind: "who-could-help", roles };
+  if (/\bwho\b/u.test(text) && NOT_ANSWERED.test(text)) return { kind: "not-answered", roles };
+  if (/\bwho\b/u.test(text) && DECLINED.test(text)) return { kind: "declined", roles };
+  // "What still needs a decision?", "Is Greeter covered?", "Do we have enough ushers?": never "nothing needs a decision"
+  // where the system shares no number for those roles (round 5); what is known instead.
+  const asked = roles.length ? sys.roster.roles.filter(r => roles.includes(r.name.trim())) : sys.roster.roles;
+  if ((isDecisionQuestion(typed) || COVERAGE.test(text)) && asked.length && asked.every(r => r.needed === null)) return { kind: "decision", roles };
+  if (/\bwho(?:'s|\s+is|\s+are)?\b/u.test(text) && /\b(?:scheduled|serving|volunteering|coming|on the schedule|signed up|listed|on)\b/u.test(text)) return { kind: "scheduled", roles };
+  return null;
+}
+/** A question about whether the service or a role is covered: decision questions and coverage words. */
+export const asksAboutCoverage = (typed: string) => isDecisionQuestion(typed) || COVERAGE.test(fold(typed));
+const andLabels = (items: readonly string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
+/** Answers a roster question here, in placeholder form (the app restores the labels on this Mac); nothing is sent. */
+export async function rosterAnswer(tools: HarnessTools, q: { kind: Exclude<RosterQuestion["kind"], "note">; roles: string[] }, signal: AbortSignal): Promise<LocalAnswer> {
+  const sys = noTeams(tools.data)!;
+  const brief = tools.data.brief!;
+  const read = reader(tools, signal);
+  const evidence: ToolEnvelope[] = [];
+  const run = async (name: string, args: Record<string, unknown> = {}) => { const e = await read(name, args); if (e) evidence.push(e); };
+  const org = tools.data.capture?.organization ?? "";
+  const person = (id: string) => tools.session.person(org, id);
+  const role = (name: string) => tools.session.role(name);
+  const named = q.roles.length > 0;
+  const roles = named ? sys.roster.roles.filter(r => q.roles.includes(r.name.trim())) : sys.roster.roles;
+  const onRole = (r: RosterRole): string => {
+    const parts = [
+      r.yes.length ? `${andLabels(r.yes.map(person))} said yes` : "",
+      r.waiting.length ? `${andLabels(r.waiting.map(person))} ${r.waiting.length === 1 ? "hasn't" : "haven't"} answered yet` : "",
+      r.unknown.length ? `Ozzie couldn't read ${andLabels(r.unknown.map(person))}'s answer` : "",
+      r.declined.length ? `${andLabels(r.declined.map(person))} said no` : "",
+    ].filter(Boolean);
+    return parts.length ? `${parts.join("; ")}.` : "nobody is listed on it yet.";
+  };
+  // How many more a role needs, where the system gave a number (review of round 5, M1): the check's own count.
+  const stillNeeds = (r: RosterRole): string | null => {
+    const left = r.needed === null ? null : brief.positions.find(p => p.name.trim() === r.name.trim() && p.remaining !== null)?.remaining ?? null;
+    return left ? `${role(r.name)} still needs ${left === 1 ? "1 more person" : `${left} more people`}, by ${sys.name}'s numbers.` : null;
+  };
+  // The limit, only for roles with no number, and named where only some have none (review of round 5, M1).
+  const unnumbered = (list: readonly RosterRole[]) => list.filter(r => r.needed === null);
+  const limitFor = (list: readonly RosterRole[]): string | null => {
+    const none = unnumbered(list);
+    if (!none.length) return null;
+    return none.length === sys.roster.roles.length
+      ? `${sys.name} doesn't share how many people each role needs, so Ozzie can't say whether a role is full.`
+      : `${sys.name} doesn't share how many people ${andLabels(none.map(r => role(r.name)))} ${none.length === 1 ? "needs" : "need"}, so Ozzie can't say whether ${none.length === 1 ? "it is" : "they are"} full.`;
+  };
+  const paragraphs: string[] = [];
+  let deadEnd = false;
+  switch (q.kind) {
+    case "who-could-help":
+      // The plain answer first, then what Ozzie does know that helps: who is on the role now, and what it still needs.
+      for (const r of named ? roles : []) await run("sunday.who_could_help", { role: role(r.name) });
+      paragraphs.push(named ? roles.map(r => noTeam(role(r.name), sys.name)).join(" ")
+        : `${sys.name} doesn't tie a team to each role, so Ozzie can't suggest who could help.`);
+      if (named) for (const r of roles) paragraphs.push([`On ${role(r.name)} now: ${onRole(r)}`, stillNeeds(r)].filter(Boolean).join(" "));
+      else paragraphs.push(rosterSummary(sys.roster));
+      deadEnd = true;
+      break;
+    case "scheduled": {
+      paragraphs.push(named ? roles.map(r => `${role(r.name)}: ${onRole(r)}`).join("\n") : rosterSummary(sys.roster));
+      if (!named) {
+        paragraphs.push(sys.roster.roles.map(r => `${role(r.name)}: ${onRole(r)}`).join("\n"));
+        if (sys.roster.no_role.length) paragraphs.push(`On the service with no role: ${andLabels(sys.roster.no_role.map(person))}.`);
+      }
+      const limit = limitFor(roles);
+      if (limit) paragraphs.push(limit);
+      break;
+    }
+    case "decision": {
+      const day = serviceDay(tools.data);
+      paragraphs.push(named
+        ? `Ozzie can't say whether ${andLabels(roles.map(r => role(r.name)))} ${roles.length === 1 ? "is" : "are"} full: ${sys.name} doesn't share how many people ${roles.length === 1 ? "it needs" : "they need"}.`
+        : `Ozzie can't say whether anything needs a decision ${day.thisOne}: ${sys.name} doesn't share how many people each role needs.`);
+      if (named) paragraphs.push(roles.map(r => `${role(r.name)}: ${onRole(r)}`).join("\n"));
+      else {
+        paragraphs.push(rosterSummary(sys.roster));
+        const look = rosterNeedsYou(sys.roster).map(r => `${role(r.name)}: ${r.waiting.length ? onRole({ ...r, yes: [], declined: [], unknown: [] }) : r.declined.length
+          ? `${andLabels(r.declined.map(person))} said no, and nobody else on it has said yes.` : "nobody is listed on it yet."}`);
+        if (look.length) paragraphs.push(look.join("\n"));
+      }
+      break;
+    }
+    case "not-answered": {
+      const waiting = roles.flatMap(r => r.waiting.map(id => `${person(id)} hasn't answered for ${role(r.name)}.`));
+      paragraphs.push(waiting.length ? waiting.join("\n") : named ? `Everyone listed on ${andLabels(roles.map(r => role(r.name)))} has answered.` : "Everyone listed has answered.");
+      if (waiting.length) paragraphs.push(`${sys.name} doesn't say whether the request was sent.`);
+      break;
+    }
+    case "declined": {
+      const no = roles.flatMap(r => r.declined.map(id => `${person(id)} said no for ${role(r.name)}.`));
+      paragraphs.push(no.length ? no.join("\n") : named ? `Nobody listed on ${andLabels(roles.map(r => role(r.name)))} said no.` : "Nobody listed said no.");
+      break;
+    }
+  }
+  // Where the facts came from, for "Based on": the check's own answers.
+  await run("sunday.pending_requests");
+  // What Ozzie can do instead, only where the answer is that it can't (review of round 5, L4).
+  if (deadEnd) paragraphs.push(canDoWith(sys.name));
+  return { paragraphs, fill: shown => shown, evidence, sources: [], gaps: [] };
+}
+
+/**
+ * What Ozzie can do instead for the church system `data` reads, when it ties no team to its roles (from what the
+ * system is, so a check that couldn't read who is on each role still gets it; review of round 5, L5); null otherwise.
+ */
+export const canDoFor = (data: HarnessData): string | null => { const name = teamless(data); return name ? canDoWith(name) : null; };
+
+/**
+ * A note to someone who hasn't answered, on a church system that ties no team to its roles (round 5): the pending
+ * finding it is for, when the question names exactly one (by role, or by a waiting person's first name, or the only
+ * one), with what Ozzie says around it; else what to ask instead. The note itself is written on this Mac
+ * (reminder-draft.ts), never by the AI.
+ */
+export async function rosterNote(tools: HarnessTools, q: RosterQuestion, typed: string, signal: AbortSignal): Promise<{ local: LocalAnswer; finding: Finding | null }> {
+  const sys = noTeams(tools.data)!;
+  const brief = tools.data.brief!;
+  const names = tools.data.capture?.names ?? {};
+  const read = reader(tools, signal);
+  const evidence: ToolEnvelope[] = [];
+  const pending = await read("sunday.pending_requests");
+  if (pending) evidence.push(pending);
+  const org = tools.data.capture?.organization ?? "";
+  const person = (id: string) => tools.session.person(org, id);
+  const role = (name: string) => tools.session.role(name);
+  const text = fold(typed);
+  const first = (id: string) => fold((names[id] ?? "").trim().split(/\s+/u)[0] ?? "");
+  const waiting = brief.findings.filter(f => f.kind === "pending" && f.person_id && f.position && canRemind(f));
+  const byRole = q.roles.length ? waiting.filter(f => q.roles.includes(f.position!.name.trim())) : waiting;
+  const byName = byRole.filter(f => first(f.person_id!).length > 1 && WORD(first(f.person_id!)).test(text));
+  const chosen = byName.length ? byName : byRole;
+  const local = (paragraphs: string[]): LocalAnswer => ({ paragraphs, fill: shown => shown, evidence, sources: [], gaps: [] });
+  if (chosen.length === 1) {
+    const f = chosen[0]!;
+    return { finding: f, local: local([DRAFT_INTRO, `${person(f.person_id!)} hasn't answered for ${role(f.position!.name)}. ${sys.name} doesn't say whether the request was sent.`]) };
+  }
+  if (!chosen.length) {
+    return { finding: null, local: local([q.roles.length ? `Nobody listed on ${andLabels(q.roles.map(role))} is waiting to answer.` : "Nobody listed is waiting to answer.", canDoWith(sys.name)]) };
+  }
+  // One person waiting on several roles is one person, asked about one role at a time (review of round 5, L2).
+  if (new Set(chosen.map(f => f.person_id)).size === 1) {
+    return { finding: null, local: local([`${person(chosen[0]!.person_id!)} hasn't answered for ${andLabels(chosen.map(f => role(f.position!.name)))}. Ask for a note about one role at a time.`]) };
+  }
+  return { finding: null, local: local([`More than one person hasn't answered: ${andLabels(chosen.map(f => `${person(f.person_id!)} for ${role(f.position!.name)}`))}. Ask for a note about one role at a time.`]) };
 }

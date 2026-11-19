@@ -241,6 +241,10 @@ pub enum AgentError {
     /// AI on this Mac: the model chosen doesn't run on this Mac, or Ozzie can't tell it does (model.rs
     /// `NotOnThisMac`). Asked of its app before every step; nothing was sent, spent or taken.
     NotOnThisMac,
+    /// Ozzie managed: ozzie.church's own check turned the step down (model.rs `NotAccepted`). Nothing of this step went
+    /// to the AI (an earlier step may have); the step's ledger outcome is `not-accepted`, the loop fails the task as
+    /// `invalid-task`, and the page says it was Ozzie's AI's check, not the connection.
+    NotAccepted,
 }
 impl From<ModelError> for AgentError {
     fn from(error: ModelError) -> Self {
@@ -263,6 +267,7 @@ impl From<ModelError> for AgentError {
             // ozzie.church counts the task's steps too: the same limit the ledger keeps here.
             ModelError::StepLimit => Self::Limit,
             ModelError::NotOnThisMac => Self::NotOnThisMac,
+            ModelError::NotAccepted => Self::NotAccepted,
         }
     }
 }
@@ -1369,6 +1374,9 @@ fn outcome(reply: &Result<AgentStepReply, AgentError>) -> &'static str {
         Err(AgentError::TooManyFacts) => "too-many-facts",
         Err(AgentError::InvalidArguments) => "invalid-arguments",
         Err(AgentError::NotConfigured | AgentError::ModelNotAllowed) => "no-model",
+        // ozzie.church's own check turned the step down before the AI saw it: its own step outcome, so What happened can
+        // say so (round 3), never "transport"; the loop fails the task as invalid-task.
+        Err(AgentError::NotAccepted) => "not-accepted",
         Err(_) => "transport",
     }
 }

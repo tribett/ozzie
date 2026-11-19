@@ -19,6 +19,7 @@ import { AutostartToggle } from "./responsibility-views.js";
 import { useDay } from "./day-words.js";
 import { dayName, eyeLine, keepTitle } from "./day-phrases.js";
 import { promise } from "./promises.js";
+import { useSystemWords } from "./church-system.js";
 
 /** How Planning Center words a connection at sign-in (spec §6), said beside the promise. */
 export const CONNECTION_WORDING = "Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection.";
@@ -64,6 +65,7 @@ export function SavedRecordings({ count, onDelete, sharing, siri = false, confir
 }) {
   const [confirm, setConfirm] = useState(confirming);
   const d = useDay();
+  const w = useSystemWords();
   const it = count === 1 ? "it" : "them";
   return <>
     <div className="find-next">
@@ -73,7 +75,7 @@ export function SavedRecordings({ count, onDelete, sharing, siri = false, confir
     </div>
     {count > 0 && onDelete && confirm && <div id="delete-recordings" className="decide" role="group" aria-labelledby="delete-recordings-q">
       <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved check" : `all ${count} saved checks`} from this Mac? {dayName(d).replace(/^./u, c => c.toUpperCase())} can't be shown
-        from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""}{siri ? " The copy Siri and Shortcuts answer from is removed too." : ""} Planning Center doesn't change.</p>
+        from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""}{siri ? " The copy Siri and Shortcuts answer from is removed too." : ""} {w.name} doesn't change.</p>
       <div className="find-next">
         <button type="button" className="btn btn-forget btn-sm" onClick={() => { setConfirm(false); onDelete(); }}>Yes, delete {it}</button>
         <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(false)}>Keep {it}</button>
@@ -109,6 +111,7 @@ export const OPEN_AT_SETTLE_MS = [100, 300, 700, 1_500] as const;
 
 export const SETTINGS_SECTIONS = [
   { id: "pco-title", label: "Planning Center and which service Ozzie watches" },
+  { id: "systems-title", label: "Other church systems" },
   { id: "your-name-title", label: "Your name on notes" },
   { id: "ai-title", label: "AI help" },
   { id: "runs-title", label: "What Ozzie runs and notices" },
@@ -133,8 +136,12 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
  * and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and Check my setup, in
  * that order.
  */
-export function ConnectionPage({ status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
+export function ConnectionPage({ system, others, status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
+  /** A church on B1 Church or Breeze: its own section (system-settings.tsx), in place of Planning Center's. */
+  system?: ReactNode;
+  /** Every church's way to the other church systems: switching, and Genesis read beside (system-settings.tsx). */
+  others?: ReactNode;
   /**
    * The church's last confirmed connection while a sign-in for that church is under way, or after one ended with it back
    * in use (App): Settings keep saying it is connected and keep its plans (review item 7). Null otherwise.
@@ -180,6 +187,7 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
   onOpenAt?: () => void;
 }) {
   const d = useDay();
+  const w = useSystemWords();
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
   // The opt-in signs in again with the same registration (Ozzie's own, or yours under Advanced) as the sign-in form.
@@ -203,7 +211,7 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
   const places = useRef(new Map<string, HTMLElement>());
   const at = (id: string) => (el: HTMLElement | null) => { if (el) places.current.set(id, el); else places.current.delete(id); };
   const [shown, setShown] = useState<readonly string[] | null>(null);
-  const others = Boolean(sharing || siri);
+  const shares = Boolean(sharing || siri);
   useLayoutEffect(() => {
     const ids = SETTINGS_SECTIONS.map(s => s.id).filter(id => { const el = places.current.get(id); return el && (el.tagName !== "DIV" || el.childElementCount > 0); });
     setShown(now => now && now.length === ids.length && now.every((id, i) => id === ids[i]) ? now : ids);
@@ -240,8 +248,10 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
     };
     settling.current = stop;
   }, [openAt]);
-  const candidates = SETTINGS_SECTIONS.filter(s => (s.id !== "other-ai-title" || others) && (s.id !== "check-setup" || onSetup || onCheckSetup)
-    && (s.id !== "calendars-title" || calendars) && (s.id !== "updates-title" || updates));
+  const candidates = SETTINGS_SECTIONS.filter(s => (s.id !== "other-ai-title" || shares) && (s.id !== "check-setup" || onSetup || onCheckSetup)
+    && (s.id !== "calendars-title" || calendars) && (s.id !== "updates-title" || updates) && (s.id !== "systems-title" || others))
+    // The church's own system names its section.
+    .map(s => s.id === "pco-title" && system ? { ...s, label: `${w.name} and which service Ozzie watches` } : s);
   return <div className="col settings" ref={page}>
     {/* Headed like every other page: the sidebar's name small above, then a title that says something (polish pass). */}
     <p className="eyebrow">Settings</p>
@@ -249,7 +259,8 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
     <p className="lede">Which church and service Ozzie reads, how it uses AI and tells you things, and what it keeps here.</p>
     <SettingsIndex sections={shown ? candidates.filter(s => shown.includes(s.id)) : candidates} onGo={go} />
 
-    <section className="settings-sec" aria-labelledby="pco-title">
+    {system ? <div className="settings-slot" tabIndex={-1} role="group" aria-labelledby="pco-title" ref={at("pco-title")}>{system}</div>
+    : <section className="settings-sec" aria-labelledby="pco-title">
       <h2 id="pco-title" className="h3" tabIndex={-1} ref={at("pco-title")}>Planning Center and which service Ozzie watches</h2>
       <div className="banner"><Icon name="lock" small /><div className="stack-tight">
         <span><strong>{promise("readsShort")}</strong> {CONNECTION_WORDING} {promise("still")} The connection is kept safely on this Mac.</span>
@@ -286,7 +297,8 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
         {control.problem?.from === "operations" && <p role="alert" className="problem">{control.problem.text}</p>}
       </section>
       <MoreFromPlanningCenter status={status} control={control} />
-    </section>
+    </section>}
+    {others && <div className="settings-slot" tabIndex={-1} role="group" aria-labelledby="systems-title" ref={at("systems-title")}>{others}</div>}
 
     <section className="settings-sec" aria-labelledby="your-name-title">
       <h2 id="your-name-title" className="h3" tabIndex={-1} ref={at("your-name-title")}>Your name on notes</h2>
@@ -303,8 +315,10 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
       <section className="find" aria-labelledby="auto-title">
         <h3 id="auto-title" className="settings-t">Keeping watch</h3>
         {/* Named as everywhere else (spec §6): Ozzie keeps an eye on the watched service by its real day, and the job beside it. */}
-        <p className="find-body">{prefs ? `${eyeLine(d)}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : `${eyeLine(d)} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
-        <p className="small">{keepTitle(d)} and other jobs are set up in Keeping watch.</p>
+        <p className="find-body">{!w.checksOnItsOwn ? `Ozzie reads ${dayName(d)} from ${w.name} when Ozzie starts, and when you press ${w.checkNow}. Checking on a schedule, and its notices, work with Planning Center only for now.`
+          : prefs ? `${eyeLine(d)}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : `${eyeLine(d)} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
+        {w.jobs ? <p className="small">{keepTitle(d)} and other jobs are set up in Keeping watch.</p>
+          : <p className="small">{w.notHere(`${keepTitle(d)} and the morning briefing`, true)}</p>}
         {onAutomatic && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onAutomatic}>Change these in Keeping watch</button></div>}
       </section>
       {autostart && <section className="find" aria-labelledby="background-title">
@@ -325,8 +339,9 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
       </div>
     </section>
 
-    {others && <section className="settings-sec" aria-labelledby="other-ai-title">
+    {shares && <section className="settings-sec" aria-labelledby="other-ai-title">
       <h2 id="other-ai-title" className="h3" tabIndex={-1} ref={at("other-ai-title")}>Other AI apps, Spotlight and Shortcuts</h2>
+      {!w.askAndShare && <p className="find-body">{w.notHere("Sharing Ozzie's last check with other AI apps, Spotlight and Shortcuts")}</p>}
       {sharing && <section className="find" aria-labelledby="share-title">
         <h3 id="share-title" className="settings-t">Other AI apps</h3>
         <p className="find-body">{SHARE_BODY}</p>
@@ -350,7 +365,8 @@ export function ConnectionPage({ status, kept = null, settings, onSettings, onSt
     <section className="settings-sec" aria-labelledby="saved-title">
       <h2 id="saved-title" className="h3" tabIndex={-1} ref={at("saved-title")}>Saved checks</h2>
       <div className="find">
-        <p className="find-body">Each check saves a copy on this Mac, so {dayName(d)} can still be shown if Planning Center can't be reached. These saved checks include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each service.</p>
+        <p className="find-body">{w.savedChecks ? `Each check saves a copy on this Mac, so ${dayName(d)} can still be shown if ${w.name} can't be reached. These saved checks include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each service.`
+          : `Ozzie doesn't save copies of ${w.name} checks: each one stays only while Ozzie is open. Any saved checks below are from Planning Center.`}</p>
         <SavedRecordings count={recordingCount} onDelete={onDeleteRecordings} sharing={Boolean(sharing?.on)} siri={Boolean(siri?.on)} />
       </div>
     </section>

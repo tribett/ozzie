@@ -140,7 +140,7 @@ describe("Sunday page", () => {
 
   it("asks the lead question when a team leader exists but no one is scheduled to lead", () => {
     const t = text(page(brief(nov22Capture(), leadRules)));
-    expect(t).toContain("I found the team's leader in Planning Center, but no one scheduled to lead this Sunday. Is that expected?");
+    expect(t).toContain("Ozzie found the team's leader in Planning Center, but no one scheduled to lead this Sunday. Is that expected?");
     expect(t).toContain("Yes, that's expected");
     expect(t).toContain("Prepare a note to the leader");
   });

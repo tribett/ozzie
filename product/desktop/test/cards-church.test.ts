@@ -96,9 +96,12 @@ describe("visitor cards and the church Ozzie uses", () => {
 
   it("is keyed in App by the church in use and Disconnect, never by the Organization ID in Settings", () => {
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-    expect(app).toContain("<KeptCards check={capture && { organization: capture.organization, names: capture.names }} example={fictional} inUse={inUseOrg ?? null} discarded={cardsDiscarded}");
+    // For Planning Center, the check on screen and the church native uses; for a church on B1 Church or Breeze, its own
+    // check under one name for the whole system, so connecting again never ends open cards unasked (decision 21).
+    expect(app).toContain("<KeptCards check={onSystem ? sys.capture && { organization: SYSTEM_CARDS, names: sys.capture.names } : capture && { organization: capture.organization, names: capture.names }}");
+    expect(app).toContain("inUse={onSystem ? (sys.connection ? SYSTEM_CARDS : null) : inUseOrg ?? null}");
     // "Connect Planning Center" only when the native status says it is disconnected (review K, L5).
-    expect(app).toMatch(/<KeptCards [^>]*disconnected=\{status\?\.state === "disconnected"\}/u);
+    expect(app).toMatch(/<KeptCards [^>]*disconnected=\{onSystem \? !systemConnected : status\?\.state === "disconnected"\}/su);
     expect(app).not.toMatch(/<CardsPage /u);
     expect(app).not.toContain("workspace={org");
     // Typing an ID under Advanced changes settings, which KeptCards never reads.

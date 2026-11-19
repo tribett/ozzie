@@ -8,6 +8,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
 import { finishMemory, type FinishItemId, type FinishStore } from "./moments.js";
+import { useSystemWords } from "./church-system.js";
 import "./first-run.css";
 import "./finish.css";
 
@@ -99,6 +100,8 @@ export interface FinishSettingUpProps {
 
 export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKidsRules, onChooseAi, moreBody, startFailed = false, store = finishMemory }: FinishSettingUpProps) {
   const { day } = useDay();
+  // The church's own system: Planning Center's words unchanged.
+  const w = useSystemWords();
   const [memory, setMemory] = useState(() => store.get());
   // A line the person opened themselves (a collapsed one), over the first-not-done rule.
   const [chosen, setChosen] = useState<FinishItemId | null>(null);
@@ -130,7 +133,7 @@ export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKids
         {startFailed && <p role="alert" className="problem finish-problem">{START_FAILED_LINE}</p>}
       </>;
       case "service": return <>
-        <p className="finish-body">Ozzie watches one service from your church's Planning Center. Until you choose one, there's nothing for it to keep an eye on.</p>
+        <p className="finish-body">Ozzie watches one service from your church's {w.name}. Until you choose one, there's nothing for it to keep an eye on.</p>
         <div className="finish-acts"><button type="button" className="btn btn-primary" onClick={onChooseService}>Choose a service</button></div>
       </>;
       case "kids": return <>
@@ -142,7 +145,9 @@ export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKids
         <div className="finish-acts"><button type="button" className="btn btn-primary" onClick={onChooseAi}>Choose</button></div>
       </>;
       case "waiting": return <p className="finish-body">
-        {`When someone at your church makes the next ${facts.plan.service ? `${facts.plan.service} ` : ""}plan in Planning Center Services, Ozzie finds it by itself. It looks again every hour while it's open. If it's the only service with a plan, Ozzie starts watching it by itself; otherwise it asks you on Today.`}</p>;
+        {w.system === "planning-center"
+          ? `When someone at your church makes the next ${facts.plan.service ? `${facts.plan.service} ` : ""}plan in Planning Center Services, Ozzie finds it by itself. It looks again every hour while it's open. If it's the only service with a plan, Ozzie starts watching it by itself; otherwise it asks you on Today.`
+          : `When someone at your church adds the next ${facts.plan.service ? `${facts.plan.service} ` : ""}${w.system === "b1" ? "plan" : "event"} in ${w.name}, Ozzie finds it by itself and watches it. It looks again each time it checks.`}</p>;
       case "more": return moreBody ?? null;
     }
   };

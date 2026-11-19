@@ -133,6 +133,10 @@ pub enum ModelError {
     /// AI on this Mac: the model chosen doesn't run on this Mac (Ollama's cloud models, a model served from another
     /// computer), or Ozzie can't tell it does (`local_ai::on_this_mac`). Nothing was sent, and it is never chosen.
     NotOnThisMac,
+    /// Ozzie managed: ozzie.church's own check of the request turned it down (HTTP 400 `invalid-request`): something in
+    /// it didn't fit the closed rules ozzie.church holds, such as a tool result naming a source its copy of the
+    /// vocabulary doesn't list yet. Nothing reached the AI. It is Ozzie's own guard, never "couldn't be reached".
+    NotAccepted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +216,19 @@ pub(crate) fn planning_center_host(host: &str) -> bool {
     ["planningcenteronline.com", "churchcenter.com"]
         .iter()
         .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+/// The church systems other than Planning Center that Ozzie reads (core/church-systems: B1 Church, Breeze, Genesis),
+/// and their families of hosts: never an AI address, on any route, so nothing meant for a model can reach them (and a
+/// church system's key, held for its own host, can never be mistaken for an AI key's). B1 Church: `api.churchapps.org`
+/// and the rest of `churchapps.org`, and `b1.church`; Breeze: `breezechms.com` and every church's own subdomain;
+/// Genesis: exactly the API address it publishes (a host on a shared platform, so only that one host, never the
+/// platform). Case and one trailing dot don't matter. core/church-systems `hosts_tests.rs` checks every host it reads.
+pub fn church_system_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let family = ["churchapps.org", "b1.church", "breezechms.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")));
+    family || host == "poxkspytrsaextyeurtg.supabase.co"
 }
 /// An 8-digit date stamp in a model id ("claude-3-5-sonnet-20241022", "…@20240620"): 20YYMMDD.
 fn date_stamp(digits: &str) -> bool {
@@ -397,7 +414,8 @@ impl RouteConfig {
     }
     /// The one URL a request may go to: `{base}/chat/completions`.
     /// Managed is fixed; own must be https; local must be this Mac's loopback; never Planning
-    /// Center or Church Center. The model id keeps `model_id_ok` on every route.
+    /// Center or Church Center, nor another church system's host (`church_system_host`). The model id keeps
+    /// `model_id_ok` on every route.
     pub fn endpoint(&self) -> Result<String, ModelError> {
         let refuse = Err(ModelError::NotConfigured);
         let base = self.base_url.as_str();
@@ -418,10 +436,10 @@ impl RouteConfig {
             && url.query().is_none()
             && url.fragment().is_none()
             && url.as_str().trim_end_matches('/') == base;
-        // Never Planning Center, whatever the route, trailing dot or not.
-        let planning_center = url
-            .host_str()
-            .is_some_and(|raw| planning_center_host(raw.trim_end_matches('.')));
+        // Never Planning Center, nor another church system Ozzie reads, whatever the route, trailing dot or not.
+        let planning_center = url.host_str().is_some_and(|raw| {
+            planning_center_host(raw.trim_end_matches('.')) || church_system_host(raw)
+        });
         let loopback = match url.host() {
             Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
             Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
@@ -2005,3 +2023,71 @@ pub(crate) fn status_at(dir: &Path, keys: &dyn ModelKeys, debug: bool, now_ms: u
 #[cfg(test)]
 #[path = "model_tests.rs"]
 mod tests;
+
+/// `church_system_host`, and an AI address on one of those hosts refused on every route.
+#[cfg(test)]
+mod church_system_host_tests {
+    use super::*;
+
+    #[test]
+    fn each_church_system_host_family_is_refused() {
+        for host in [
+            "api.churchapps.org",
+            "API.ChurchApps.org",
+            "api.churchapps.org.",
+            "churchapps.org",
+            "api.demo.churchapps.org",
+            "b1.church",
+            "grace.b1.church",
+            "breezechms.com",
+            "cedarhollow.breezechms.com",
+            "CEDARHOLLOW.BREEZECHMS.COM.",
+            "poxkspytrsaextyeurtg.supabase.co",
+            "poxkspytrsaextyeurtg.supabase.co.",
+        ] {
+            assert!(church_system_host(host), "{host}");
+        }
+        for host in [
+            "api.openai.com",
+            "api.anthropic.com",
+            "generativelanguage.googleapis.com",
+            "localhost",
+            "127.0.0.1",
+            "supabase.co",
+            "another.supabase.co",
+            "notchurchapps.org",
+            "breezechms.com.evil.example",
+            "b1church.com",
+        ] {
+            assert!(!church_system_host(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn an_ai_address_on_a_church_system_host_is_refused_on_every_route() {
+        let base = |route: Route, url: &str| RouteConfig {
+            route,
+            base_url: url.to_owned(),
+            model: "vendor/model-1".into(),
+            ..RouteConfig::managed()
+        };
+        for url in [
+            "https://api.churchapps.org/v1",
+            "https://api.churchapps.org./v1",
+            "https://cedarhollow.breezechms.com/v1",
+            "https://grace.b1.church/v1",
+            "https://poxkspytrsaextyeurtg.supabase.co/functions/v1",
+        ] {
+            assert_eq!(
+                base(Route::Own, url).endpoint(),
+                Err(ModelError::NotConfigured),
+                "{url}"
+            );
+        }
+        assert!(
+            base(Route::Own, "https://api.example.invalid/v1")
+                .endpoint()
+                .is_ok()
+        );
+    }
+}

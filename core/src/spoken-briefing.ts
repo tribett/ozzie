@@ -7,7 +7,7 @@
 // Mac's own voice, and `<`, `>` and `&` never reach it (no markup a voice could act on).
 import type { AttentionReport } from "./attention-import/index.js";
 import { operationsNotChecked, type SundayOperations } from "./operations-capture.js";
-import { blockoutRoles, blockoutTime, type Finding, type SundayBrief } from "./sunday-brief.js";
+import { blockoutRoles, blockoutTime, rosterNeedsYou, rosterSummary, unnumberedRoster, type Finding, type SundayBrief } from "./sunday-brief.js";
 import type { DecidedBrief, DecidedItem } from "./sunday-decisions.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
@@ -45,6 +45,11 @@ export interface BriefingOptions {
   day?: DayWords;
   /** Email and calendar times, as Today shows them (the import's own zone). Defaults to `timeZone`. */
   attentionTimeZone?: string;
+  /**
+   * When the check was made, as the Sunday page says it (this Mac's clock). Defaults to `timeZone`; set when `timeZone`
+   * is a church's own zone that may not be this Mac's (round 3).
+   */
+  checkedTimeZone?: string;
   /** Off by default: "Someone on the Greeter team". On: names from this check, spoken on this Mac only. */
   includeNames?: boolean;
   names?: Readonly<Record<string, string>>;
@@ -119,24 +124,26 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
     case "too-few-confirmed": return fewConfirmed(f, ctx);
     case "background-check": return background(f, ctx);
     case "pending":
+      // Where the request lives: Planning Center, or the system the finding came from, which may not say whether it was sent.
       return `${name ? `${name} hasn't accepted ${pos} yet.` : `Someone scheduled for ${pos} hasn't accepted yet.`} ${f.notification === "sent"
-        ? "The request was sent; there's no answer yet." : "Planning Center shows the request hasn't been sent yet."}`;
+        ? "The request was sent; there's no answer yet." : f.notification === undefined && f.source ? `${f.source} doesn't say whether the request was sent.`
+          : `${f.source ?? "Planning Center"} shows the request hasn't been sent yet.`}`;
     case "streak":
       // The streak finding carries no position, so none is named (no guessing from other findings).
       return `${name ?? "Someone"} has been scheduled ${f.sundays} weeks in a row. Your Church rules suggest a quick check-in.`;
     case "lead-missing":
       return `No one is scheduled to lead ${pos} ${ctx.d.thisOne}. Your Church rules ask for a scheduled lead.`;
     case "lead-unverified":
-      return `I couldn't confirm the scheduled lead for ${pos}, so I'm not counting it as covered.`;
+      return `Ozzie couldn't confirm the scheduled lead for ${pos}, so it isn't counting it as covered.`;
     case "blockout": {
       const one = blockoutTime(f), at = one ? ` at ${clock(one.starts_at, ctx.timeZone)}` : "";
       const when = !one && (f.serving?.length ?? 0) > 1 ? "at those times" : "at that time";
-      return name ? `${name} is scheduled for ${blockoutRoles(f)}${at} and has a blockout in Planning Center ${when}.`
-        : `Someone scheduled for ${blockoutRoles(f)}${at} has a blockout in Planning Center ${when}.`;
+      return name ? `${name} is scheduled for ${blockoutRoles(f)}${at} and has a blockout in ${f.source ?? "Planning Center"} ${when}.`
+        : `Someone scheduled for ${blockoutRoles(f)}${at} has a blockout in ${f.source ?? "Planning Center"} ${when}.`;
     }
     default:
-      return f.stale || stale ? "This check is out of date. Check Planning Center again before relying on it."
-        : `Part of ${ctx.d.thisOne} couldn't be checked, so I won't call ${ctx.name} covered.`;
+      return f.stale || stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
+        : `Part of ${ctx.d.thisOne} couldn't be checked, so Ozzie won't call ${ctx.name} covered.`;
   }
 }
 
@@ -210,41 +217,51 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   const decisionLines = bounded(decisions, limit, n => `And ${n} more that ${n === 1 ? "needs" : "need"} a decision, listed on screen.`);
   if (resolved) decisionLines.push(ctx.d.kind === "weekday" ? `You already decided ${one(resolved, `${ctx.d.day} item`, `${ctx.d.day} items`)}, for ${ctx.d.thisOne} only.`
     : `You already decided ${one(resolved, "item", "items")}, for ${ctx.d.thisOne} only.`);
-  if (!decisionLines.length) decisionLines.push("Nothing I read needs a decision.");
+  // Ozzie's voice throughout: the tool is never a person, so never "I" (round 5). A church system that shares no number
+  // needed (Breeze) is never "nothing needs a decision": who is listed, and that Ozzie can't say it is covered.
+  const roster = sunday ? unnumberedRoster(sunday) : null;
+  if (!decisionLines.length) decisionLines.push(roster
+    ? `For ${ctx.name}, ${rosterSummary(roster).charAt(0).toLowerCase()}${rosterSummary(roster).slice(1)} ${sunday?.source ?? "The church system"} doesn't share how many people each role needs, so Ozzie can't say whether ${ctx.name} is covered.`
+    : "Nothing Ozzie read needs a decision.");
 
   looks.push(...open.filter(i => i.finding.tone === "look").map(i => again(i, look(i.finding, ctx, Boolean(sunday?.stale)))));
+  // A role nobody has said yes to, on such a service: said as a fact, with no names.
+  if (roster) for (const r of rosterNeedsYou(roster).filter(r => !r.waiting.length)) {
+    looks.push(r.declined.length ? `Nobody on ${r.name} has said yes: ${one(r.declined.length, "person", "people")} said no.` : `Nobody is listed on ${r.name} yet.`);
+  }
   looks.push(...operations.looks);
   const lookLines = bounded(looks, limit, n => `And ${n} more worth a look, listed on screen.`);
-  if (input.ignoredInstructions) lookLines.push(`I ignored ${one(input.ignoredInstructions, "email", "emails")} that contained instructions. I never follow instructions found inside email, and nothing was done.`);
-  if (input.quietCount) lookLines.push(`I read ${input.quietCount} other ${input.quietCount === 1 ? "email or calendar item" : "emails and calendar items"}. Nothing is needed from you there.`);
+  if (input.ignoredInstructions) lookLines.push(`Ozzie ignored ${one(input.ignoredInstructions, "email", "emails")} that contained instructions. It never follows instructions found inside email, and nothing was done.`);
+  if (input.quietCount) lookLines.push(`Ozzie read ${input.quietCount} other ${input.quietCount === 1 ? "email or calendar item" : "emails and calendar items"}. Nothing is needed from you there.`);
 
   const unchecked = bounded([
     ...(sunday ? sunday.not_checked : [`${capital(ctx.name)} hasn't been checked yet.`]),
     ...(sunday && input.operations !== undefined ? input.operations ? input.operations.not_checked : operationsNotChecked(null) : []),
     ...(attention ? attention.gaps : ["No email or calendar was read."]),
-  ], limit, n => `And ${n} more ${n === 1 ? "thing" : "things"} I couldn't check, listed on screen.`);
+  ], limit, n => `And ${n} more ${n === 1 ? "thing" : "things"} Ozzie couldn't check, listed on screen.`);
   const times: string[] = [];
   const mailZone = options.attentionTimeZone ?? ctx.timeZone;
   if (attention) times.push(attention.kind === "fictional-import"
     ? `The email and calendar items are the fictional example, imported ${when(attention.imported_at, mailZone)}. No mailbox was read.`
     : `Email and calendar were read ${when(attention.imported_at, mailZone)}.`);
   if (sunday) {
-    const at = when(sunday.checked_at ?? sunday.completed_at, ctx.timeZone);
+    const at = when(sunday.checked_at ?? sunday.completed_at, options.checkedTimeZone ?? ctx.timeZone);
     times.push(sunday.mode === "fictional" ? `The ${ctx.d.kind === "weekday" ? `${ctx.d.day} ` : ""}check is the fictional example, read ${at}.`
       : sunday.mode === "recording" ? `${capital(ctx.name)} comes from the saved copy of a check made ${at}. It isn't a fresh check.`
-        : `Planning Center was checked ${at}.${sunday.stale ? " That's more than 30 minutes ago, so it may not be current." : ""}`);
+        : `${sunday.source ?? "Planning Center"} was checked ${at}.${sunday.stale ? " That's more than 30 minutes ago, so it may not be current." : ""}`);
   }
 
   // Items, not lines: each follow-up, room and group meeting counts as on the Sunday page and Today (live review 2026-11-18).
   const decided = decisions.length - operations.decisions.length + operations.counted.decisions;
   const looked = looks.length - operations.looks.length + operations.counted.looks;
-  const summary = decided + looked === 0 ? "Nothing I read needs you right now."
+  const summary = roster && decided === 0 ? `Ozzie can't say whether ${ctx.name} is covered${looked ? `, and ${one(looked, "is", "are")} worth a look` : ""}.`
+    : decided + looked === 0 ? "Nothing Ozzie read needs you right now."
     : `${decided ? `${one(decided, "thing needs", "things need")} a decision` : "nothing needs a decision"}${looked ? `, and ${one(looked, "is", "are")} worth a look` : ""}.`;
   const sections: BriefingSection[] = ([
     { id: "intro", heading: "", sentences: [`Here is today's briefing. ${summary.charAt(0).toUpperCase()}${summary.slice(1)}`] },
     { id: "decisions", heading: "Needs a decision", sentences: decisionLines },
     { id: "looks", heading: "Worth a look", sentences: lookLines },
-    { id: "unchecked", heading: "What I couldn't check", sentences: unchecked },
+    { id: "unchecked", heading: "What Ozzie couldn't check", sentences: unchecked },
     { id: "times", heading: "When this was checked", sentences: times },
     { id: "close", heading: "", sentences: ["Stopping or skipping this briefing doesn't mark anything done. The details and sources are on screen."] },
   ] as BriefingSection[]).filter(s => s.sentences.length > 0).map(s => ({ ...s, sentences: s.sentences.map(speakable) }));

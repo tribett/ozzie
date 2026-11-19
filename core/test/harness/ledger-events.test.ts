@@ -40,6 +40,14 @@ describe("ledgerDetail", () => {
     expect(ledgerDetailOk("failed", "too-many-facts")).toBe(false);
     expect(ledgerDetailOk("tool", "sunday.overview too-many-facts")).toBe(false);
   });
+
+  it("holds a model step Ozzie's AI turned down before the AI saw it, as native records it, and only as a step (round 3)", () => {
+    expect(ledgerDetailOk("model", "2 not-accepted")).toBe(true);
+    expect(ledgerDetail({ type: "model", detail: "step 2 not-accepted" })).toBe("2 not-accepted");
+    // Never a task's failure code: the task fails invalid-task.
+    expect(ledgerDetailOk("failed", "not-accepted")).toBe(false);
+    expect(ledgerDetailOk("tool", "sunday.overview not-accepted")).toBe(false);
+  });
 });
 
 // ---- Every event the loops emit -----------------------------------------------------------------

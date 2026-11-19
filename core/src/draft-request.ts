@@ -80,9 +80,10 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/u;
  * at 7:00 PM"), else the service's own church-local date ("on Wednesday, November 25"), else "at the next service".
  * Never relative to today, and never a fixed Sunday: the service may be on any day (onboarding spec §5, decision 18).
  */
-export function serviceOn(finding: Finding, date?: string | null): string {
+export function serviceOn(finding: Finding, date?: string | null, zone?: string | null): string {
   const interval = finding.position?.interval;
-  if (interval) return `on ${new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+  // `zone`: the church's own, where the caller has it (review of round 5, L7); else this Mac's, as before.
+  if (interval) return `on ${new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", ...(zone ? { timeZone: zone } : {}) })}`;
   const day = date && DATE.test(date) ? new Date(`${date}T12:00:00Z`) : null;
   return day && !Number.isNaN(day.getTime()) ? `on ${day.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}` : "at the next service";
 }

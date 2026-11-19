@@ -586,7 +586,7 @@ describe("Ask answers written on this Mac", () => {
     const m = scripted([() => answer('{"answer":"not-covered"}')]);
     const turn = await askOzzie(harness(m.model), "When is the youth retreat?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
-    expect(turn.answer.body.split("\n\n")).toEqual(["I can't tell from what I read.", CAN_DO_INSTEAD]);
+    expect(turn.answer.body.split("\n\n")).toEqual(["Ozzie can't tell from what it read.", CAN_DO_INSTEAD]);
     expect(ASK_FAILURES.fidelity).toContain("What can you do?");
   });
 });
@@ -774,7 +774,7 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
     const m = scripted([() => answer('{"answer":"not-covered"}')]);
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "What still needs a decision this Sunday?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
-    expect(turn.answer.body.split("\n\n")[0]).toBe("I can't tell from what I read.");
+    expect(turn.answer.body.split("\n\n")[0]).toBe("Ozzie can't tell from what it read.");
     expect(turn.answer.body).toContain("Also on the Sunday page, needing a decision:");
     expect(turn.answer.body).not.toContain(CAN_DO_INSTEAD);
   });

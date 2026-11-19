@@ -67,7 +67,7 @@ function OverlapCard({ overlap, reads, today, zone }: { overlap: CalendarOverlap
         <li><Icon name="dot" small />Rule: two events with times on your calendars overlap, and neither is marked free or cancelled.</li>
         <li><Icon name="dot" small />“{first.title}”, {span(first, zone)}: from {readTimes(first, reads, zone)}.</li>
         <li><Icon name="dot" small />“{second.title}”, {span(second, zone)}: from {readTimes(second, reads, zone)}.</li>
-        <li><Icon name="dot" small />I only read your calendars. Nothing was changed on either one.</li>
+        <li><Icon name="dot" small />Ozzie only reads your calendars. Nothing was changed on either one.</li>
       </ul>}
     </div>
   </article>;

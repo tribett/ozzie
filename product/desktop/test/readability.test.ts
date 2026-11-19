@@ -168,7 +168,8 @@ describe("Settings is findable (audit item 27)", () => {
     // Lists and notes stay on this Mac: Settings reads nothing off the page (core/test/sources/stays-on-this-mac.test.ts).
     expect(src).not.toMatch(/\.scrollIntoView\(|querySelector|getElementById|\.closest\(/u);
     // Every heading the index moves to can take the focus.
-    for (const { id } of SETTINGS_SECTIONS.filter(s => !["calendars-title", "updates-title"].includes(s.id))) expect(html).toMatch(new RegExp(`<h2 id="${id}" class="h3" tabindex="-1">`, "u"));
+    // Calendars, Updates and Other church systems are slots App fills (system-settings.tsx holds the last one's heading).
+    for (const { id } of SETTINGS_SECTIONS.filter(s => !["calendars-title", "updates-title", "systems-title"].includes(s.id))) expect(html).toMatch(new RegExp(`<h2 id="${id}" class="h3" tabindex="-1">`, "u"));
     expect(html).toMatch(/<div class="settings-slot" tabindex="-1" role="group" aria-labelledby="calendars-title">/u);
   });
 

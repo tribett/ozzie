@@ -748,6 +748,10 @@ fn only_name_free_fields_and_details_are_stored() {
     assert!(!detail_ok(EventType::Failed, "too-many-facts"));
     assert!(!detail_ok(EventType::Tool, "too-many-facts"));
     assert!(FailureCode::parse("too-many-facts").is_none());
+    // ozzie.church's own check turning a step down is a step's outcome too (round 3), never a task's failure code.
+    assert!(detail_ok(EventType::Model, "2 not-accepted"));
+    assert!(!detail_ok(EventType::Failed, "not-accepted"));
+    assert!(FailureCode::parse("not-accepted").is_none());
     // The file holds only what the rows show: no field for a question, an answer or source text.
     let text = std::fs::read_to_string(dir.file()).unwrap();
     assert!(!text.to_lowercase().contains("riley") && !text.contains('?'));

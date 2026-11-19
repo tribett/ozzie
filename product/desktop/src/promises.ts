@@ -45,6 +45,15 @@ export const promise = (name: PromiseName, form: PromiseForm = BUILD_FORM): stri
 /** Every promise sentence in both forms, for the test that each lives only here. */
 export const ALL_PROMISES: readonly string[] = Object.values(BOTH).flatMap(p => [p.A, p.B]);
 
+/**
+ * The same promises for a church on another system (B1 Church, Breeze, Genesis), named for it. Only form A: Ozzie has no
+ * way to change anything in another system.
+ */
+export const systemPromise = (name: "reads" | "names" | "connectReads", system: string): string =>
+  name === "reads" ? `It only reads. It never changes anything in ${system}.`
+    : name === "names" ? `The names Ozzie reads from ${system} stay on this Mac. The AI sees stand-ins instead.`
+      : `Ozzie only reads. It can't change anything in ${system}.`;
+
 /** S1's three lines, in order: reads, names, sends. */
 export const firstScreenPromises = (form: PromiseForm = BUILD_FORM) => [promise("reads", form), promise("names", form), promise("sends", form)];
 

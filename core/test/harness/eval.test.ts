@@ -8,6 +8,7 @@ import { backgroundInToolResult, backgroundWording } from "../../src/harness/bac
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
 import { ASK_SKILL, composeAnswer, Harness } from "../../src/harness/index.js";
 import { LABEL_PATTERN } from "../../src/harness/session.js";
+import { CANT_TELL } from "../../src/harness/compose.js";
 import type { HarnessData } from "../../src/harness/tools.js";
 import { PiLoop } from "../../src/harness/pi-loop.js";
 import { TsLoop } from "../../src/harness/ts-loop.js";
@@ -143,7 +144,7 @@ describe("each procedure uses its own tools and ends with a verified answer", ()
     const m = scripted([() => calls(["sunday.overview"]), () => answer('{"answer":"not-covered"}')]);
     const result = await harness(harnessData(), m.model).ask("Is anyone willing to do a second shift?");
     expect(result.ok && result.outcome.status).toBe("verified");
-    expect(result.ok && composeAnswer(result.outcome.answer!, result.outcome.evidence).paragraphs).toEqual([NOT_COVERED]);
+    expect(result.ok && composeAnswer(result.outcome.answer!, result.outcome.evidence).paragraphs).toEqual([CANT_TELL]);
   });
 });
 

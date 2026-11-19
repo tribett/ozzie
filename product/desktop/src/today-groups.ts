@@ -57,7 +57,12 @@ export type TodaySubject =
   | { type: "watching"; responsibility: Responsibility; notes: NoticedItem[] }
   /** The regular Sunday check (proactive.ts), once it can run: how often, when it last and next looks, what it missed. */
   | { type: "regular"; check: RegularCheck }
-  | { type: "answers"; positions: string[] };
+  | { type: "answers"; positions: string[] }
+  /**
+   * A church system that doesn't share how many people each role needs (Breeze): someone hasn't answered, or a role
+   * has nobody who said yes. Never "nothing needs a decision" for it (round 5); the card says what is known.
+   */
+  | { type: "roster" };
 export interface TodayItem {
   /** Name-free and stable: what set-aside and first-seen times are kept by on this Mac. */
   id: string;
@@ -78,6 +83,12 @@ export interface TodaySunday {
   decisions: number;
   /** Positions with a request Planning Center records as sent and not yet accepted. */
   answers: string[];
+  /**
+   * Set for a church system that doesn't share how many people each role needs (round 5): Ozzie can't say whether the
+   * service is covered, so Today never calls it clear. `needsYou`: someone hasn't answered, or a role has nobody who said
+   * yes (a decline with no one in its place, or nobody listed).
+   */
+  unknownNeed?: { needsYou: boolean };
 }
 /**
  * The regular Sunday check as Today shows it (audit item 24), from What runs automatically's schedule. Times are ISO;
@@ -173,6 +184,9 @@ export function todayItems(input: TodayInput): TodayItem[] {
     const id = `sunday:${input.sunday.plan_id}`;
     const writeup = foldedIntoSunday ? view?.writeups[foldedIntoSunday.id] ?? null : null;
     items.push({ id, state: "needs-decision", since: seen(id), subject: { type: "sunday", decisions: input.sunday.decisions, noticed: foldedIntoSunday, writeup } });
+  } else if (input.sunday.unknownNeed?.needsYou) {
+    const id = `roster:${input.sunday.plan_id}`;
+    items.push({ id, state: "needs-you", since: seen(id), subject: { type: "roster" } });
   }
   items.push(...noticed);
   for (const [rid, item] of access) {
@@ -262,8 +276,8 @@ const at = (iso: string, now: string, zone: string) => localDate(iso, zoneOr(zon
  * What the regular Sunday check is doing, in one line (audit item 24): "Checks Planning Center every hour while Ozzie is
  * open. Last checked 9:06 AM. Next check 10:06 AM."
  */
-export function regularLine(c: RegularCheck, now: string, zone: string): string {
-  const how = `Checks Planning Center at least ${every(c.intervalMinutes)} while Ozzie is open${c.runOnLaunch ? ", and when it opens" : ""}.`;
+export function regularLine(c: RegularCheck, now: string, zone: string, source = "Planning Center"): string {
+  const how = `Checks ${source} at least ${every(c.intervalMinutes)} while Ozzie is open${c.runOnLaunch ? ", and when it opens" : ""}.`;
   const last = c.last ? ` Last checked ${at(c.last.at, now, zone)}${c.last.ok ? "" : ", but that check couldn't finish"}.` : " Not checked yet.";
   const next = c.paused ? " Paused: nothing runs until you resume it in Keeping watch." : c.running ? " Checking now." : c.next ? ` Next check ${at(c.next, now, zone)}.` : "";
   return `${how}${last}${next}`;
@@ -280,10 +294,13 @@ export function regularMissedText(c: RegularCheck, now: string, zone: string): s
  * In progress with nothing in it: what would start something, never a pointer to Ask (audit item 4). Named by the
  * watched service's real day (`d`, onboarding spec §5); the fictional example is a Sunday.
  */
-export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean, d: DayWords = SUNDAY_WORDS): string {
+export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean, d: DayWords = SUNDAY_WORDS,
+  system: { name: string; jobs: boolean } = { name: "Planning Center", jobs: true }): string {
   if (example) return "Nothing runs in the fictional example.";
-  if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine(d)} once Planning Center is connected and a service is chosen; ${keepTitle(d)} and other jobs start when you set them up.`;
-  return `Nothing is running. ${keepTitle(d)} and other jobs start when you set them up in Keeping watch.`;
+  // A church on B1 Church or Breeze: jobs work with Planning Center only for now, so none is offered as starting here.
+  const jobs = system.jobs ? `${keepTitle(d)} and other jobs start when you set them up` : `${keepTitle(d)} and other jobs work with Planning Center only for now`;
+  if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine(d)} once ${system.name} is connected and a service is chosen; ${jobs}.`;
+  return system.jobs ? `Nothing is running. ${jobs} in Keeping watch.` : `Nothing is running. ${jobs}.`;
 }
 
 /** One decision Today names (audit item 17): its words, the Sunday card it opens, and whether that card lists people. */
@@ -306,7 +323,9 @@ export function decisionLines(items: readonly Decided[], ops: { rooms: number; f
     const when = f.position?.interval ? at(f.position.interval.starts_at) : d.thisOne;
     switch (f.kind) {
       case "needs-people": {
-        const clear = f.people?.suggestions.length ?? 0;
+        // A system that ties no team to its roles (Breeze) lists no one: the line says nothing about a team.
+        if (!f.people) return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}, ${when}.`, people: false };
+        const clear = f.people.suggestions.length;
         const team = clear === 0 ? "no one else on the team is clear" : clear === 1 ? "1 on the team is clear" : `${clear} on the team are clear`;
         return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}, ${when}. ${team.charAt(0).toUpperCase()}${team.slice(1)} for that time.`,
           people: clear + (f.people?.conflicts.length ?? 0) > 0 };
@@ -342,14 +361,17 @@ export const sundayCountText = (n: number) => `${n} ${n === 1 ? "thing" : "thing
 export const pageNotes = (item: NoticedItem) => Math.max(0, (item.drafts ?? 0) - (item.drafted ? 1 : 0));
 export const notesReadyText = (n: number, d: DayWords = SUNDAY_WORDS) => `Ozzie has ${n === 1 ? "a note" : `${n} notes`} ready for these on ${pageRef(d)}. Nothing has been sent.`;
 
-/** The line under the page title, from the counts alone. */
-export function ledeText(g: Pick<Grouped, "attention" | "review" | "progress">): string {
+/**
+ * The line under the page title, from the counts alone. `unknownNeed`: the service is on a church system that doesn't
+ * share how many people each role needs, so nothing on it is said to need nobody (release review L3).
+ */
+export function ledeText(g: Pick<Grouped, "attention" | "review" | "progress">, unknownNeed = false): string {
   const a = g.attention.length, r = g.review.length;
   const parts = [
     ...(a ? [`${a} ${a === 1 ? "thing needs" : "things need"} your attention.`] : []),
     ...(r ? [`${r} ${r === 1 ? "is" : "are"} ready to review.`] : []),
   ];
-  return parts.length ? parts.join(" ") : "Nothing needs you right now.";
+  return parts.length ? parts.join(" ") : unknownNeed ? "Nothing Ozzie can check needs you right now." : "Nothing needs you right now.";
 }
 
 // ---- Kept on this Mac ----------------------------------------------------------------------------------

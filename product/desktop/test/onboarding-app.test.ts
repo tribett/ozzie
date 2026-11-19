@@ -22,7 +22,8 @@ describe("App's onboarding wiring", () => {
     expect(app).toContain("const setupEntry = showSetup || setupAt !== null;");
     // Not while a sign-in only adds Calendar, People and Groups to a connected church (decision 24), nor while any sign-in for
     // a church already connected is in the browser (review item 7; both in read-more-app.test.ts).
-    expect(app).toContain('const setupAt = setup === "auto" || fictional || addingAccess || reconnecting ? null : firstRunScreen(facts);');
+    // A church on B1 Church or Breeze opens at its own first unmet fact (decision 21).
+    expect(app).toContain('const setupAt = setup === "auto" || fictional || addingAccess || reconnecting ? null : onSystem ? systemSetup : firstRunScreen(facts);');
     expect(app).toMatch(/\{askShown && <div className="small side-ai"><AiLine /u);
     expect(app).toMatch(/\{askShown && <button type="button" ref=\{askEntry\}/u);
     expect(app).toContain("const askShown = resultSeen || setup === null;");

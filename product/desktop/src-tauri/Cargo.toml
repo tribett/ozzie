@@ -1,6 +1,6 @@
 [package]
 name = "ozzie-desktop"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
@@ -15,6 +15,10 @@ tauri = { version = "=2.12.4", features = ["tray-icon"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ozzie-native-auth = { path = "../../../core/native-auth" }
+# Read-only B1 Church, Breeze and Genesis (church_systems.rs). Never its `dev-tool` feature.
+ozzie-church-systems = { path = "../../../core/church-systems" }
+# Already locked through ozzie-native-auth: a church system's key text is wiped from memory once it is used.
+zeroize = "1.8"
 tauri-plugin-notification = "=2.8.0"
 # "Open Ozzie when I log in": off unless the person turns it on (a Launch Agent in ~/Library/LaunchAgents).
 tauri-plugin-autostart = "=2.7.0"

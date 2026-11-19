@@ -57,6 +57,7 @@ import { BACKGROUND_LINE, forModels } from "./kids-rules.js";
 import { BOOKS, containsName, fold, nameTerms, NOT_OURS, UNSPACED } from "./draft-request.js";
 import { backgroundWording, newerCharacter } from "./harness/background-wording.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
+import { SYSTEMS } from "./church-systems/types.js";
 
 // Pinned natively by model_tests.rs (`the_fixed_ask_text_matches_the_webview_exactly`).
 export const ASK_SYSTEM = [
@@ -1066,8 +1067,25 @@ export function suggestedQuestions(brief: SundayBrief | null): string[] {
   if (!brief) return [];
   const thisOne = (brief.day ?? SUNDAY_WORDS).thisOne;
   const role = (f: Finding) => f.position?.name.replace(/\s+/gu, " ").trim() ?? "";
-  const open = brief.findings.find(f => f.kind === "needs-people" && role(f));
+  // A church system that ties no team to its roles (Breeze) lists no one who could cover: neither question is offered.
+  const open = brief.findings.find(f => f.kind === "needs-people" && role(f) && !(brief.source && !f.people));
   const flagged = brief.findings.find(f => role(f));
+  // A church system that ties no team to its roles (Breeze): what works there, each answered on this Mac from who is on
+  // each role (compose.ts rosterQuestion, round 5). The note names no one: it is to whoever hasn't answered for a role.
+  // The same test as Ask's own answers (compose.ts rosterQuestion): what the system is, and who is on each role.
+  const teamless = Object.values(SYSTEMS).find(s => s.name === brief.source)?.teamMembers === false;
+  const roster = teamless && brief.roster && brief.roster.roles.length > 0 ? brief.roster : null;
+  if (roster) {
+    const waiting = roster.roles.filter(r => r.waiting.length > 0);
+    const note = brief.findings.find(f => f.kind === "pending" && role(f) && waiting.some(r => r.name === f.position?.name && r.waiting.length === 1));
+    return [
+      `Who is scheduled ${thisOne}?`,
+      ...(waiting.length ? ["Who hasn't answered yet?"] : []),
+      ...(brief.findings.some(f => f.tone === "decision") ? [`What still needs a decision ${thisOne}?`] : []),
+      ...(flagged ? [`Why is ${role(flagged)} flagged?`] : []),
+      ...(note ? [`Draft a note to the person who hasn't answered for ${role(note)}`] : []),
+    ].slice(0, 4);
+  }
   const out = [
     ...(open ? [`Who could cover ${role(open)}?`] : []),
     ...(brief.findings.some(f => f.tone === "decision") ? [`What still needs a decision ${thisOne}?`] : []),

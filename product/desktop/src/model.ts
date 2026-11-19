@@ -174,5 +174,7 @@ export function modelProblem(error: unknown, account?: unknown): string {
   if (known.includes("contact-detail")) return "This note looks like it holds a phone number or email address, so Ozzie's AI didn't send it. Your draft is unchanged.";
   if (known.includes("background-check")) return BACKGROUND_NOTE_TEXT;
   if (known.includes("hidden-character")) return HIDDEN_NOTE_TEXT;
+  // ozzie.church's own check turned the request down (native `not-accepted`): not the network (round 3).
+  if (known.includes("not-accepted")) return "Ozzie's AI didn't accept this request, so nothing was sent to the AI. This isn't a connection problem; try again later. Your draft is unchanged.";
   return "The AI couldn't be reached. Your draft is unchanged.";
 }

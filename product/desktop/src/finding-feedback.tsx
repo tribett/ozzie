@@ -9,6 +9,7 @@ import {
   stopScopes, stopText, urgencyEntry, urgencyFor, withEntry, withoutEntry, type CorrectionWhat, type FeedbackEntry, type FeedbackScope, type FeedbackTarget, type UrgencyEntry,
 } from "../../../core/src/finding-feedback.js";
 import { Icon } from "./icons.js";
+import { useSystemWords } from "./church-system.js";
 import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
 import { dayName, pageRef } from "./day-phrases.js";
 
@@ -39,7 +40,7 @@ export function useFeedback(source: FeedbackSource | null | undefined, names: Na
   const notice = <FeedbackNotice note={note} onUndo={() => { if (note) source.onEntries([...note.before]); setNote(null); }} onDismiss={() => setNote(null)} />;
   return { controls, notice };
 }
-/** "Got it. I won't flag serving streaks for Jordan Lee." with Undo, shown where the card was. */
+/** "Got it. Ozzie won't flag serving streaks for Jordan Lee." with Undo, shown where the card was. Never "I" (round 5). */
 export function FeedbackNotice({ note, onUndo, onDismiss }: { note: FeedbackNote | null; onUndo: () => void; onDismiss: () => void }) {
   if (!note) return null;
   return <div className="panel-ok feedback-note" role="status">
@@ -52,8 +53,8 @@ export function FeedbackNotice({ note, onUndo, onDismiss }: { note: FeedbackNote
 }
 
 const URGENCY_SAID: Record<UrgencyEntry["level"], (kind: string) => string> = {
-  "right-away": kind => `I'll tell you right away about ${kindWords(kind)}.`,
-  briefing: kind => `I'll keep ${kindWords(kind)} for your briefing instead of sending a notice.`,
+  "right-away": kind => `Ozzie will tell you right away about ${kindWords(kind)}.`,
+  briefing: kind => `Ozzie will keep ${kindWords(kind)} for your briefing instead of sending a notice.`,
 };
 /** What a per-kind choice means, said on the card while it's on; the watched service named by its real day (`d`). */
 export const URGENCY_NOW: Record<UrgencyEntry["level"], (kind: string, d?: DayWords) => string> = {
@@ -76,8 +77,8 @@ export function correctionChoices(kind: string, occasion: string, source: string
 }
 /** What the page confirms, with Undo, once a correction is saved. */
 export const correctionSaid = (what: CorrectionWhat, occasion: string) => what === "finding"
-  ? `Got it. I've hidden this ${occasion} and kept your note. Undo brings it back now; later, it's under “What you've told Ozzie” on Church rules.`
-  : "Got it. I kept your note, and this still shows. You can delete the note under “What you've told Ozzie” on Church rules.";
+  ? `Got it. Ozzie hid this ${occasion} and kept your note. Undo brings it back now; later, it's under “What you've told Ozzie” on Church rules.`
+  : "Got it. Ozzie kept your note, and this still shows. You can delete the note under “What you've told Ozzie” on Church rules.";
 
 /**
  * The controls under a finding. `urgency`: false where notices don't apply (the fictional email import).
@@ -174,7 +175,7 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion: oc
     {stage === "stop" && <form id={`${id}-form`} className="decide" onSubmit={e => {
       e.preventDefault();
       const chosen = scopes[scope] ?? scopes[0]!;
-      attempt(() => { const entry = stopEntry(target, chosen, now()); save(entry, `Got it. ${stopText(entry, who).replace(/^Don't flag/u, "I won't flag")}`); });
+      attempt(() => { const entry = stopEntry(target, chosen, now()); save(entry, `Got it. ${stopText(entry, who).replace(/^Don't flag/u, "Ozzie won't flag")}`); });
     }}>
       {scopes.length > 1
         ? <fieldset className="plan-report"><legend className="bold">What should Ozzie stop flagging?</legend>
@@ -192,7 +193,7 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion: oc
     </form>}
     {stage === "always" && target.action && <form id={`${id}-form`} className="decide" onSubmit={e => {
       e.preventDefault();
-      attempt(() => { const entry = alwaysEntry(target, now()); save(entry, `Got it. ${alwaysText(entry, who).replace(/^Always prepare/u, "I'll always prepare")}`); });
+      attempt(() => { const entry = alwaysEntry(target, now()); save(entry, `Got it. ${alwaysText(entry, who).replace(/^Always prepare/u, "Ozzie will always prepare")}`); });
     }}>
       <p className="find-body">{alwaysText({ kind: target.kind, action: target.action, scope: alwaysScope(target), labels: target.labels ?? {} }, who)}</p>
       <p className="input-help">Ozzie only prepares it. You still copy it and send it yourself.</p>
@@ -228,7 +229,7 @@ export function FromYourCards({ feedback }: { feedback: FeedbackControls | null 
   </li>;
   return <section className="find from-cards" aria-labelledby="from-cards-title">
     <h2 id="from-cards-title" className="h3">What you've told Ozzie</h2>
-    <p className="find-body">What you said on findings on {pageRef(d)} and Today. Each applies right away, using what was already read, and to every later check; delete one here any time. Nothing here changes Planning Center.</p>
+    <p className="find-body">What you said on findings on {pageRef(d)} and Today. Each applies right away, using what was already read, and to every later check; delete one here any time. Nothing here changes {useSystemWords().name}.</p>
     {!feedback.entries.length && <p className="small">Nothing yet. On a finding, choose “This isn't right”, “Stop flagging this”, “Always do this”, “Always tell me right away” or “Put this in the briefing”, and it shows here.</p>}
     {stops.length > 0 && <><h3 className="bold">Don't flag</h3>
       <ul className="list">{stops.map(e => row(e, stopText(e, who), "Start flagging this again", "Ozzie flags this again, starting now."))}</ul></>}

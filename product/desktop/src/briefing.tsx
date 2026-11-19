@@ -25,7 +25,9 @@ function Chevron() {
 
 /** "Listen to today's briefing": a compact bar that reads this page's findings aloud. Stopping never marks anything done. */
 export function BriefingPanel({ input, names, attentionTimeZone, timeZone = localZone() }: {
-  input: BriefingInput; names: Readonly<Record<string, string>>; attentionTimeZone?: string; timeZone?: string;
+  input: BriefingInput; names: Readonly<Record<string, string>>; attentionTimeZone?: string;
+  /** The service's times. When it is a church's own zone, the check's time still follows this Mac, as the Sunday page says it. */
+  timeZone?: string;
 }) {
   const [withNames, setWithNames] = useState(false);
   const [state, setState] = useState<"ready" | "playing" | "problem">("ready");
@@ -35,7 +37,7 @@ export function BriefingPanel({ input, names, attentionTimeZone, timeZone = loca
   // The watched service's real day, for the lines said before a check has read it ("Wednesday hasn't been checked yet").
   const day = useDay();
   const briefing = useMemo(() => buildSpokenBriefing(input, {
-    timeZone, includeNames: withNames, names, day, ...(attentionTimeZone ? { attentionTimeZone } : {}),
+    timeZone, checkedTimeZone: localZone(), includeNames: withNames, names, day, ...(attentionTimeZone ? { attentionTimeZone } : {}),
   }), [input, names, withNames, timeZone, attentionTimeZone, day]);
   const stop = () => {
     run.current++;

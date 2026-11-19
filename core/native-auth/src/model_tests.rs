@@ -1539,7 +1539,7 @@ fn a_paused_allowance_and_a_refused_token_are_closed_codes_on_rewording() {
         (
             400,
             r#"{"error":"invalid-request"}"#,
-            ModelError::ProviderFailure,
+            ModelError::NotAccepted,
         ),
         (
             503,

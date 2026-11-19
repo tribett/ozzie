@@ -366,8 +366,10 @@ pub fn detail_ok(kind: EventType, detail: &str) -> bool {
             EventType::Model => match detail.split_once(' ') {
                 Some((n, outcome)) => {
                     step(n)
-                        && (matches!(outcome, "stop" | "tool_calls" | "length" | "too-many-facts")
-                            || FailureCode::parse(outcome).is_some())
+                        && (matches!(
+                            outcome,
+                            "stop" | "tool_calls" | "length" | "too-many-facts" | "not-accepted"
+                        ) || FailureCode::parse(outcome).is_some())
                 }
                 None => step(detail),
             },

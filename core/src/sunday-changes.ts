@@ -91,7 +91,14 @@ const dispositions = (f: Finding | undefined): PositionFacts["people"] => {
 
 /** Summarize one check for comparison. `now` must be the time the brief is evaluated at. */
 export function recordSundayCheck(capture: SundayCapture, rules: SundayRules, now: string): SundayCheckRecord {
-  const brief = buildSundayBrief(capture, rules, now);
+  return recordFromBrief(buildSundayBrief(capture, rules, now), { organization: capture.organization, plan_id: capture.plan_id, completed_at: capture.completed_at },
+    servingFacts(capture));
+}
+/**
+ * One check's record from its brief, the check it is of (`organization`: Planning Center's, or `<system>:<church id>` for
+ * another church system) and who was scheduled and how (`serving`: null when that wasn't completely read).
+ */
+export function recordFromBrief(brief: SundayBrief, of: { organization: string; plan_id: string; completed_at: string }, serving: ServingFact[] | null): SundayCheckRecord {
   const byKey = new Map(brief.findings.map(f => [f.key, f]));
   const positions: Record<string, PositionFacts> = {};
   for (const p of brief.positions) {
@@ -110,13 +117,13 @@ export function recordSundayCheck(capture: SundayCapture, rules: SundayRules, no
     leads[leadKey(team)] = { team_id: team, name: finding?.position?.name ?? slots[0]!.name, starts_at: finding?.position?.interval?.starts_at ?? null, state };
   }
   return {
-    version: 2, organization: capture.organization, plan_id: capture.plan_id,
+    version: 2, organization: of.organization, plan_id: of.plan_id,
     plan_dates: brief.plan.dates, plan_starts_at: brief.plan.starts_at,
-    completed_at: capture.completed_at, status: brief.status,
+    completed_at: of.completed_at, status: brief.status,
     fully_read: brief.sources.failed.length === 0 && !brief.findings.some(f => f.kind === "worth-a-look"),
     failed_reads: brief.sources.failed.length,
     decisions: brief.findings.filter(f => f.tone === "decision").length,
-    positions, leads, serving: servingFacts(capture),
+    positions, leads, serving,
   };
 }
 
@@ -259,8 +266,9 @@ const PageOf = (d: DayWords) => d.kind === "weekday" ? `The ${d.page} page` : `T
 /**
  * Plain-language sentence for one change. Names come only from the local resolver, at render time. `d`: the watched
  * service's day words, so a change names its real day and page (onboarding spec §5); the Sunday words otherwise.
+ * `source`: the system the check read (Planning Center unless a church uses B1 Church or Breeze).
  */
-export function describeChange(change: SundayChange, nameOf: (personId: string) => string | undefined, d: DayWords = SUNDAY_WORDS): string {
+export function describeChange(change: SundayChange, nameOf: (personId: string) => string | undefined, d: DayWords = SUNDAY_WORDS, source = "Planning Center"): string {
   const name = change.person_id ? nameOf(change.person_id) : undefined;
   const Who = name ?? "Someone", who = name ?? "someone";
   const pos = change.position ?? "A position";
@@ -273,15 +281,15 @@ export function describeChange(change: SundayChange, nameOf: (personId: string) 
     case "need-opened": return `${pos} now needs ${people(change.to ?? 0)}.`;
     case "need-increased": return `${pos} now needs ${people(change.to ?? 0)}, up from ${change.from}.`;
     case "need-decreased": return `${pos} now needs ${people(change.to ?? 0)}, down from ${change.from}.`;
-    case "need-filled": return `${pos} no longer has an open request in Planning Center.`;
+    case "need-filled": return source === "Planning Center" ? `${pos} no longer has an open request in Planning Center.` : `${pos} no longer needs anyone, by ${source}'s numbers.`;
     case "lead-missing": return `No one is confirmed to lead ${pos} ${d.thisOne} now.`;
     case "lead-confirmed": return `Someone is confirmed to lead ${pos} ${d.thisOne} now.`;
     case "suggestion-conflict": return `${Who} now has a possible conflict for ${pos}.`;
     case "suggestion-left-out": return `${Who} is now left out for ${pos}. ${PageOf(d)} shows why.`;
     case "coverage-unverified": return change.failed_reads
-      ? `Some coverage couldn't be verified: ${change.failed_reads} Planning Center ${change.failed_reads === 1 ? "read" : "reads"} didn't complete.`
+      ? `Some coverage couldn't be verified: ${change.failed_reads} ${source} ${change.failed_reads === 1 ? "read" : "reads"} didn't complete.`
       : "Some coverage couldn't be verified in the latest check.";
-    case "coverage-verified": return "Every Planning Center read completed again.";
+    case "coverage-verified": return `Every ${source} read completed again.`;
     case "finding-new": return `New since the last check: ${kindWords(change.finding?.kind ?? "")}. Your Church rules say to tell you right away.`;
   }
 }

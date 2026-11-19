@@ -15,9 +15,11 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { AgentRuntime, AgentStepReply, FailureCode, ModelStep, Skill, TaskEvent, TaskOutcome, ToolEnvelope } from "../../../core/src/harness/contract.js";
 import { REFUSALS } from "../../../core/src/ask.js";
 import {
-  asksAboutChecksOrKids, chosenSources, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_OPEN, NOTHING_TO_DECIDE, onPage, openDecisions, type KidsQuestion,
-  type LocalAnswer,
+  asksAboutChecksOrKids, asksAboutCoverage, canDoFor, chosenSources, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_OPEN, NOTHING_TO_DECIDE, onPage, openDecisions,
+  rosterAnswer, rosterNote, rosterQuestion, type KidsQuestion, type LocalAnswer,
 } from "../../../core/src/harness/compose.js";
+import { reminderDraft, restoreReminder } from "../../../core/src/reminder-draft.js";
+import { isTimeZone } from "../../../core/src/church-time.js";
 import { answerText, parseAnswer } from "../../../core/src/harness/fixed.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { ASK_SKILL, composeAnswer, Harness, type HarnessData } from "../../../core/src/harness/index.js";
@@ -29,6 +31,9 @@ import { SUNDAY_WORDS } from "../../../core/src/service-day.js";
 import { buildSundayBrief, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
+import { SYSTEM_IDS, type CapturePart, type SystemCapture, type SystemId } from "../../../core/src/church-systems/types.js";
+import { CAPTURE_PARTS, unreadParts } from "../../../core/src/church-systems/reads.js";
+export { systemHarnessCapture } from "../../../core/src/church-systems/harness.js";
 import { operationsGranted, type ConnectionStatus } from "./connection.js";
 import {
   ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, CHECK_FOUND, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
@@ -43,7 +48,7 @@ const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 /** agent_step's closed error vocabulary (agent.rs AgentError), as Tauri rejects with it: a bare string. */
 export type AgentErrorCode = "egress" | "denied" | "limit" | "invalid-task" | "ledger-unavailable" | "not-configured" | "budget" | "daily-limit"
   | "rate-limited" | "provider-failure" | "invalid-request" | "model-not-allowed" | "invalid-answer" | "allowance-paused" | "contact-detail"
-  | "background-check" | "month-limit" | "no-credit" | "thought-only" | "too-many-facts" | "invalid-arguments" | "not-on-this-mac";
+  | "background-check" | "month-limit" | "no-credit" | "thought-only" | "too-many-facts" | "invalid-arguments" | "not-on-this-mac" | "not-accepted";
 /** The FailureCodes a model step can end a task with (the loops keep exactly these from a step's error). */
 export type StepCode = "egress" | "denied" | "limit" | "invalid-task" | "no-model" | "transport" | "fidelity" | "invalid-arguments";
 /**
@@ -81,6 +86,9 @@ const STEP_CODES: Readonly<Record<AgentErrorCode, StepCode>> = Object.freeze({
   // AI on this Mac whose model runs elsewhere (Ollama's cloud models; native asks its app before every step): nothing was
   // sent, and the route can't be used, so the Ask panel shows its way to choose how Ozzie uses AI.
   "not-on-this-mac": "no-model",
+  // Ozzie managed: ozzie.church's own check of the step turned it down (HTTP 400 invalid-request), so nothing reached the
+  // AI. Ozzie's guard, never the network: "invalid-task" in the ledger, and the Ask panel says which (round 3).
+  "not-accepted": "invalid-task",
 });
 const nativeCode = (error: unknown): AgentErrorCode | null => {
   const raw = typeof error === "string" ? error : typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -187,6 +195,8 @@ export interface AppSnapshot {
    * leader's own calendar is on Today, which no longer shows it, so Ask neither answers from it nor points to it.
    */
   fictionalImport?: boolean;
+  /** A church on B1 Church or Breeze: the system named as the source of every Services fact (HarnessData `source`). */
+  source?: string;
 }
 export const modeOf = (capture: SundayCapture | null, fictional: boolean): HarnessData["mode"] =>
   fictional ? "fictional" : capture?.kind === "recording" ? "recording" : "live";
@@ -214,6 +224,7 @@ export function buildHarnessData(s: AppSnapshot, refresh?: HarnessData["refresh"
     mode: modeOf(capture, fictional),
     connected,
     ...(connected && refresh ? { refresh } : {}),
+    ...(s.source ? { source: s.source } : {}),
   };
 }
 
@@ -462,7 +473,31 @@ export class LedgerRecorder {
    * up by the ledger; its own result or error is returned unchanged. `onTask` is told its task id first, so
    * what the check found can be kept beside it (proactive.ts).
    */
-  async check(work: () => Promise<SundayCapture>, trigger: CheckTrigger = "automatic", onTask?: (taskId: string) => void): Promise<SundayCapture> {
+  check(work: () => Promise<SundayCapture>, trigger: CheckTrigger = "automatic", onTask?: (taskId: string) => void): Promise<SundayCapture> {
+    return this.#checkTask(work, "planning_center.refresh", checkFailure, trigger, onTask);
+  }
+  /**
+   * One check of a church on B1 Church or Breeze, as a "check" task the same way. The ledger names no tool for its read
+   * (its event is only how complete the read was); which system it read is kept beside it on this Mac, so What happened
+   * names it.
+   */
+  checkSystem(work: () => Promise<SystemCapture>, system: SystemId, trigger: CheckTrigger = "automatic", onTask?: (taskId: string) => void): Promise<SystemCapture> {
+    let task = "";
+    return this.#checkTask(work, "church_system.refresh", systemCheckFailure, trigger, id => {
+      task = id;
+      try { this.#triggers?.setSource?.(id, system); } catch { /* per-device convenience only */ }
+      onTask?.(id);
+    }, capture => {
+      // Partial only for what didn't read in full, never a read the system cuts short by design (reads.ts); which parts,
+      // in closed words, is kept beside the task so What happened can say them.
+      const parts = unreadParts(capture);
+      try { if (parts.length) this.#triggers?.setParts?.(task, parts); } catch { /* per-device convenience only */ }
+      return parts.length > 0;
+    });
+  }
+  async #checkTask<C extends { reads: readonly { outcome: string }[] }>(work: () => Promise<C>, tool: string, failure: (error: unknown) => FailureCode,
+    trigger: CheckTrigger, onTask?: (taskId: string) => void,
+    partialOf: (capture: C) => boolean = capture => capture.reads.some(r => r.outcome !== "ok" && r.outcome !== "not-requested")): Promise<C> {
     const id = this.#newId();
     try { onTask?.(id); } catch { /* per-device convenience only: never fails the check */ }
     const observer = this.task("check", "sunday-ready");
@@ -473,12 +508,12 @@ export class LedgerRecorder {
     emit("running");
     try {
       const capture = await work();
-      const partial = capture.reads.some(r => r.outcome !== "ok" && r.outcome !== "not-requested");
-      emit("tool", `planning_center.refresh:${partial ? "partial" : "complete"}`);
+      const partial = partialOf(capture);
+      emit("tool", `${tool}:${partial ? "partial" : "complete"}`);
       emit("verified");
       return capture;
     } catch (error) {
-      emit("failed", checkFailure(error));
+      emit("failed", failure(error));
       throw error;
     }
   }
@@ -524,6 +559,17 @@ export class LedgerRecorder {
  *    or the Mac refused or couldn't give it.
  *  - `provider-failure`: Planning Center out of reach, and anything else.
  */
+/**
+ * Why a check of a church on B1 Church or Breeze failed, by native's closed word (proactive.ts SystemReadFailure): its key
+ * missing or refused is `denied`, the Keychain locked or another check under way `cancelled`, anything else
+ * `provider-failure`.
+ */
+export function systemCheckFailure(error: unknown): FailureCode {
+  const outcome = error instanceof Error && "outcome" in error ? String((error as { outcome: unknown }).outcome) : typeof error === "string" ? error : "";
+  if (/^(?:no-key|key-refused|refused|bad-key)$/u.test(outcome)) return "denied";
+  if (/^(?:busy|locked|cancelled)$/u.test(outcome)) return "cancelled";
+  return "provider-failure";
+}
 export function checkFailure(error: unknown): FailureCode {
   const known = JSON.stringify(error) ?? "";
   if (known.includes("organization-unverified")) return "unverified";
@@ -544,6 +590,12 @@ export interface TriggerStore {
   setEnd(id: string, end: TaskEnd): void;
   found?(id: string): CheckFound | undefined;
   setFound?(id: string, found: CheckFound): void;
+  /** The system a check read, when it isn't Planning Center (a church on B1 Church or Breeze). */
+  source?(id: string): SystemId | undefined;
+  setSource?(id: string, system: SystemId): void;
+  /** The parts such a check didn't read in full (reads.ts closed words), when there were any. */
+  parts?(id: string): CapturePart[] | undefined;
+  setParts?(id: string, parts: readonly CapturePart[]): void;
 }
 const TRIGGERS_KEY = "ozzie.ledger.checks.v1";
 const TRIGGERS_KEPT = 200;
@@ -552,6 +604,10 @@ const TRIGGERS_KEPT = 200;
  * doesn't know, start and all, so these never go there.
  */
 const FOUND_LIST = "ozzie.ledger.found.v1";
+/** Which system each of a church system's checks read, under its own key for the same reason. */
+const SOURCE_LIST = "ozzie.ledger.systems.v1";
+/** The parts a church system's check didn't read in full, the same way (closed words only). */
+const PARTS_LIST = "ozzie.ledger.system-parts.v1";
 type Kept = [string, TaskStart | null, TaskEnd?];
 export function localTriggers(store: { getItem(k: string): string | null; setItem(k: string, v: string): void } | null = typeof localStorage === "undefined" ? null : localStorage):
   Required<TriggerStore> {
@@ -580,7 +636,32 @@ export function localTriggers(store: { getItem(k: string): string | null; setIte
       if (!(CHECK_FOUND as readonly unknown[]).includes(found)) return;
       try { store?.setItem(FOUND_LIST, JSON.stringify([[id, found], ...readFound().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ }
     },
+    parts: id => readParts().find(([k]) => k === id)?.[1],
+    setParts: (id, parts) => {
+      const kept = parts.filter(p => (CAPTURE_PARTS as readonly string[]).includes(p));
+      if (!kept.length) return;
+      try { store?.setItem(PARTS_LIST, JSON.stringify([[id, kept], ...readParts().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ }
+    },
+    source: id => readSource().find(([k]) => k === id)?.[1],
+    setSource: (id, system) => {
+      if (!(SYSTEM_IDS as readonly unknown[]).includes(system)) return;
+      try { store?.setItem(SOURCE_LIST, JSON.stringify([[id, system], ...readSource().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ }
+    },
   };
+  function readParts(): [string, CapturePart[]][] {
+    try {
+      const raw = JSON.parse(store?.getItem(PARTS_LIST) ?? "[]") as unknown;
+      return Array.isArray(raw) ? raw.filter((e): e is [string, CapturePart[]] => Array.isArray(e) && e.length === 2 && typeof e[0] === "string"
+        && Array.isArray(e[1]) && e[1].length > 0 && e[1].every(p => (CAPTURE_PARTS as readonly unknown[]).includes(p))) : [];
+    } catch { return []; }
+  }
+  function readSource(): [string, SystemId][] {
+    try {
+      const raw = JSON.parse(store?.getItem(SOURCE_LIST) ?? "[]") as unknown;
+      return Array.isArray(raw) ? raw.filter((e): e is [string, SystemId] => Array.isArray(e) && e.length === 2 && typeof e[0] === "string"
+        && (SYSTEM_IDS as readonly unknown[]).includes(e[1])) : [];
+    } catch { return []; }
+  }
   function readFound(): [string, CheckFound][] {
     try {
       const raw = JSON.parse(store?.getItem(FOUND_LIST) ?? "[]") as unknown;
@@ -654,6 +735,17 @@ export type AskTurn =
  */
 const rowSources = (harness: Harness, outcome: TaskOutcome) => chosenSources(outcome.answer ?? "", outcome.evidence, harness.tools.rowSources());
 
+/**
+ * Said under an answer that read the service of a church system that shares no number needed for any role (Breeze):
+ * Ozzie can't say whether a role is full, so "nothing needs a decision" is never the whole answer (review of round 4,
+ * M5). Ozzie's own words on this Mac, never a tool result: the sentence isn't in the shared vocabulary.
+ */
+export function systemGaps(data: HarnessData, evidence: readonly Pick<ToolEnvelope, "source">[]): string[] {
+  const roles = data.brief?.roster?.roles ?? [];
+  if (!data.source || !roles.length || !roles.every(r => r.needed === null)) return [];
+  return evidence.some(e => e.source === data.source)
+    ? [`${data.source} doesn't share how many people each role needs, so Ozzie can't say whether a role is full.`] : [];
+}
 export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: Skill | undefined, sender: string): ShownAnswer {
   // The watched service's own day words, so an answer names Wednesday and "the Wednesday page" (review H4).
   const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
@@ -816,7 +908,7 @@ export async function overviewAnswer(harness: Harness, outcome: TaskOutcome, sig
     body: [...counts.map(p => harness.restore(p)), ...left.paragraphs.map(p => left.fill(harness.restore(p)))].join("\n\n"),
     draft: null, notCovered: false,
     basedOn: basedOnEvidence([...evidence, ...left.sources], mode),
-    gaps: [...new Set(evidenceGaps(evidence, mode))],
+    gaps: [...new Set([...evidenceGaps(evidence, mode), ...systemGaps(harness.data, evidence)])],
     procedure: null,
     // What the AI's task looked at, then what Ozzie read on this Mac to write the answer, each once.
     steps: [...new Set([...outcomeSteps(outcome.events, outcome.evidence, mode), ...localSteps(left.evidence, left.sources.some(s => s.source === "Planning Center People"))])],
@@ -878,6 +970,21 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     }
     return { state: "refused", text: prepared.refusal };
   }
+  // On a church system that ties no team to its roles (Breeze), who could help, who is scheduled, who hasn't answered,
+  // and a note to someone who hasn't: answered here from who is on each role, nothing sent (round 5). Before the kids
+  // answer: Breeze has no teams to mark as kids teams, so that answer would be a dead end there (review of round 5, L6).
+  const roster = rosterQuestion(typed, harness.data);
+  if (roster?.kind === "note") {
+    const note = await rosterNote(harness.tools, roster, typed, signal);
+    if (signal.aborted) return { state: "cancelled", text: askFailureText("cancelled") };
+    options.recorder?.answeredHere(note.local.evidence);
+    const shown = localAnswer(harness, note.local);
+    const brief = harness.data.brief;
+    return { state: "answered", answer: note.finding && brief
+      ? { ...shown, draft: restoreReminder(reminderDraft(note.finding, brief.plan.date, brief.time_zone && isTimeZone(brief.time_zone) ? brief.time_zone : null), note.finding, harness.data.capture?.names ?? {}, options.sender ?? "") }
+      : shown };
+  }
+  if (roster) { const asked = { kind: roster.kind, roles: roster.roles }; return here(() => rosterAnswer(harness.tools, asked, signal)); }
   const kids = kidsQuestion(typed, harness.data);
   if (kids) return here(() => kidsAnswer(harness.tools, kids, signal));
   const observer = options.recorder?.task("ask", ASK_SKILL);
@@ -893,13 +1000,17 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     const added = left !== null && left.paragraphs.length > 0;
     // "Nothing in this check needs a decision" counts only what the AI read; it is never said above decisions added here.
     const own = shown.body.split("\n\n").filter(p => p && !(added && p === NOTHING_TO_DECIDE));
-    const body = [...own, ...(added ? left.paragraphs.map(p => left.fill(harness.restore(p))) : []), ...(shown.notCovered && !added ? [CAN_DO_INSTEAD] : [])].join("\n\n");
+    // What Ozzie can do instead, for the system the church uses: never what it just said it can't (round 5).
+    const body = [...own, ...(added ? left.paragraphs.map(p => left.fill(harness.restore(p))) : []), ...(shown.notCovered && !added ? [canDoFor(harness.data) ?? CAN_DO_INSTEAD] : [])].join("\n\n");
     const mode = harness.data.mode;
+    // How many people a role needs is said under an answer about coverage, and under any answer that says nothing needs
+    // a decision (round 5: it led a "who could cover" one; review of round 5, H1: never "nothing needs a decision" alone).
+    const coverage = asksAboutCoverage(typed) || own.includes(NOTHING_TO_DECIDE) ? systemGaps(harness.data, outcome.evidence) : [];
     return { state: "answered", answer: {
-      ...shown, body,
+      ...shown, body, ...(coverage.length ? { gaps: [...new Set([...shown.gaps, ...coverage])] } : {}),
       ...(added ? {
         added: true, basedOn: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome), ...left.evidence, ...left.sources], mode),
-        gaps: [...new Set([...shown.gaps, ...evidenceGaps(left.evidence, mode)])],
+        gaps: [...new Set([...shown.gaps, ...evidenceGaps(left.evidence, mode), ...coverage])],
         // What Ozzie read on this Mac for them, after the AI's own steps, each once.
         steps: [...new Set([...shown.steps, ...localSteps(left.evidence, left.sources.some(s => s.source === "Planning Center People"))])],
       } : {}),

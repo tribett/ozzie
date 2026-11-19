@@ -277,6 +277,8 @@ export function problemText(code: string | null | undefined): string {
     case "invalid": return "its plan couldn't be used as saved; try Change";
     case "transport": case "no-model": return "the AI service didn't answer";
     case "invalid-arguments": return "the AI asked to look something up in a way Ozzie doesn't allow";
+    // Ozzie's own check of a step (on this Mac, or Ozzie's AI's at ozzie.church: native `not-accepted`) turned it down.
+    case "invalid-task": return "Ozzie's own check turned a step down before the AI saw it";
     default: return "something went wrong";
   }
 }

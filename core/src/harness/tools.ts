@@ -52,6 +52,13 @@ export interface HarnessData {
   connected: boolean;
   /** The native Sunday check (read-only). Resolves to the data for the new check. */
   refresh?: (signal: AbortSignal) => Promise<HarnessData>;
+  /**
+   * A church on B1 Church or Breeze (core/src/church-systems): the system its check read, named as every Services tool's
+   * source in place of Planning Center Services (vocabulary.json sources). Its `capture` then holds no Planning Center
+   * read: only who the check named (local only) under the church's placeholder scope, and when it finished; the brief
+   * is the system's own. Absent: Planning Center.
+   */
+  source?: string;
 }
 export interface HarnessToolsOptions { now?: () => string }
 
@@ -201,6 +208,8 @@ export function unconfirmedSources(result: OperationsResult | null): string[] {
   return [...(found.has("room") ? [CALENDAR] : []), ...(found.has("step") ? [PEOPLE] : [])];
 }
 const UNDESCRIBED = "a part of the check Ozzie can't describe";
+/** A role in a church system that ties no team to its roles (Breeze): no one is listed for it (vocabulary.json values). */
+export const NO_TEAM = "no team is tied to roles in this church system";
 const AGES = "confirmed people counted; ages not checked";
 const byLabel = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 const byId = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
@@ -292,7 +301,13 @@ export class HarnessTools {
   #servicesResult(payload: Record<string, unknown>, list?: string): Result {
     const { brief } = this.#services();
     const completeness: Completeness = this.#stale(brief.checked_at) ? "stale" : brief.sources.failed.length ? "partial" : "complete";
-    return { source: SERVICES, check_time: checkTime(brief.checked_at), completeness, payload, ...(list ? { list } : {}) };
+    return { source: this.#data.source ?? SERVICES, check_time: checkTime(brief.checked_at), completeness, payload, ...(list ? { list } : {}) };
+  }
+  /** A church on B1 Church or Breeze: no team leaders, no Planning Center counts, no lead, room or kids rules of Planning Center's. */
+  get #other(): boolean { return this.#data.source !== undefined; }
+  /** Whether a request was sent: B1 Church says; Breeze doesn't, so it is "not known" rather than "not sent". */
+  #request(f: Finding): string {
+    return f.notification === "sent" ? "request sent, no answer yet" : f.notification === "unsent" || !this.#other ? "request not sent yet" : NOT_KNOWN;
   }
   #person(id: string | undefined): string { return id ? this.session.person(this.#services().org, id) : NOT_KNOWN; }
   /** A position's label: by name, or by (team, name) when another team of this plan has a position of the same name (B-S2). */
@@ -379,7 +394,7 @@ export class HarnessTools {
         case "needs-people": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN }); break;
         case "lead-missing": case "lead-unverified": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone) }); break;
         case "pending": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), person: this.#person(f.person_id),
-          request: f.notification === "sent" ? "request sent, no answer yet" : "request not sent yet" }); break;
+          request: this.#request(f) }); break;
         case "streak": Object.assign(base, { person: this.#person(f.person_id), sundays_in_a_row: f.sundays ?? NOT_KNOWN }); break;
         case "worth-a-look": Object.assign(base, { reads_not_completed: brief.sources.failed.length, too_old_to_treat_as_current: !!f.stale }); break;
         // Counts only: who is confirmed or pending stays on this Mac.
@@ -396,7 +411,7 @@ export class HarnessTools {
     return this.#servicesResult({
       mode: this.#data.mode, sunday: brief.plan.date ?? NOT_KNOWN, reads: brief.sources.reads, reads_not_completed: brief.sources.failed.length,
       needs_a_decision: open.filter(f => f.tone === "decision").length + ops.decisions, worth_a_look: open.filter(f => f.tone === "look").length + ops.looks,
-      ...(backgroundChecksOn(this.#data.rules) ? { kept_on_this_mac: KEPT_ON_THIS_MAC } : {}),
+      ...(!this.#other && backgroundChecksOn(this.#data.rules) ? { kept_on_this_mac: KEPT_ON_THIS_MAC } : {}),
       findings: [...findings, ...ops.rows],
     }, "findings");
   }
@@ -445,21 +460,23 @@ export class HarnessTools {
         return [{
           kind: kindWord(f.kind), role: this.#role(f), time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN,
           confirmed: [...new Set(f.confirmed ?? [])].sort(byId).map(id => this.#person(id)),
-          people_listed: { no_overlap_found: p?.suggestions.length ?? 0, possible_conflict: p?.conflicts.length ?? 0,
-            needs_confirmation: p?.unverified.length ?? 0, left_out: p?.left_out.length ?? 0 },
-          team_leaders: this.#leaders(f), ...this.#decision(decided.get(f.id)),
+          // A system that ties no team to its roles (Breeze) lists no one: said as that, never as nobody on the team.
+          people_listed: p ? { no_overlap_found: p.suggestions.length, possible_conflict: p.conflicts.length, needs_confirmation: p.unverified.length, left_out: p.left_out.length }
+            : this.#other ? NO_TEAM : { no_overlap_found: 0, possible_conflict: 0, needs_confirmation: 0, left_out: 0 },
+          ...(this.#other ? {} : { team_leaders: this.#leaders(f) }), ...this.#decision(decided.get(f.id)),
         }];
       }
       if (f.kind === "lead-missing" || f.kind === "lead-unverified") {
         return [{
           kind: kindWord(f.kind), role: this.#role(f), time: span(f.position?.interval, zone),
           ...(f.kind === "lead-missing" ? { scheduled_to_lead_not_accepted: [...new Set(f.pending_leads ?? [])].sort(byId).map(id => this.#person(id)) } : {}),
-          team_leaders: this.#leaders(f), ...this.#decision(decided.get(f.id)),
+          ...(this.#other ? {} : { team_leaders: this.#leaders(f) }), ...this.#decision(decided.get(f.id)),
         }];
       }
       return [];
     });
-    return this.#servicesResult({
+    // Planning Center's own counts and its team leaders are Planning Center's words: another system's check says neither.
+    return this.#servicesResult(this.#other ? { needs } : {
       needs, remaining_means: "Planning Center's own count of open requests; people who accepted or are pending are already counted",
       team_leaders_means: "oversight of the team, not a Sunday assignment",
     }, "needs");
@@ -467,9 +484,24 @@ export class HarnessTools {
 
   /** The asked-for role is echoed under `asked_for`, which never counts as evidence (verify.ts, review B-S1). */
   #whoCouldHelp(role: string): Result {
-    const { zone } = this.#services();
+    const { zone, brief } = this.#services();
     const findings = this.#needsFor(role);
-    if (!findings.length) return this.#servicesResult({ asked_for: { role }, open_need: "none in the last check", people: [] });
+    if (!findings.length) {
+      // A church system's role whose need isn't known (no number shared, or its answers not read whole; review of round 4,
+      // M1): "no open need" would be a guess. With no team tied to it (Breeze) that is said as for an open need; with a
+      // team (B1 Church), that the need isn't known. Existing words only: the hosted site checks them.
+      const target = this.session.target(role);
+      const unknown = this.#other && target?.kind === "role"
+        ? brief.positions.filter(p => p.name.trim() === target.name && p.remaining === null) : [];
+      if (unknown.length && unknown.every(p => p.team_id === "?")) return this.#servicesResult({ asked_for: { role }, people_listed: NO_TEAM, people: [] }, "people");
+      if (unknown.length) return this.#servicesResult({ asked_for: { role }, open_need: NOT_KNOWN, people: [] });
+      return this.#servicesResult({ asked_for: { role }, open_need: "none in the last check", people: [] });
+    }
+    // A system that ties no team to its roles (Breeze): the role's times, and that no one can be listed, never an empty team.
+    if (this.#other && findings.every(f => !f.people)) {
+      return this.#servicesResult({ asked_for: { role }, times: findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
+        people_listed: NO_TEAM, people: [] }, "people");
+    }
     return this.#servicesResult({
       asked_for: { role }, times: findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
       people: this.#people(findings).map(p => ({ role, ...p })),
@@ -480,8 +512,7 @@ export class HarnessTools {
   #pending(): Result {
     const { brief, zone } = this.#services();
     const pending = brief.findings.filter(f => f.kind === "pending").map(f => ({
-      role: this.#role(f), time: span(f.position?.interval, zone), person: this.#person(f.person_id),
-      request: f.notification === "sent" ? "request sent, no answer yet" : "request not sent yet",
+      role: this.#role(f), time: span(f.position?.interval, zone), person: this.#person(f.person_id), request: this.#request(f),
     }));
     const leads = brief.findings.filter(f => f.kind === "lead-missing").flatMap(f => [...new Set(f.pending_leads ?? [])].sort(byId)
       .map(id => ({ role: this.#role(f), person: this.#person(id), status: "scheduled to lead, hasn't accepted" })));
@@ -519,6 +550,9 @@ export class HarnessTools {
    * uncertain or out of date is never "complete".
    */
   #operations(source: string): { ops: SundayOperations | null; completeness: Completeness; zone: string | null; result: (payload: Record<string, unknown>, list?: string) => Result } {
+    // A church on B1 Church or Breeze has no Planning Center Calendar, People or Groups: nothing is said of them, not even
+    // that they weren't granted (the host never offers these tools there either).
+    if (this.#other) throw new ToolFailure("denied");
     const { brief } = this.#services();
     const ops = this.#data.operations;
     const zone = ops?.result?.churchTimeZone ?? brief.time_zone;
@@ -625,10 +659,11 @@ export class HarnessTools {
     const rules = this.#data.rules;
     return {
       source: "Church rules on this Mac", check_time: checkTime(brief.checked_at ?? capture.completed_at), completeness: "complete",
+      // Lead and room rules are Planning Center's (its teams and rooms): a church on another system has none in use.
       payload: {
         check_in_after_sundays_in_a_row: rules.checkInAfterSundaysInARow > 0 ? rules.checkInAfterSundaysInARow : "off",
-        sunday_leads: rules.sundayLeads.flatMap(l => l.lead_position.trim() ? [{ lead_role: this.#roleOf(l.lead_position, l.team_id) }] : []),
-        rooms: roomRules(rules).map(r => ({ room: this.session.room(r.room_id), rule: "not shared", setup_minutes: r.setup_minutes })),
+        sunday_leads: this.#other ? [] : rules.sundayLeads.flatMap(l => l.lead_position.trim() ? [{ lead_role: this.#roleOf(l.lead_position, l.team_id) }] : []),
+        rooms: this.#other ? [] : roomRules(rules).map(r => ({ room: this.session.room(r.room_id), rule: "not shared", setup_minutes: r.setup_minutes })),
       },
     };
   }

@@ -22,7 +22,7 @@ describe("Listen to today's briefing", () => {
     expect(html).toContain("Stopping or skipping doesn&#x27;t mark anything done.");
     expect(html).toContain("For Sunday, Greeter still needs one more person");
     expect(html).toContain("Someone scheduled for Lyrics hasn&#x27;t accepted yet.");
-    expect(html).toContain("I ignored one email that contained instructions.");
+    expect(html).toContain("Ozzie ignored one email that contained instructions.");
   });
 
   it("leaves every name out of the script by default and speaks nothing just by rendering", () => {
@@ -34,7 +34,7 @@ describe("Listen to today's briefing", () => {
   it("reads Sunday without a check as not checked, never as clear", () => {
     const none = renderToStaticMarkup(React.createElement(BriefingPanel, { input: { attention: null, sunday: null }, names: {}, timeZone: "America/New_York" }));
     expect(none).toContain("Sunday hasn&#x27;t been checked yet.");
-    expect(none).toContain("Nothing I read needs a decision.");
+    expect(none).toContain("Nothing Ozzie read needs a decision.");
   });
 
   it("hands the exact script to the Mac's voice and stops it on request", async () => {

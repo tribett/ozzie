@@ -9,6 +9,7 @@
 // and nothing is added to Planning Center; photos are revoked object URLs. App.tsx keeps this page mounted once opened,
 // hidden when another page is shown, and hears only how many cards are open.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useSystemWords } from "./church-system.js";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { fields, type CardView, type FieldName, type Reading } from "../../../core/src/card-review/lifecycle.js";
@@ -519,6 +520,11 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
   const total = Object.keys(ui.reading).length;
   const allChecked = cards.length > 0 && cards.every(c => c.reviewed);
   const first = active ? lookFirst(cards, people, ui.source) : [];
+  // A church on another system: the same sentences name it, and its connection doesn't end the cards (no question asks).
+  const w = useSystemWords();
+  // Nothing chosen yet (round 5): no church to switch from, so the system's own line, said neutrally.
+  const ends = w.system === "planning-center" && !w.unchosen ? KEPT_ENDS
+    : KEPT_ENDS.map(end => end.startsWith("Ozzie switches to another church") ? "You switch to another church system in Settings. Ozzie asks first." : end);
   return <div className="col cards">
     <p className="eyebrow">Visitor cards</p>
     <h1 className="h1">Read visitor cards</h1>
@@ -527,11 +533,11 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
         away in the app's usual fold (owner's polish pass, 2026-11-18). */}
     <div className="limits" id="cards-limits">
       <p className="limits-t" id="cards-limits-t"><Icon name="lock" small />{KEPT_TITLE}</p>
-      <p id="cards-limits-promise">{KEPT_PROMISE}</p>
+      <p id="cards-limits-promise">{w.say(KEPT_PROMISE)}</p>
       <details className="listen-more limits-more">
         <summary><Icon name="chev" small />{KEPT_MORE}</summary>
         <p>{KEPT_BODY}</p>
-        <ul>{KEPT_ENDS.map(end => <li key={end}>{end}</li>)}</ul>
+        <ul>{ends.map(end => <li key={end}>{end}</li>)}</ul>
       </details>
     </div>
     {ui.recognizer === "not-available"
@@ -553,7 +559,7 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
       <p><strong>Reviewed here; nothing saved to your church's tools.</strong> Copied {ui.copied === 1 ? "1 card" : `${ui.copied} cards`}. Paste the list where your church keeps visitor records.{ui.followUps > 0 && ` The list includes ${ui.followUps === 1 ? "1 prepared follow-up" : `${ui.followUps} prepared follow-ups`}. Choose who will follow up in your church tools; Ozzie won't contact anyone.`} This review is closed and nothing from it was kept in Ozzie. The list is on this Mac's clipboard until you copy something else; if you use Universal Clipboard or a clipboard history app, it may be there too.</p></div>}
     {status === "closed" && ui.ended !== "copied" && (ui.ended === "discarded" || total > 0) && <p className="panel-sunken">{ui.ended === "discarded" ? "Discarded. Nothing from these cards was kept." : "This review is closed and nothing from it was kept."} Choose the photos again to start over.</p>}
 
-    {active && noMatches && <p className="small">{noMatches}</p>}
+    {active && noMatches && <p className="small">{w.say(noMatches)}</p>}
     {active && first.length > 0 && <section className="panel-info cards-first" aria-labelledby="first-title">
       <Icon name="eye" />
       <div className="stack-tight">
@@ -588,6 +594,7 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
   people: Readonly<Record<string, string>>; onSource: (card: number, field: FieldName, from: FieldSource) => void; onRemoved: (card: number) => void;
 }) {
   const [large, setLarge] = useState(false);
+  const { say } = useSystemWords();
   const busy = state === "waiting" || state === "reading";
   const name = card.fields.name.text.trim();
   const matches = name ? possibleMatches(name, people).map(id => people[id]!) : [];
@@ -678,7 +685,7 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
         <blockquote className="cards-quote">“{followUp.words}”</blockquote>
         {followUp.details.map(d => <p key={d}>{d}</p>)}
         <p className="bold">Choose who will follow up in your church tools.</p>
-        <p className="small">Ozzie won't call, text or email anyone. This goes in the list you copy; nothing is added to Planning Center.</p>
+        <p className="small">{say("Ozzie won't call, text or email anyone. This goes in the list you copy; nothing is added to Planning Center.")}</p>
       </section>}
       <div className="cr-actions">
         <button type="button" className="btn btn-primary btn-sm" disabled={busy || card.reviewed} onClick={() => { checkCard(controller, ticket, card); }}>

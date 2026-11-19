@@ -3169,8 +3169,8 @@ fn ozzie_church_refusals_are_closed_codes_and_a_paused_allowance_is_its_own() {
         (
             400,
             r#"{"error":"invalid-request"}"#,
-            AgentError::ProviderFailure,
-            "provider-failure",
+            AgentError::NotAccepted,
+            "not-accepted",
         ),
         (
             500,

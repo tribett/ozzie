@@ -48,6 +48,11 @@ export interface SetupKnown {
   lastCheck?: { outcome: string; at_ms: number } | null | undefined;
   /** More text the report must never hold (people's names, team names, plan titles). The church and service are added here. */
   never?: readonly string[] | undefined;
+  /**
+   * A church on B1 Church or Breeze: its own connection, in place of Planning Center's row (native's setup check reads
+   * Planning Center only). `connected`: a key was checked and kept on this Mac.
+   */
+  system?: { name: string; church: string | null; connected: boolean; id?: "b1" | "breeze" } | null | undefined;
 }
 /** What one round of checking found. `check` is null when native's setup_check isn't built or didn't answer. */
 export interface CheckFacts { check: SetupCheck | null; notices: NoticePermission; startOn: boolean | null }
@@ -107,11 +112,16 @@ function aiName(route: AiRoute, company: AiCompany | null): string {
 export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: string | null | undefined; zone?: string | undefined } = {}): SetupRow[] {
   const c = facts.check;
   const rows: SetupRow[] = [];
+  // A church on another system: its row says where Ozzie reads, and what native's check of Planning Center found doesn't apply.
+  if (k.system) rows.push({
+    id: "planning-center", label: k.system.name, code: k.system.connected ? "connected" : "not-connected", ok: k.system.connected,
+    verdict: k.system.connected ? `Connected${k.system.church ? ` to ${k.system.church}` : ""}` : "Not connected yet", fix: k.system.connected ? null : "connect",
+  });
   // Planning Center
   const pc: PlanningCenterCode = known(c?.planning_center) ? c.planning_center : planningCenterFrom(k.connection);
   const church = c?.church ?? churchName(k.connection?.organization_name) ?? null;
   const checkedMs = c?.checked_at_ms ?? k.connection?.checked_at_ms ?? null;
-  rows.push({
+  if (!k.system) rows.push({
     id: "planning-center", label: "Planning Center", code: pc, ok: pc === "connected",
     verdict: pc === "connected" ? `${church ? `Connected to ${church}` : "Connected"}${checkedMs ? ` · checked ${time(checkedMs, opts.zone)}` : ""}`
       : pc === "sign-in-again" ? "Needs you to connect again" : pc === "unreachable" ? "Can't reach Planning Center right now"
@@ -120,14 +130,14 @@ export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: strin
   });
   // The service Ozzie watches
   const fallbackService: ServiceCode = !k.watched ? "none" : k.passed ? "passed" : k.waiting ? "waiting" : "watching";
-  const service: ServiceCode = c && known(c.service) && !(c.service === "none" && k.watched) ? c.service : fallbackService;
+  const service: ServiceCode = !k.system && c && known(c.service) && !(c.service === "none" && k.watched) ? c.service : fallbackService;
   const date = opts.date ?? k.watched?.date ?? null;
   const name = k.watched?.service ?? null;
   rows.push({
     id: "service", label: "The service Ozzie watches", code: service, ok: service === "watching",
     verdict: service === "watching" ? [date, name, k.watched?.follows ? "moves on by itself" : null].filter(Boolean).join(" · ") || "Watching a service"
       : service === "passed" ? `${date ? `${date} has passed` : "That service has passed"}${k.watched?.follows ? " · Ozzie moves on to the next one by itself" : ""}`
-      : service === "waiting" ? `Waiting for the next ${name ? `${name} ` : ""}plan`
+      : service === "waiting" ? `Waiting for the next ${name ? `${name} ` : ""}${k.system?.id === "breeze" ? "event" : "plan"}`
       : service === "none" ? "No service chosen" : UNKNOWN,
     // The page always knows whether a service is chosen, so this row is never "Couldn't check just now".
     fix: service === "none" ? "choose-service" : "choose-other",
@@ -183,9 +193,13 @@ export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: strin
 /** The report for these rows (setup-report.ts): codes only, with the church and the service added to what it must never hold. */
 export function reportFor(facts: CheckFacts, k: SetupKnown, rows: readonly SetupRow[], checkedAtMs: number | null): string {
   const code = (id: RowId) => rows.find(r => r.id === id)?.code;
+  // A church on another system: its own row is reported as that system's connection, and Planning Center as what is known
+  // of Planning Center itself (native's check, else the connection), never the system's connection under Planning Center's name.
+  const pc: PlanningCenterCode = known(facts.check?.planning_center) ? facts.check!.planning_center : planningCenterFrom(k.connection);
   const codes: RowCodes = {
-    planning_center: code("planning-center") as PlanningCenterCode, service: code("service") as ServiceCode, ai: code("ai") as AiCode,
+    planning_center: k.system ? pc : code("planning-center") as PlanningCenterCode, service: code("service") as ServiceCode, ai: code("ai") as AiCode,
     notices: code("notices") as NoticesCode, start_with_mac: code("start") as StartCode, phone: (code("phone") ?? null) as RowCodes["phone"],
+    church_system: k.system?.id ? { system: k.system.id, connection: k.system.connected ? "connected" : "not-connected" } : null,
   };
   const route = routeOf(facts, k);
   return buildReport({
@@ -257,7 +271,9 @@ export function CheckMySetup({ known: k, serviceTypeId, planId, planDate, onConn
   };
   const fixOf = (fix: FixId): { label: string; go: () => void } => {
     const go = handlers[fix];
-    return go ? { label: FIX_LABEL[fix], go } : { label: FIX_LABEL["change-ai"], go: onChangeAi };
+    // Connecting another system names it ("Connect B1 Church").
+    const label = fix === "connect" && k.system ? `Connect ${k.system.name}` : FIX_LABEL[fix];
+    return go ? { label, go } : { label: FIX_LABEL["change-ai"], go: onChangeAi };
   };
   const copyReport = async () => {
     if (!facts) return;

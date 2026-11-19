@@ -17,6 +17,8 @@ import { thisMacOnly, type NoticeOptions } from "./phone-notice.js";
 import { noticeDayOf } from "./day-phrases.js";
 import type { NoticeDay } from "./onboarding-bridge.js";
 import type { CheckFound } from "./harness-words.js";
+import type { SystemConnection } from "./church-system.js";
+import type { SystemCapture } from "../../../core/src/church-systems/types.js";
 
 /**
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
@@ -105,8 +107,21 @@ export const browserStore: KeyValueStore = {
   set: (key, value) => { try { localStorage.setItem(key, value); } catch { /* per-device convenience only */ } },
 };
 
+/**
+ * A church on B1 Church or Breeze, as its checks see it: the connection this Mac keeps when the check starts, and the read
+ * of its watched service (App's: moving on to the next service once the day has passed, then native's read). The read
+ * throws a SystemReadFailure when it brings no capture.
+ */
+export interface SystemWatch { connection: SystemConnection; read: () => Promise<SystemCapture> }
+/** A system check that brought no capture, by native's closed outcome word. */
+export class SystemReadFailure extends Error {
+  /** `church`: the church read, when known, so a failure is never said of another church connected since. */
+  constructor(readonly system: SystemConnection["system"], readonly outcome: string, readonly church: string | null = null) { super(outcome); }
+}
 export interface ProactiveContext {
   settings: Settings; rules: SundayRules; status: ConnectionStatus | null;
+  /** A church on B1 Church or Breeze with a service to watch; absent or null otherwise (its checks then don't run). */
+  system?: SystemWatch | null;
   /**
    * The day the coverage notice names (day-phrases.ts `noticeDayOf` of the watched service's day words), when App knows
    * it. Absent: the day of the plan this check last read ("sunday" only when that plan is on a Sunday), else none, which
@@ -114,10 +129,12 @@ export interface ProactiveContext {
    */
   noticeDay?: NoticeDay;
 }
-export interface ProactiveHooks {
+export interface ProactiveHooks<C = SundayCapture> {
   context: () => ProactiveContext;
   onStatus: (s: ConnectionStatus) => void;
-  onCapture: (capture: SundayCapture, trigger: RunTrigger) => void;
+  onCapture: (capture: C, trigger: RunTrigger) => void;
+  /** A check that ended without a capture, whatever started it (a church on another system says why on its page). */
+  onFailure?: (error: unknown, trigger: RunTrigger) => void;
   /**
    * What an automatic check found changed (person ids only), so a responsibility can check sooner. `about`:
    * the Sunday it is about, and whether this check has a notice to send. A promise means Keep Sunday covered
@@ -126,8 +143,36 @@ export interface ProactiveHooks {
    */
   onChanges?: (changes: SundayChange[], about: { plan_id: string; notice: boolean }) => Promise<boolean> | void;
 }
-export interface ProactiveDeps {
+/**
+ * What a finished check is compared by: the church and service it is of, its name-free record (sunday-changes.ts), the
+ * brief and rooms it shows, and whether every read completed. Null: not a live read of the church watched now, so nothing
+ * is compared, kept or told.
+ */
+export interface CheckDigest {
+  /** The church: Planning Center's organization, or `<system>:<church id>`. */
+  owner: string;
+  plan_id: string;
+  record: SundayCheckRecord;
+  brief: SundayBrief;
+  ops: SundayOperations | null;
+  /** Every read ended whole (or wasn't asked for): only then can a check count as having found nothing new. */
+  complete: boolean;
+}
+/** Planning Center's live check, as the schedule has always compared it. */
+export function sundayDigest(capture: SundayCapture, ctx: ProactiveContext, now: string): CheckDigest | null {
+  if (capture.kind !== "live") return null;
+  return {
+    owner: capture.organization, plan_id: capture.plan_id, record: recordSundayCheck(capture, ctx.rules, now),
+    brief: buildSundayBrief(capture, ctx.rules, now), ops: sundayOperations(capture, ctx.rules, { now }),
+    complete: capture.reads.every(r => r.outcome === "ok" || r.outcome === "not-requested"),
+  };
+}
+/** Where a controller keeps its state on this Mac. Preferences are the person's own, shared by every controller. */
+export interface ProactiveKeys { prefs: string; schedule: string; history: string; memory: string; seen: string; everything: string }
+export interface ProactiveDeps<C = SundayCapture> {
   store: KeyValueStore;
+  /** Where its state is kept; Planning Center's keys by default. */
+  keys?: ProactiveKeys;
   now: () => string;
   timeZone: () => string;
   /**
@@ -136,7 +181,18 @@ export interface ProactiveDeps {
    * `onTask`: told the check's task id in the ledger, when it has one.
    */
   check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic",
-    onTask?: (taskId: string) => void) => Promise<SundayCapture>;
+    onTask?: (taskId: string) => void) => Promise<C>;
+  /** What a finished check is compared by (CheckDigest); Planning Center's `sundayDigest` by default. */
+  digest?: (capture: C, ctx: ProactiveContext, now: string) => CheckDigest | null;
+  /** Whether a check may start on its own now; Planning Center's `proactiveReadiness` by default. */
+  ready?: (ctx: ProactiveContext) => boolean;
+  /** The church whose saved checks a held notice is rechecked against; Planning Center's organization by default. */
+  owner?: (ctx: ProactiveContext) => string | undefined;
+  /**
+   * Whether a check that started with `start` is still of the church watched at `end`. A failed check of a church let go
+   * meanwhile isn't charged to the one watched now (no "couldn't finish", no retry count, no history). Always by default.
+   */
+  same?: (start: ProactiveContext, end: ProactiveContext) => boolean;
   /** Keeps what a finished check found (closed words) beside its task, for What happened. Best effort. */
   found?: (taskId: string, found: CheckFound) => void;
   /** The coverage notice; `localOnly` when only background checks brought it (its phone line stays back), `day` its fixed line's day. */
@@ -155,15 +211,15 @@ export interface ProactiveView {
   /** Entries needing attention since the page was last opened. */
   unseen: number;
 }
-export interface ProactiveController {
-  start(hooks: ProactiveHooks): void;
+export interface ProactiveController<C = SundayCapture> {
+  start(hooks: ProactiveHooks<C>): void;
   stop(): void;
   tick(): Promise<void>;
   /**
    * "Check now", and the check a responsibility's run makes (`source` "automatic" for the ledger). Either
    * way its changes show in Ozzie and never send the Sunday notice; the responsibility decides on notices.
    */
-  checkNow(source?: "manual" | "automatic"): Promise<SundayCapture>;
+  checkNow(source?: "manual" | "automatic"): Promise<C>;
   pause(): void;
   resume(): void;
   /**
@@ -172,15 +228,27 @@ export interface ProactiveController {
    */
   pauseWithEverything(paused: boolean): void;
   setPrefs(prefs: ProactivePrefs): void;
+  /**
+   * The church watched is let go (a disconnect, a switch of system or church): a notice held for quiet hours is dropped,
+   * so nothing about that church is told afterwards, and what changed and how its last check went are cleared. Its saved
+   * Sundays stay, name-free, as they do for Planning Center.
+   */
+  letGo(): void;
   markSeen(): void;
   view(): ProactiveView;
   subscribe(listener: () => void): () => void;
 }
 
-const KEYS = {
+const KEYS: ProactiveKeys = {
   prefs: "ozzie.proactive.prefs.v1", schedule: "ozzie.proactive.schedule.v1", history: "ozzie.proactive.history.v1", memory: "ozzie.proactive.sundays.v1", seen: "ozzie.proactive.seen.v1",
   everything: "ozzie.proactive.everything.v1",
 };
+/** A church on B1 Church or Breeze: its own schedule, history and checks, and the person's own preferences. */
+export const SYSTEM_KEYS: ProactiveKeys = {
+  prefs: KEYS.prefs, schedule: "ozzie.proactive.system.schedule.v1", history: "ozzie.proactive.system.history.v1", memory: "ozzie.proactive.system.sundays.v1",
+  seen: "ozzie.proactive.system.seen.v1", everything: "ozzie.proactive.system.everything.v1",
+};
+const KEYS_PC = KEYS;
 const TICK_MS = 10_000;
 const HISTORY_LIMIT = 20;
 const SUNDAYS_KEPT = 6;
@@ -205,16 +273,16 @@ const SETTLED = 1;
  * Saved preferences, with quiet hours moved to the settled default (9:00 PM to 7:00 AM) only when they
  * still equal the earlier default and haven't been settled before. A person's own choice is never changed.
  */
-export function loadPrefs(store: KeyValueStore): ProactivePrefs {
-  const raw = read<Partial<ProactivePrefs> & { settled?: number }>(store, KEYS.prefs);
+export function loadPrefs(store: KeyValueStore, key = KEYS.prefs): ProactivePrefs {
+  const raw = read<Partial<ProactivePrefs> & { settled?: number }>(store, key);
   const prefs = cleanPrefs(raw);
   if (!raw || raw.settled === SETTLED) return prefs;
   const quiet = settledQuietHours({ start: prefs.quietStart, end: prefs.quietEnd });
   const settled = { ...prefs, quietStart: quiet.start, quietEnd: quiet.end };
-  savePrefs(store, settled);
+  savePrefs(store, settled, key);
   return settled;
 }
-const savePrefs = (store: KeyValueStore, prefs: ProactivePrefs) => store.set(KEYS.prefs, JSON.stringify({ ...prefs, settled: SETTLED }));
+const savePrefs = (store: KeyValueStore, prefs: ProactivePrefs, key = KEYS.prefs) => store.set(key, JSON.stringify({ ...prefs, settled: SETTLED }));
 const validSchedule = (s: ScheduleState | null): s is ScheduleState =>
   s !== null && typeof s === "object" && s.version === 1 && typeof s.paused === "boolean" && typeof s.failures === "number";
 const keyOf = (organization: string, planId: string) => `${organization}:${planId}`;
@@ -245,8 +313,12 @@ function shownPrint(brief: SundayBrief, ops: SundayOperations | null): string {
 const newestOf = (sundays: Record<string, SundayCheckMemory>) =>
   Object.entries(sundays).sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at))[0]?.[0] ?? null;
 
-export function createProactive(deps: ProactiveDeps): ProactiveController {
-  let prefs = loadPrefs(deps.store);
+export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): ProactiveController<C> {
+  const KEYS = deps.keys ?? KEYS_PC;
+  const digestOf = deps.digest ?? (sundayDigest as unknown as NonNullable<ProactiveDeps<C>["digest"]>);
+  const readyNow = deps.ready ?? ((ctx: ProactiveContext) => proactiveReadiness(ctx.settings, ctx.status) === "ready");
+  const ownerOf = deps.owner ?? ((ctx: ProactiveContext) => ctx.settings.organization);
+  let prefs = loadPrefs(deps.store, KEYS.prefs);
   const loaded = read<ScheduleState>(deps.store, KEYS.schedule);
   let schedule = validSchedule(loaded) ? loaded : newSchedule();
   let history = read<{ version: 1; entries: HistoryEntry[] }>(deps.store, KEYS.history)?.entries ?? [];
@@ -269,10 +341,10 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     schedule = pauseSchedule(schedule);
     history = history.map(e => e.notice === "held" ? { ...e, notice: "none" } : e);
   };
-  let hooks: ProactiveHooks | null = null;
+  let hooks: ProactiveHooks<C> | null = null;
   /** The real day of the plan the last check read, for the notice when App doesn't say (ProactiveContext `noticeDay`). */
   let checkedDay: NoticeDay | null = null;
-  let inflight: Promise<SundayCapture> | null = null;
+  let inflight: Promise<C> | null = null;
   let launched = false;
   let timer: unknown = null;
   const listeners = new Set<() => void>();
@@ -310,18 +382,18 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
    * (harness-words.ts CheckFound), or null when that isn't known: not a live read, the first check of this Sunday, the
    * check right before it of another service, or nothing kept from the check before to compare what it showed with.
    */
-  async function afterCapture(capture: SundayCapture, trigger: RunTrigger, rules: SundayRules, now: string): Promise<CheckFound | null> {
-    if (capture.kind !== "live") return null;
-    const record = recordSundayCheck(capture, rules, now);
-    const key = keyOf(capture.organization, capture.plan_id);
+  async function afterCapture(capture: C, trigger: RunTrigger, ctx: ProactiveContext, now: string): Promise<CheckFound | null> {
+    const digest = digestOf(capture, ctx, now);
+    if (!digest) return null;
+    const { record, brief, ops } = digest;
+    const rules = ctx.rules;
+    const key = keyOf(digest.owner, digest.plan_id);
     const prior = sundays[key] ?? null;
     const follows = newestOf(sundays) === key;
     const { changes, memory } = compareSundayCheck(prior, record, { now, urgentWithinHours: prefs.urgentWithinHours });
     // Every finding this check shows, kids teams, rooms and follow-ups included, with what the last check of this Sunday showed.
     const entries = feedbackOf(rules);
-    const brief = buildSundayBrief(capture, rules, now);
     checkedDay = noticeDayOf(brief.day);
-    const ops = sundayOperations(capture, rules, { now });
     const shown = foundOf(brief, ops), print = shownPrint(brief, ops);
     const before = prior ? foundBy[key] ?? null : null;
     const printBefore = prior ? printBy[key] ?? null : null;
@@ -330,7 +402,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     foundBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, shown.map(f => f.key)]] : foundBy[k] ? [[k, foundBy[k]]] : []));
     printBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, print]] : printBy[k] ? [[k, printBy[k]]] : []));
     deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy, prints: printBy }));
-    const about = { trigger, plan_id: capture.plan_id, plan_dates: record.plan_dates };
+    const about = { trigger, plan_id: digest.plan_id, plan_dates: record.plan_dates };
     if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return null; }
     // The person's Church rules on notices: kinds kept for the briefing, kinds told right away (a kind the Sunday
     // comparison doesn't follow is told when this check newly finds one), and what they asked Ozzie to stop
@@ -342,7 +414,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const differs = all.length > 0 || (before !== null && !sameKeys(before, shown.map(f => f.key))) || (printBefore !== null && printBefore !== print)
       || !sameFacts(prior.latest, record);
     const outcome: CheckFound | null = differs ? "changes"
-      : follows && before !== null && printBefore !== null && capture.reads.every(r => r.outcome === "ok" || r.outcome === "not-requested") ? "nothing-new" : null;
+      : follows && before !== null && printBefore !== null && digest.complete ? "nothing-new" : null;
     const routed = routeChanges(all, entries);
     const listed = all.filter(c => !routed.stopped.includes(c));
     if (!listed.length) return outcome;
@@ -353,7 +425,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const sunday = listed.filter(c => c.kind !== "finding-new");
     let handed: Promise<boolean> | void = undefined;
     if (trigger !== "manual" && !own && sunday.length) {
-      try { handed = hooks?.onChanges?.(sunday, { plan_id: capture.plan_id, notice: found.worse }); } catch { /* the check itself finished */ }
+      try { handed = hooks?.onChanges?.(sunday, { plan_id: digest.plan_id, notice: found.worse }); } catch { /* the check itself finished */ }
     }
     let notice: HistoryEntry["notice"] = "none";
     if (found.worse && trigger === "manual") notice = "in-app";
@@ -384,7 +456,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     emit();
   }
 
-  function run(trigger: RunTrigger, source?: "manual" | "automatic"): Promise<SundayCapture> {
+  function run(trigger: RunTrigger, source?: "manual" | "automatic"): Promise<C> {
     const ctx = hooks!.context();
     const work = (async () => {
       try {
@@ -393,16 +465,25 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
         const capture = await deps.check(ctx, s => hooks?.onStatus(s), trigger, source, id => { ledger.task = id; });
         const now = deps.now();
         let found: CheckFound | null = null;
-        try { found = await afterCapture(capture, trigger, ctx.rules, now); } catch { /* the check itself finished; comparing is best effort */ }
+        // Compared with what this Mac knows of the church watched when it ends: a church let go meanwhile (a switch, a
+        // disconnect) gives no digest, so nothing of it is kept or told.
+        try { found = await afterCapture(capture, trigger, { ...ctx, ...pick(hooks?.context()) }, now); } catch { /* the check itself finished; comparing is best effort */ }
         if (found && ledger.task) try { deps.found?.(ledger.task, found); } catch { /* What happened then shows the check on its own */ }
         schedule = finishRun(schedule, scheduleSettings(), now, { ok: true });
         hooks?.onCapture(capture, trigger);
         return capture;
       } catch (error) {
         const problem = deps.problem(error);
+        const end = hooks?.context();
+        if (deps.same && end && !deps.same(ctx, end)) {
+          // A check of a church let go of meanwhile: nothing of it is charged to the church watched now.
+          schedule = { ...finishRun(schedule, scheduleSettings(), deps.now(), { ok: false, problem }), failures: 0, last_run: schedule.last_run };
+          throw error;
+        }
         schedule = finishRun(schedule, scheduleSettings(), deps.now(), { ok: false, problem });
         // Report the first failure in a row; retries continue quietly with backoff.
         if (schedule.failures === 1) add({ at: deps.now(), kind: "failed", trigger, problem });
+        try { hooks?.onFailure?.(error, trigger); } catch { /* the page's own words only */ }
         throw error;
       } finally {
         inflight = null;
@@ -423,7 +504,8 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
    */
   const stillNotifying = (entry: HistoryEntry): SundayChange[] => {
     const ctx = hooks?.context();
-    const own = ctx && entry.plan_id ? keyOf(ctx.settings.organization, entry.plan_id) : undefined;
+    const owner = ctx ? ownerOf(ctx) : undefined;
+    const own = owner && entry.plan_id ? keyOf(owner, entry.plan_id) : undefined;
     const key = own && sundays[own] ? own : Object.keys(sundays).find(k => sundays[k]!.latest.plan_id === entry.plan_id);
     const memory = key ? sundays[key] : undefined;
     const holding = (entry.changes ?? []).filter(c => !memory || changeStillHolds(c, memory, foundBy[key!] ?? null));
@@ -436,7 +518,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const released = releaseHeld(schedule, inQuietHours(quiet(), now, deps.timeZone()));
     schedule = released.state;
     const ctx = hooks.context();
-    const step = tickSchedule(schedule, now, proactiveReadiness(ctx.settings, ctx.status) === "ready");
+    const step = tickSchedule(schedule, now, readyNow(ctx));
     schedule = step.state;
     if (step.missed) add({ at: now, kind: "missed", scheduled_for: step.missed });
     const running = step.start ? run(step.start) : inflight;
@@ -509,6 +591,13 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
       schedule = rescheduleFor(schedule, scheduleSettings(), deps.now());
       emit();
     },
+    letGo() {
+      checkedDay = null;
+      // What changed and how the last check went were that church's: Keeping watch starts afresh for the next one.
+      schedule = { ...schedule, held: null, failures: 0, last_run: null };
+      history = [];
+      emit();
+    },
     markSeen() {
       // Seeing the changes in the app counts as being told; a held notice isn't needed any more.
       seenAt = deps.now();
@@ -523,6 +612,9 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }
+
+/** A check's own context, with the church watched when it ends (ProactiveContext `system`), for comparing it. */
+const pick = (ctx: ProactiveContext | undefined): Partial<ProactiveContext> => ctx ? { system: ctx.system ?? null } : {};
 
 let desktop: ProactiveController | null = null;
 /** One controller per webview: checks run while Ozzie is open. */

@@ -31,9 +31,36 @@ import { dayName, pageRef } from "./day-phrases.js";
 import { ProcedureBody } from "./procedure-text.js";
 import { DraftActions, type OpenDraft } from "./draft-actions.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
+import { useSystemWords, type SystemWords } from "./church-system.js";
 import { isVoiceShortcut, listenInto, LISTENING_NOTE, nativeVoice, VOICE_HINT, VOICE_SHORTCUT, voiceOff, type Voice, type VoiceStatus } from "./voice.js";
 
 type Page = "sunday" | "today" | "connection" | "cards";
+/** "See how this works" for an answer the AI chose the facts of (Planning Center's words; another system's name in its place). */
+const MODEL_HOW = "The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such as [Person 1] and [Role 1]; " +
+  "Ozzie put them back on this Mac. The AI only chose which facts answer your question: Ozzie wrote every sentence here from those facts, in its own order. " +
+  "Nothing was sent to anyone, and nothing in Planning Center changed.";
+/**
+ * "What can you do?" in the church's own system's words: Planning Center's list unchanged; for B1 Church or Breeze, only
+ * what Ozzie does with it (no kids teams, background checks, rooms or follow-ups; who could help only where the system
+ * ties a team to each role).
+ */
+export function helpFor(w: SystemWords): { intro: string; can: readonly string[]; never: string; try: string; first: string } {
+  if (w.system === "planning-center" && !w.unchosen) return HELP;
+  // Nothing chosen yet (a fresh Mac): Planning Center's list, never "from what it reads in Planning Center" (release review L5).
+  if (w.unchosen) return { ...HELP, intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first) };
+  return {
+    intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first),
+    // Where no team is tied to roles (Breeze), what works there instead of who could help (round 5).
+    try: w.noTeam ? "You could ask “Who is scheduled?” or “Who hasn't answered yet?”, or say “Keep an eye on the service”." : HELP.try,
+    can: [
+      "Check the service Ozzie watches: open roles, who answered, and anything that needs a decision.",
+      ...(w.noTeam ? ["Show who is on each role, who said yes, who hasn't answered yet and who said no."] : [HELP.can[1]!]),
+      HELP.can[2]!,
+      "Keep an eye on the service and tell you privately when something changes.",
+      HELP.can[5]!,
+    ],
+  };
+}
 type PlanRequest = Exclude<Parsed, { kind: "none" }>;
 type TurnState = { state: "asking" } | AskTurn | { state: "plan"; parsed: PlanRequest } | { state: "cards" } | { state: "help"; checked: boolean } | { state: "start" };
 export type Turn = { id: number; question: string } & TurnState;
@@ -118,17 +145,17 @@ export function answerAccount(answer: ShownAnswer): Account {
 /** "See how this works": the procedure Ozzie followed, verbatim, and the steps it took, in plain words. */
 export function HowItWorks({ answer }: { answer: ShownAnswer }) {
   const day = useDay();
+  // The church's own system where these say where the names came from (Planning Center's words unchanged).
+  const { say } = useSystemWords();
   return <div className="ask-how-body stack-tight">
     {answer.procedure && <>
       <p className="bold">Ozzie followed this procedure: {procedureTitle(answer.procedure.title, day) ?? answer.procedure.title}</p>
       <ProcedureBody body={answer.procedure.body} />
     </>}
     <TaskAccount account={answerAccount(answer)} />
-    {answer.local ? <p className="small">{LOCAL_HOW}</p>
-      : answer.composedHere ? <p className="small">{composedHow(day)}</p>
-      : <p className="small">The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such
-        as [Person 1] and [Role 1]; Ozzie put them back on this Mac. The AI only chose which facts answer your question: Ozzie wrote every sentence
-        here from those facts, in its own order. Nothing was sent to anyone, and nothing in Planning Center changed.</p>}
+    {answer.local ? <p className="small">{say(LOCAL_HOW)}</p>
+      : answer.composedHere ? <p className="small">{say(composedHow(day))}</p>
+      : <p className="small">{say(MODEL_HOW)}</p>}
     {answer.added && <p className="small">{addedHow(day)}</p>}
   </div>;
 }
@@ -240,17 +267,19 @@ function NextSteps({ page, onOpen }: { page: string | undefined; onOpen: (page: 
 /** Ozzie's side of one question. */
 export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined }) {
   const d = useDay();
+  const w = useSystemWords();
+  const help = helpFor(w);
   switch (turn.state) {
     case "plan": return plans ? <div className="body"><PlanTurn parsed={turn.parsed} context={plans.context} actions={plans.actions} /></div> : null;
     case "cards": return <div className="body"><p>{CARDS_POINTER}</p>
       {page !== "cards" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("cards")}><Icon name="user" small />Open Visitor cards</button></div>}</div>;
     case "help": return <div className="body stack-tight">
-      <p>{HELP.intro}</p>
-      <ul className="list">{HELP.can.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>
-      <p>{HELP.never}</p>
-      {turn.checked ? <p className="small">{HELP.try}</p> : <><p>{HELP.first}</p><NextSteps page={page} onOpen={onOpen} /></>}
+      <p>{help.intro}</p>
+      <ul className="list">{help.can.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>
+      <p>{help.never}</p>
+      {turn.checked ? <p className="small">{help.try}</p> : <><p>{help.first}</p><NextSteps page={page} onOpen={onOpen} /></>}
       <p className="small">Nothing was sent.</p></div>;
-    case "start": return <div className="body stack-tight"><p>{ASK_START}</p><NextSteps page={page} onOpen={onOpen} /><p className="small">Nothing was sent.</p></div>;
+    case "start": return <div className="body stack-tight"><p>{w.say(ASK_START)}</p><NextSteps page={page} onOpen={onOpen} /><p className="small">Nothing was sent.</p></div>;
     case "asking": return <div className="body"><p className="small"><Icon name="spinner" small spin /> Reading what Ozzie already has…</p></div>;
     case "refused": return <div className="body"><p>{onDayPage(turn.text, d)}</p>{!/nothing was sent/i.test(turn.text) && <p className="small">Nothing was sent.</p>}</div>;
     case "no-model": return <div className="body"><NeedsModel /></div>;
@@ -276,11 +305,22 @@ export function AskPanel(props: {
   plans?: PlanHooks;
   /** Speaking a question on this Mac. Production: the native listener. */
   voice?: Voice;
+  /**
+   * Ask isn't available for the church's system (Planning Center only, for now): this one plain line says so in place of
+   * the nothing-checked line, and no question can be sent.
+   */
+  notHere?: string | undefined;
+  /**
+   * A church on a system jobs don't read yet: a request to take something on (`parse`, as `plans` would read it) is
+   * answered with `text`, which says so plainly.
+   */
+  jobsNotHere?: { parse: (typed: string) => Parsed; text: string } | undefined;
   /** Whether listening is possible, before the check (tests and restored views). */
   initialVoice?: VoiceStatus;
 }) {
   const { brief, modelReady } = props;
   const day = useDay();
+  const words = useSystemWords();
   const voice = props.voice ?? nativeVoice;
   // "Choose how Ozzie uses AI" from inside the panel closes the panel as it opens the AI screens, which the panel would
   // otherwise cover (live in the release app, 2026-11-18). The same button elsewhere is unchanged.
@@ -345,7 +385,10 @@ export function AskPanel(props: {
     if (!canType || busy || listening !== "no" || !typed.trim()) return;
     setVoiceNote(null);
     const question = typed.trim();
-    const route = routeQuestion(typed, { brief, modelReady, canAsk: Boolean(props.ask), parse: props.plans?.parse });
+    // A church on another system: asking Ozzie to take something on is read the same way, and answered with what can't be
+    // done there yet (props.jobsNotHere), never sent to the AI as a question.
+    const route = !props.plans && props.jobsNotHere && props.jobsNotHere.parse(typed).kind !== "none"
+      ? { kind: "jobs-not-here" as const } : routeQuestion(typed, { brief, modelReady, canAsk: Boolean(props.ask), parse: props.plans?.parse });
     // Everything but a question about what was read is answered here, without any model. Nothing is sent anywhere.
     const local = (turn: TurnState) => {
       const id = nextId.current++;
@@ -354,6 +397,7 @@ export function AskPanel(props: {
       setTurns(all => [...all, { id, question, ...turn }]);
     };
     switch (route.kind) {
+      case "jobs-not-here": return local({ state: "refused", text: props.jobsNotHere!.text });
       case "help": return local({ state: "help", checked: Boolean(brief) });
       case "cards": return local({ state: "cards" });
       case "plan": return local({ state: "plan", parsed: route.parsed });
@@ -385,7 +429,7 @@ export function AskPanel(props: {
     : voiceNote ?? (answered ? null : voiceAbout);
   const notes = <>
     <p className="small">{ASK_INTRO}</p>
-    <p className="small ask-note"><Icon name="lock" small />{ASK_NOTE}</p>
+    <p className="small ask-note"><Icon name="lock" small />{words.say(ASK_NOTE)}</p>
     {answered && voiceAbout && <p className="small">{voiceAbout}</p>}
   </>;
   return <ChooseAiContext.Provider value={closeThenChoose}><aside id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
@@ -399,15 +443,16 @@ export function AskPanel(props: {
       <span className="ask-head-scope">Questions about {dayName(day)}</span></div><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close Ask Ozzie" onClick={props.onClose}><Icon name="x" /></button></div>
     <div className="ask-scroll">
-      {!answered && notes}
+      {!answered && !props.notHere && notes}
       {/* No button to the page already on screen. */}
-      {!brief && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
-        <p>{props.connection === "checking" ? `Nothing has been checked yet. Ozzie is checking Planning Center now. You can also open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
+      {props.notHere && <div className="panel-info"><Icon name="info" /><p>{props.notHere}</p></div>}
+      {!brief && !props.notHere && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
+        <p>{words.say(props.connection === "checking" ? `Nothing has been checked yet. Ozzie is checking Planning Center now. You can also open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
           : props.connection === "unchecked" ? `Nothing has been checked yet, and Ozzie couldn't check Planning Center just now. You can open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
           : props.connection === "connected" ? `Nothing has been checked yet. Check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`
-          : `Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`}</p>
+          : `Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`)}</p>
         {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>Open {dayName(day)}</button></div>}</div></div>}
-      {!modelReady && <NeedsModel />}
+      {!modelReady && !props.notHere && <NeedsModel />}
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
       {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />A saved copy of a check from {time(brief.completed_at)}. Not a current check.</p>}
       {brief && !answered && <BasedOn text={basedOnBrief(brief)} />}

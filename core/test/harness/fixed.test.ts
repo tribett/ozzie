@@ -126,7 +126,11 @@ describe("fixed/vocabulary.json", () => {
     }
     // Ozzie's own "not checked" lines were all made of fixed words: none had to be left out as undescribed.
     expect(seen.values.has("a part of the check Ozzie can't describe")).toBe(false);
-    expect([...seen.sources].sort()).toEqual([...VOCABULARY.sources].sort());
+    // The other church systems' names (design §6): B1 Church's and Breeze's results are read over their own fixtures
+    // (core/test/church-systems/ask.test.ts); Genesis is only read beside the main system, never asked about.
+    const otherSystems = new Set(["B1 Church", "Breeze", "Genesis"]);
+    expect([...seen.sources].sort()).toEqual([...VOCABULARY.sources].filter(s => !otherSystems.has(s)).sort());
+    expect(VOCABULARY.sources.filter(s => otherSystems.has(s))).toEqual(["B1 Church", "Breeze", "Genesis"]);
     // No key the vocabulary lists is unused by every fixture but a few rare ones.
     const rare = new Set(["status_differs_by_time", "left_out_for_length", "decision", "changed_since_decision", "reason", "scheduled_to_lead_not_accepted", "too_old_to_treat_as_current", "reads_not_completed"]);
     for (const k of VOCABULARY.payload_keys) if (!rare.has(k)) expect(seen.keys, k).toContain(k);

@@ -31,6 +31,43 @@ export interface DayWords {
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+const WEEKDAY_WORDS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const MONTH_WORDS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+/**
+ * Whether a plan's or event's own title only says its date again ("Sunday Nov 22", "11/22", "November 22, 2026",
+ * "Sunday"), so a page that already names the date leaves it out; a title that adds anything ("Youth Night", "Christmas
+ * Eve", "Sunday Nov 22 – Communion") is shown. `date`: the plan's own date, YYYY-MM-DD. The weekday, the month and the
+ * year are each said at most once, and any numbers say the day itself: "Sunday 11" in November may be the 11 o'clock
+ * service, so it is shown (review of round 3, L4).
+ */
+export function titleOnlyDate(title: string, date: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(date);
+  if (!m) return false;
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const weekday = WEEKDAY_WORDS[new Date(`${date}T00:00:00Z`).getUTCDay()]!, monthName = MONTH_WORDS[month - 1]!;
+  const words = title.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean);
+  if (!words.length) return false;
+  const numbers: number[] = [];
+  let weekdays = 0, months = 0;
+  for (const w of words) {
+    const n = /^(\d{1,4})(?:st|nd|rd|th)?$/u.exec(w);
+    if (n) numbers.push(Number(n[1]));
+    else if ((w.length >= 3 && weekday.startsWith(w)) || (w === "tues" && weekday === "tuesday") || ((w === "thur" || w === "thurs") && weekday === "thursday")) weekdays++;
+    else if ((w.length >= 3 && monthName.startsWith(w)) || (w === "sept" && month === 9)) months++;
+    else return false;
+  }
+  if (weekdays > 1) return false;
+  if (!numbers.length) return months <= 1;
+  // The day first (it may equal the month or the year's last two digits), then at most one month and one year.
+  const left = [...numbers];
+  const take = (ok: (v: number) => boolean) => { const i = left.findIndex(ok); if (i < 0) return false; left.splice(i, 1); return true; };
+  if (!take(v => v === day)) return false;
+  if (left.length && take(v => v === month)) months++;
+  if (months > 1) return false;
+  if (left.length && !take(v => v === year || v === year % 100)) return false;
+  return left.length === 0;
+}
+
 /** "Wednesday, November 25" for a `YYYY-MM-DD` calendar date. */
 export function longDate(date: string): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });

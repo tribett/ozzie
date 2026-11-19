@@ -9,6 +9,7 @@ import { KidsTeamsRules } from "./kids-rules-section.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import { FromYourCards, useFeedback } from "./finding-feedback.js";
 import { useDay } from "./day-words.js";
+import { useSystemWords, type SystemWords } from "./church-system.js";
 import { dayName, pageRef, procedurePurpose } from "./day-phrases.js";
 import { procedureTitle } from "./harness-words.js";
 import { ProcedureBody } from "./procedure-text.js";
@@ -47,6 +48,10 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
   </section>;
 }
 
+/** What Church rules mean for a church on another system, in one plain paragraph. */
+export const SYSTEM_RULES = (w: SystemWords) =>
+  `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
+
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
 export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
@@ -64,6 +69,9 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   church?: ReactNode;
 }) {
   const d = useDay();
+  const w = useSystemWords();
+  // A church on another system: only what that system shares is checked; these rules need Planning Center's reads.
+  const other = w.system !== "planning-center";
   // What the person told Ozzie on finding cards, kept with these rules; deleting one says so, with Undo.
   const { controls, notice } = useFeedback({ entries: feedbackOf(rules), onEntries: next => onChange({ ...rules, feedback: next }) }, names);
   const roomRule = (id: string) => roomRules(rules).find(r => r.room_id === id);
@@ -87,9 +95,13 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   return <div className="col">
     <p className="eyebrow">Church rules</p>
     <h1 className="h1">How your church wants {dayName(d)} checked</h1>
-    <p className="lede">These are your church's choices. Changing one updates {pageRef(d)} right away using what was already read. Nothing in Planning Center changes.</p>
+    <p className="lede">These are your church's choices. Changing one updates {pageRef(d)} right away using what was already read. Nothing in {w.name} changes.</p>
+    {other && <section className="find">
+      <h2 className="h3">What Ozzie checks with {w.name}</h2>
+      <p className="find-body">{SYSTEM_RULES(w)}</p>
+    </section>}
     {keptElsewhere.length > 0 && <p className="banner"><Icon name="info" small /><span>Rules you set for the teams and rooms of {churchList(keptElsewhere)} are kept for {keptElsewhere.length === 1 ? "that church" : "those churches"} and don't apply here. They come back if Ozzie uses {keptElsewhere.length === 1 ? "that church" : "one of them"} again.</span></p>}
-    <section className="find">
+    {!other && <><section className="find">
       <h2 className="h3">Serving many weeks in a row</h2>
       <p className="find-body">Flag anyone confirmed this many weeks in a row, so a person can check in. It's about care, not performance.</p>
       <div className="row rule-row">
@@ -140,9 +152,10 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
         </div>;
       })}
       {rooms.length > 0 && <p className="small">For a room set as not shared, Ozzie counts its setup time before each booking and reads Calendar's own conflict records. An overlap Calendar lists as not yet resolved shows as Room use needs review. Overlaps in a room with no rule set, or that Ozzie can't confirm, show as Worth a look.</p>}
-    </section>
+    </section></>}
     {notice}
     <FromYourCards feedback={controls} />
-    {procedures && procedures.length > 0 && <HowOzzieChecks procedures={procedures} focus={focus} />}
+    {/* The AI's procedures read Planning Center's checks only (Ask, jobs, who could help): not shown for another system. */}
+    {!other && procedures && procedures.length > 0 && <HowOzzieChecks procedures={procedures} focus={focus} />}
   </div>;
 }

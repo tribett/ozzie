@@ -2582,13 +2582,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozzie-church-systems"
+version = "0.1.0"
+dependencies = [
+ "core-foundation",
+ "core-foundation-sys",
+ "icu_normalizer",
+ "ozzie-native-auth",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "ozzie-desktop"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
  "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "ozzie-church-systems",
  "ozzie-native-auth",
  "semver",
  "serde",
@@ -2599,6 +2615,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-notification",
  "tauri-plugin-updater",
+ "zeroize",
 ]
 
 [[package]]

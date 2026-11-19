@@ -52,6 +52,8 @@ export class HarnessHost implements ToolHost {
     return [...new Set<string>(skill.tools)].flatMap(name => {
       if (!isToolName(name)) return [];
       if (OPERATIONS_TOOLS.has(name) && !operations) return [];
+      // A church on B1 Church or Breeze: Ozzie doesn't count weeks in a row there, so check-ins aren't offered.
+      if (name === "sunday.rule_checkins" && data.source !== undefined) return [];
       if (name === "planning_center.refresh" && !refresh) return [];
       return [TOOL_SPECS[name]];
     });

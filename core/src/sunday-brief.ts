@@ -53,10 +53,68 @@ export interface Finding {
   /** "Why I flagged this": the rule, the source facts and when they were read. Name-free. */
   why: string[];
 }
+/**
+ * Who is on one role, by person id (names resolve on this Mac), as the system lists them: said yes, hasn't answered,
+ * said no, or an answer Ozzie can't read. `needed`: the number the system asks for, or null when it doesn't share one.
+ */
+export interface RosterRole {
+  position_id: string; team_id: string | null; name: string; needed: number | null;
+  yes: string[]; waiting: string[]; declined: string[]; unknown: string[];
+}
+/**
+ * Everyone the check names on the service, role by role, for a church system that doesn't share how many people a role
+ * needs (Breeze): there, who is scheduled is the answer Ozzie can give (round 4). `no_role`: people on the service
+ * with no role. Absent on Planning Center's briefs.
+ */
+export interface Roster { roles: RosterRole[]; no_role: string[] }
+/**
+ * A roster's places on roles (one per person per role) by answer, and how many people hold them. Counting places, not
+ * people, keeps someone who said yes on one role and hasn't answered on another from hiding the second (review of
+ * round 5, M5).
+ */
+export function rosterCounts(roster: Roster): { people: number; places: number; yes: number; waiting: number; no: number; unknown: number } {
+  const people = new Set<string>();
+  const c = { yes: 0, waiting: 0, no: 0, unknown: 0 };
+  for (const r of roster.roles) {
+    const seen = new Set<string>();
+    const add = (ids: string[], k: keyof typeof c) => { for (const id of ids) if (!seen.has(id)) { seen.add(id); people.add(id); c[k]++; } };
+    add(r.yes, "yes"); add(r.waiting, "waiting"); add(r.unknown, "unknown"); add(r.declined, "no");
+  }
+  return { people: people.size, places: c.yes + c.waiting + c.no + c.unknown, ...c };
+}
+/**
+ * "4 people are listed: 2 said yes, 1 hasn't answered, 1 said no." From a roster, no names. The parts add up to the
+ * whole (round 5); where someone is on more than one role, the parts count places: "4 people are listed in 5 places on roles: …".
+ */
+export function rosterSummary(roster: Roster): string {
+  const c = rosterCounts(roster);
+  if (c.places === 0) return "Nobody is listed on a role yet.";
+  const parts = [c.yes ? `${c.yes} said yes` : "", c.waiting ? `${c.waiting} ${c.waiting === 1 ? "hasn't" : "haven't"} answered` : "",
+    c.unknown ? `${c.unknown} with an answer Ozzie couldn't read` : "", c.no ? `${c.no} said no` : ""].filter(Boolean);
+  const who = c.people === 1 ? "1 person is" : `${c.people} people are`;
+  return c.places === c.people ? `${who} listed: ${parts.join(", ")}.` : `${who} listed in ${c.places} places on roles: ${parts.join(", ")}.`;
+}
+/**
+ * The roster of a church system that shares no number needed for any role (Breeze), where who is on each role is what
+ * Ozzie can say: null otherwise. Every surface that would say "nothing needs a decision" says what is known instead.
+ */
+export const unnumberedRoster = (brief: Pick<SundayBrief, "roster"> | null | undefined): Roster | null =>
+  brief?.roster && brief.roster.roles.length > 0 && brief.roster.roles.every(r => r.needed === null) ? brief.roster : null;
+/**
+ * The roles a pastor should look at on such a service (round 5): someone hasn't answered, or nobody has said yes (a
+ * decline with no one in its place, or nobody listed). Facts only, never a judgment about anyone.
+ */
+export const rosterNeedsYou = (roster: Roster): RosterRole[] =>
+  roster.roles.filter(r => r.waiting.length > 0 || (r.yes.length === 0 && r.unknown.length === 0));
 /** One scheduled position as read, so a filled gap can be told apart from a person's decision. */
 export interface PositionStatus { team_id: string; name: string; remaining: number | null; pending: number; lead: PositionAssessment["lead"] }
 export interface SundayBrief {
   mode: SundayCapture["kind"] | "fictional";
+  /**
+   * The church system the check read, when it isn't Planning Center (core/src/church-systems/brief.ts: "B1 Church",
+   * "Breeze"). Absent: Planning Center Services. Every sentence that names where the facts are reads it.
+   */
+  source?: string;
   /**
    * `sort_date` is Planning Center's local wall-clock time with a misleading `Z`, never an instant.
    * `date` is its church-local date; `starts_at` the instant it names in the church's zone (null without the zone).
@@ -81,6 +139,13 @@ export interface SundayBrief {
   hidden?: { finding: Finding; entry: StopEntry | CorrectionEntry }[];
   positions: PositionStatus[];
   not_checked: string[];
+  /** A church system's service, role by role (Roster); absent for Planning Center. */
+  roster?: Roster;
+  /**
+   * A church system's rarer limits, beside `not_checked`: true, but not what a pastor acts on (round 5). The page folds
+   * them under "More that Ozzie can't see"; the spoken briefing and Ask read `not_checked` only. Absent for Planning Center.
+   */
+  not_checked_more?: string[];
 }
 
 export const needKey = (team_id: string, name: string) => JSON.stringify(["need", team_id, name]);

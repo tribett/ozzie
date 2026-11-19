@@ -6,6 +6,7 @@ import type { FailureCode, Skill, TaskEvent, ToolEnvelope, ToolName } from "../.
 import { NATIVE_TOOL_ALLOWLIST } from "../../../core/src/harness/contract.js";
 import { TEMPLATE_IDS, TEMPLATES, type RunTrigger, type TemplateId } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
+import { SYSTEMS } from "../../../core/src/church-systems/types.js";
 import { dayPage, REFUSALS } from "../../../core/src/ask.js";
 import { alsoOnPage } from "../../../core/src/harness/compose.js";
 import { VOCABULARY } from "../../../core/src/harness/fixed.js";
@@ -111,6 +112,11 @@ const MAX_FACTS = VOCABULARY.answer.max_facts;
  * (native step outcome `too-many-facts`; the task still fails as fidelity). Finishes "Couldn't finish: …" (review L4).
  */
 export const TOO_MANY_FACTS = "the AI's answer listed more facts than Ozzie checks in one answer";
+/** Why a task stopped when Ozzie's AI's own check turned one of its steps down (native step outcome `not-accepted`). */
+export const NOT_ACCEPTED = "Ozzie's AI turned a step down before the AI saw it, so it wasn't a connection problem";
+/** A failed task one of whose steps Ozzie's AI turned down, from the ledger's own events. */
+const notAccepted = (row: Pick<TaskRow, "failure" | "events">) =>
+  row.failure === "invalid-task" && row.events.some(e => e.type === "model" && /^[1-9]\d? not-accepted$/u.test(e.detail));
 /** A failed task whose AI step ended because its answer listed too many facts, from the ledger's own events. */
 const tooManyFacts = (row: Pick<TaskRow, "failure" | "events">) =>
   row.failure === "fidelity" && row.events.some(e => e.type === "model" && /^[1-9]\d? too-many-facts$/u.test(e.detail));
@@ -124,8 +130,20 @@ export const CHECK_FAILURE_REASONS: Readonly<Partial<Record<FailureCode, string>
   unverified: "Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read",
   cancelled: "Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped",
 });
-const reasonFor = (kind: TaskRow["kind"], code: string | null | undefined) =>
-  kind === "check" && code && Object.hasOwn(CHECK_FAILURE_REASONS, code) ? CHECK_FAILURE_REASONS[code as FailureCode]! : reason(code);
+/**
+ * Why a check of a church on B1 Church or Breeze (`name`) stopped (harness-bridge.ts `systemCheckFailure`): its key, the
+ * system out of reach, or this Mac's Keychain locked or another check under way.
+ */
+export const systemCheckReasons = (name: string): Readonly<Partial<Record<FailureCode, string>>> => Object.freeze({
+  "provider-failure": `${name} couldn't be reached or didn't answer just now`,
+  denied: `the key Ozzie keeps for ${name} wasn't there or wasn't accepted`,
+  cancelled: "this Mac's Keychain was locked, or another check was under way, so the check stopped",
+});
+/** `source`: the system a check read, when it isn't Planning Center. */
+const reasonFor = (kind: TaskRow["kind"], code: string | null | undefined, source?: string) => {
+  const own = kind === "check" && source ? systemCheckReasons(source) : CHECK_FAILURE_REASONS;
+  return kind === "check" && code && Object.hasOwn(own, code) ? own[code as FailureCode]! : reason(code);
+};
 
 /** When Ozzie can't tell, what it can do instead (owner decision "Useful help when work cannot be completed"). */
 export const CAN_DO_INSTEAD = "Ozzie can tell you what still needs a decision for the service it watches, who on a team could help with an open role, or prepare a note for you to copy. Ask “What can you do?” to see more.";
@@ -178,6 +196,14 @@ export const ASK_FAILURES = Object.freeze({
   // Background-check wording stopped on this Mac or by ozzie.church (native `background-check`): the page's own refusal.
   background: REFUSALS.background,
   slowDown: "The AI service asked Ozzie to slow down. Try again in a minute.",
+  /**
+   * Ozzie's AI turned the question down with its own check before asking the AI (native `not-accepted`): not the network,
+   * and not anything in the question the person typed. Seen live (round 3) when ozzie.church's copy of the vocabulary
+   * didn't list a church system yet.
+   */
+  // A step after the first may be the one turned down (seen live at step 2): the AI may have had the question, never
+  // what Ozzie read for that step (review of round 3, M1).
+  notAccepted: "Ozzie's AI turned down a step of this question before the AI saw it, so the AI didn't get what Ozzie read for it. This isn't a connection problem; Ozzie's AI may need an update. Try again later.",
   unfinished: "Ozzie couldn't finish that just now.",
   cancelled: "You stopped this question. Ozzie won't show an answer for it.",
 });
@@ -271,6 +297,7 @@ export function askFailureText(code: FailureCode | null, native?: string, paused
   if (native === "contact-detail") return ASK_FAILURES.contact;
   if (native === "background-check") return ASK_FAILURES.background;
   if (native === "rate-limited") return ASK_FAILURES.slowDown;
+  if (native === "not-accepted") return ASK_FAILURES.notAccepted;
   if (code === "egress") return ASK_FAILURES.egress;
   if (code === "invalid-arguments") return ASK_FAILURES.arguments;
   if (native === "too-many-facts") return ASK_FAILURES.tooMany;
@@ -284,8 +311,11 @@ export function askFailureText(code: FailureCode | null, native?: string, paused
 
 // ---- Steps ---------------------------------------------------------------------------------------
 
-/** One ledger event (native grammar) in plain words, or null for bookkeeping people don't need to see. */
-export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow["kind"] = "ask"): string | null {
+/**
+ * One ledger event (native grammar) in plain words, or null for bookkeeping people don't need to see. `source`: the
+ * system a check read, when it isn't Planning Center (its read is a tool event with no tool named).
+ */
+export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow["kind"] = "ask", source?: string): string | null {
   switch (type) {
     case "tool": {
       const [first, second] = detail.split(" ");
@@ -293,7 +323,7 @@ export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow[
       const status = second ?? first ?? "";
       const phrase = name && ALLOWLIST.has(name)
         ? kind === "check" && name === "planning_center.refresh" ? "Read the service from Planning Center" : TOOL_PHRASES[name as ToolName]
-        : "Tried something Ozzie doesn't allow";
+        : kind === "check" && source && name === null ? `Read the service from ${source}` : "Tried something Ozzie doesn't allow";
       // Checking again isn't offered to a job's run (refused there): it was never done, so it never reads as done.
       if (kind !== "check" && name === "planning_center.refresh" && status === "denied") return "Didn't read Planning Center again: that isn't possible here";
       // A draft isn't a read: "all of it" would say nothing.
@@ -309,10 +339,12 @@ export function stepText(type: TaskEvent["type"], detail: string, kind: TaskRow[
       if (outcome === "tool_calls") return `${asked}; it asked to look something up`;
       if (outcome === "length") return `${asked}; its reply ran too long`;
       if (outcome === "too-many-facts") return `${asked}; ${TOO_MANY_FACTS}`;
+      // ozzie.church's own check turned the step down (native `not-accepted`): it never reached the AI.
+      if (outcome === "not-accepted") return `Step ${n} went to Ozzie's AI, whose own check turned it down before the AI saw it`;
       return `${asked}; ${reason(outcome)}`;
     }
     case "verified": return kind === "check" ? "Finished the check" : "Checked the facts it chose against what was read";
-    case "failed": return `Stopped: ${reasonFor(kind, detail)}`;
+    case "failed": return `Stopped: ${reasonFor(kind, detail, source)}`;
     case "cancelled": return "Stopped by you";
     default: return null;
   }
@@ -347,8 +379,11 @@ export function outcomeSteps(events: readonly TaskEvent[], evidence: readonly To
   });
 }
 export const modelSteps = (events: readonly TaskEvent[]) => events.filter(e => e.type === "model").length;
-/** How many times a recorded task asked the AI: native records each step twice, as reserved ("1") and finished ("1 stop"). */
-export const askedInRecord = (row: Pick<TaskRow, "events">) => row.events.filter(e => e.type === "model" && /^[1-9]\d? \S/u.test(e.detail)).length;
+/**
+ * How many times a recorded task asked the AI: native records each step twice, as reserved ("1") and finished ("1 stop").
+ * A step Ozzie's AI turned down before the AI saw it ("2 not-accepted") never asked it.
+ */
+export const askedInRecord = (row: Pick<TaskRow, "events">) => row.events.filter(e => e.type === "model" && /^[1-9]\d? \S/u.test(e.detail) && !/ not-accepted$/u.test(e.detail)).length;
 
 // ---- Where an answer came from ---------------------------------------------------------------------
 
@@ -360,12 +395,16 @@ const PLANNING_CENTER = /^Planning Center /u;
 const RULES_SOURCE = "Church rules on this Mac";
 const IMPORT_SOURCE = "Fictional email and calendar import";
 
-/** "Based on: …" before any question: the check on screen. */
+/** The church systems other than Planning Center a source may name ("B1 Church", "Breeze"): each is its own source. */
+const OTHER_SYSTEMS: ReadonlySet<string> = new Set(Object.values(SYSTEMS).map(s => s.name));
+
+/** "Based on: …" before any question: the check on screen (`brief.source`: the system it read, when not Planning Center). */
 export function basedOnBrief(brief: SundayBrief): string {
   const at = brief.checked_at ?? brief.completed_at;
+  const of = brief.source ?? "Planning Center";
   const sunday = brief.mode === "fictional" ? `fictional example data as of ${when(at)}`
-    : brief.mode === "recording" ? `a saved copy of the Planning Center check at ${when(at)}`
-      : `Planning Center check at ${when(at)}`;
+    : brief.mode === "recording" ? `a saved copy of the ${of} check at ${when(at)}`
+      : `${of} check at ${when(at)}`;
   return `Based on: ${sunday}${brief.mode === "fictional" ? ", plus the fictional email import" : ""}`;
 }
 
@@ -395,6 +434,11 @@ export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" |
       parts.push(...[...at].map(([t, products]) => `Planning Center ${named(products)}, checked ${t}`));
     }
   }
+  // A church on B1 Church or Breeze: its own system, checked when its check ran ("B1 Church, checked Fri, Nov 20, 9:05 AM").
+  for (const [source, t] of latest) {
+    if (!OTHER_SYSTEMS.has(source)) continue;
+    parts.push(mode === "fictional" ? `fictional example data as of ${when(t)}` : mode === "recording" ? `a saved copy of the ${source} check at ${when(t)}` : `${source}, checked ${when(t)}`);
+  }
   if (latest.has(IMPORT_SOURCE)) parts.push("the fictional email import");
   if (latest.has(RULES_SOURCE)) parts.push("your Church rules");
   return `Based on: ${parts.join("; ") || "what Ozzie read"}`;
@@ -405,7 +449,7 @@ export function evidenceGaps(evidence: readonly (Pick<ToolEnvelope, "source" | "
   mode: "live" | "recording" | "fictional"): string[] {
   const out = new Set<string>();
   for (const e of evidence) {
-    const what = PLANNING_CENTER.test(e.source) ? e.source : e.source === IMPORT_SOURCE ? "The fictional email import" : "Part of this";
+    const what = PLANNING_CENTER.test(e.source) || OTHER_SYSTEMS.has(e.source) ? e.source : e.source === IMPORT_SOURCE ? "The fictional email import" : "Part of this";
     // An overview cut to fit is said as that (review item 6); "couldn't be read" only for reads that didn't complete.
     const cut = overviewCut(e);
     if (e.completeness === "partial" && !cut.only) out.add(`${what}: part of this couldn't be read.`);
@@ -456,8 +500,11 @@ const things = (n: number) => `${n} ${n === 1 ? "thing" : "things"} looked at`;
 export const procedureTitle = (title: string | undefined, d: DayWords) =>
   title === "Sunday ready" && !(d.kind === "weekday" && d.weekday === 0) ? `Ready for ${dayName(d)}` : title;
 
-/** One line per task, e.g. "Answered a question · checked · 3 things looked at · 9:42 PM". */
-export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<string, Skill> | null; trigger?: TaskStart; now?: Date; day?: DayWords } = {}): string {
+/**
+ * One line per task, e.g. "Answered a question · checked · 3 things looked at · 9:42 PM". `source`: the system a check
+ * read, when it isn't Planning Center (kept beside the check on this Mac).
+ */
+export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<string, Skill> | null; trigger?: TaskStart; now?: Date; day?: DayWords; source?: string } = {}): string {
   const now = options.now ?? new Date();
   const d = options.day ?? SUNDAY_WORDS;
   const tools = row.events.filter(e => e.type === "tool");
@@ -465,7 +512,8 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
   let title: string, outcome: string | null;
   if (row.kind === "check") {
     // Said without the day: an older check may have been of another week's service.
-    title = options.trigger === "manual" ? "Planning Center check you started" : options.trigger === "automatic" ? "Planning Center check, on its own" : "Planning Center check";
+    const of = options.source ?? "Planning Center";
+    title = options.trigger === "manual" ? `${of} check you started` : options.trigger === "automatic" ? `${of} check, on its own` : `${of} check`;
     outcome = row.state === "verified" ? (tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "part of it couldn't be read" : null) : null;
   } else {
     // A job's run is named by the job; anything else by its procedure.
@@ -475,7 +523,7 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
     title = row.kind === "ask" ? row.state === "verified" ? options.trigger === "on-this-mac" ? "Answered on this Mac" : "Answered a question" : "A question" : procedure!;
     outcome = row.state === "verified" ? `checked · ${things(tools.length)}` : null;
   }
-  if (row.state === "failed") outcome = `Couldn't finish: ${tooManyFacts(row) ? TOO_MANY_FACTS : reasonFor(row.kind, row.failure)}`;
+  if (row.state === "failed") outcome = `Couldn't finish: ${tooManyFacts(row) ? TOO_MANY_FACTS : notAccepted(row) ? NOT_ACCEPTED : reasonFor(row.kind, row.failure, options.source)}`;
   if (row.state === "cancelled") outcome = "You stopped it";
   if (row.state === "admitted" || row.state === "running" || row.state === "proposed") outcome = "Still running";
   return [title, outcome, at].filter(Boolean).join(" · ");
@@ -495,15 +543,17 @@ const timesText = (n: number) => n === 1 ? "once" : n === 2 ? "twice" : `${n} ti
 /** "Keep Wednesday covered ran on schedule, at 9:00 AM." */
 export const jobStarted = (template: TemplateId, trigger: RunTrigger, at: string, d: DayWords = SUNDAY_WORDS) => `${templateTitle(template, d)} ran ${JOB_WHY[trigger]}, at ${at}.`;
 /** "Ozzie asked the AI twice." with what the AI does, or that no AI was used and why. */
-export function aiText(kind: TaskRow["kind"], start: TaskStart | undefined, asked: number, verified: boolean, unanswered = false): string {
-  if (kind === "check") return "No AI was used: this was Ozzie's own check of Planning Center.";
+export function aiText(kind: TaskRow["kind"], start: TaskStart | undefined, asked: number, verified: boolean, unanswered = false, source = "Planning Center"): string {
+  if (kind === "check") return `No AI was used: this was Ozzie's own check of ${source}.`;
   if (start === "on-this-mac") return "No AI was used: Ozzie answered this on this Mac from its last check.";
   // A step reserved but never finished was sent for, with no answer back (review G).
   if (!asked) return unanswered ? "Ozzie got no answer from the AI." : "Ozzie didn't reach the AI.";
   return `Ozzie asked the AI ${timesText(asked)}.${verified ? " The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything." : ""}`;
 }
 export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefined; end?: TaskEnd | undefined; procedures?: ReadonlyMap<string, Skill> | null; now?: Date;
-  day?: DayWords } = {}): Account {
+  day?: DayWords; source?: string;
+  /** A church system's check: the parts it didn't read in full, in plain words (reads.ts PART_NAMES), when kept. */
+  unread?: readonly string[] } = {}): Account {
   const now = options.now ?? new Date();
   const d = options.day ?? SUNDAY_WORDS;
   const at = clockText(row.created_at, now);
@@ -511,18 +561,21 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
   const job = start?.startsWith("job:") ? start.split(":") as [string, TemplateId, RunTrigger] : null;
   let started: string;
   if (row.kind === "check") {
-    started = start === "manual" ? `You asked Ozzie to check Planning Center at ${at}.` : start === "automatic" ? `Ozzie checked Planning Center on its own at ${at}.` : `Ozzie checked Planning Center at ${at}.`;
+    const of = options.source ?? "Planning Center";
+    started = start === "manual" ? `You asked Ozzie to check ${of} at ${at}.` : start === "automatic" ? `Ozzie checked ${of} on its own at ${at}.` : `Ozzie checked ${of} at ${at}.`;
   } else if (row.kind === "ask") started = `You asked a question at ${at}.`;
   else if (job) started = jobStarted(job[1], job[2], at, d);
   else if (start === "who-could-help") started = `You asked Ozzie to look at who could help with a role, at ${at}.`;
   else started = `${procedureTitle(options.procedures?.get(row.skill_id)?.title, d) ?? "A check Ozzie runs"} ran at ${at}.`;
-  const looked = row.events.flatMap(e => e.type === "tool" ? [stepText("tool", e.detail, row.kind)!] : []);
+  // Which parts a church system's check didn't read in full, when kept beside it: said after its read and its ending.
+  const which = row.kind === "check" && options.unread?.length ? `: ${options.unread.length > 1 ? `${options.unread.slice(0, -1).join(", ")} and ${options.unread.at(-1)!}` : options.unread[0]!}` : "";
+  const looked = row.events.flatMap(e => e.type === "tool" ? [`${stepText("tool", e.detail, row.kind, options.source)!}${which && e.detail === "partial" ? which : ""}`] : []);
   const asked = askedInRecord(row);
   const tools = row.events.filter(e => e.type === "tool");
   let ended: string;
   switch (row.state) {
     case "verified":
-      if (row.kind === "check") ended = tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "Finished, though part of the check couldn't be read." : "Finished.";
+      if (row.kind === "check") ended = tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? `Finished, though part of the check couldn't be read${which}.` : "Finished.";
       // Its card shows what the AI found next to the full list, never a draft, and says when the AI didn't ask for this
       // role's list of people (review H, M3; review G, N3, N4). The record names no role, so a call for another role's list
       // counts as a call here, and this ending then says nothing about whose list it was (review K, L1).
@@ -541,30 +594,32 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
     case "failed":
       ended = tooManyFacts(row) ? "The AI's answer listed more facts than Ozzie checks in one answer, so it wasn't shown."
         : row.failure === "fidelity" ? "The AI's answer didn't check out against what Ozzie read, so nothing was shown."
-        : row.failure === "limit" ? "Stopped at its limit." : `Couldn't finish: ${reasonFor(row.kind, row.failure)}.`;
+        : row.failure === "limit" ? "Stopped at its limit." : notAccepted(row) ? `Couldn't finish: ${NOT_ACCEPTED}.`
+        : `Couldn't finish: ${reasonFor(row.kind, row.failure, options.source)}.`;
       break;
     // Pausing or stopping a job, or stopping a question: a person did it either way (review H, L12).
     case "cancelled": ended = "Stopped by you."; break;
     default: ended = "Still running.";
   }
-  return { started, looked, ai: aiText(row.kind, start, asked, row.state === "verified", row.events.some(e => e.type === "model")), ended };
+  return { started, looked, ai: aiText(row.kind, start, asked, row.state === "verified", row.events.some(e => e.type === "model"), options.source), ended };
 }
 
 /**
  * A check What happened may fold with others like it: one Ozzie started by itself (its line says "on its own"), that
  * finished with its read complete, and that is kept as having found nothing new. One whose outcome isn't known never is.
+ * `source`: the system the check read, when it isn't Planning Center (its read is the tool event with no tool named).
  */
-export function quietCheck(row: TaskRow, start: TaskStart | undefined, found: CheckFound | undefined): boolean {
+export function quietCheck(row: TaskRow, start: TaskStart | undefined, found: CheckFound | undefined, source?: string): boolean {
   if (row.kind !== "check" || row.state !== "verified" || start !== "automatic" || found !== "nothing-new" || !Number.isFinite(Date.parse(row.created_at))) return false;
   const tools = row.events.filter(e => e.type === "tool");
-  return tools.length > 0 && tools.every(e => e.detail === "planning_center.refresh complete");
+  return tools.length > 0 && tools.every(e => e.detail === (source ? "complete" : "planning_center.refresh complete"));
 }
 /**
  * The one line for two or more of those in a row on one day, under that day's heading: "Checked Planning Center 6 times on
- * schedule, 9:00 AM to 2:00 PM · nothing new". It opens to each check's own line.
+ * schedule, 9:00 AM to 2:00 PM · nothing new". It opens to each check's own line. `source`: the system they read.
  */
-export function quietChecksLine(rows: readonly Pick<TaskRow, "created_at">[]): string {
+export function quietChecksLine(rows: readonly Pick<TaskRow, "created_at">[], source = "Planning Center"): string {
   const at = rows.map(r => r.created_at).sort();
   const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `Checked Planning Center ${timesText(rows.length)} on its own, ${time(at[0]!)} to ${time(at.at(-1)!)} · nothing new`;
+  return `Checked ${source} ${timesText(rows.length)} on its own, ${time(at[0]!)} to ${time(at.at(-1)!)} · nothing new`;
 }

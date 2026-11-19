@@ -20,6 +20,8 @@ export interface RowCodes {
   planning_center: PlanningCenterCode; service: ServiceCode; ai: AiCode; notices: NoticesCode; start_with_mac: StartCode;
   /** Only when the phone row is shown. */
   phone?: PhoneCode | null | undefined;
+  /** A church on B1 Church or Breeze: which, and whether its key was checked and kept on this Mac. */
+  church_system?: { system: "b1" | "breeze"; connection: "connected" | "not-connected" } | null | undefined;
 }
 export interface ReportInput {
   app?: { version?: string | null | undefined; macos?: string | null | undefined; chip?: string | null | undefined; memory_gb?: number | null | undefined } | null | undefined;
@@ -49,6 +51,8 @@ const ROWS = {
   notices: ["allowed", "denied", "not-asked", "unknown"],
   "start-with-mac": ["on", "off", "unknown"],
   phone: ["on", "off"],
+  "church-system": ["b1", "breeze"],
+  "church-system-connection": ["connected", "not-connected"],
   "ai-route": ["managed", "own", "local", "none"],
   "ai-company": ["openai", "anthropic", "gemini", "other", "none"],
   "local-ai": ["yes", "no", "unknown"],
@@ -135,6 +139,7 @@ export function buildReport(input: ReportInput): string {
   const r = input.rows;
   add("planning-center", r.planning_center); add("service", r.service); add("ai", r.ai); add("notices", r.notices); add("start-with-mac", r.start_with_mac);
   if (r.phone) add("phone", r.phone);
+  if (r.church_system) { add("church-system", r.church_system.system); add("church-system-connection", r.church_system.connection); }
   add("ai-route", input.ai_route);
   add("ai-company", input.ai_route === "none" || input.ai_route === "local" ? null : input.ai_company ?? null);
   // The address only for "Another AI company", and never one that names the church or anyone in it.

@@ -1,10 +1,11 @@
 // Today: what needs the person, in the three settled groups (today-groups.ts says which item goes where),
 // then the spoken briefing and what Ozzie read that needs nothing. Items can be set aside until tomorrow
 // or Monday on this Mac; they come back on their own, with their age.
+import { isTimeZone } from "../../../core/src/church-time.js";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { evaluateAttentionImport, type AttentionFinding, type Message, type CalendarEvent } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
-import { sundayShownCount, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { rosterNeedsYou, rosterSummary, sundayShownCount, unnumberedRoster, type Roster, type RosterRole, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { Icon } from "./icons.js";
@@ -26,6 +27,7 @@ import { AskedNote, CHECK_CONNECTION, CHECKING_LINE, STUCK_LINE, type AskedLine 
 import { useDay, type DayWords } from "./day-words.js";
 import { DayName, dayName, eyeLine } from "./day-phrases.js";
 import { promise } from "./promises.js";
+import { systemWords, useSystemWords, type SystemWords } from "./church-system.js";
 
 /** Keeping watch, for Today: it comes to the person here first. */
 export interface TodayWatch {
@@ -80,7 +82,7 @@ function EmailCard({ finding, sources, titleId, age, feedback = null, children }
           return <li key={e.message_id + e.anchor.start}><Icon name="dot" small />Email “{m?.subject}”, received {m ? stamp(m.received_at) : "—"}: “{e.anchor.quote}”</li>;
         })}
         {event && <li><Icon name="dot" small />Calendar “{event.title}”, last changed {stamp(event.modified_at)}: still lists {event.location}, {event.status}.</li>}
-        <li><Icon name="dot" small />I didn't mark anything read, move anything or change the calendar.</li>
+        <li><Icon name="dot" small />Ozzie didn't mark anything read, move anything or change the calendar.</li>
       </ul>}
     </div>
     {/* Email and calendar bring no notices, so only "This isn't right" applies here. */}
@@ -92,23 +94,40 @@ function EmailCard({ finding, sources, titleId, age, feedback = null, children }
 /** "your Wednesday", or "your service(s)" when the service isn't on one day (or none is chosen yet). */
 const yourService = (d: DayWords) => d.kind === "weekday" ? `your ${d.day}` : d.kind === "unknown" ? "your service" : "your services";
 /** The not-connected card's title (spec §2, after the failures table), named by the watched service's day. */
-export const connectTitle = (d: DayWords) => `Connect Planning Center to see ${yourService(d)}`;
-/** Its body: what connecting is, then the promise (promises.ts, never retyped). */
-export const connectBody = () => `Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and ${promise("connectAnd")}`;
+export const connectTitle = (d: DayWords, system = "Planning Center") => `Connect ${system} to see ${yourService(d)}`;
+/** Its body: what connecting is, then the promise (promises.ts, never retyped). Another system connects with its own key. */
+export const connectBody = (w?: SystemWords) => w?.unchosen
+  ? "Nothing on this page is about your church yet. Ozzie reads Planning Center, B1 Church or Breeze, and only reads: it never changes anything there."
+  : w && w.system !== "planning-center"
+  ? `Nothing on this page is about your church yet. Connecting takes a key from your church's ${w.name}, and Ozzie only reads it: it never changes anything in ${w.name}.`
+  : `Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and ${promise("connectAnd")}`;
 
 /** The plain title of an item, for the set-aside list. Named by the watched service's real day (spec §5). */
-function itemTitle(item: TodayItem, now: string, d: DayWords): string {
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+/** One role a pastor should look at, with the names on this Mac: who hasn't answered, or that nobody has said yes. */
+function needsYouLine(r: RosterRole, names: Readonly<Record<string, string>>): string {
+  const who = (ids: string[]) => { const n = ids.map(id => (Object.hasOwn(names, id) && names[id]) || "Someone").sort((a, b) => a.localeCompare(b));
+    return n.length <= 1 ? n.join("") : `${n.slice(0, -1).join(", ")} and ${n.at(-1)!}`; };
+  const parts = [
+    r.waiting.length ? `${who(r.waiting)} ${r.waiting.length === 1 ? "hasn't" : "haven't"} answered yet` : "",
+    !r.yes.length && !r.waiting.length && r.declined.length ? `${who(r.declined)} said no, and nobody else on it has said yes` : "",
+    !r.yes.length && !r.waiting.length && !r.declined.length && !r.unknown.length ? "nobody is listed yet" : "",
+  ].filter(Boolean);
+  return `${r.name}: ${parts.join("; ")}.`;
+}
+function itemTitle(item: TodayItem, now: string, d: DayWords, w: SystemWords = systemWords(null), roster: Roster | null = null): string {
   const s = item.subject;
   switch (s.type) {
+    case "roster": return roster ? `On ${dayName(d)}, ${lowerFirst(rosterSummary(roster))}` : d.question;
     case "email": return s.finding.title;
     // Any kind of finding that needs a decision counts here, so the words don't assume positions.
     case "sunday": return `${DayName(d)} has ${sundayCountText(s.decisions)}.`;
     case "sunday-unchecked": return d.question;
-    case "connect": return connectTitle(d);
+    case "connect": return w.unchosen ? `Choose what your church uses to see ${yourService(d)}` : connectTitle(d, w.name);
     case "noticed": return noticedTitle(s.item, now, d);
     case "watching": return s.responsibility.title;
     case "regular": return eyeLine(d);
-    case "answers": return "Waiting for an answer in Planning Center";
+    case "answers": return `Waiting for an answer in ${w.name}`;
   }
 }
 
@@ -176,6 +195,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   waiting?: string | null;
 }) {
   const words = useDay();
+  const w = useSystemWords();
   const now = nowProp ?? watch?.now ?? new Date().toISOString();
   const zone = zoneProp ?? macZone();
   const { controls, notice } = useFeedback(feedback, names);
@@ -202,11 +222,14 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   const headings = useRef<Partial<Record<GroupId, HTMLHeadingElement | null>>>({});
   const [focusGroup, setFocusGroup] = useState<GroupId | null>(null);
 
+  // A church system that doesn't share how many people each role needs (Breeze): who is on each role is what is known.
+  const roster = unnumberedRoster(brief);
   // The same count as the Sunday page's headline and the sidebar: Services, rooms and follow-ups that need a decision.
   const sunday: TodaySunday | null = useMemo(() => brief && decided ? {
     plan_id: brief.plan.id, checked_at: brief.completed_at, decisions: sundayShownCount(decided, operations).decisions,
     answers: [...new Set(decided.items.filter(i => i.state !== "resolved" && i.finding.notification === "sent").flatMap(i => i.finding.position ? [i.finding.position.name] : []))],
-  } : null, [brief, decided, operations]);
+    ...(roster ? { unknownNeed: { needsYou: rosterNeedsYou(roster).length > 0 } } : {}),
+  } : null, [brief, decided, operations, roster]);
   // Each decision named on the Sunday card (audit item 17), in the Sunday page's order, and Worth a look counted apart.
   const named = useMemo(() => {
     if (!decided) return null;
@@ -273,8 +296,8 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         return <article key={item.id} className="find" aria-labelledby={titleId}>
           <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />Needs a decision</span>
             {s.noticed?.overnight && <span className="badge b-muted"><Icon name="clock" small />Overnight</span>}
-            <span className="find-where">Planning Center Services</span>{age && <span className="find-age">{age}</span>}</div>
-          <h3 id={titleId} className="find-title">{itemTitle(item, now, words)}</h3>
+            <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
+          <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
           {/* Keep Sunday covered's write-up of its run leads the card, or says quietly why there is none (audit item 6). */}
           {s.noticed && <WriteUpBlock item={s.noticed} writeup={s.writeup} names={names} now={now} />}
           {named && named.named.length > 0 && <ul className="list today-decisions">{named.named.map((l, i) => <li key={l.key}>
@@ -291,23 +314,33 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           {later}
         </article>;
       }
+      // A church system that doesn't share how many people each role needs: what is known, and what needs a look.
+      case "roster": return roster && <article key={item.id} className="find" aria-labelledby={titleId}>
+        <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
+          <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, roster)}</h3>
+        <ul className="list today-decisions">{rosterNeedsYou(roster).map(r => <li key={r.position_id}><span>{needsYouLine(r, names)}</span></li>)}</ul>
+        <p className="find-body">{brief?.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether {words.thisOne} is covered.</p>
+        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
+        {later}
+      </article>;
       // No next plan of the watched service yet (move-on.ts): said plainly, with nothing to press; Ozzie looks again each hour.
       case "sunday-unchecked": return waiting ? <article key={item.id} className="find" aria-labelledby={titleId}>
-        <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for a plan</span><span className="find-where">Planning Center Services</span></div>
+        <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for a plan</span><span className="find-where">{w.services}</span></div>
         <h3 id={titleId} className="find-title">{waiting}</h3>
       </article> : <article key={item.id} className="find" aria-labelledby={titleId}>
-        <div className="find-top"><span className="badge b-muted"><Icon name="sun" small />{words.page}</span><span className="find-where">Planning Center Services</span></div>
+        <div className="find-top"><span className="badge b-muted"><Icon name="sun" small />{words.page}</span><span className="find-where">{w.services}</span></div>
         <h3 id={titleId} className="find-title">{words.question}</h3>
         <p className="find-body">{DayName(words)} hasn't been checked yet.</p>
         <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Check {dayName(words)}</button></div>
         {later}
       </article>;
       case "connect": return notConnected && <article key={item.id} className="find today-connect" aria-labelledby={titleId}>
-        <div className="find-top"><span className="badge b-muted"><Icon name="link" small />Not connected yet</span><span className="find-where">Planning Center</span></div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now, words)}</h3>
-        <p className="find-body">{connectBody()}</p>
+        <div className="find-top"><span className="badge b-muted"><Icon name="link" small />Not connected yet</span><span className="find-where">{w.name}</span></div>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
+        <p className="find-body">{connectBody(w)}</p>
         <div className="find-next">
-          <button type="button" className="btn btn-primary btn-sm" aria-describedby={titleId} onClick={notConnected.onConnect}>Connect Planning Center</button>
+          <button type="button" className="btn btn-primary btn-sm" aria-describedby={titleId} onClick={notConnected.onConnect}>{w.connect}</button>
           <button type="button" className="btn btn-secondary btn-sm" onClick={notConnected.onExample}>See an example church first</button>
         </div>
       </article>;
@@ -334,17 +367,17 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         const missed = regularMissedText(s.check, now, zone);
         return <article key={item.id} className="find today-watch" aria-labelledby={titleId}>
           <div className="find-top"><span className={`badge ${s.check.paused ? "b-muted" : "b-ok"}`}><Icon name="repeat" small />{s.check.paused ? "Paused" : "Always on"}</span>
-            <span className="find-where">Planning Center Services</span></div>
+            <span className="find-where">{w.services}</span></div>
           <h3 id={titleId} className="find-title">{eyeLine(words)}</h3>
-          <p className="find-body">{regularLine(s.check, now, zone)}</p>
+          <p className="find-body">{regularLine(s.check, now, zone, w.name)}</p>
           {missed && <ul className="list resp-problems"><li><Icon name="clock" small />{missed}</li></ul>}
         </article>;
       }
       case "answers": return <article key={item.id} className="find" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for an answer</span>
-          <span className="find-where">Planning Center Services</span>{age && <span className="find-age">{age}</span>}</div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now, words)}</h3>
-        <p className="find-body">Planning Center shows a request was sent for {list(s.positions)} and hasn't been accepted yet.</p>
+          <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
+        <p className="find-body">{w.name} shows a request was sent for {list(s.positions)} and hasn't been accepted yet.</p>
         <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
       </article>;
     }
@@ -355,14 +388,17 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     return <section key={id} className={`today-group today-${id}`} aria-labelledby={`today-group-${id}`}>
       <h2 id={`today-group-${id}`} className="h3 today-group-h" tabIndex={-1} ref={el => { headings.current[id] = el; }}>
         {GROUPS[id].title}<span className="today-count">{countText(shown.length)}</span></h2>
-      {shown.length === 0 && <p className="today-empty">{id === "progress" ? progressEmptyText(regular, example, words) : GROUPS[id].empty}</p>}
+      {shown.length === 0 && <p className="today-empty">{id === "progress" ? progressEmptyText(regular, example, words, w) : GROUPS[id].empty}</p>}
       {shown.map(card)}
       {extra}
     </section>;
   };
 
-  const sundayCalm = brief && sunday && sunday.decisions === 0 && <><p className="today-calm"><Icon name="sun" small />
-    <span>Nothing on {dayName(words)} needs a decision.</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>Open {dayName(words)}</button></p>
+  // Never "nothing needs a decision" for a church system that doesn't share how many people each role needs (round 5):
+  // what is known, and that Ozzie can't say whether it is covered. The card above says it when someone needs a look.
+  const sundayCalm = brief && sunday && sunday.decisions === 0 && !sunday.unknownNeed?.needsYou && <><p className="today-calm"><Icon name="sun" small />
+    <span>{roster ? `On ${dayName(words)}, ${lowerFirst(rosterSummary(roster))} ${brief.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether ${words.thisOne} is covered.`
+      : `Nothing on ${dayName(words)} needs a decision.`}</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>Open {dayName(words)}</button></p>
     {/* With no Sunday card, what the leader said they'd send is said here instead. */}
     {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}</>;
   const progressMore = watch && <div className="today-more">
@@ -372,7 +408,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   return <div className="col today">
     <p className="eyebrow">{day(now, zone)} · {clock(now, zone)}</p>
     <h1 className="h1">What needs you today</h1>
-    <p className="lede">{ledeText(grouped)}</p>
+    <p className="lede">{ledeText(grouped, Boolean(sunday?.unknownNeed))}</p>
     {/* A saved check on screen says so, with its real time; while the launch's check is under way, a quiet line says that. */}
     {(checking || stuck || brief?.mode === "recording") && <p className="small today-checking">
       {brief?.mode === "recording" && <span>{savedLine(brief.completed_at)} </span>}
@@ -400,16 +436,19 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     {church}
     {calendar && <CalendarGroup reads={calendar.reads} now={now} zone={zone} reading={calendar.reading} onSettings={calendar.onSettings} />}
 
-    {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now, words)} onBack={bringBack} />}
+    {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now, words, w)} onBack={bringBack} />}
 
     {/* After the work, so the work comes first; the written script stays folded until asked for. Nothing to brief before
         Planning Center is connected. */}
-    {spoken && !(notConnected && !example && !brief) && <BriefingPanel input={spoken} names={names} attentionTimeZone={tz} />}
+    {/* The service's times on the church's own clock, as the cards above say them (round 3: they differed when the
+        church's zone isn't this Mac's). */}
+    {spoken && !(notConnected && !example && !brief) && <BriefingPanel input={spoken} names={names} attentionTimeZone={tz}
+      {...(brief?.time_zone && isTimeZone(brief.time_zone) ? { timeZone: brief.time_zone } : {})} />}
 
     {example && injected.length > 0 && <section className="find guarded" aria-labelledby="today-ignored">
       <div className="find-top"><span className="badge b-look"><Icon name="lock" small />Ignored on purpose</span></div>
-      <h2 id="today-ignored" className="find-title">An email told me to “{injected[0]!.anchor.quote.replace(/\.$/, "")}”.</h2>
-      <p className="find-body">I never follow instructions found inside email, and I can't send email or look up passwords at all. Nothing was done.</p>
+      <h2 id="today-ignored" className="find-title">An email told Ozzie to “{injected[0]!.anchor.quote.replace(/\.$/, "")}”.</h2>
+      <p className="find-body">Ozzie never follows instructions found inside email, and it can't send email or look up passwords at all. Nothing was done.</p>
     </section>}
 
     {example && report.ok && <section className="notchecked" aria-labelledby="today-quiet">

@@ -13,7 +13,7 @@
 // lives in memory in church-sources.ts; Ozzie's own tests check that nothing which sends anything imports it or this
 // page, and that they use none of the ways off the page the test names (core/test/sources/stays-on-this-mac.test.ts; a
 // check on Ozzie's own code, not a sandbox).
-import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { MAX_HITS, occurrenceOf, pointerState, searchNotes, sectionName, titleCount, type NoteRange, type Notes, type NoteSection } from "../../../core/src/sources/notes.js";
 import { MAX_LABEL, NOTE_FINDING_KINDS, type NoteAttachment, type NotesSource } from "../../../core/src/sources/types.js";
@@ -21,6 +21,14 @@ import { GUESSED_LETTERS_NOTES, LINES_CUT, LONG_LINES_CUT, NOTE_KIND_WORDS, NOTE
 import { plainLine } from "../../../core/src/sources/text.js";
 import { TOO_MANY_POINTERS, type ChurchSources, type ChurchSourcesState, type NotesRead } from "./church-sources.js";
 import { Icon } from "./icons.js";
+
+/**
+ * The church system whose teams and people these lists and notes stand beside: "Planning Center", or "B1 Church" or
+ * "Breeze" for a church on another system (App provides it). Only a name: nothing of the system is read here.
+ */
+export const ListsSystemName = createContext("Planning Center");
+/** One of this page's fixed sentences, naming the church's system where it names Planning Center. */
+export const sayFor = (text: string, system: string) => system === "Planning Center" ? text : text.replace(/Planning Center/gu, system);
 
 export { TOO_MANY_POINTERS };
 export const NOTES_TITLE = "Notes";
@@ -200,6 +208,7 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
   /** A section asked for from a Sunday card, laid out, opened and moved to (review V, L4). */
   focused: number | null;
 }) {
+  const system = useContext(ListsSystemName);
   const [name, setName] = useState(source.label);
   const [query, setQuery] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
@@ -269,7 +278,7 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
         <label className="field-l" htmlFor={`${id}-find`}>{FIND_NOTES}</label>
         <input id={`${id}-find`} className="input own-find" type="search" value={query} autoComplete="off" spellCheck={false} aria-describedby={`${id}-find-help`}
           onChange={e => setQuery(e.target.value)} />
-        <p id={`${id}-find-help`} className="input-help">{FIND_HELP}</p>
+        <p id={`${id}-find-help`} className="input-help">{sayFor(FIND_HELP, system)}</p>
       </div>
       {query.trim() ? <NotesFound notes={notes} query={query} /> : <div className="note-sections">
         {notes.sections.slice(0, count).map((section, index) => <details key={index} className="note-section" open={open.has(index)}

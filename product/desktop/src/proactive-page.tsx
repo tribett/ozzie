@@ -11,8 +11,9 @@ import { promise } from "./promises.js";
 import { CHECK_REFUSED } from "./sunday-source.js";
 import { CopyForAdministrator } from "./planning-center-forms.js";
 import type { DayWords } from "../../../core/src/service-day.js";
+import { useSystemWords } from "./church-system.js";
 
-export const useProactiveView = (p: ProactiveController) => useSyncExternalStore(p.subscribe, p.view, p.view);
+export const useProactiveView = <C,>(p: ProactiveController<C>) => useSyncExternalStore(p.subscribe, p.view, p.view);
 
 type Names = Record<string, string>;
 const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -32,23 +33,35 @@ export const scheduleLine = (prefs: ProactivePrefs) =>
 export const quietLine = (prefs: ProactivePrefs) =>
   `${clock(prefs.quietStart)} to ${clock(prefs.quietEnd)}. Notices wait until they end${prefs.urgentDuringQuiet ? ", except urgent ones" : ""}.`;
 const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-/** "Central Time (America/Chicago)": the zone's everyday name where this Mac knows one, then its IANA name. */
+const ZONE_LABELS = new Map<string, string>();
+/**
+ * "Central Time (Chicago)", "Eastern Time (New York)": the zone's everyday name where this Mac knows one, with its city as
+ * the hint; else the city alone. One style everywhere a zone is shown (Keeping watch, jobs, the time zone question,
+ * Settings); what is kept is always the IANA name.
+ */
 export function zoneLabel(zone: string): string {
+  const kept = ZONE_LABELS.get(zone);
+  if (kept !== undefined) return kept;
+  // English like the rest of the app, whatever this Mac's language (review of round 3, L8).
   const name = (style: "longGeneric" | "long") => {
-    try { return new Intl.DateTimeFormat(undefined, { timeZone: zone, timeZoneName: style }).formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value; }
+    try { return new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: style }).formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value; }
     catch { return undefined; }
   };
+  const city = zone.split("/").at(-1)!.replace(/_/gu, " ");
   const long = name("longGeneric") ?? name("long");
-  return long && long !== zone ? `${long} (${zone})` : zone;
+  const label = long && long !== zone && !/^GMT[+-]/u.test(long) ? (long === city ? long : `${long} (${city})`) : city;
+  // The time zone question lists every zone this Mac knows: each is worked out once.
+  ZONE_LABELS.set(zone, label);
+  return label;
 }
 /**
- * The church's own zone when a check read it from Planning Center; otherwise this Mac's. Times on this
- * page and quiet hours follow this Mac's clock, so a church on a different zone says so.
+ * The church's own zone when a check read it from Planning Center (`source`: the church's system); otherwise this Mac's.
+ * Times on this page and quiet hours follow this Mac's clock, so a church on a different zone says so.
  */
-export function zoneText(churchTimeZone: string | null, mac = macZone()): string {
-  if (!churchTimeZone) return `${zoneLabel(mac)}, this Mac's time. The church's own time zone shows here once a check reads it from Planning Center.`;
-  return churchTimeZone === mac ? `${zoneLabel(churchTimeZone)}, the church's time zone in Planning Center. This Mac is on the same time.`
-    : `${zoneLabel(churchTimeZone)}, the church's time zone in Planning Center. Times on this page and quiet hours follow this Mac's clock: ${zoneLabel(mac)}.`;
+export function zoneText(churchTimeZone: string | null, mac = macZone(), source = "Planning Center"): string {
+  if (!churchTimeZone) return `${zoneLabel(mac)}, this Mac's time. The church's own time zone shows here once a check reads it from ${source}.`;
+  return churchTimeZone === mac ? `${zoneLabel(churchTimeZone)}, the church's time zone in ${source}. This Mac is on the same time.`
+    : `${zoneLabel(churchTimeZone)}, the church's time zone in ${source}. Times on this page and quiet hours follow this Mac's clock: ${zoneLabel(mac)}.`;
 }
 /**
  * How the last check started. "manual" is every check outside the schedule, not only Check now: Ozzie's own re-read while
@@ -70,13 +83,14 @@ const notice = (d: DayWords): Record<NonNullable<HistoryEntry["notice"]>, string
 const RECENT_MS = 24 * 3_600_000;
 
 function ChangeLine({ change, names, d }: { change: SundayChange; names: Names; d: DayWords }) {
+  const w = useSystemWords();
   const tag = change.urgency === "urgent" ? <span className="badge b-conflict"><Icon name="flag" small />Urgent</span>
     : change.kind === "coverage-unverified" ? <span className="badge b-look"><Icon name="question" small />Worth a look</span>
       : change.effect === "worse" ? <span className="badge b-muted">Changed</span>
         : <span className={`badge ${change.effect === "better" ? "b-ok" : "b-muted"}`}>{change.effect === "better" ? "Better" : "Changed"}</span>;
   return <li>
     {tag}
-    <span>{describeChange(change, id => names[id], d)}
+    <span>{describeChange(change, id => names[id], d, w.name)}
       {change.urgency === "urgent" && change.service_starts_at && <span className="small"> Service starts {time(change.service_starts_at)}.</span>}</span>
   </li>;
 }
@@ -105,7 +119,7 @@ function Entry({ entry, names, d }: { entry: HistoryEntry; names: Names; d: DayW
  * asleep" are said outside any fold. Every sentence names the service by its real day (the day words, spec §5).
  */
 export function ProactivePage({ view, names, organization, planId, readiness, shownReadiness = readiness, busy, now, churchTimeZone = null, church = null, onCheckNow, onPause,
-  onResume, onPrefs, responsibilities = null }: {
+  onResume, onPrefs, responsibilities = null, note = null, notReady = null }: {
   view: ProactiveView; names: Names; organization: string; planId: string; readiness: Readiness; busy: boolean; now: string;
   /**
    * What the page says about readiness: while a sign-in for a church already connected is in the browser, what was true
@@ -123,9 +137,15 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
    * steady look at Sunday to show first under the day's heading, above Keep Sunday covered.
    */
   responsibilities?: ((regular: React.ReactNode) => React.ReactNode) | null;
+  /** Said under what Ozzie is watching when there are no jobs to list (a church on a system jobs don't read yet). */
+  note?: string | null;
+  /** Why checks don't run yet, when the three readiness words don't say it (a church system's zone or first run). */
+  notReady?: string | null;
 }) {
   const { prefs, schedule } = view;
   const d = useDay();
+  // The church's own system (Planning Center's words unchanged): a church on B1 Church or Breeze is kept watch over the same way.
+  const w = useSystemWords();
   const day = dayName(d);
   const last = schedule.last_run;
   const latest = view.latest[`${organization}:${planId}`];
@@ -146,8 +166,9 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
       : last.outcome === "interrupted" ? `${time(last.finished_at)}. Stopped when Ozzie closed.`
         : `${ran(last)}. Finished.${latest && !latest.fully_read ? " Some coverage couldn't be verified." : ""}`;
   const nextLine = schedule.paused ? `Paused. Ozzie doesn't look at ${day} until you resume.`
+    : notReady && shownReadiness !== "ready" ? notReady
     : shownReadiness === "not-configured" ? "After you choose which service Ozzie watches under Settings."
-      : shownReadiness === "not-connected" ? "After Planning Center is connected under Settings."
+      : shownReadiness === "not-connected" ? `After ${w.name} is connected under Settings.`
         : running ? "Checking now…"
           : schedule.next_run_at ? `${time(schedule.next_run_at)}${schedule.failures ? ", trying again after a problem" : ""}.` : "Not scheduled.";
 
@@ -164,13 +185,13 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
       The last check couldn't finish. {last.problem} {schedule.next_run_at ? `Ozzie will try again ${time(schedule.next_run_at)}.` : ""}</p>}
     {last?.outcome === "failed" && !schedule.paused && last.problem === CHECK_REFUSED && <CopyForAdministrator />}
     {shownReadiness !== "ready" && !schedule.paused && <p className="panel-info"><Icon name="info" small />
-      {shownReadiness === "not-configured" ? "Not running yet. Choose which service Ozzie watches under Settings." : "Not running yet. Connect Planning Center under Settings, then checks start on their own."}</p>}
+      {notReady ? `Not running yet. ${notReady}` : shownReadiness === "not-configured" ? "Not running yet. Choose which service Ozzie watches under Settings." : `Not running yet. ${w.connect} under Settings, then checks start on their own.`}</p>}
     {schedule.held && <p className="panel-info"><Icon name="clock" small />A notice is waiting until quiet hours end at {clock(prefs.quietEnd)}. Everything it's about is listed below.</p>}
 
     <section className="find" aria-labelledby="job-title">
       {/* The church by its name, as a job's card says it (spec §6); never its organization number. */}
-      <div className="find-top">{state}<span className="find-where">{!organization ? "Planning Center Services, not connected yet"
-        : church ? `Planning Center Services, ${church}` : "Planning Center Services"}</span></div>
+      <div className="find-top">{state}<span className="find-where">{!organization ? `${w.services}, not connected yet`
+        : church ? `${w.services}, ${church}` : w.services}</span></div>
       <Title id="job-title" className="find-title">{eyeLine(d)}</Title>
       <p className="find-body">{EYE_ABOUT}</p>
       {/* Where it stands first, then what it does. The time zone is said under Schedule and quiet hours. */}
@@ -184,7 +205,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
       </div>
       <div className="find-next">
         <button type="button" className="btn btn-primary" disabled={running || readiness === "not-configured"} onClick={onCheckNow}>
-          {running ? <><Icon name="spinner" small spin />Checking Planning Center…</> : "Check now"}</button>
+          {running ? <><Icon name="spinner" small spin />{w.checking}</> : "Check now"}</button>
         {schedule.paused
           ? <button type="button" className="btn btn-secondary" onClick={onResume}>Resume keeping an eye on {day}</button>
           : <button type="button" className="btn btn-secondary" onClick={onPause}>Pause keeping an eye on {day}</button>}
@@ -195,12 +216,13 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
   return <div className="col">
     <p className="eyebrow">Keeping watch</p>
     <h1 className="h1">What Ozzie does on its own</h1>
-    <p className="lede">Ozzie checks Planning Center for you and tells you privately when something needs you. {promise("connectAnd")}</p>
+    <p className="lede">Ozzie checks {w.name} for you and tells you privately when something needs you. {promise("connectAnd")}</p>
     {/* Without the list (it is always there in the app): the same order, what is running before how it works. */}
     {responsibilities ? responsibilities(regular) : <section className="stack" aria-labelledby="watching-title">
       <h2 id="watching-title" className="h3">What Ozzie is watching</h2>
       <p className="small">{QUIT_LINE}</p>
       {regular}
+      {note && <p className="small">{note}</p>}
       <details className="listen-more watch-how"><summary><Icon name="chev" small />See how this works</summary>
         <ul className="small">{WATCH_HOW.map(line => <li key={line}>{line}</li>)}</ul>
       </details>
@@ -232,7 +254,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
         <label htmlFor="quiet-end">Quiet hours end</label>
         <input id="quiet-end" type="time" value={prefs.quietEnd} onChange={e => set({ quietEnd: e.target.value })} />
       </div>
-      <p className="small">Time zone: {zoneText(churchTimeZone)}</p>
+      <p className="small">Time zone: {zoneText(churchTimeZone, macZone(), w.name)}</p>
       <label className="confirmation"><input type="checkbox" checked={prefs.urgentDuringQuiet} onChange={e => set({ urgentDuringQuiet: e.target.checked })} /><span>Let urgent changes through during quiet hours</span></label>
       <p className="small">Off unless you turn it on. Changes always show here in Ozzie, quiet hours or not.</p>
       <div className="row rule-row">

@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "system": "breeze",
+  "church": {
+    "id": "cedarhollow",
+    "time_zone": "America/Chicago"
+  },
+  "started_at": "2026-11-17T15:00:00Z",
+  "completed_at": "2026-11-17T15:00:31Z",
+  "reads": [
+    {
+      "read": "breeze.account",
+      "checked_at": "2026-11-17T15:00:00Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.events",
+      "checked_at": "2026-11-17T15:00:07Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.roles",
+      "checked_at": "2026-11-17T15:00:10Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.volunteers",
+      "checked_at": "2026-11-17T15:00:14Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.people",
+      "checked_at": "2026-11-17T15:00:17Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.attendance",
+      "checked_at": "2026-11-17T15:00:17Z",
+      "outcome": "not-requested"
+    },
+    {
+      "read": "breeze.tags",
+      "checked_at": "2026-11-17T15:00:21Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.forms",
+      "checked_at": "2026-11-17T15:00:24Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "breeze.form_entries",
+      "checked_at": "2026-11-17T15:00:31Z",
+      "outcome": "ok"
+    }
+  ],
+  "service": {
+    "id": "4401",
+    "day": "2026-11-22",
+    "starts_at": "2026-11-22T09:00:00-06:00",
+    "ends_at": "2026-11-22T10:30:00-06:00",
+    "shared": null
+  },
+  "busy": null,
+  "positions": [
+    {
+      "id": "9627",
+      "team_id": null,
+      "needed": 2
+    },
+    {
+      "id": "9628",
+      "team_id": null,
+      "needed": 1
+    },
+    {
+      "id": "9629",
+      "team_id": null,
+      "needed": 1
+    }
+  ],
+  "assignments": [
+    {
+      "id": "501-9627",
+      "position_id": "9627",
+      "person_id": "157857",
+      "status": "unconfirmed",
+      "asked": null
+    },
+    {
+      "id": "502-9627",
+      "position_id": "9627",
+      "person_id": "157858",
+      "status": "declined",
+      "asked": null
+    },
+    {
+      "id": "502-9628",
+      "position_id": "9628",
+      "person_id": "157858",
+      "status": "declined",
+      "asked": null
+    },
+    {
+      "id": "503-9629",
+      "position_id": "9629",
+      "person_id": "157859",
+      "status": "accepted",
+      "asked": null
+    }
+  ],
+  "on_service": [
+    "157860"
+  ],
+  "team_members": [],
+  "blockouts": null,
+  "groups": [
+    {
+      "id": "301",
+      "members": null
+    }
+  ],
+  "events": [
+    {
+      "id": "4401",
+      "starts_at": "2026-11-22T09:00:00-06:00",
+      "ends_at": "2026-11-22T10:30:00-06:00",
+      "attendance": null
+    },
+    {
+      "id": "4402",
+      "starts_at": "2026-11-27T18:00:00-06:00",
+      "ends_at": null,
+      "attendance": null
+    }
+  ],
+  "forms": [
+    {
+      "id": "41",
+      "submissions": 2
+    },
+    {
+      "id": "42",
+      "submissions": 0
+    }
+  ],
+  "names": {
+    "157857": "Avery Quillfeather",
+    "157858": "Blake Marrowstone",
+    "157859": "Casey Thimbleton",
+    "157860": "Ellis Brightwater"
+  },
+  "labels": {
+    "church": "Cedar Hollow Fellowship",
+    "service": "Sunday Gathering",
+    "position:9627": "Vocals",
+    "position:9628": "Greeter",
+    "position:9629": "Sound",
+    "group:301": "Worship Team",
+    "event:4401": "Sunday Gathering",
+    "event:4402": "Harvest Supper",
+    "form:41": "Fall Sign-up",
+    "form:42": "Prayer Card"
+  }
+}

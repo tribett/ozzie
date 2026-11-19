@@ -121,8 +121,8 @@ describe("This isn't right asks what is wrong before hiding anything (audit item
     expect(correctionChoices("attention", "for this import", "what was imported").map(c => c.label)).toEqual(["This finding is wrong", "Something else"]);
   });
   it("confirms what happened, with where it can be undone later", () => {
-    expect(correctionSaid("finding", "for this Sunday")).toBe("Got it. I've hidden this for this Sunday and kept your note. Undo brings it back now; later, it's under “What you've told Ozzie” on Church rules.");
-    expect(correctionSaid("person", "for this Sunday")).toBe("Got it. I kept your note, and this still shows. You can delete the note under “What you've told Ozzie” on Church rules.");
+    expect(correctionSaid("finding", "for this Sunday")).toBe("Got it. Ozzie hid this for this Sunday and kept your note. Undo brings it back now; later, it's under “What you've told Ozzie” on Church rules.");
+    expect(correctionSaid("person", "for this Sunday")).toBe("Got it. Ozzie kept your note, and this still shows. You can delete the note under “What you've told Ozzie” on Church rules.");
   });
   it("a note that keeps the role showing is on the Sunday page and listed on Church rules as still showing", () => {
     const entry: FeedbackEntry = { type: "correction", id: "c", kind: "needs-people", at: AT, key: role.key, occurrence: role.occurrence, facts: role.facts,

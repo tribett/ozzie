@@ -11,8 +11,11 @@ export const FAILURE_CODES: readonly FailureCode[] = Object.freeze(["denied", "s
   "timeout", "cancelled", "egress", "fidelity", "transport", "no-model", "interrupted", "invalid-arguments"]);
 const FAILURES: ReadonlySet<string> = new Set(FAILURE_CODES);
 const TOOLS: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);
-/** How a model step can end besides a FailureCode: its finish, or (native agent.rs `outcome`) an answer that listed too many facts. */
-const FINISH: ReadonlySet<string> = new Set(["stop", "tool_calls", "length", "too-many-facts"]);
+/**
+ * How a model step can end besides a FailureCode: its finish, or (native agent.rs `outcome`) an answer that listed too
+ * many facts, or Ozzie's AI's own check turning the step down before the AI saw it (round 3).
+ */
+const FINISH: ReadonlySet<string> = new Set(["stop", "tool_calls", "length", "too-many-facts", "not-accepted"]);
 const STEP = /^[1-9]\d?$/u;
 const status = (s: string) => COMPLETENESS.has(s) || FAILURES.has(s);
 
@@ -33,7 +36,7 @@ export function ledgerDetailOk(type: TaskEvent["type"], detail: string): boolean
 
 /**
  * The native ledger detail for one runtime event, or null when it can't be expressed:
- *   model "step <n>" [outcome]          → "<n>" or "<n> <stop|tool_calls|length|too-many-facts|FailureCode>"
+ *   model "step <n>" [outcome]          → "<n>" or "<n> <stop|tool_calls|length|too-many-facts|not-accepted|FailureCode>"
  *   tool "<allowlisted tool>:<status>"  → "<tool> <status>"   (status: a Completeness value or a FailureCode)
  *   tool "unknown:<status>" or "<status>" → "<status>" alone (a tool the allowlist doesn't hold is never named)
  *   failed "<FailureCode>", cancelled "" or "cancelled", and admitted, running and verified "" → unchanged.

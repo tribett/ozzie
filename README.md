@@ -3,9 +3,10 @@
 [![Checks](https://github.com/tribett/ozzie/actions/workflows/ci.yml/badge.svg)](https://github.com/tribett/ozzie/actions/workflows/ci.yml)
 
 Ozzie by FlockConnect is a desktop app for church staff and ministry leaders.
-It reads your church's Planning Center account, checks the coming Sunday
-against rules you set, and lays out what needs a decision: a serving role
-nobody has said yes to, a room booked twice, a follow-up with no one assigned.
+It reads your church's Planning Center, B1 Church or Breeze account, checks
+the coming Sunday against rules you set, and lays out what needs a decision: a serving role
+nobody has said yes to and, with Planning Center, a room booked twice or a follow-up with
+no one assigned.
 It can draft a note for you to send yourself. People decide, and people go.
 
 **Status:** early build from the AI for Church Hackathon 2026. It runs on
@@ -42,6 +43,20 @@ invented people). No church data is shown.
   (Messages), for that one person (`core/native-auth/src/contact.rs`).
   Signing in, renewing access and disconnecting use Planning Center's standard
   OAuth sign-in endpoints.
+- **Or reads B1 Church or Breeze, and only reads.** A church that plans its
+  services in B1 Church or Breeze chooses it when Ozzie first opens, and gives
+  Ozzie a key made in that system; the key goes only to that system and is
+  kept in the Mac's Keychain. Ozzie reads the service it watches (roles, who is
+  scheduled and how they answered, and in B1 Church each role's team and
+  blockouts) from a fixed list of GET addresses per system
+  (`core/church-systems/`), and says plainly what it can't see there (Breeze
+  has no blockout dates and doesn't say how many people a role needs, so Ozzie
+  shows who is on each role instead of calling the service covered; none of
+  them shares background checks). Genesis can
+  be read beside any of them for groups, events and forms only. Checks on a
+  schedule, private notices, saved checks and Ask work with them as with
+  Planning Center; jobs, Siri and Shortcuts, the copy for other AI apps and the
+  extras below work with Planning Center only for now.
 - **People forms, Check-Ins and signups, if you turn them on.** Each is its
   own choice under Settings › Forms, check-ins and signups. For the People
   forms you choose to watch, Ozzie reads how many new submissions there are,
@@ -202,7 +217,8 @@ invented people). No church data is shown.
 - **Works without a connection.** "See the fictional example" shows the app
   with an invented church, marked "Example church, not real." on every page,
   with "Leave the example". A Today that isn't connected shows no invented
-  items: it asks you to connect Planning Center or see the example.
+  items: it asks you to choose what your church uses, or connect it, or see the
+  example.
 
 ## What Ozzie never does
 
@@ -214,8 +230,8 @@ In short, Ozzie never:
 - pretends to give pastoral care, counselling or prayer;
 - scores, ranks or labels a person's spiritual health, faithfulness or risk;
 - makes a pastoral decision or acts without a named person approving it;
-- writes to Planning Center;
-- sends the names it read from Planning Center to an AI model;
+- writes to Planning Center, B1 Church, Breeze or Genesis;
+- sends the names it read from any of them to an AI model;
 - presents uncertainty as fact, or hides what it read and when.
 
 These are not settings. No user, church or plan can switch them off.

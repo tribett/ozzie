@@ -86,6 +86,8 @@ const CONNECTED: Status = { state: "connected", organization: ORG, checked_at_ms
 const CHECKED: Status = { ...CONNECTED, found: undefined, found_at_ms: undefined };
 
 const FIRST_SCREEN = "It only reads. It never changes anything in Planning Center.";
+/** A brand-new Mac's first screen since a second church system shipped (onboarding decision 21). */
+const CHOOSE_SCREEN = "What does your church use?";
 /** The service page's and Today's word for a saved check (sunday-page.tsx), with its real time. */
 const SAVED_LINE = "Saved copy of";
 const STEP = /Step \d of 3/u;
@@ -121,6 +123,10 @@ async function press(app: Mounted, label: string) {
   await app.settle();
 }
 /** Lets time pass, half a second at a time, until `text` is on screen. */
+/** On a brand-new Mac, "What does your church use?" comes first: Planning Center goes on exactly as before. */
+async function choosePlanningCenter(app: Mounted) {
+  if (dom.seen().includes(CHOOSE_SCREEN)) await press(app, "Planning Center");
+}
 async function waitFor(app: Mounted, text: string, rounds = 40) {
   const { act } = await import("react");
   for (let i = 0; i < rounds && !dom.seen().includes(text); i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await app.settle(5); }
@@ -145,6 +151,7 @@ async function reopen() {
 async function firstRun(ai: "No AI for now" | "Decide later") {
   native.pick = pickReply(SUNDAY_MORNING);
   const app = await launch();
+  await choosePlanningCenter(app);
   await press(app, "Connect Planning Center");
   if (dom.button("Open Planning Center in my browser")) await press(app, "Open Planning Center in my browser");
   native.status = { ...CONNECTED };
@@ -188,7 +195,8 @@ describe("the sidebar's Setting up entry and the screen agree (0.3.0 live click-
     native.pick = pickReply(SUNDAY_MORNING);
     const app = await launch();
     expect(dom.seen()).toContain("Setting up");
-    await press(app, "Connect Planning Center");
+    await choosePlanningCenter(app);
+  await press(app, "Connect Planning Center");
     if (dom.button("Open Planning Center in my browser")) await press(app, "Open Planning Center in my browser");
     native.status = { ...CONNECTED };
     await waitFor(app, "Next: choose how Ozzie uses AI");
@@ -208,7 +216,7 @@ describe("a relaunch after first run (0.3.0 live click-through: setup reopened a
     await firstRun("No AI for now");
     await quit();
     const { seen } = await reopen();
-    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); }
+    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); expect(screen).not.toContain(CHOOSE_SCREEN); }
     neverNotConnected(seen);
     expect(dom.seen()).toContain(TODAY);
     expect(dom.seen()).not.toContain("Setting up");
@@ -224,7 +232,7 @@ describe("a relaunch after first run (0.3.0 live click-through: setup reopened a
     await firstRun("Decide later");
     await quit();
     const { seen } = await reopen();
-    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); }
+    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); expect(screen).not.toContain(CHOOSE_SCREEN); }
     neverNotConnected(seen);
     expect(dom.seen()).toContain(TODAY);
     // On the page itself: the closed Ask panel holds the same words on its button.
@@ -235,14 +243,15 @@ describe("a relaunch after first run (0.3.0 live click-through: setup reopened a
   it("a church that left at S5d with nothing planned opens again at that step (no result yet), never at the first screen", async () => {
     native.pick = pickReply(NOTHING_PLANNED);
     const app = await launch();
-    await press(app, "Connect Planning Center");
+    await choosePlanningCenter(app);
+  await press(app, "Connect Planning Center");
     if (dom.button("Open Planning Center in my browser")) await press(app, "Open Planning Center in my browser");
     native.status = { ...CONNECTED };
     await waitFor(app, "Go to Today");
     await press(app, "Go to Today");
     await quit();
     const { seen } = await reopen();
-    for (const screen of seen) expect(screen).not.toContain(FIRST_SCREEN);
+    for (const screen of seen) { expect(screen).not.toContain(FIRST_SCREEN); expect(screen).not.toContain(CHOOSE_SCREEN); }
     // Nothing saved to show: only the quiet line while the check is under way, never "not connected".
     neverNotConnected(seen);
     expect(seen[0]).toContain(CHECKING);
@@ -256,7 +265,7 @@ describe("a relaunch after first run (0.3.0 live click-through: setup reopened a
     native.saved.set(path, { ...nov22Capture(), kind: "recording" });
     native.keychain = { ...CHECKED };
     const { seen } = await reopen();
-    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); }
+    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); expect(screen).not.toContain(CHOOSE_SCREEN); }
     neverNotConnected(seen);
     expect(dom.seen()).toContain(TODAY);
     expect(dom.seen()).not.toContain("Setting up");
@@ -267,7 +276,7 @@ describe("a relaunch after first run (0.3.0 live click-through: setup reopened a
     await quit();
     native.checkFails = true;
     const { seen } = await reopen();
-    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); }
+    for (const screen of seen) { expect(screen).not.toMatch(STEP); expect(screen).not.toContain(FIRST_SCREEN); expect(screen).not.toContain(CHOOSE_SCREEN); }
     // Until the check has failed it says it is checking, never "not connected"; once it has, it says so, as before, and
     // the saved check stays on screen.
     neverNotConnected(seen.filter(screen => screen.includes(CHECKING)));
@@ -320,7 +329,7 @@ describe("while the launch check of a saved sign-in is under way (0.3.0 live: 'N
     const { act } = await import("react");
     for (let i = 0; i < 6; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(100); }); await app.settle(5); seen.push(dom.seen()); }
     for (const screen of seen) { expect(screen).not.toContain(TODAY); expect(screen).not.toContain(CHECKING); }
-    expect(dom.seen()).toContain(FIRST_SCREEN);
+    expect(dom.seen()).toContain(CHOOSE_SCREEN);
   }, 60_000);
 
   it("a sign-in that is really gone is said as before, once the check has answered", async () => {
@@ -375,7 +384,7 @@ describe("review L6: a native launch command that never answers never leaves the
     const seen: string[] = [];
     const app = await launch(seen);
     await pass(app, 22, seen);
-    expect(dom.seen()).toContain(FIRST_SCREEN);
+    expect(dom.seen()).toContain(CHOOSE_SCREEN);
     for (const screen of seen) { expect(screen).not.toContain(TODAY); expect(screen).not.toContain(CHECKING); }
   }, 60_000);
 
@@ -384,7 +393,7 @@ describe("review L6: a native launch command that never answers never leaves the
     const seen: string[] = [];
     const app = await launch(seen);
     await pass(app, 22, seen);
-    expect(dom.seen()).toContain(FIRST_SCREEN);
+    expect(dom.seen()).toContain(CHOOSE_SCREEN);
     for (const screen of seen) expect(screen).not.toContain(TODAY);
   }, 60_000);
 });

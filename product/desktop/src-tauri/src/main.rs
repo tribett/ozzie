@@ -41,6 +41,8 @@ mod calendars;
 mod card_picker;
 // The church's own AI key, taken in natively (clipboard or Ozzie's key window), checked, then kept in the Keychain.
 mod church_sources;
+// B1 Church, Breeze and Genesis, read-only: keys through the native key window, reads through core/church-systems.
+mod church_systems;
 mod key_sheet;
 // "Open in Mail" / "Open in Messages" on drafts: a new, unsent message the person sends.
 mod draft_apps;
@@ -176,6 +178,14 @@ impl SessionNames {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remember(read.iter());
+    }
+    /// Every person name a church system's check read (church_systems.rs: B1 Church, Breeze, Genesis), as
+    /// `remember` does for Planning Center's. Labels (roles, teams, groups, events) stay out, as for Planning Center.
+    pub(crate) fn remember_names(&self, names: &[String]) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remember(names);
     }
     fn snapshot(&self) -> NameGuard {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -329,12 +339,17 @@ async fn connect_planning_center_app(
     };
     tauri::async_runtime::spawn_blocking(move || {
         let bound = match &ask {
-            Ask::Again(church) => bound_again(
-                church,
-                consumer.0.church_in_use().as_deref(),
-                consumer.0.held(church).is_some(),
-            )
-            .then(|| church.clone()),
+            Ask::Again(church) => {
+                let held = consumer.0.held(church).is_some();
+                let reads_on = app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .and_then(|dir| operations_reads_saved(&dir, church));
+                (bound_again(church, consumer.0.church_in_use().as_deref(), held)
+                    || widens_unsaved(held, reads_on))
+                .then(|| church.clone())
+            }
             Ask::Chosen(..) => None,
         };
         sign_in(&consumer, &app, ask, |consumer| match bound {
@@ -794,14 +809,25 @@ fn again_for(
 fn bound_again(church: &str, in_use: Option<&str>, saved: bool) -> bool {
     saved && in_use != Some(church)
 }
+/// Whether a sign-in again asks for more than Services with nothing saved for the church (`again_ask`: its rooms and
+/// groups switch still on, after a switch to another church system and back, or a disconnect). It is then bound to that
+/// church, so a browser signed in to another one can't give it Calendar, People and Groups unasked: Planning Center's
+/// grant for another church fails and nothing is saved (release review 2026-11-19, M1).
+fn widens_unsaved(held: bool, reads_on: Option<bool>) -> bool {
+    !held && reads_on == Some(true)
+}
 /// What a sign-in again asks for: exactly the access the church's sign-in on this Mac holds now (Services, and Calendar,
 /// People and Groups, Check-Ins and Registrations as each was granted), so Planning Center's page lists what the church
 /// already allowed and allowing it drops nothing; never more (review 2026-11-18, late). It is for the rooms, follow-ups
 /// and group reads (`purpose` "operations") only while their switch is on for that church and it holds the access;
 /// held with the reads off or undecided it is for nothing, so its grant can't turn them on (`decide_before_grant`,
-/// `reads_may_go_on`). Nothing saved (or unreadable): Services alone, for nothing.
+/// `reads_may_go_on`). Nothing saved (or unreadable: a switch to another church system and back, or a disconnect,
+/// removed it): Calendar, People and Groups beside Services, for these reads, while their switch is still on for that
+/// church, since it only ever went on with that access held (release review 2026-11-19: switching back from B1 Church
+/// or Breeze otherwise dropped them); otherwise Services alone, for nothing. Check-Ins and Registrations aren't known
+/// then, and Settings says they were lost.
 fn again_ask(held: Option<Scopes>, reads_on: Option<bool>) -> (Scopes, Option<SignInFor>) {
-    let held = held.unwrap_or(Scopes::Services);
+    let held = held.unwrap_or(Scopes::asked(reads_on == Some(true), false, false));
     let purpose = (held.operations() && reads_on == Some(true)).then_some(SignInFor::Operations);
     (held, purpose)
 }
@@ -1702,6 +1728,7 @@ fn main() {
         .manage(ManagedConnect::default())
         .manage(SignIns::default())
         .manage(key_sheet::Desk::default())
+        .manage(church_systems::ChurchSystems::default())
         .manage(local_tools::LocalTools::default())
         .manage(shortcuts::OpenedPage::default())
         .manage(Smoke {
@@ -1787,6 +1814,16 @@ fn main() {
             key_sheet::remove_own_key,
             key_sheet::own_key_saved,
             key_sheet::own_key_count,
+            church_systems::church_system_connect,
+            church_systems::church_system_verify,
+            church_systems::church_system_choices,
+            church_systems::church_system_check,
+            church_systems::church_system_forget,
+            church_systems::church_system_saved,
+            church_systems::church_system_saved_checks,
+            church_systems::church_system_load_check,
+            church_systems::church_system_delete_checks,
+            church_systems::church_system_keychain_wait,
             ai_setup::local_ai_find,
             ai_setup::local_ai_open,
             ai_setup::come_forward,
@@ -2518,10 +2555,19 @@ mod tests {
                     }
                 }
             }
-            // Nothing saved for the church (or unreadable): Services alone, for nothing, whatever its switch says.
-            for reads_on in [Some(true), Some(false), None] {
+            // Nothing saved for the church (or unreadable): Services alone, for nothing, unless its switch is still on,
+            // which it only went with Calendar, People and Groups held: then those again, for the reads (release review
+            // 2026-11-19, a switch to another church system and back). Never Check-Ins or Registrations unknown here.
+            for reads_on in [Some(false), None] {
                 assert_eq!(again_ask(None, reads_on), (Scopes::Services, None));
             }
+            assert_eq!(
+                again_ask(None, Some(true)),
+                (
+                    Scopes::asked(true, false, false),
+                    Some(SignInFor::Operations)
+                )
+            );
 
             // Read here, never from the page: what the church's saved sign-in holds and its own switch.
             let dir =
@@ -2538,8 +2584,18 @@ mod tests {
                 again_for(&consumer, Some(&dir), "1001"),
                 (wide, Some(SignInFor::Operations))
             );
-            // Another church's switch says nothing about this one; a church with nothing saved asks for Services.
+            // Another church's switch says nothing about this one. A church with nothing saved asks for Services, and
+            // for Calendar, People and Groups again while its own switch is still on (signed out, as a switch to another
+            // church system does; release review 2026-11-19).
             assert!(set_switch(&dir, "3003", true));
+            assert_eq!(
+                again_for(&consumer, Some(&dir), "3003"),
+                (
+                    Scopes::asked(true, false, false),
+                    Some(SignInFor::Operations)
+                )
+            );
+            assert!(set_switch(&dir, "3003", false));
             assert_eq!(
                 again_for(&consumer, Some(&dir), "3003"),
                 (Scopes::Services, None)
@@ -2618,6 +2674,24 @@ mod tests {
             assert!(bound_again("2002", Some("1001"), true));
             assert!(bound_again("2002", None, true));
             assert!(!bound_again("2002", Some("1001"), false));
+            // Asking for more than Services with nothing saved is bound to the church, even the one in use; Services
+            // alone stays one click (release review 2026-11-19, M1).
+            assert!(widens_unsaved(false, Some(true)));
+            for (held, reads_on) in [
+                (true, Some(true)),
+                (false, Some(false)),
+                (false, None),
+                (true, None),
+            ] {
+                assert!(!widens_unsaved(held, reads_on), "{held} {reads_on:?}");
+            }
+            // Whenever `again_ask` widens with nothing saved, the sign-in is bound.
+            for reads_on in [Some(true), Some(false), None] {
+                assert_eq!(
+                    again_ask(None, reads_on).0 != Scopes::Services,
+                    widens_unsaved(false, reads_on)
+                );
+            }
             // A sign-in again whose one click Planning Center gave to another church is for nothing there.
             let elsewhere = SignIns::default();
             let connected = held_wide.0.current().unwrap();
@@ -2657,7 +2731,9 @@ mod tests {
             }
             let app_command = &main[main.find("async fn connect_planning_center_app(").unwrap()..];
             let app_command = &app_command[..app_command.find("\n}\n").unwrap()];
-            assert!(app_command.contains("Ask::Again(church) => bound_again("));
+            assert!(app_command.contains(
+                "(bound_again(church, consumer.0.church_in_use().as_deref(), held)\n                    || widens_unsaved(held, reads_on))"
+            ));
             assert!(
                 app_command.contains(".prepare(String::new(), church, true, Purpose::SignIn)?")
             );

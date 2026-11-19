@@ -151,7 +151,9 @@ export const connection = {
    * "Sign in to {church} instead". Native asks Planning Center for exactly the access that church's sign-in on this Mac
    * holds now, never more, and says it is for the rooms, follow-ups and group reads only while they are on for that church
    * (main.rs `again_ask`; review 2026-11-18, late), so allowing it drops nothing and turns nothing on. With nothing saved
-   * for it, Services alone. What it asked for isn't known here, so `operationsAsked` keeps what it said.
+   * for it (a switch to another church system and back, a disconnect), Services, and Calendar, People and Groups again
+   * while that church's rooms and groups switch is still on. What it asked for isn't known here, so `operationsAsked`
+   * keeps what it said.
    */
   connectAppAgain: (church: string) => {
     signInStarting(undefined);

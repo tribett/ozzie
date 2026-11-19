@@ -2,7 +2,7 @@
 // everything still open for the Sunday on screen, in one place, with what wasn't checked and when it
 // was read. Built only from the brief, the person's decisions and the rooms / follow-ups check the
 // Sunday page shows; names resolve on this Mac only. Read-only: decisions happen on the Sunday page.
-import { blockoutRoles, blockoutTime, shownUncertainties, sundayShownCount, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutRoles, blockoutTime, rosterSummary, shownUncertainties, sundayShownCount, unnumberedRoster, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../core/src/harness/responsibilities.js";
@@ -26,15 +26,16 @@ export function sundayReadyLine(f: Finding, names: Names, d: DayWords = SUNDAY_W
   const pos = f.position?.name ?? "A role";
   switch (f.kind) {
     case "needs-people": return `${pos} still needs ${people(f.remaining ?? 1)}.`;
-    case "pending": return `${nameOf(names, f.person_id)} hasn't accepted ${pos} yet. ${f.notification === "sent" ? "The request was sent." : "Planning Center shows the request hasn't been sent."}`;
+    case "pending": return `${nameOf(names, f.person_id)} hasn't accepted ${pos} yet. ${f.notification === "sent" ? "The request was sent."
+      : f.notification === undefined && f.source ? `${f.source} doesn't say whether the request was sent.` : `${f.source ?? "Planning Center"} shows the request hasn't been sent.`}`;
     case "streak": return `${nameOf(names, f.person_id)} is scheduled ${f.sundays} weeks in a row. Your Church rules suggest a check-in.`;
     case "lead-missing": return `No one is scheduled to lead ${pos} ${d.thisOne}.`;
     case "lead-unverified": return `The scheduled lead for ${pos} couldn't be confirmed.`;
     // The kids rules read as on the Sunday page: which team, which time, and (on this Mac only) who.
     case "too-few-confirmed": return fewConfirmedTitle(f);
     case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
-    case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in Planning Center at ${blockoutTime(f) ? "that time" : "those times"}. Planning Center still counts them.`;
-    case "worth-a-look": return f.stale ? "This check is out of date. Check Planning Center again before relying on it." : `Part of ${d.thisOne} couldn't be checked, so it isn't a full picture.`;
+    case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} at ${blockoutTime(f) ? "that time" : "those times"}. ${f.source ?? "Planning Center"} still counts them.`;
+    case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.` : `Part of ${d.thisOne} couldn't be checked, so it isn't a full picture.`;
     default: return f.why[0] ?? "Something else is worth a look.";
   }
 }
@@ -68,14 +69,18 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   return <section className="sunday-ready" aria-label={readyTitle(d)}>
     <p className="bold">{readyTitle(d)}{brief.plan.dates ? ` · ${brief.plan.dates}` : ""}</p>
     {brief.mode === "fictional" && <p className="small">Fictional example. No church data is shown.</p>}
-    <p className="small">{counts.decisions ? `${counts.decisions === 1 ? "One thing needs" : `${counts.decisions} things need`} a decision` : "Nothing needs a decision"}
-      {counts.looks ? `, and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}.
+    {/* Never "nothing needs a decision" where the system shares no number needed (Breeze, round 5). */}
+    {unnumberedRoster(brief) && !counts.decisions ? <p className="small">{rosterSummary(unnumberedRoster(brief)!)} {brief.source ?? "The church system"} doesn't share how many people each role needs, so Ozzie can't say whether {d.thisOne} is covered.
+      {counts.looks ? ` ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look.` : ""}
       {counts.resolved ? ` You resolved ${counts.resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>
+    : <p className="small">{counts.decisions ? `${counts.decisions === 1 ? "One thing needs" : `${counts.decisions} things need`} a decision` : "Nothing needs a decision"}
+      {counts.looks ? `, and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}.
+      {counts.resolved ? ` You resolved ${counts.resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>}
     {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names, d)))}</>}
     {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names, d)))}</>}
     {others.length > 0 && <><p className="small bold">Rooms, follow-ups and group meetings</p>{list(others)}</>}
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
-    <p className="small">{brief.mode === "recording" ? "From the saved copy of a check made" : "Read from Planning Center"} {time(brief.checked_at ?? brief.completed_at)}.</p>
+    <p className="small">{brief.mode === "recording" ? "From the saved copy of a check made" : `Read from ${brief.source ?? "Planning Center"}`} {time(brief.checked_at ?? brief.completed_at)}.</p>
     <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSunday}>Open {dayName(d)} to decide</button></div>
   </section>;
 }

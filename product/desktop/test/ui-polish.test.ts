@@ -204,8 +204,8 @@ describe("a heading focus moves to (audit item 4)", () => {
 
 describe("What runs automatically: time zone", () => {
   it("names the church's zone when a check read it, and says when this Mac's clock differs", () => {
-    expect(zoneText("America/Chicago", "America/New_York")).toMatch(/^.*\(America\/Chicago\), the church's time zone in Planning Center\. Times on this page and quiet hours follow this Mac's clock: .*\(America\/New_York\)\.$/);
+    expect(zoneText("America/Chicago", "America/New_York")).toMatch(/^Central Time \(Chicago\), the church's time zone in Planning Center\. Times on this page and quiet hours follow this Mac's clock: Eastern Time \(New York\)\.$/);
     expect(zoneText("America/New_York", "America/New_York")).toContain("This Mac is on the same time.");
-    expect(zoneText(null, "America/New_York")).toMatch(/\(America\/New_York\), this Mac's time\. The church's own time zone shows here once a check reads it/);
+    expect(zoneText(null, "America/New_York")).toMatch(/^Eastern Time \(New York\), this Mac's time\. The church's own time zone shows here once a check reads it/);
   });
 });

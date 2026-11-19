@@ -9,7 +9,7 @@
 // Nothing here goes to AI help, other AI apps, Siri, a notice or the briefing (core/test/sources/stays-on-this-mac.test.ts).
 // So this page imports nothing the sending side does, the day words included: its sentences name no day, and never
 // "Sunday" for a service on another day (onboarding spec §5.1).
-import { memo, useId, useMemo, useState } from "react";
+import { memo, useContext, useId, useMemo, useState } from "react";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { MAX_COLUMNS, type Sheet } from "../../../core/src/sources/sheet.js";
 import { columnValues, matchFor, suggestMatches, type MatchTarget, type Suggestion } from "../../../core/src/sources/match.js";
@@ -18,6 +18,7 @@ import { CELLS_CUT, GUESSED_LETTERS, readFrom, ROWS_CUT, SAME_NAME, SOURCE_PROBL
 import { plainLine } from "../../../core/src/sources/text.js";
 import { useChurchSources, type ChurchSources, type SourceRead } from "./church-sources.js";
 import { LINK_TITLE, LinkForm } from "./church-link-form.js";
+import { ListsSystemName, sayFor } from "./church-notes.js";
 import { ChurchNotes } from "./church-notes.js";
 import { Icon } from "./icons.js";
 import "./church-lists.css";
@@ -123,9 +124,10 @@ function MatchTable({ sheet, source, positions, onMatches }: {
     return next;
   });
   const id = useId();
+  const system = useContext(ListsSystemName);
   if (!values.length) return <p className="small">That column has nothing in it to match.</p>;
   return <div className="stack-tight">
-    <p className="small">{MATCH_HELP}</p>
+    <p className="small">{sayFor(MATCH_HELP, system)}</p>
     {!positions.length && <p className="small">{NEEDS_CHECK}</p>}
     <table className="own-table match-table">
       <thead><tr><th scope="col">In your list</th><th scope="col">Matched to</th></tr></thead>
@@ -223,6 +225,7 @@ function ListCard({ source, read, positions, sources, reading }: {
   const [removing, setRemoving] = useState(false);
   const [rereading, setRereading] = useState(false);
   const id = useId();
+  const system = useContext(ListsSystemName);
   const save = (edit: Parameters<ChurchSources["update"]>[1]) => { setProblem(null); void sources.update(source.id, edit).then(setProblem); };
   const sheet = read?.ok ? read.sheet : null;
   const headers = sheet ? [...new Set(sheet.headers.filter(h => h !== ""))].slice(0, MAX_COLUMNS) : [];
@@ -267,7 +270,7 @@ function ListCard({ source, read, positions, sources, reading }: {
           <option value="">Choose a column</option>
           {headers.map(h => <option key={h} value={h}>{h}</option>)}
         </select>
-        <p className="input-help">{COLUMN_HELP}</p>
+        <p className="input-help">{sayFor(COLUMN_HELP, system)}</p>
       </div>
       {source.column !== null && headers.includes(source.column) && <MatchTable sheet={sheet} source={source} positions={positions}
         onMatches={matches => save({ matches })} />}

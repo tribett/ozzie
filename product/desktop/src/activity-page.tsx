@@ -4,8 +4,11 @@ import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { quietCheck, quietChecksLine, taskAccount, taskLine, type Account, type CheckFound, type TaskEnd, type TaskRow, type TaskStart } from "./harness-words.js";
 import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
+import { BY_DESIGN_OUTCOME, NOT_YET_OUTCOME, READ_LABELS, readOutcome, useSystemWords } from "./church-system.js";
+import { SYSTEMS, type CapturePart, type SystemId } from "../../../core/src/church-systems/types.js";
+import { PART_NAMES, shortByDesign } from "../../../core/src/church-systems/reads.js";
 import { dayName, pageRef } from "./day-phrases.js";
-import { promise } from "./promises.js";
+import { promise, systemPromise } from "./promises.js";
 import { OLLAMA, ollamaDoneSaid } from "./ai-words.js";
 import type { OllamaHistory } from "./onboarding-bridge.js";
 
@@ -61,11 +64,13 @@ export function byDay(tasks: readonly TaskRow[], now: Date): { day: string; task
  * (`quiet`: harness-words.ts `quietCheck`), which share one line that opens to each of them. Any other task between them
  * ends the run; nothing is left out.
  */
-export function foldQuiet(tasks: readonly TaskRow[], quiet: (row: TaskRow) => boolean): TaskRow[][] {
+export function foldQuiet(tasks: readonly TaskRow[], quiet: (row: TaskRow) => boolean, sourceOf: (row: TaskRow) => string | undefined = () => undefined): TaskRow[][] {
   const lines: TaskRow[][] = [];
   let run: TaskRow[] = [];
   const close = () => { lines.push(...(run.length > 1 ? [run] : run.map(r => [r]))); run = []; };
   for (const row of tasks) {
+    // A run is of one system's checks: a check of another system ends it.
+    if (quiet(row) && run.length && sourceOf(run[0]!) !== sourceOf(row)) close();
     if (quiet(row)) { run.push(row); continue; }
     close();
     lines.push([row]);
@@ -97,7 +102,8 @@ export function TaskAccount({ account }: { account: Account }) {
  * a row on one day share a line that opens to each one's own line (display only: every task is still there). The newest
  * RECENT_SHOWN lines show; "Show earlier work" lists the rest. Name-free: the list holds no question, answer or source text.
  */
-export function RecentWork({ tasks, procedures = null, trigger = () => undefined, end = () => undefined, found = () => undefined, now }: {
+export function RecentWork({ tasks, procedures = null, trigger = () => undefined, end = () => undefined, found = () => undefined, source = () => undefined,
+  parts = () => undefined, now }: {
   /** undefined while loading; null when the list isn't available. */
   tasks: TaskRow[] | null | undefined;
   procedures?: ReadonlyMap<string, Skill> | null;
@@ -107,27 +113,35 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   end?: (taskId: string) => TaskEnd | undefined;
   /** What a check found, when this Mac knows: only checks kept as having found nothing new are folded. */
   found?: (taskId: string) => CheckFound | undefined;
+  /** The system a check read, when it isn't Planning Center (a church on B1 Church or Breeze), as this Mac kept it. */
+  source?: (taskId: string) => SystemId | undefined;
+  /** The parts a church system's check didn't read in full, as this Mac kept them (reads.ts closed words). */
+  parts?: (taskId: string) => readonly CapturePart[] | undefined;
   now?: Date;
 }) {
   const [all, setAll] = useState(false);
   const id = useId();
   const day = useDay();
+  const w = useSystemWords();
   if (tasks === undefined) return null;
   if (tasks === null) return <p className="small recent-quiet"><Icon name="info" small />{LEDGER_UNAVAILABLE}</p>;
-  if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each check of Planning Center appear here.</p>;
+  if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each check of {w.name} appear here.</p>;
   const sorted = [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const kept = new Map(sorted.map(row => [row.task_id, { start: trigger(row.task_id), end: end(row.task_id) }]));
-  const quiet = (row: TaskRow) => quietCheck(row, kept.get(row.task_id)?.start, found(row.task_id));
+  const sourceOf = (row: TaskRow) => { const id = row.kind === "check" ? source(row.task_id) : undefined; return id ? SYSTEMS[id].name : undefined; };
+  const quiet = (row: TaskRow) => quietCheck(row, kept.get(row.task_id)?.start, found(row.task_id), sourceOf(row));
   // A run never crosses a day: each day's tasks are folded on their own.
-  const days = byDay(sorted, now ?? new Date()).map(d => ({ day: d.day, lines: foldQuiet(d.tasks, quiet) }));
+  const days = byDay(sorted, now ?? new Date()).map(d => ({ day: d.day, lines: foldQuiet(d.tasks, quiet, sourceOf) }));
   const total = days.reduce((n, d) => n + d.lines.length, 0);
   const earlier = total - RECENT_SHOWN;
   let room = all ? total : RECENT_SHOWN;
   const shown = days.flatMap(d => { const lines = d.lines.slice(0, Math.max(0, room)); room -= lines.length; return lines.length ? [{ ...d, lines }] : []; });
   const item = (row: TaskRow) => {
     const { start, end: ended } = kept.get(row.task_id) ?? {};
-    const line = taskLine(row, { procedures, day, ...(start ? { trigger: start } : {}), ...(now ? { now } : {}) });
-    const account = taskAccount(row, { start, end: ended, procedures, day, ...(now ? { now } : {}) });
+    const of = sourceOf(row);
+    const line = taskLine(row, { procedures, day, ...(start ? { trigger: start } : {}), ...(now ? { now } : {}), ...(of ? { source: of } : {}) });
+    const unread = of ? parts(row.task_id)?.map(p => PART_NAMES[p]) : undefined;
+    const account = taskAccount(row, { start, end: ended, procedures, day, ...(now ? { now } : {}), ...(of ? { source: of } : {}), ...(unread?.length ? { unread } : {}) });
     return <li key={row.task_id} className={row.state === "failed" ? "is-problem" : ""}>
       <details className="recent-task">
         <summary><Icon name="chev" small /><span>{line}</span></summary>
@@ -138,7 +152,7 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   // Quiet checks in a row: one line, opening to each check exactly as it shows on its own.
   const fold = (rows: TaskRow[]) => <li key={foldKey(rows)}>
     <details className="recent-task recent-fold">
-      <summary><Icon name="chev" small /><span>{quietChecksLine(rows)}</span></summary>
+      <summary><Icon name="chev" small /><span>{quietChecksLine(rows, sourceOf(rows[0]!))}</span></summary>
       <ol className="log recent">{rows.map(item)}</ol>
     </details>
   </li>;
@@ -155,22 +169,26 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
 }
 
 /** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */
-export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, now, ollama = null }: {
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, now, ollama = null, system = null }: {
   capture: SundayCapture | null; notGranted?: boolean;
+  /** A church on B1 Church or Breeze: the reads of its latest check, in place of Planning Center's. */
+  system?: { name: string; check: { started_at: string; system?: SystemId; reads: readonly { read: string; checked_at: string; outcome: string }[] } | null } | null;
   tasks?: TaskRow[] | null | undefined; procedures?: ReadonlyMap<string, Skill> | null;
   trigger?: (taskId: string) => TaskStart | undefined; end?: (taskId: string) => TaskEnd | undefined;
-  found?: (taskId: string) => CheckFound | undefined; now?: Date;
+  found?: (taskId: string) => CheckFound | undefined; source?: (taskId: string) => SystemId | undefined;
+  parts?: (taskId: string) => readonly CapturePart[] | undefined; now?: Date;
   /** Each time Ozzie got Ollama (native `ollama_install_history`), oldest first: a time and a closed word, never a path. */
   ollama?: OllamaHistory["done"] | null;
 }) {
   const d = useDay();
+  const w = useSystemWords();
   return <div className="col">
     <p className="eyebrow">What happened</p>
     <h1 className="h1">What Ozzie did</h1>
-    <p className="lede">{promise("reads")} {promise("sends")}</p>
+    <p className="lede">{system ? systemPromise("reads", system.name) : w.unchosen ? w.say(promise("reads")) : promise("reads")} {promise("sends")}</p>
     <section className="stack" aria-labelledby="recent-title">
       <h2 id="recent-title" className="h3">Recent work</h2>
-      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(found ? { found } : {})} {...(now ? { now } : {})} />
+      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(found ? { found } : {})} {...(source ? { source } : {})} {...(parts ? { parts } : {})} {...(now ? { now } : {})} />
     </section>
     {ollama && ollama.length > 0 && <section className="stack" aria-labelledby="ollama-title">
       <h2 id="ollama-title" className="h3">{OLLAMA.historyTitle}</h2>
@@ -179,7 +197,23 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
         <span>{ollamaDoneSaid(o.end)}</span>
       </li>)}</ol>
     </section>}
-    <section className="stack" aria-labelledby="reads-title">
+    {system && <section className="stack" aria-labelledby="reads-title">
+      <h2 id="reads-title" className="h3">Every read in the latest check</h2>
+      {!system.check && <p className="panel-sunken">No check has run yet. Every read appears here once {dayName(d)} is checked.</p>}
+      {system.check && <>
+        <p className="checkline">{system.name} · started {new Date(system.check.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {system.check.reads.length} reads</p>
+        <ol className="log">{system.check.reads.map((r, i) => {
+          // Cut short by design every time (B1's forms, Breeze's newest form entries): read as Ozzie reads it, no problem.
+          const designed = !!system.check?.system && shortByDesign(system.check.system, r.read, r.outcome) && !!BY_DESIGN_OUTCOME[r.read];
+          return <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" || designed ? "" : "is-problem"}>
+            <span className="log-t">{new Date(r.checked_at).toLocaleTimeString()}</span>
+            <span>{READ_LABELS[r.read] ?? "Another read"}</span>
+            <span className="small">{designed ? BY_DESIGN_OUTCOME[r.read] : r.outcome === "not-requested" && NOT_YET_OUTCOME[r.read] ? NOT_YET_OUTCOME[r.read] : readOutcome(r.outcome, system.name)}</span>
+          </li>;
+        })}</ol>
+      </>}
+    </section>}
+    {!system && <section className="stack" aria-labelledby="reads-title">
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
       {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {dayName(d)} is checked, or when you open the fictional example on {pageRef(d)}.</p>}
       {capture && <>
@@ -190,6 +224,6 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
           <span className="small">{activityOutcome(r.outcome, notGranted)}</span>
         </li>)}</ol>
       </>}
-    </section>
+    </section>}
   </div>;
 }

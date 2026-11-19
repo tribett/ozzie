@@ -1,0 +1,29 @@
+[package]
+name = "ozzie-church-systems"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.99.1"
+
+# Only for the developer tool, a separate crate (core/church-systems-dev) that is never part of this one: it opens
+# the test fakes and the one raw read the tool needs (`test_support`, `dev_support`). Never on by default, so nothing a
+# library user can call.
+[features]
+dev-tool = []
+
+[dependencies]
+# Only for `credentials::{CredentialStore, StoreError, MacKeychain, read_private}`.
+ozzie-native-auth = { path = "../native-auth" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+zeroize = { version = "1.8", features = ["derive"] }
+url = "2.5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# Already in this crate's lock (through ozzie-native-auth), at the version native-auth uses: names and labels are kept in
+# NFC, so one name written two ways is one name.
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already in this crate's lock (through security-framework): this Mac's own time zone data (zones.rs).
+core-foundation = "0.10"
+core-foundation-sys = "0.8"

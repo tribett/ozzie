@@ -5,14 +5,13 @@ import type { AgentStepReply, AgentStepRequest, ModelStep, ToolEnvelope } from "
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
 import {
   ALSO_ON_SUNDAY, alsoOnPage, backgroundSentence, BACKGROUND_OFF, BACKGROUND_ON_FILE, BACKGROUND_UNCONFIRMED, chosenSources, composeAnswer, DECISION_QUESTION, decisionsLeftOut, DRAFT_INTRO, isDecisionQuestion, KEPT_HERE,
-  kidsAnswer, kidsQuestion, kidsWording, MEMBERS_UNREAD, NO_KIDS_TEAM, NOBODY_SCHEDULED, nobodyScheduled, NOTHING_OPEN, ON_SUNDAY, onPage, openDecisions, setAside, NOT_COVERED_MORE, NOT_FREE, NOT_RANKED, NOTHING_TO_DECIDE,
+  kidsAnswer, kidsQuestion, kidsWording, MEMBERS_UNREAD, NO_KIDS_TEAM, NOBODY_SCHEDULED, nobodyScheduled, NOTHING_OPEN, ON_SUNDAY, onPage, openDecisions, setAside, NOT_COVERED_MORE, CANT_TELL, NOT_FREE, NOT_RANKED, NOTHING_TO_DECIDE,
 } from "../../src/harness/compose.js";
 import { envelopeProblems } from "../../src/harness/fixed.js";
 import { Harness } from "../../src/harness/index.js";
 import { HarnessSession, restoreLabels, showTimes } from "../../src/harness/session.js";
 import { HarnessTools, type HarnessData } from "../../src/harness/tools.js";
 import { TsLoop } from "../../src/harness/ts-loop.js";
-import { NOT_COVERED } from "../../src/ask.js";
 import { CHECKED, nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../src/fictional-sunday.js";
 import type { SundayCapture, SundayRules } from "../../src/sunday-capture.js";
 import { buildSundayBrief, sundayShownCount, type Finding } from "../../src/sunday-brief.js";
@@ -309,9 +308,12 @@ describe("fixed framing for each kind of answer", () => {
   };
   it("not covered: the fixed opening, then any facts read", async () => {
     const evidence = await help();
-    expect(composeAnswer('{"answer":"not-covered"}', evidence).paragraphs).toEqual([NOT_COVERED]);
+    // Ozzie's voice, never "I" (round 5).
+    expect(CANT_TELL).toBe("Ozzie can't tell from what it read.");
+    expect(composeAnswer('{"answer":"not-covered"}', evidence).paragraphs).toEqual([CANT_TELL]);
     const some = composeAnswer('{"answer":"not-covered","facts":["f1"]}', evidence);
-    expect(some.paragraphs[0]).toBe(NOT_COVERED);
+    expect(some.paragraphs[0]).toBe(CANT_TELL);
+    expect(NOT_COVERED_MORE).toBe("What the check does say:");
     expect(some.paragraphs[1]).toBe(NOT_COVERED_MORE);
     // A count of none isn't said (owner's read of 0.3.2): no "and 0 with no scheduled lead".
     expect(some.paragraphs[2]).toBe("This check found 2 roles that still need people.");
@@ -345,7 +347,7 @@ describe("fixed framing for each kind of answer", () => {
   });
   it("a draft is only the drafting tool's text (C1): a draft id with no draft, or another tool's, shows no draft", async () => {
     const evidence = await help();
-    expect(composeAnswer('{"answer":"draft","draft":"d1"}', evidence)).toEqual({ kind: "not-covered", paragraphs: [NOT_COVERED], draft: null });
+    expect(composeAnswer('{"answer":"draft","draft":"d1"}', evidence)).toEqual({ kind: "not-covered", paragraphs: [CANT_TELL], draft: null });
   });
   it("each person's sentence takes the person from the fact itself (C3), so a label can't be moved onto another person's fact", async () => {
     const evidence = await help();

@@ -43,8 +43,8 @@ describe("spoken briefing script", () => {
     expect(looks).toContain("No one is scheduled to lead Nursery this Sunday. Your Church rules ask for a scheduled lead.");
     expect(looks).toContain("Someone scheduled for Lyrics hasn't accepted yet. Planning Center shows the request hasn't been sent yet.");
     expect(looks).toContain("Someone has been scheduled 3 weeks in a row. Your Church rules suggest a quick check-in.");
-    expect(looks).toContain("I ignored one email that contained instructions. I never follow instructions found inside email, and nothing was done.");
-    expect(looks).toContain("I read 3 other emails and calendar items. Nothing is needed from you there.");
+    expect(looks).toContain("Ozzie ignored one email that contained instructions. It never follows instructions found inside email, and nothing was done.");
+    expect(looks).toContain("Ozzie read 3 other emails and calendar items. Nothing is needed from you there.");
     for (const name of Object.values(capture.names)) expect(b.text).not.toContain(name);
     for (const id of Object.keys(capture.names)) expect(b.text).not.toContain(id);
   });
@@ -93,7 +93,7 @@ describe("spoken briefing script", () => {
 
   it("says plainly when Sunday or email wasn't checked at all, and never calls that clear", () => {
     const s = buildSpokenBriefing({ attention: null, sunday: null }, { timeZone: tz });
-    expect(s.sections.find(x => x.id === "decisions")!.sentences).toEqual(["Nothing I read needs a decision."]);
+    expect(s.sections.find(x => x.id === "decisions")!.sentences).toEqual(["Nothing Ozzie read needs a decision."]);
     expect(s.sections.find(x => x.id === "unchecked")!.sentences).toEqual(["Sunday hasn't been checked yet.", "No email or calendar was read."]);
     expect(s.text).not.toMatch(/covered|all clear|nothing to worry/i);
   });
@@ -105,6 +105,16 @@ describe("spoken briefing script", () => {
       "The Sunday check is the fictional example, read Friday, November 20 at 9:00 AM.",
     ]);
     expect(s.text).toContain("Greeter still needs one more person at the 8:30 AM service.");
+  });
+
+  it("says the service's times on a church's own clock and when it was checked on this Mac's, when they differ (round 3)", () => {
+    const live = buildSundayBrief(capture, rules, "2026-11-20T18:00:00Z");
+    const s = buildSpokenBriefing({ attention: null, sunday: live }, { timeZone: "America/Chicago", checkedTimeZone: "America/Los_Angeles" });
+    expect(s.sections.find(x => x.id === "times")!.sentences[0]).toBe(
+      "Planning Center was checked Friday, November 20 at 7:00 AM. That's more than 30 minutes ago, so it may not be current.");
+    // The service's own time stays on the church's clock.
+    expect(buildSpokenBriefing(base, { timeZone: "America/Chicago", checkedTimeZone: "America/Los_Angeles" }).text)
+      .toContain("Greeter still needs one more person at the 8:30 AM service.");
   });
 
   it("says when a live check is out of date", () => {
@@ -141,7 +151,7 @@ describe("spoken briefing script", () => {
     const s = buildSpokenBriefing({ ...base, attention: attentionHeavy, sunday: heavy }, { timeZone: tz });
     expect(s.seconds).toBeLessThanOrEqual(MAX_SPOKEN_SECONDS);
     expect(s.text.length).toBeLessThanOrEqual(MAX_SPOKEN_CHARS);
-    expect(s.text).toMatch(/And \d+ more things I couldn't check, listed on screen\./);
+    expect(s.text).toMatch(/And \d+ more things Ozzie couldn't check, listed on screen\./);
     // Four per section would have run past two minutes here; the script reads fewer.
     expect(s.text).not.toContain("And 4 more that need a decision");
     expect(s.text).toContain("And 6 more that need a decision, listed on screen.");
@@ -268,7 +278,7 @@ describe("a Wednesday service, by its own day", () => {
     expect(s.sections.find(x => x.id === "decisions")!.sentences).toContain("You already decided one Wednesday item, for this Wednesday only.");
     const partial: SundayBrief = { ...brief, findings: [{ id: "worth-a-look:scope", key: "w", kind: "worth-a-look", tone: "look", why: [] }] };
     expect(buildSpokenBriefing({ attention: null, sunday: partial }, { timeZone: tz }).text)
-      .toContain("Part of this Wednesday couldn't be checked, so I won't call Wednesday covered.");
+      .toContain("Part of this Wednesday couldn't be checked, so Ozzie won't call Wednesday covered.");
   });
 });
 

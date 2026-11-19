@@ -14,7 +14,7 @@
   ],
   "sources": [
     "Planning Center Services", "Planning Center Calendar", "Planning Center People", "Planning Center Groups",
-    "Fictional email and calendar import", "Church rules on this Mac"
+    "Fictional email and calendar import", "Church rules on this Mac", "B1 Church", "Breeze", "Genesis"
   ],
   "completeness": ["complete", "partial", "stale", "denied"],
   "tool_errors": ["denied", "stale", "partial", "provider-failure", "unverified"],
@@ -82,6 +82,7 @@
     "no rule set",
     "no scheduled lead",
     "no scheduled lead expected",
+    "no team is tied to roles in this church system",
     "no unowned overdue follow-ups found",
     "none in the last check",
     "none listed",

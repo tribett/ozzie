@@ -144,7 +144,7 @@ impl HostedConfig {
     }
 }
 /// A debug override: `https://<host>[:port]`, or `http://127.0.0.1[:port]`, with no path, user, query or fragment,
-/// and never Planning Center or Church Center.
+/// and never Planning Center, Church Center or another church system's host.
 fn dev_base(text: &str) -> Option<String> {
     let text = text.trim_end_matches('/');
     let url = url::Url::parse(text).ok()?;
@@ -156,7 +156,9 @@ fn dev_base(text: &str) -> Option<String> {
         && url.path() == "/";
     let host = url.host_str()?.trim_end_matches('.');
     let allowed = match url.scheme() {
-        "https" => !host.is_empty() && !model::planning_center_host(host),
+        "https" => {
+            !host.is_empty() && !model::planning_center_host(host) && !model::church_system_host(host)
+        }
         "http" => url.host() == Some(url::Host::Ipv4(Ipv4Addr::LOCALHOST)),
         _ => false,
     };
@@ -238,6 +240,9 @@ pub(crate) fn refusal(status: u16, body: &[u8]) -> Option<ModelError> {
         400 if is("background-check") => Some(ModelError::BackgroundCheck),
         // ozzie.church found a hidden character in a note before the AI (web/ requests.ts).
         400 if is("hidden-character") => Some(ModelError::HiddenCharacter),
+        // ozzie.church's own check of the request turned it down (web/ requests.ts `checkAgentStep`, `checkReword`):
+        // Ozzie's guard, not the network, and said so (round 3: a church system's results before the site knew them).
+        400 if is("invalid-request") => Some(ModelError::NotAccepted),
         _ => Some(ModelError::ProviderFailure),
     }
 }

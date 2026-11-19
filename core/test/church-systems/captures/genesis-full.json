@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "system": "genesis",
+  "church": {
+    "id": "5f0c2a4e-1b7d-4c3e-9a10-fictional001",
+    "time_zone": "America/Chicago"
+  },
+  "started_at": "2026-11-17T15:00:00Z",
+  "completed_at": "2026-11-17T15:00:03Z",
+  "reads": [
+    {
+      "read": "genesis.me",
+      "checked_at": "2026-11-17T15:00:00Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "genesis.groups",
+      "checked_at": "2026-11-17T15:00:00Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "genesis.events",
+      "checked_at": "2026-11-17T15:00:01Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "genesis.forms",
+      "checked_at": "2026-11-17T15:00:01Z",
+      "outcome": "ok"
+    },
+    {
+      "read": "genesis.form_submissions",
+      "checked_at": "2026-11-17T15:00:03Z",
+      "outcome": "ok"
+    }
+  ],
+  "service": null,
+  "busy": null,
+  "positions": [],
+  "assignments": [],
+  "on_service": [],
+  "team_members": [],
+  "blockouts": null,
+  "groups": [
+    {
+      "id": "grp-1",
+      "members": 12
+    },
+    {
+      "id": "grp-2",
+      "members": null
+    }
+  ],
+  "events": [
+    {
+      "id": "evt-1",
+      "starts_at": "2026-11-22T09:00:00-06:00",
+      "ends_at": "2026-11-22T10:30:00-06:00",
+      "attendance": 142
+    },
+    {
+      "id": "evt-2",
+      "starts_at": "2026-11-27T18:00:00-06:00",
+      "ends_at": null,
+      "attendance": null
+    }
+  ],
+  "forms": [
+    {
+      "id": "FRMfall",
+      "submissions": 2
+    },
+    {
+      "id": "FRMcare",
+      "submissions": 0
+    }
+  ],
+  "names": {},
+  "labels": {
+    "church": "Cedar Hollow Fellowship",
+    "group:grp-1": "Tuesday Bible Study",
+    "group:grp-2": "Youth Night",
+    "event:evt-1": "Sunday Gathering",
+    "event:evt-2": "Harvest Supper",
+    "form:FRMcare": "Prayer Card",
+    "form:FRMfall": "Fall Sign-up"
+  }
+}

@@ -451,6 +451,8 @@ describe("a note Ozzie drafted while keeping an eye on things", () => {
     expect(ledeText({ attention: one, review: [], progress: one })).toBe("1 thing needs your attention.");
     expect(ledeText({ attention: [], review: [...one, ...one], progress: [] })).toBe("2 are ready to review.");
     expect(ledeText({ attention: [], review: [], progress: one })).toBe("Nothing needs you right now.");
+    // A service on a system that shares no number needed (Breeze): never said to need nobody (release review L3).
+    expect(ledeText({ attention: [], review: [], progress: one }, true)).toBe("Nothing Ozzie can check needs you right now.");
   });
 });
 
@@ -458,7 +460,7 @@ describe("the fictional example never looks real (audit item 2)", () => {
   const today = (props: Partial<React.ComponentProps<typeof TodayPage>> = {}) => text(renderToStaticMarkup(React.createElement(TodayPage, {
     brief: null, names: {}, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), ...props,
   })));
-  const invented = /Tonight's orientation|Ignore your rules|Fictional import|Harbor Example Church|An email told me/u;
+  const invented = /Tonight's orientation|Ignore your rules|Fictional import|Harbor Example Church|An email told (?:me|Ozzie)/u;
 
   it("shows none of the example's invented items on a Today that isn't the example", () => {
     // Not connected yet, and the example not chosen: what to do next, and nothing invented.
