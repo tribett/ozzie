@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
-import { taskAccount, taskLine, type Account, type TaskEnd, type TaskRow, type TaskStart } from "./harness-words.js";
+import { quietCheck, quietChecksLine, taskAccount, taskLine, type Account, type CheckFound, type TaskEnd, type TaskRow, type TaskStart } from "./harness-words.js";
 import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
 import { dayName, pageRef } from "./day-phrases.js";
@@ -56,6 +56,25 @@ export function byDay(tasks: readonly TaskRow[], now: Date): { day: string; task
   }
   return out;
 }
+/**
+ * One day's tasks, in order, as Recent work's lines: each task its own line, except two or more quiet checks in a row
+ * (`quiet`: harness-words.ts `quietCheck`), which share one line that opens to each of them. Any other task between them
+ * ends the run; nothing is left out.
+ */
+export function foldQuiet(tasks: readonly TaskRow[], quiet: (row: TaskRow) => boolean): TaskRow[][] {
+  const lines: TaskRow[][] = [];
+  let run: TaskRow[] = [];
+  const close = () => { lines.push(...(run.length > 1 ? [run] : run.map(r => [r]))); run = []; };
+  for (const row of tasks) {
+    if (quiet(row)) { run.push(row); continue; }
+    close();
+    lines.push([row]);
+  }
+  close();
+  return lines;
+}
+/** A fold is known by its oldest check, so one that is open stays open as newer quiet checks join it at the top. */
+export const foldKey = (rows: readonly TaskRow[]) => `quiet-${rows.at(-1)!.task_id}`;
 
 /**
  * A task as a short account (audit item 7): what started it, what Ozzie looked at, whether it asked the AI and what the AI
@@ -74,10 +93,11 @@ export function TaskAccount({ account }: { account: Account }) {
 }
 
 /**
- * Recent work, newest first and grouped by day: one plain line per task, opening to a short account of it. The newest
- * RECENT_SHOWN show; "Show earlier work" lists the rest. Name-free: the list holds no question, answer or source text.
+ * Recent work, newest first and grouped by day: one plain line per task, opening to a short account of it. Quiet checks in
+ * a row on one day share a line that opens to each one's own line (display only: every task is still there). The newest
+ * RECENT_SHOWN lines show; "Show earlier work" lists the rest. Name-free: the list holds no question, answer or source text.
  */
-export function RecentWork({ tasks, procedures = null, trigger = () => undefined, end = () => undefined, now }: {
+export function RecentWork({ tasks, procedures = null, trigger = () => undefined, end = () => undefined, found = () => undefined, now }: {
   /** undefined while loading; null when the list isn't available. */
   tasks: TaskRow[] | null | undefined;
   procedures?: ReadonlyMap<string, Skill> | null;
@@ -85,6 +105,8 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   trigger?: (taskId: string) => TaskStart | undefined;
   /** Which closed form a verified answer took, when this Mac knows. */
   end?: (taskId: string) => TaskEnd | undefined;
+  /** What a check found, when this Mac knows: only checks kept as having found nothing new are folded. */
+  found?: (taskId: string) => CheckFound | undefined;
   now?: Date;
 }) {
   const [all, setAll] = useState(false);
@@ -94,11 +116,18 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   if (tasks === null) return <p className="small recent-quiet"><Icon name="info" small />{LEDGER_UNAVAILABLE}</p>;
   if (!tasks.length) return <p className="panel-sunken">Nothing yet. Questions you ask Ozzie and each check of Planning Center appear here.</p>;
   const sorted = [...tasks].sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const earlier = sorted.length - RECENT_SHOWN;
+  const kept = new Map(sorted.map(row => [row.task_id, { start: trigger(row.task_id), end: end(row.task_id) }]));
+  const quiet = (row: TaskRow) => quietCheck(row, kept.get(row.task_id)?.start, found(row.task_id));
+  // A run never crosses a day: each day's tasks are folded on their own.
+  const days = byDay(sorted, now ?? new Date()).map(d => ({ day: d.day, lines: foldQuiet(d.tasks, quiet) }));
+  const total = days.reduce((n, d) => n + d.lines.length, 0);
+  const earlier = total - RECENT_SHOWN;
+  let room = all ? total : RECENT_SHOWN;
+  const shown = days.flatMap(d => { const lines = d.lines.slice(0, Math.max(0, room)); room -= lines.length; return lines.length ? [{ ...d, lines }] : []; });
   const item = (row: TaskRow) => {
-    const start = trigger(row.task_id);
+    const { start, end: ended } = kept.get(row.task_id) ?? {};
     const line = taskLine(row, { procedures, day, ...(start ? { trigger: start } : {}), ...(now ? { now } : {}) });
-    const account = taskAccount(row, { start, end: end(row.task_id), procedures, day, ...(now ? { now } : {}) });
+    const account = taskAccount(row, { start, end: ended, procedures, day, ...(now ? { now } : {}) });
     return <li key={row.task_id} className={row.state === "failed" ? "is-problem" : ""}>
       <details className="recent-task">
         <summary><Icon name="chev" small /><span>{line}</span></summary>
@@ -106,11 +135,18 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
       </details>
     </li>;
   };
+  // Quiet checks in a row: one line, opening to each check exactly as it shows on its own.
+  const fold = (rows: TaskRow[]) => <li key={foldKey(rows)}>
+    <details className="recent-task recent-fold">
+      <summary><Icon name="chev" small /><span>{quietChecksLine(rows)}</span></summary>
+      <ol className="log recent">{rows.map(item)}</ol>
+    </details>
+  </li>;
   return <>
     <div className="recent-days" id={`${id}-list`}>
-      {byDay(all ? sorted : sorted.slice(0, RECENT_SHOWN), now ?? new Date()).map((d, i) => <section key={d.day} className="recent-day" aria-labelledby={`${id}-day-${i}`}>
+      {shown.map((d, i) => <section key={d.day} className="recent-day" aria-labelledby={`${id}-day-${i}`}>
         <h3 id={`${id}-day-${i}`} className="recent-day-h">{d.day}</h3>
-        <ol className="log recent">{d.tasks.map(item)}</ol>
+        <ol className="log recent">{d.lines.map(line => line.length > 1 ? fold(line) : item(line[0]!))}</ol>
       </section>)}
     </div>
     {earlier > 0 && <div><button type="button" className="btn btn-quiet btn-sm btn-flush" aria-expanded={all} aria-controls={`${id}-list`} onClick={() => setAll(!all)}>
@@ -119,10 +155,11 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
 }
 
 /** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */
-export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, now, ollama = null }: {
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, now, ollama = null }: {
   capture: SundayCapture | null; notGranted?: boolean;
   tasks?: TaskRow[] | null | undefined; procedures?: ReadonlyMap<string, Skill> | null;
-  trigger?: (taskId: string) => TaskStart | undefined; end?: (taskId: string) => TaskEnd | undefined; now?: Date;
+  trigger?: (taskId: string) => TaskStart | undefined; end?: (taskId: string) => TaskEnd | undefined;
+  found?: (taskId: string) => CheckFound | undefined; now?: Date;
   /** Each time Ozzie got Ollama (native `ollama_install_history`), oldest first: a time and a closed word, never a path. */
   ollama?: OllamaHistory["done"] | null;
 }) {
@@ -133,7 +170,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
     <p className="lede">{promise("reads")} {promise("sends")}</p>
     <section className="stack" aria-labelledby="recent-title">
       <h2 id="recent-title" className="h3">Recent work</h2>
-      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(now ? { now } : {})} />
+      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(found ? { found } : {})} {...(now ? { now } : {})} />
     </section>
     {ollama && ollama.length > 0 && <section className="stack" aria-labelledby="ollama-title">
       <h2 id="ollama-title" className="h3">{OLLAMA.historyTitle}</h2>

@@ -21,7 +21,7 @@ import { DEFAULT_PREFS } from "../src/proactive.js";
 import { ProactivePage } from "../src/proactive-page.js";
 import { newSchedule } from "../../../core/src/schedule.js";
 import {
-  foundText, lifetimeText, noticedTitle, problemText, purposeText, refusalText, runText, scheduleText, statusText, togetherText,
+  foundText, keepAbout, lifetimeText, noticedTitle, oneOfEach, problemText, purposeText, QUIT_LINE, refusalText, runText, scheduleText, statusText, WATCH_HOW,
 } from "../src/responsibility-words.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
 import { DayProvider } from "../src/day-words.js";
@@ -269,16 +269,19 @@ describe("Keeping watch: the home for responsibilities", () => {
 
   it("lists each with a plain status, its schedule, last and next check, and controls", () => {
     const page = list();
-    expect(page).toContain("What Ozzie is keeping an eye on");
+    expect(page).toContain("What Ozzie is watching");
     expect(page).toContain("Keeping an eye on it");
     expect(page).toContain("Paused");
     expect(page).toContain("Couldn't finish last time");
     // Without the run's report, the count is labeled findings, so it can't be read as Sunday's things to decide.
     expect(page).toMatch(/Last check .+, when it started\. Finished: 4 findings; 1 note ready to review\./u);
     expect(page).toMatch(/Couldn't finish: Planning Center didn't answer\./u);
-    expect(page).toContain("1 of 6 checks used in the last 24 hours.");
+    expect(page).toContain("Checks used 1 of 6 in the last 24 hours.");
+    // Where each one stands comes first on its card, then what it does.
+    expect(page.indexOf("Keep Sunday covered Last check")).toBeGreaterThan(-1);
+    expect(page.indexOf("Keep Sunday covered Last check")).toBeLessThan(page.indexOf("Watches Open roles"));
     for (const button of ["Check now", "Pause", "Resume", "Change", "Stop", "Pause everything", "Set up something new"]) expect(page).toContain(button);
-    expect(page).toContain("Ozzie keeps checking while its window is closed; it stays as the small Ozzie picture at the top of your screen.");
+    expect(page).toContain("See how this works Ozzie keeps checking while its window is closed. It stays as the small Ozzie picture at the top of your screen.");
     expect(page).not.toMatch(HIDDEN_WORDS);
     expect(page).not.toMatch(NEVER);
   });
@@ -320,29 +323,31 @@ describe("Keeping watch: the home for responsibilities", () => {
     expect(waiting).toContain("Next check As soon as Planning Center is connected.");
   });
 
-  it("shows Sunday as one item: Ozzie keeping an eye on Sunday beside Keep Sunday covered, saying how they work together", () => {
+  it("shows Sunday as one item: Ozzie keeping an eye on Sunday, then Keep Sunday covered, each saying on its card what it is", () => {
     const morning = items[1]!;
     const regular = React.createElement("p", null, "REGULAR CHECK");
     const sundayList = (rs: Responsibility[]) => render(React.createElement(ResponsibilityList, { view: view({ items: rs }), context: context(), runner: fakeRunner(view({ items: rs })), actions, sunday: regular }));
     const page = sundayList([items[0]!, morning]);
     const at = (s: string) => page.indexOf(s);
-    expect(at("What Ozzie is keeping an eye on")).toBeLessThan(at("Keeping an eye on Sunday"));
-    expect(page).toContain(togetherText());
-    expect(at("Keeping an eye on Sunday")).toBeLessThan(at("REGULAR CHECK"));
-    expect(at("REGULAR CHECK")).toBeLessThan(at("Keep Sunday covered Watches"));
-    expect(at("Keep Sunday covered Watches")).toBeLessThan(at("Morning briefing Watches"));
-    // Keep Sunday covered's card is listed once, in the Sunday item, not again among the rest.
-    expect(page.match(/Keep Sunday covered Watches/gu)).toHaveLength(1);
+    expect(at("What Ozzie is watching")).toBeLessThan(at("Sunday REGULAR CHECK"));
+    // Keep Sunday covered says what it is in short sentences, apart from the steady look: a job started, with a plan, limits and an end.
+    expect(page).toContain(`Keep Sunday covered ${keepAbout()} Last check`);
+    expect(keepAbout()).toBe("A job you started, with a plan, limits and an end you chose. It checks more often as Sunday gets close, and sooner when the check above finds a change. It also prepares notes.");
+    expect(at("REGULAR CHECK")).toBeLessThan(at("Keep Sunday covered A job you started"));
+    expect(at("Keep Sunday covered A job you started")).toBeLessThan(at("Morning briefing Last check"));
+    // Keep Sunday covered's card is listed once, in the Sunday item, not again among the rest; only it carries that line.
+    expect(page.match(/Keep Sunday covered A job you started/gu)).toHaveLength(1);
+    expect(page).not.toMatch(/Morning briefing A job/u);
     expect(page).toContain("Every day at 7:00 AM, and sooner when something changes. Also at 12:00 PM and 5:00 PM in the two days before Sunday.");
     // Not on: the Sunday item offers it, with the plan to confirm first; nothing else says "Nothing yet".
     const off = sundayList([morning]);
-    expect(off).toMatch(/Keeping an eye on Sunday .*REGULAR CHECK Not on Keep Sunday covered It checks more often as Sunday gets close, tells you when something needs a decision, and prepares notes\. You confirm a short plan before anything starts\. Set up Keep Sunday covered/u);
+    expect(off).toMatch(/Sunday REGULAR CHECK Not on Keep Sunday covered A job you start\. You confirm a short plan first, with limits and an end you choose\. It checks more often as Sunday gets close, and sooner when the check above finds a change\. It prepares notes and tells you when something needs a decision\. Set up Keep Sunday covered/u);
     expect(sundayList([])).not.toContain("Nothing yet");
     expect(page).not.toMatch(HIDDEN_WORDS);
     expect(page).not.toMatch(NEVER);
   });
 
-  it("on Keeping watch, the regular look at Sunday is inside the Sunday item, once", () => {
+  it("on Keeping watch, the steady look at Sunday is inside the Sunday item, once, and says where it stands first", () => {
     const proactiveView = { prefs: DEFAULT_PREFS, schedule: newSchedule(), history: [], latest: {}, running: false, unseen: 0 };
     const page = render(React.createElement(ProactivePage, {
       view: proactiveView, names: {}, organization: "1001", planId: "92902197", readiness: "ready", busy: false, now: FRI,
@@ -350,12 +355,13 @@ describe("Keeping watch: the home for responsibilities", () => {
       responsibilities: (regular: React.ReactNode) => React.createElement(ResponsibilityList, { view: v, context: context(), runner: fakeRunner(v), actions, sunday: regular }),
     }));
     const at = (s: string) => page.indexOf(s);
-    expect(page.match(/Keeping an eye on Sunday/gu)).toHaveLength(1);
-    expect(page.match(/Ozzie keeps an eye on Sunday/gu)).toHaveLength(2); // its card, and the line saying how it works with Keep Sunday covered
-    expect(at("Keeping an eye on Sunday")).toBeLessThan(at("On schedule"));
-    expect(at("On schedule")).toBeLessThan(at("Keep Sunday covered Watches"));
-    expect(at("Keep Sunday covered Watches")).toBeLessThan(at("What changed recently"));
-    expect(page).toContain("When Ozzie opens, then every hour while Ozzie is running on this Mac");
+    // One name for it (spec §6): its card's title, said once; the page no longer repeats it in every line.
+    expect(page.match(/Ozzie keeps an eye on Sunday/gu)).toHaveLength(1);
+    expect(page.match(/keep(?:s|ing)? an eye on/giu)!.length).toBeLessThanOrEqual(5);
+    expect(page).toContain("Sunday On schedule Planning Center Services Ozzie keeps an eye on Sunday Runs by itself whenever Ozzie is open. Last check Not yet. Next check");
+    expect(at("On schedule")).toBeLessThan(at("Keep Sunday covered A job you started"));
+    expect(at("Keep Sunday covered A job you started")).toBeLessThan(at("What changed recently"));
+    expect(page).toContain("How often When Ozzie opens, then at least every hour while it is running, even with its window closed. While its window is on screen, about every 30 minutes.");
   });
 
   it("says when everything is paused, and when there's nothing yet", () => {
@@ -385,6 +391,105 @@ describe("Keeping watch: the home for responsibilities", () => {
     expect(paused).not.toContain("Pause everything stops");
     expect(alone).not.toMatch(HIDDEN_WORDS);
     expect(alone).not.toMatch(NEVER);
+  });
+});
+
+describe("Keeping watch reads top to bottom: what is running, then how it works (polish, 2026-11-19)", () => {
+  const keep = responsibility(sunday(), { runs: [run()] });
+  const morning = responsibility(defaultPlan("morning-briefing", FRI, ET), { id: "00000000-0000-4000-8000-000000000002" });
+  const proactiveView = { prefs: DEFAULT_PREFS, schedule: newSchedule(), history: [], latest: {}, running: false, unseen: 0 };
+  const html = (items: Responsibility[]) => {
+    const v = view({ items, next: { [keep.id]: "2026-11-20T17:00:00.000Z" } });
+    return renderToStaticMarkup(React.createElement(ProactivePage, {
+      view: proactiveView, names: {}, organization: "1001", planId: "92902197", readiness: "ready", busy: false, now: FRI,
+      church: "Harbor Example Church", churchTimeZone: "America/Chicago", onCheckNow() {}, onPause() {}, onResume() {}, onPrefs() {},
+      responsibilities: (regular: React.ReactNode) => React.createElement(ResponsibilityList, {
+        view: v, context: context({ church: "Harbor Example Church" }), runner: fakeRunner(v), actions, sunday: regular }),
+    }));
+  };
+  // Keep Sunday covered on (with another job), and not on (offered).
+  const on = html([keep, morning]), off = html([]);
+  const FOLD = '<details class="listen-more watch-how">';
+  /** What a person reads without opening anything: every fold taken out. */
+  const unfolded = (h: string) => text(h.replace(/<details\b[\s\S]*?<\/details>/gu, " "));
+  /** What the "See how this works" fold holds. */
+  const folded = (h: string) => text(/<details class="listen-more watch-how">[\s\S]*?<\/details>/u.exec(h)?.[0] ?? "");
+
+  it("keeps every fact the old explanation gave: on the page, and at most one click away", () => {
+    // The old lead, its paragraph, Pause everything's line, the line about the two things that look at Sunday, and the card's rows.
+    const facts = [
+      "tells you privately when something needs you", "Ozzie only reads.", "even with its window closed",
+      "Ozzie keeps checking while its window is closed.", "It stays as the small Ozzie picture at the top of your screen.",
+      QUIT_LINE, "Ozzie catches up once when it can.",
+      "Ozzie runs one job of each kind at a time", "use Change on its card instead of setting up another",
+      "Pause everything stops Ozzie keeping an eye on Sunday", "until you resume.",
+      "Ozzie keeps an eye on Sunday", "Runs by itself whenever Ozzie is open.", "When something gets worse, a private notice on this Mac",
+      "It never includes names or details.", "It checks more often as Sunday gets close, and sooner when the check above finds a change.",
+      "Reads only. It never sends messages.", "then compares them with the last check.",
+      "Planning Center Services, Harbor Example Church", "Time zone: Central Time (America/Chicago), the church's time zone in Planning Center.",
+      "Last check", "Next check", "Quiet hours 9:00 PM to 7:00 AM: notices wait until they end.",
+    ];
+    for (const page of [on, off]) for (const fact of facts) expect(text(page), fact).toContain(fact);
+    // Keep Sunday covered: a job a person starts, with a plan, limits and an end, that prepares notes and says when something needs a decision.
+    for (const fact of ["A job you started, with a plan, limits and an end you chose.", "It also prepares notes.", "Tells you Only when something needs a decision."]) {
+      expect(text(on), fact).toContain(fact);
+    }
+    for (const fact of ["A job you start. You confirm a short plan first, with limits and an end you choose.", "It prepares notes and tells you when something needs a decision."]) {
+      expect(text(off), fact).toContain(fact);
+    }
+    // Anything not said outside a fold is in the one "See how this works" fold, a click away.
+    for (const page of [on, off]) expect(folded(page)).toBe(` See how this works ${[...WATCH_HOW, oneOfEach()].join(" ")} `);
+  });
+
+  it("says Ozzie only reads, and that nothing runs after quitting or while asleep, without opening anything", () => {
+    for (const page of [on, off]) {
+      expect(unfolded(page)).toContain("tells you privately when something needs you. Ozzie only reads.");
+      expect(unfolded(page)).toContain(QUIT_LINE);
+      expect(unfolded(page)).toContain("Reads only. It never sends messages.");
+      expect(unfolded(page)).not.toContain(WATCH_HOW[0]!);
+    }
+  });
+
+  it("never promises an exact hour: Ozzie checks at least that often, and more often with its window on screen", () => {
+    for (const page of [on, off]) {
+      expect(text(page)).toContain("at least every hour");
+      expect(text(page)).not.toMatch(/(?<!at least )\bevery hour\b/u);
+      expect(text(page)).toContain("While its window is on screen, about every 30 minutes.");
+    }
+  });
+
+  it("shows what is running and where it stands before the fold, with little to read before it", () => {
+    for (const page of [on, off]) {
+      const fold = page.indexOf(FOLD);
+      expect(fold).toBeGreaterThan(-1);
+      for (const status of [">On schedule<", ">Last check<", ">Next check<", ">Ozzie keeps an eye on Sunday<"]) {
+        expect(page.indexOf(status), status).toBeGreaterThan(page.indexOf("<h1"));
+        expect(page.indexOf(status), status).toBeLessThan(fold);
+      }
+      expect(page.indexOf(">Last check<")).toBeLessThan(page.indexOf(">What it does<"));
+      // What a pastor reads before the steady look's last check: the title, a two-sentence lead, the heading, one short line,
+      // the card's top (81 words with a job on; it was 269, three paragraphs of explanation, before 2026-11-19).
+      const before = text(page).slice(0, text(page).indexOf(" Last check ")).trim().split(/\s+/u);
+      expect(before.length, before.join(" ")).toBeLessThanOrEqual(90);
+    }
+    // Keep Sunday covered's own state, before the fold too.
+    expect(on.indexOf(">Keeping an eye on it<")).toBeLessThan(on.indexOf(FOLD));
+    expect(off.indexOf(">Not on<")).toBeLessThan(off.indexOf(FOLD));
+  });
+
+  it("heads its parts in order, one level at a time, and its fold opens like every other", () => {
+    const headings = [...on.matchAll(/<h([1-6])\b[^>]*>([^<]*)<\/h\1>/gu)].map(m => `h${m[1]} ${m[2]}`);
+    expect(headings).toEqual([
+      "h1 What Ozzie does on its own", "h2 What Ozzie is watching", "h3 Sunday", "h4 Ozzie keeps an eye on Sunday", "h4 Keep Sunday covered",
+      "h3 Morning briefing", "h2 What changed recently", "h2 Schedule and quiet hours",
+    ]);
+    const levels = headings.map(h => Number(h[1]));
+    levels.forEach((l, i) => { if (i) expect(l - levels[i - 1]!, headings[i]).toBeLessThanOrEqual(1); });
+    expect(on).toContain(`${FOLD}<summary><svg class="ic ic-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>See how this works</summary><ul class="small"><li>`);
+    expect(on.match(/See how this works<\/summary>/gu)).toHaveLength(1);
+    // Pause everything is still described by its own line.
+    expect(on).toMatch(/aria-describedby="pause-scope"[^>]*>Pause everything<\/button>/u);
+    expect(on).toContain('<span id="pause-scope">Pause everything stops Ozzie keeping an eye on Sunday, and everything else here, until you resume.</span>');
   });
 });
 
@@ -495,7 +600,7 @@ describe("a kind that has used its checks for the last 24 hours", () => {
     expect(line).not.toContain("Next check");
     const card = render(React.createElement(ResponsibilityList, { view: v, context: context(), runner: fakeRunner(v), actions }));
     expect(card).toContain(`Next check It has used its checks for now. It can check again ${againText(free, FRI)}.`);
-    expect(card).toContain("6 of 6 checks used in the last 24 hours.");
+    expect(card).toContain("Checks used 6 of 6 in the last 24 hours.");
     // A scheduled time after its checks free up is one it can keep; with checks left, the schedule stands.
     const later = view({ items: [fresh, stopped], next: { [fresh.id]: at_(free, 60) } });
     expect(checksBack(fresh, later, FRI)).toBeNull();
@@ -596,8 +701,10 @@ describe("a church whose service is on a Wednesday (onboarding spec §5)", () =>
     const items = [keep({ runs: [run()] }), morning];
     const v = view({ items });
     const list = wed(React.createElement(ResponsibilityList, { view: v, context: context({ sunday: WED }), runner: fakeRunner(v), actions, sunday: React.createElement("p", null, "REGULAR") }));
-    expect(list).toContain("Keeping an eye on Wednesday");
-    expect(list).toContain(togetherText(wednesdayWords()));
+    expect(list).toContain("Wednesday REGULAR");
+    expect(list).toContain(`Keep Wednesday covered ${keepAbout(wednesdayWords())}`);
+    expect(keepAbout(wednesdayWords())).toContain("It checks more often as Wednesday gets close");
+    expect(list).toContain(oneOfEach(wednesdayWords()));
     expect(list).toContain("Pause everything stops Ozzie keeping an eye on Wednesday, and everything else here, until you resume.");
     expect(list).toContain("Thursday's includes the full “Ready for Wednesday” brief.");
     expect(list).not.toContain("Sunday");
@@ -629,7 +736,8 @@ describe("a church whose service is on a Wednesday (onboarding spec §5)", () =>
     expect(page).toContain("Keeping watch");
     expect(page).toContain("Ozzie keeps an eye on Wednesday");
     expect(page).toContain("“Wednesday coverage needs attention. Open Ozzie to see details.”");
-    expect(page).toContain("Account Planning Center, Harbor Example Church");
+    // The church by its name beside where the card reads, as a job's card says it.
+    expect(page).toContain("On schedule Planning Center Services, Harbor Example Church Ozzie keeps an eye on Wednesday");
     expect(page).toContain("Pause keeping an eye on Wednesday");
     expect(page).not.toContain("Sunday");
     expect(page).not.toContain("1001");

@@ -1,8 +1,8 @@
 // Settings' AI section (onboarding spec §3, §4.4, S10d). It shows which AI Ozzie uses and what that route needs now,
 // and "Change" opens the very same screens as first run (ai-choice.tsx), so the two can't differ. The church's own key:
 // this month's count and its limit ("Change the limit"), and "Remove my key from this Mac" (also once AI is off, while a key is kept). AI on this Mac: whether it has answered the
-// check. Ozzie's AI: its state and how to stop paying. Every word comes from closed codes; native's label, a key or
-// anything a company wrote is never shown.
+// check, and with LM Studio that its LM Link can answer from another computer. Ozzie's AI: its state and how to stop
+// paying. Every word comes from closed codes; native's label, a key or anything a company wrote is never shown.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useDay } from "./day-words.js";
 import { Icon } from "./icons.js";
@@ -167,7 +167,9 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
     </Problem>}
     {route === "local" && status && status.setup !== "not-on-this-mac" && (status.setup === "not-checked" || !status.configured
       ? <Problem text={LIMIT.localNotChecked} calm><button type="button" className="btn btn-primary" onClick={() => open({ at: "mac" })}>{LIMIT.checkLocal}</button></Problem>
-      : typeof status.checked_at_ms === "number" && Number.isFinite(status.checked_at_ms) ? <Ok lines={[LIMIT.localChecked(when(status.checked_at_ms))]} /> : null)}
+      : typeof status.checked_at_ms === "number" && Number.isFinite(status.checked_at_ms) ? <Ok lines={[LIMIT.localChecked(when(status.checked_at_ms), status.local_app ?? null)]} /> : null)}
+    {/* LM Studio can run its models on another of the person's computers (LM Link), which Ozzie can't see: said plainly. */}
+    {route === "local" && status?.local_app === "lm-studio" && status.setup !== "not-on-this-mac" && <p className="ai-body">{MAC.lmLink}</p>}
     {route === "managed" && status && <OzzieAiState status={status} onStart={() => open({ at: "ozzie" })} onReconnect={() => open({ at: "ozzie", reconnect: true })}
       onAnother={() => open({ at: "choose" })} onChanged={shown} />}
     {problem && <Problem text={problem} />}

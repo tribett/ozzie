@@ -157,7 +157,9 @@ describe("background checks", () => {
     const others = findings.filter(f => f.kind !== "background-check");
     const count = (tone: string, list: typeof findings) => list.filter(f => f.tone === tone).length;
     const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
-    expect(out).toContain(`this check found ${shown.decisions - count("decision", background)} items that need a decision and ${shown.looks - count("look", background)} worth a look`);
+    const d = shown.decisions - count("decision", background), w = shown.looks - count("look", background);
+    expect(d > 0 && w > 0).toBe(true);
+    expect(out).toContain(`, ${d} things need a decision and ${w} are worth a look.`);
     expect(out).toContain("Some findings are shown only in Ozzie on this Mac");
     if (background.length) expect(count("decision", findings) + count("look", findings)).toBeGreaterThan(count("decision", others) + count("look", others));
   });

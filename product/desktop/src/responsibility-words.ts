@@ -9,7 +9,7 @@ import { describeChange } from "../../../core/src/sunday-changes.js";
 import { kindWords } from "../../../core/src/finding-feedback.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
 import type { NoticedItem } from "./responsibility-runner.js";
-import { dayName, eyeLine, keepTitle, pageRef } from "./day-phrases.js";
+import { dayName, keepTitle, pageRef } from "./day-phrases.js";
 import { promise } from "./promises.js";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -70,15 +70,28 @@ export function purposeText(template: TemplateId, d: DayWords = SUNDAY_WORDS): s
   }
 }
 /**
- * How the two things that look at the service differ, on Keeping watch, in two sentences under the same two
- * names used everywhere (audit item 28, spec §6). Ozzie keeping an eye on the day (proactive.ts) is the steady look; Keep
- * {day} covered (on_change, near_deadline) is a job the leader starts, with its own plan, limits and end.
+ * How the two things that look at the service differ, on Keeping watch: each says it on its own card, in short sentences,
+ * under the same two names used everywhere (audit item 28, spec §6). Ozzie keeping an eye on the day (proactive.ts, its
+ * card titled "Ozzie keeps an eye on {day}") is the steady look that runs by itself; Keep {day} covered (on_change,
+ * near_deadline) is a job the leader starts, with its own plan, limits and end, and its card sits under the steady look's.
  */
-export const togetherText = (d: DayWords = SUNDAY_WORDS): string =>
-  `${eyeLine(d)} whenever it is open: it looks at the service on its schedule and sends a private notice when something gets worse. ${keepTitle(d)} is a job you start, with a plan, limits and an end you choose: it checks more often as ${dayName(d)} gets close, checks sooner when Ozzie's regular look finds a change, prepares notes, and tells you when something needs a decision.`;
-/** Offered beside the hourly look when Keep {day} covered isn't on. */
+export const EYE_ABOUT = "Runs by itself whenever Ozzie is open.";
+/** Keep {day} covered's card on Keeping watch, under the steady look's card: what it is, and how the two work together. */
+export const keepAbout = (d: DayWords = SUNDAY_WORDS): string =>
+  `A job you started, with a plan, limits and an end you chose. It checks more often as ${dayName(d)} gets close, and sooner when the check above finds a change. It also prepares notes.`;
+/** Offered under the steady look's card when Keep {day} covered isn't on. */
 export const offerText = (d: DayWords = SUNDAY_WORDS): string =>
-  `It checks more often as ${dayName(d)} gets close, tells you when something needs a decision, and prepares notes. You confirm a short plan before anything starts.`;
+  `A job you start. You confirm a short plan first, with limits and an end you choose. It checks more often as ${dayName(d)} gets close, and sooner when the check above finds a change. It prepares notes and tells you when something needs a decision.`;
+/** Keeping watch says this without opening anything: closing the window doesn't stop Ozzie, but quitting it or sleep does. */
+export const QUIT_LINE = "Nothing runs after you quit Ozzie or while this Mac is asleep.";
+/** Keeping watch's "See how this works", after what is running: how Ozzie keeps checking. QUIT_LINE stays outside it. */
+export const WATCH_HOW: readonly string[] = Object.freeze([
+  "Ozzie keeps checking while its window is closed. It stays as the small Ozzie picture at the top of your screen.",
+  "If a check is missed because Ozzie was quit or this Mac was asleep, Ozzie catches up once when it can.",
+]);
+/** The same fold's line about jobs, where jobs are listed. */
+export const oneOfEach = (d: DayWords = SUNDAY_WORDS): string =>
+  `Ozzie runs one job of each kind at a time, such as one ${keepTitle(d)}. To change one, use Change on its card instead of setting up another.`;
 /** Every automatic check depends on this; said wherever a plan says when it checks. */
 export const ONLY_WHILE = "Only while this Mac is awake and Ozzie is running.";
 /** What the run checks, finishing "Ozzie couldn't check …". */

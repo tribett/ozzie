@@ -359,6 +359,14 @@ export const MAC = {
    */
   elsewhere: (app: LocalApp, n: number) => `${n === 1 ? "One model" : `${n} models`} in ${APP_NAME[app]} ${n === 1 ? "runs" : "run"} on ${away(app)}, not on this Mac, so Ozzie doesn't list ${n === 1 ? "it" : "them"}.`,
   lmNoModels: "LM Studio's server is on, but it has no AI models yet. In LM Studio, download a model, then press Look again.",
+  /**
+   * LM Studio's LM Link (its docs, read 2026-11-19): with it on, a model on another of the person's own computers answers
+   * requests to this Mac's LM Studio "as if it were loaded locally", and nothing LM Studio's local server lists says which
+   * computer a model is on. Ozzie can't tell, so with LM Studio "on this Mac" is never promised: this is said where an LM
+   * Studio model is chosen or checked, and in Settings for a chosen one. Ollama's promise is unchanged; names never go to
+   * any model either way.
+   */
+  lmLink: "LM Studio can be set up to run its models on another of your computers (its LM Link feature). Ozzie can't see that setting, so if you use LM Link, your questions may go to that computer.",
   nothing: "Ozzie didn't find AI on this Mac.",
   /** After Look again (or "I've opened Ollama") still finds nothing, in the polite status line: the look did happen. */
   stillNothing: "Ozzie still doesn't find AI on this Mac.",
@@ -538,9 +546,12 @@ export function removedSaid(removed: ModelRemoved, id: string, routeCleared: boo
 export function localSaid(verdict: LocalVerdict, app: LocalApp, id: string, day: string, seconds?: number, smallRoom = false): { lines: string[]; tone: "ok" | "problem"; advice?: string } {
   const problem = (text: string) => ({ lines: [text], tone: "problem" as const });
   switch (verdict) {
-    case "answers": return { tone: "ok", lines: [
+    // LM Studio can answer from another of the person's computers (LM Link), unseen by Ozzie: never "on this Mac" there.
+    case "answers": return { tone: "ok", lines: app === "ollama" ? [
       seconds === undefined ? "It answers." : `It answers. A typical answer took ${seconds} second${seconds === 1 ? "" : "s"} on this Mac.`,
-      `Ozzie will use ${modelName(id)} on this Mac. Nothing leaves this Mac.`],
+      `Ozzie will use ${modelName(id)} on this Mac. Nothing leaves this Mac.`] : [
+      seconds === undefined ? "It answers." : `It answers. A typical answer took ${seconds} second${seconds === 1 ? "" : "s"}.`,
+      `Ozzie will use ${modelName(id)} through LM Studio.`, MAC.lmLink],
       ...(smallRoom ? { advice: app === "ollama"
         ? "Ollama gives this model less room than Ozzie's longer questions need, so those could be cut short. To give it room, set Context length to 8k or more in Ollama's Settings."
         : "LM Studio gives this model less room than Ozzie's longer questions need, so those could be cut short. To give it room, in LM Studio's My Models, press the gear next to this model, set its context length to 8192 or more, then load the model again." } : {}) };
@@ -868,7 +879,8 @@ export const LIMIT = {
   /** The model chosen runs elsewhere (native `not-on-this-mac`): never used; the way to another model. */
   localElsewhere: (id: string | null, app: LocalApp | null) => `${id ? notOnThisMac(id, app) : "The model chosen doesn't run on this Mac, so Ozzie doesn't use it here."} Choose a model on this Mac, or another way to use AI.`,
   chooseLocal: "Choose a model on this Mac",
-  localChecked: (at: string) => `Answered Ozzie's check on ${at}. Nothing leaves this Mac.`,
+  /** "Nothing leaves this Mac." only for Ollama: LM Studio's own line (`MAC.lmLink`) says why it isn't promised there. */
+  localChecked: (at: string, app: LocalApp | null) => `Answered Ozzie's check on ${at}.${app === "ollama" ? " Nothing leaves this Mac." : ""}`,
   checkLocal: "Check that it answers",
   // "No AI for now" from Settings (contract N5 `set_no_ai`): no route, and what stays on this Mac or on the account.
   /** `many`: more than one company's key is kept, so it agrees with "Remove my keys from this Mac" beside it (live, 2026-11-18). */

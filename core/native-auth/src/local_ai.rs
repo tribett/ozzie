@@ -8,8 +8,10 @@
 //! fictional text, and one GET for the room the app gave the model (`/api/ps`, `/api/v1/models`): when the second
 //! answer misses the check word, to say why, and when it passes, to say whether a larger church's question would fit.
 //! Each request waits only as long as its own wait, and the whole check ends within three minutes (`CHECK_WAIT`). No
-//! key, no church data and no name ever goes; nothing leaves this Mac. A model is saved as the route only once it
-//! answered, with when (`model::save_local_checked`), and only if no other choice of AI was made while it was checked.
+//! key, no church data and no name ever goes, and with Ollama nothing leaves this Mac (LM Studio's LM Link can answer
+//! from another of the person's computers, which nothing its local server lists shows; the page says so, contract
+//! "LM Studio and LM Link"). A model is saved as the route only once it answered, with when
+//! (`model::save_local_checked`), and only if no other choice of AI was made while it was checked.
 //!
 //! Every request to a model on this Mac asks it not to think first (providers.json `local.reasoning_effort`): a
 //! thinking model otherwise spends its whole answer thinking (owner's live test, Ollama 0.40.16 and qwen3:8b,
@@ -388,7 +390,7 @@ pub(crate) struct Row {
     pub size: Option<u64>,
     /// Not a cloud name, no remote field, and, at Ollama, a digest and at least `MIN_LOCAL_BYTES`: anything Ozzie can't
     /// tell runs here counts as not here. LM Studio's list says no size or digest, so only the first two are judged
-    /// there.
+    /// there, and its LM Link (a model on another computer served "as if it were loaded locally") can't be seen at all.
     pub here: bool,
 }
 /// Everything an app lists right now (at most `MAX_ROWS`), or None when it isn't answering.

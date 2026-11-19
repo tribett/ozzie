@@ -353,7 +353,7 @@ describe("Ask's answers name the service's real day and page (review H4)", () =>
       "followups.unowned", "groups.clashes", "rules.current"]) evidence.push(await tools.run(name, {}, signal, "t"));
     const ids = [...new Set(evidence.flatMap(e => [...JSON.stringify(e.payload).matchAll(/"fact":"(f\d+)"/gu)].map(m => m[1]!)))];
     const lines = [data.brief!.day!, null].flatMap(day => ids.flatMap(id => composeAnswer(JSON.stringify({ answer: "facts", facts: [id] }), evidence, day).paragraphs));
-    expect(lines.join(" ")).toContain("For Wednesday, November 25, this check found");
+    expect(lines.join(" ")).toMatch(/For Wednesday, November 25, \d+ things need a decision/u);
     for (const line of lines) expect(sundays(onDayPage(line, WED))).toEqual([]);
   });
 

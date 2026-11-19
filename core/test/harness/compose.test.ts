@@ -87,12 +87,14 @@ describe("the four suggested questions, answered from facts the model chose", ()
       () => call("sunday.overview"),
       r => { const p = results(r)[0]!.payload as { findings: { fact: string; tone: string }[] }; return answer({ answer: "facts", facts: p.findings.filter(f => f.tone === "needs a decision").map(f => f.fact) }); },
     ]);
+    // No overview sentence chosen: one label line says what the rows are, and each row keeps its date (owner's read of 0.3.2).
     expect(out.restored).toEqual([
-      "Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
-      "Needs a decision: Nursery at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
+      "Needs a decision:",
+      "Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
+      "Nursery at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
       // The room overlap a Church rule confirms and the follow-up with no owner, as the Sunday page counts them (live review 2026-11-18).
-      "Needs a decision: Sanctuary (fictional) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM.",
-      "Needs a decision: Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.",
+      "Sanctuary (fictional) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM.",
+      "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.",
     ]);
   });
 
@@ -118,6 +120,186 @@ describe("the four suggested questions, answered from facts the model chose", ()
   });
 });
 
+// ---- The overview in plain words (owner's read of 0.3.2: "correct, but it reads like a machine printout") ------------
+
+/** A time on one date, church-local, as the tools give it. */
+const span = (day: string, from: string, to: string) => ({ starts_at: `${day}T${from}-05:00`, ends_at: `${day}T${to}-05:00` });
+const SUN = "2026-11-22";
+const needRow = (fact: string, role: string, time = span(SUN, "09:30", "10:30"), extra: Record<string, unknown> = {}) =>
+  ({ fact, kind: "needs people", tone: "needs a decision", role, time, remaining: 1, ...extra });
+const followUpRow = (fact: string, due = "2026-10-26T17:27-04:00") => ({ fact, kind: "needs an owner", tone: "needs a decision", workflow: "[Workflow 1]", step: "[Step 1]", due });
+const checkInRow = (fact: string, person = "[Person 2]") => ({ fact, kind: "check-in suggested", tone: "worth a look", person, sundays_in_a_row: 4 });
+/** The overview as the tool gives it: its own fact f1, then its rows. */
+const overviewOf = (d: number, w: number, findings: Record<string, unknown>[], over: Record<string, unknown> = {}): ToolEnvelope => ({
+  tool: "sunday.overview", source: "Planning Center Services", check_time: "2026-11-19T08:53:00Z", completeness: "complete",
+  payload: { fact: "f1", mode: "live", sunday: SUN, reads: 20, reads_not_completed: 0, needs_a_decision: d, worth_a_look: w, findings, ...over },
+});
+/** The open roles, numbered after the overview's rows (`first`), each needs-people row with its team as the tool gives it. */
+const openNeedsOf = (first: number, rows: { role: string; kind?: string; time?: ReturnType<typeof span> }[], over: Record<string, unknown> = {}): ToolEnvelope => ({
+  tool: "sunday.open_needs", source: "Planning Center Services", check_time: "2026-11-19T08:53:00Z", completeness: "complete",
+  payload: { fact: `f${first}`, needs: rows.map((r, i) => ({ fact: `f${first + 1 + i}`, kind: r.kind ?? "needs people", role: r.role, time: r.time ?? span(SUN, "09:30", "10:30"),
+    ...(r.kind && r.kind !== "needs people" ? {} : { remaining: 1, confirmed: [], people_listed: { no_overlap_found: 0, possible_conflict: 0, needs_confirmation: 0, left_out: 0 } }),
+    team_leaders: "none listed" })), ...over },
+});
+const facts = (...ids: string[]) => JSON.stringify({ answer: "facts", facts: ids });
+const sundayWords = dayWords({ sort_date: `${SUN}T09:30:00Z` }, null);
+
+describe("the overview in plain words (owner's read of 0.3.2)", () => {
+  it("the answer the owner read in 0.3.2: the count without a zero, rows without the date said above or a label on each, no count the rows already say", () => {
+    // Two roles that still need people and a follow-up with no owner; nothing worth a look. The AI chose the overview's
+    // sentence, its three rows, and the open roles' own count, as Ozzie's AI did on Nov 19.
+    const evidence = [overviewOf(3, 0, [needRow("f2", "[Role 1]"), needRow("f3", "[Role 2]"), followUpRow("f4")]),
+      openNeedsOf(5, [{ role: "[Role 1]" }, { role: "[Role 2]" }])];
+    for (const e of evidence) expect(envelopeProblems(e)).toEqual([]);
+    const expected = [
+      "For Sunday, November 22, 3 things need a decision.",
+      "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      "[Role 2] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      // Its due date isn't the service's, so it keeps it.
+      "[Workflow 1], step [Step 1], was due 2026-10-26T17:27-04:00 and has no owner.",
+    ];
+    expect(composeAnswer(facts("f1", "f2", "f3", "f4", "f5"), evidence, sundayWords).paragraphs).toEqual(expected);
+    // Without the day words (a write-up, the copy for other AI apps): the plan's own date, the same words.
+    expect(composeAnswer(facts("f1", "f2", "f3", "f4", "f5"), evidence).paragraphs).toEqual(expected);
+    // Restored on this Mac: names, and the follow-up's due time in plain words.
+    expect(showTimes(expected[3]!, "America/New_York")).toBe("[Workflow 1], step [Step 1], was due 5:27 PM on October 26 and has no owner.");
+  });
+
+  it("never says a count of none: the Sunday page's words for its counts, and what this check found when nothing needs a decision", () => {
+    const lead = (d: number, w: number, failed = 0) => composeAnswer(facts("f1"), [overviewOf(d, w, [], { reads_not_completed: failed })]).paragraphs[0];
+    expect(lead(3, 0)).toBe("For Sunday, November 22, 3 things need a decision.");
+    expect(lead(1, 0)).toBe("For Sunday, November 22, 1 thing needs a decision.");
+    expect(lead(3, 2)).toBe("For Sunday, November 22, 3 things need a decision and 2 are worth a look.");
+    expect(lead(1, 1)).toBe("For Sunday, November 22, 1 thing needs a decision and 1 is worth a look.");
+    expect(lead(0, 2)).toBe("For Sunday, November 22, this check found nothing that needs a decision, and 2 things worth a look.");
+    expect(lead(0, 1)).toBe("For Sunday, November 22, this check found nothing that needs a decision, and 1 thing worth a look.");
+    expect(lead(0, 0)).toBe("For Sunday, November 22, this check found nothing that needs a decision or is worth a look.");
+    // Reads that didn't complete are still said right after it, never folded into an all clear.
+    expect(lead(0, 0, 2)).toBe("For Sunday, November 22, this check found nothing that needs a decision or is worth a look. 2 Planning Center reads didn't complete.");
+    // The open roles' own count, the same way.
+    const count = (rows: { role: string; kind?: string }[]) => composeAnswer(facts("f1"), [openNeedsOf(1, rows)]).paragraphs[0];
+    expect(count([{ role: "[Role 1]" }, { role: "[Role 2]" }])).toBe("This check found 2 roles that still need people.");
+    expect(count([{ role: "[Role 1]" }])).toBe("This check found 1 role that still needs people.");
+    expect(count([{ role: "[Role 1]" }, { role: "[Role 2]", kind: "no scheduled lead" }])).toBe("This check found 1 role that still needs people and 1 with no scheduled lead.");
+    expect(count([{ role: "[Role 1]", kind: "no scheduled lead" }, { role: "[Role 2]", kind: "no scheduled lead" }])).toBe("This check found 2 roles with no scheduled lead.");
+    expect(count([{ role: "[Role 1]", kind: "lead couldn't be confirmed" }])).toBe("This check found no role that still needs people, and none without a scheduled lead.");
+    expect(count([])).toBe("This check found no role that still needs people, and none without a scheduled lead.");
+    for (const said of [lead(3, 0), lead(0, 2), lead(0, 0), count([{ role: "[Role 1]" }])]) expect(said).not.toMatch(/\b0\b/u);
+  });
+
+  it("says the date once: a row on the date the overview's sentence names says its clock alone; any other date, a UTC time, a row before it, a weekend's, keep theirs", () => {
+    const rows = [needRow("f2", "[Role 1]"), needRow("f3", "[Role 2]", span("2026-11-21", "17:00", "18:00")), needRow("f4", "[Role 3]", { starts_at: "2026-11-22T14:30Z", ends_at: "2026-11-22T15:30Z" }),
+      { fact: "f5", kind: "room use needs review", tone: "needs a decision", room: "[Room 1]", overlap: span(SUN, "10:30", "11:00") }, followUpRow("f6", "2026-11-22T08:00-05:00")];
+    const overview = overviewOf(5, 0, rows);
+    expect(envelopeProblems(overview)).toEqual([]);
+    expect(composeAnswer(facts("f1", "f2", "f3", "f4", "f5", "f6"), [overview], sundayWords).paragraphs).toEqual([
+      "For Sunday, November 22, 5 things need a decision.",
+      "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      "[Role 2] at 2026-11-21T17:00-05:00 still needs 1 more person, by Planning Center's count.",
+      "[Role 3] at 2026-11-22T14:30Z still needs 1 more person, by Planning Center's count.",
+      "[Room 1] has bookings that overlap from 10:30 AM to 11:00 AM.",
+      "[Workflow 1], step [Step 1], was due 2026-11-22T08:00-05:00 and has no owner.",
+    ]);
+    // Without the overview's sentence, every row keeps its date.
+    expect(composeAnswer(facts("f2", "f5"), [overview], sundayWords).paragraphs).toEqual(["Needs a decision:",
+      "[Role 1] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count.", "[Room 1] has bookings that overlap on 2026-11-22 from 10:30 AM to 11:00 AM."]);
+    // A weekend's sentence names two dates: no row's date goes without saying.
+    const weekend = dayWords({ sort_date: "2026-11-21T17:00:00Z", times: ["2026-11-21T22:00:00Z", "2026-11-22T14:30:00Z"] }, "America/New_York");
+    expect(composeAnswer(facts("f1", "f2"), [overview], weekend).paragraphs).toEqual([
+      "For Saturday, November 21 and Sunday, November 22, 5 things need a decision.", "[Role 1] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count."]);
+    // A fact the answer gives before the overview's sentence keeps its date; one after it doesn't.
+    const before = openNeedsOf(1, [{ role: "[Role 1]" }]);
+    const after = overviewOf(1, 0, [needRow("f4", "[Role 2]")], { fact: "f3" });
+    expect(composeAnswer(facts("f2", "f3", "f4"), [before, after], sundayWords).paragraphs).toEqual([
+      "[Role 1] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count. Planning Center lists no team leader.",
+      "For Sunday, November 22, 1 thing needs a decision.", "[Role 2] at 9:30 AM still needs 1 more person, by Planning Center's count."]);
+  });
+
+  it("groups the rows as the Sunday page does, one label line per group, and none when the sentence above already says what every row is", () => {
+    const settled = { ...needRow("f5", "[Role 3]"), decision: "covered outside Planning Center" };
+    const rows = [needRow("f2", "[Role 1]"), checkInRow("f3"), needRow("f4", "[Role 2]"), settled];
+    // Both kinds, and one the leader resolved: needs a decision, worth a look, then resolved, each in the overview's order.
+    expect(composeAnswer(facts("f1", "f2", "f3", "f4", "f5"), [overviewOf(2, 1, rows)]).paragraphs).toEqual([
+      "For Sunday, November 22, 2 things need a decision and 1 is worth a look.",
+      "Needs a decision:", "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.", "[Role 2] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      "Worth a look:", "[Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance.",
+      "Resolved by you:", "[Role 3] at 9:30 AM still needs 1 more person, by Planning Center's count. You decided: covered outside Planning Center.",
+    ]);
+    // Only decisions, under a sentence that counts only decisions: no label.
+    expect(composeAnswer(facts("f1", "f2", "f4"), [overviewOf(2, 0, rows)]).paragraphs.slice(1)).toEqual([
+      "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.", "[Role 2] at 9:30 AM still needs 1 more person, by Planning Center's count."]);
+    // Only decisions, under a sentence that also counts what is worth a look: the label says which these are.
+    expect(composeAnswer(facts("f1", "f2", "f4"), [overviewOf(2, 1, rows)]).paragraphs[1]).toBe("Needs a decision:");
+    // Only worth a look, under a sentence that counts only that: no label.
+    expect(composeAnswer(facts("f1", "f3"), [overviewOf(0, 1, rows)]).paragraphs).toEqual([
+      "For Sunday, November 22, this check found nothing that needs a decision, and 1 thing worth a look.",
+      "[Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance."]);
+    // A resolved row is never unlabelled, even alone.
+    expect(composeAnswer(facts("f1", "f5"), [overviewOf(2, 0, rows)]).paragraphs.slice(1, 2)).toEqual(["Resolved by you:"]);
+    // No sentence above: each group under its label.
+    expect(composeAnswer(facts("f2", "f3"), [overviewOf(2, 1, rows)]).paragraphs.filter(p => p.endsWith(":"))).toEqual(["Needs a decision:", "Worth a look:"]);
+    // No row is ever said with its own label.
+    for (const p of composeAnswer(facts("f1", "f2", "f3", "f4", "f5"), [overviewOf(2, 1, rows)]).paragraphs) expect(p).not.toMatch(/^(?:Needs a decision|Worth a look|Resolved by you): \S/u);
+  });
+
+  it("a line from another tool after the overview's rows never reads as one of its group: then each row keeps its own label (review of this change)", () => {
+    const rows = [needRow("f2", "[Role 1]"), checkInRow("f3")];
+    const overview = overviewOf(2, 1, rows);
+    // A follow-up from its own tool (it needs a decision) after the rows: under "Worth a look:" it would read as worth a look.
+    const followUps: ToolEnvelope = { tool: "followups.unowned", source: "Planning Center People", check_time: "2026-11-19T08:53:00Z", completeness: "complete",
+      payload: { fact: "f4", status: "needs an owner", worth_a_look: 0, follow_ups: [{ fact: "f5", workflow: "[Workflow 1]", step: "[Step 1]", due: "2026-10-26T17:27-04:00" }] } };
+    expect(envelopeProblems(followUps)).toEqual([]);
+    expect(composeAnswer(facts("f1", "f2", "f3", "f5"), [overview, followUps]).paragraphs).toEqual([
+      "For Sunday, November 22, 2 things need a decision and 1 is worth a look.",
+      "Needs a decision: [Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      "Worth a look: [Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance.",
+      "[Workflow 1], step [Step 1], was due 2026-10-26T17:27-04:00 and has no owner."]);
+    // A pending request (worth a look on the Sunday page) after decision rows that need no label: each row says its label.
+    const pending: ToolEnvelope = { tool: "sunday.pending_requests", source: "Planning Center Services", check_time: "2026-11-19T08:53:00Z", completeness: "complete",
+      payload: { fact: "f4", pending: [{ fact: "f5", role: "[Role 3]", time: span(SUN, "09:30", "10:30"), person: "[Person 1]", request: "request not sent yet" }], leads_not_accepted: [] } };
+    expect(envelopeProblems(pending)).toEqual([]);
+    expect(composeAnswer(facts("f1", "f2", "f5"), [overviewOf(1, 0, rows), pending]).paragraphs).toEqual([
+      "For Sunday, November 22, 1 thing needs a decision.",
+      "Needs a decision: [Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      "[Person 1] is pending for [Role 3] at 9:30 AM. The request hasn't been sent yet."]);
+    // Only the closing notes after it: grouped.
+    expect(composeAnswer(facts("f1", "f2"), [overviewOf(1, 0, rows)]).paragraphs).toEqual([
+      "For Sunday, November 22, 1 thing needs a decision.", "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count."]);
+  });
+
+  it("the date is left out only after the overview's sentence as shown: one dropped as a repeat of a fuller one doesn't count (review of this change)", () => {
+    // Two overviews in one answer (a check in between): the first sentence is the start of the second's, so only the second is
+    // shown, after the first's rows. Those rows come before any date is said, so they keep theirs, and their own label.
+    const first = overviewOf(2, 0, [needRow("f2", "[Role 1]"), needRow("f3", "[Role 2]")]);
+    const second = overviewOf(2, 0, [needRow("f5", "[Role 3]"), needRow("f6", "[Role 4]")], { fact: "f4", reads_not_completed: 1 });
+    expect(composeAnswer(facts("f1", "f2", "f3", "f4", "f6"), [first, second]).paragraphs).toEqual([
+      "Needs a decision: [Role 1] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count.",
+      "Needs a decision: [Role 2] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count.",
+      "For Sunday, November 22, 2 things need a decision. 1 Planning Center read didn't complete.",
+      "[Role 4] at 9:30 AM still needs 1 more person, by Planning Center's count."]);
+  });
+
+  it("an overview cut for length keeps its full totals; the open roles' count is said whenever it says more than the rows", () => {
+    // Five of the overview's rows were left out to fit: its sentence still says the check's own totals.
+    const cut: ToolEnvelope = { ...overviewOf(7, 4, [needRow("f2", "[Role 1]"), needRow("f3", "[Role 2]")], { left_out_for_length: 5 }), completeness: "partial" };
+    expect(composeAnswer(facts("f1", "f2", "f3"), [cut]).paragraphs).toEqual([
+      "For Sunday, November 22, 7 things need a decision and 4 are worth a look.", "Needs a decision:",
+      "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count.", "[Role 2] at 9:30 AM still needs 1 more person, by Planning Center's count."]);
+    const overview = overviewOf(2, 0, [needRow("f2", "[Role 1]"), needRow("f3", "[Role 2]")]);
+    const count = (open: ToolEnvelope, ...ids: string[]) => composeAnswer(facts(...ids), [overview, open]).paragraphs.filter(p => p.startsWith("This check found"));
+    // Every role it counts is said above it: it adds nothing.
+    expect(count(openNeedsOf(4, [{ role: "[Role 1]" }, { role: "[Role 2]" }]), "f1", "f2", "f3", "f4")).toEqual([]);
+    // Said in the open roles' own fuller rows, the same.
+    expect(count(openNeedsOf(4, [{ role: "[Role 1]" }, { role: "[Role 2]" }]), "f4", "f5", "f6")).toEqual([]);
+    // A role it counts that no line says: it adds a fact, so it's said.
+    expect(count(openNeedsOf(4, [{ role: "[Role 1]" }, { role: "[Role 2]" }]), "f1", "f2", "f4")).toEqual(["This check found 2 roles that still need people."]);
+    // Its own rows cut for length: said, whatever the rows above say.
+    expect(count(openNeedsOf(4, [{ role: "[Role 1]" }, { role: "[Role 2]" }], { left_out_for_length: 3 }), "f1", "f2", "f3", "f4")).toEqual(["This check found 2 roles that still need people."]);
+    // A role with no scheduled lead counts too.
+    expect(count(openNeedsOf(4, [{ role: "[Role 1]" }, { role: "[Role 4]", kind: "no scheduled lead" }]), "f1", "f2", "f4")).toEqual(["This check found 1 role that still needs people and 1 with no scheduled lead."]);
+  });
+});
+
 describe("fixed framing for each kind of answer", () => {
   const help = async () => {
     const t = new HarnessTools(harnessData(), new HarnessSession(), { now: () => FRESH });
@@ -131,14 +313,19 @@ describe("fixed framing for each kind of answer", () => {
     const some = composeAnswer('{"answer":"not-covered","facts":["f1"]}', evidence);
     expect(some.paragraphs[0]).toBe(NOT_COVERED);
     expect(some.paragraphs[1]).toBe(NOT_COVERED_MORE);
-    expect(some.paragraphs[2]).toMatch(/^This check found 2 roles that still need people and 0 with no scheduled lead\.$/u);
+    // A count of none isn't said (owner's read of 0.3.2): no "and 0 with no scheduled lead".
+    expect(some.paragraphs[2]).toBe("This check found 2 roles that still need people.");
   });
   it("nothing needs a decision: the fixed sentence, then any facts", () => {
     const overview: ToolEnvelope = { tool: "sunday.overview", source: "Planning Center Services", check_time: "2026-11-20T15:00:00Z", completeness: "complete",
       payload: { fact: "f1", mode: "live", sunday: "2026-11-22", reads: 20, reads_not_completed: 0, needs_a_decision: 0, worth_a_look: 1,
         findings: [{ fact: "f2", kind: "check-in suggested", tone: "worth a look", person: "[Person 2]", sundays_in_a_row: 4 }] } };
     expect(composeAnswer('{"answer":"nothing-needs-a-decision","facts":["f2"]}', [overview]).paragraphs).toEqual([NOTHING_TO_DECIDE,
-      "Worth a look: [Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance."]);
+      "Worth a look:", "[Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance."]);
+    // With the overview's sentence, which already says the one thing is worth a look: no label.
+    expect(composeAnswer('{"answer":"nothing-needs-a-decision","facts":["f1","f2"]}', [overview]).paragraphs).toEqual([NOTHING_TO_DECIDE,
+      "For Sunday, November 22, this check found nothing that needs a decision, and 1 thing worth a look.",
+      "[Person 2] is scheduled 4 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance."]);
   });
   it("someone scheduled with a blockout: Worth a look, each role with Planning Center's own status and time, never an open role", async () => {
     const overview: ToolEnvelope = { tool: "sunday.overview", source: "Planning Center Services", check_time: "2026-11-20T15:00:00Z", completeness: "complete",
@@ -151,8 +338,9 @@ describe("fixed framing for each kind of answer", () => {
       ] } };
     expect(envelopeProblems(overview)).toEqual([]);
     expect(composeAnswer('{"answer":"facts","facts":["f2","f3"]}', [overview]).paragraphs).toEqual([
-      "Worth a look: [Person 1] is scheduled for [Role 1] (confirmed) at 2026-11-22T09:30-05:00 and has a blockout in Planning Center at that time. Planning Center still counts them, so it isn't an open spot.",
-      "Worth a look: [Person 2] is scheduled for [Role 1] (confirmed) at 2026-11-22T09:30-05:00 and [Role 2] (pending) at 2026-11-22T11:00-05:00 and has a blockout in Planning Center at those times. Planning Center still counts them, so they aren't open spots.",
+      "Worth a look:",
+      "[Person 1] is scheduled for [Role 1] (confirmed) at 2026-11-22T09:30-05:00 and has a blockout in Planning Center at that time. Planning Center still counts them, so it isn't an open spot.",
+      "[Person 2] is scheduled for [Role 1] (confirmed) at 2026-11-22T09:30-05:00 and [Role 2] (pending) at 2026-11-22T11:00-05:00 and has a blockout in Planning Center at those times. Planning Center still counts them, so they aren't open spots.",
     ]);
   });
   it("a draft is only the drafting tool's text (C1): a draft id with no draft, or another tool's, shows no draft", async () => {
@@ -361,10 +549,12 @@ describe("a decision question: open decisions the answer left out are added on t
     expect(listed[0]).toBe(onPage(SUNDAY_WORDS));
     const items = listed.slice(1);
     expect(items).toHaveLength(shown.decisions);
-    // The roles in the page's order, then the room and the follow-up from their own tools.
-    const roles = items.filter(t => t.startsWith("Needs a decision: "));
+    // The roles in the page's order, then the room and the follow-up from their own tools. The heading says they need a
+    // decision, so no item says it again (owner's read of 0.3.2); nothing above names the date, so each time keeps it.
+    const roles = items.filter(t => /^\[Role \d+\] /u.test(t));
     expect(roles).toHaveLength(shown.decisions - 2);
-    for (const t of roles) expect(t).toMatch(/^Needs a decision: \[Role \d+\] at .+ still needs 1 more person, by Planning Center's count\.$/u);
+    for (const t of items) expect(t).not.toMatch(/^Needs a decision/u);
+    for (const t of roles) expect(t).toMatch(/^\[Role \d+\] at 2026-11-22T\d\d:\d\d-05:00 still needs 1 more person, by Planning Center's count\.$/u);
     const usher = (n: number) => { const target = tools.session.target(/\[Role \d+\]/u.exec(roles[n]!)![0]); return target?.kind === "role" ? target.name : null; };
     // The three the leader settled are left out; the rest in order, then the fictional Sunday's own two roles.
     expect(roles.map((_, i) => usher(i))).toEqual([...Array.from({ length: 9 }, (_, i) => `Usher ${i + 4}`), "Greeter", "Nursery"]);
@@ -384,9 +574,11 @@ describe("a decision question: open decisions the answer left out are added on t
     const left = await decisionsLeftOut(h.tools, res.outcome.answer!, res.outcome.evidence, signal);
     const shown = left.paragraphs.map(p => left.fill(h.restore(p)));
     expect(shown[0]).toBe(ALSO_ON_SUNDAY);
+    // Under a heading that says they need a decision, none says it again (owner's read of 0.3.2). The answer above didn't
+    // say the date, so every time here keeps it.
     expect(shown.slice(1)).toEqual([
-      expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\..* Kept on this Mac; never sent to an AI\.$/u),
-      expect.stringMatching(/^Needs a decision: Cameron Larkspur's background check on file expires before Sunday\..* Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(/^Blake Ashgrove has no current background check on file\. Scheduled for Nursery volunteer at 9:30 AM on November 22\..* Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(/^Cameron Larkspur's background check on file expires before Sunday\..* Kept on this Mac; never sent to an AI\.$/u),
       expect.stringMatching(/^Room use needs review: Sanctuary \(fictional\) has bookings that overlap on November 22 from /u),
       "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.",
     ]);
@@ -407,8 +599,9 @@ describe("a decision question: open decisions the answer left out are added on t
       expect.stringMatching(/^Room use needs review: \[Room 1\] has bookings that overlap .* Planning Center doesn't show it as worked out\.$/u),
       "[Workflow 1], step [Step 1], was due 2026-10-26T17:27-04:00 and has no owner.",
     ]);
-    // Only the overview's: said in its own words.
-    expect(composeAnswer(JSON.stringify({ answer: "facts", facts: overviewOps }), evidence).paragraphs).toHaveLength(2);
+    // Only the overview's: said in its own words, under one label line.
+    expect(composeAnswer(JSON.stringify({ answer: "facts", facts: overviewOps }), evidence).paragraphs).toEqual([
+      "Needs a decision:", expect.stringMatching(/^\[Room 1\] has bookings that overlap on 2026-11-22 from /u), "[Workflow 1], step [Step 1], was due 2026-10-26T17:27-04:00 and has no owner."]);
   });
 
   it("the overview says the Sunday page's count, each room, follow-up and group meeting in its tone, and a settled decision as Resolved by you (live review 2026-11-18)", async () => {
@@ -420,15 +613,20 @@ describe("a decision question: open decisions the answer left out are added on t
     const every = JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.map(f => f.fact)] });
     const shown = sundayShownCount(applyDecisions(data.brief!, data.decisions), data.operations);
     expect(shown).toMatchObject({ decisions: 3, looks: 3 });
+    // Grouped as the Sunday page groups them, each group under one label line, in the overview's order within it; the date
+    // the first sentence names isn't said again, and the follow-up keeps its own due date (owner's read of 0.3.2).
     expect(composeAnswer(every, [overview]).paragraphs.map(t => showTimes(t, data.brief!.time_zone))).toEqual([
-      "For Sunday, November 22, this check found 3 items that need a decision and 3 worth a look.",
-      "Resolved by you: [Role 1] at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count. You decided: covered outside Planning Center.",
-      "Needs a decision: [Role 2] at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.",
-      "Worth a look: [Person 1] is pending for [Role 3] at 9:30 AM on November 22. The request hasn't been sent yet. Pending is not the same as asked.",
-      "Worth a look: [Person 2] is scheduled 3 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance.",
-      "Needs a decision: [Room 1] has bookings that overlap on November 22 from 10:30 AM to 11:00 AM.",
-      "Needs a decision: [Workflow 1], step [Step 1], was due 5:27 PM on October 26 and has no owner.",
-      "Worth a look: [Person 1] is scheduled for [Role 3] (pending) at 9:30 AM on November 22 while their group meets at 9:30 AM on November 22.",
+      "For Sunday, November 22, 3 things need a decision and 3 are worth a look.",
+      "Needs a decision:",
+      "[Role 2] at 9:30 AM still needs 1 more person, by Planning Center's count.",
+      "[Room 1] has bookings that overlap from 10:30 AM to 11:00 AM.",
+      "[Workflow 1], step [Step 1], was due 5:27 PM on October 26 and has no owner.",
+      "Worth a look:",
+      "[Person 1] is pending for [Role 3] at 9:30 AM. The request hasn't been sent yet. Pending is not the same as asked.",
+      "[Person 2] is scheduled 3 weeks in a row. Your Church rules suggest a check-in, which is about care, not performance.",
+      "[Person 1] is scheduled for [Role 3] (pending) at 9:30 AM while their group meets at 9:30 AM.",
+      "Resolved by you:",
+      "[Role 1] at 9:30 AM still needs 1 more person, by Planning Center's count. You decided: covered outside Planning Center.",
     ]);
     // Said once: a decision question's answer that chose them gets nothing added for them.
     expect((await decisionsLeftOut(tools, every, [overview], signal)).paragraphs).toEqual([]);
@@ -441,7 +639,7 @@ describe("a decision question: open decisions the answer left out are added on t
     const o2 = await unruled.run("sunday.overview", {}, signal, "t");
     const rows = (o2.payload as { findings: { fact: string; kind: string }[] }).findings.filter(f => f.kind === "room use needs review" || f.kind === "a detail couldn't be verified");
     expect(composeAnswer(JSON.stringify({ answer: "facts", facts: rows.map(r => r.fact) }), [o2]).paragraphs).toEqual([
-      "Worth a look: [Room 1] has bookings that overlap on 2026-11-22 from 10:45 AM to 11:00 AM.", "Worth a look: Some room or follow-up details couldn't be confirmed."]);
+      "Worth a look:", "[Room 1] has bookings that overlap on 2026-11-22 from 10:45 AM to 11:00 AM.", "Some room or follow-up details couldn't be confirmed."]);
   });
 
   it("adds nothing the answer already said, and nothing a leader already decided", async () => {
@@ -463,7 +661,7 @@ describe("a decision question: open decisions the answer left out are added on t
     const decidedTools = new HarnessTools(decidedData, new HarnessSession(), { now: () => FRESH });
     const left = await decisionsLeftOut(decidedTools, '{"answer":"not-covered"}', [], signal);
     const decided = left.paragraphs.map(p => left.fill(restoreLabels(p, decidedTools.session, { names: data.capture!.names, timeZone: data.brief!.time_zone })));
-    expect(decided.filter(p => /still needs 1 more person/u.test(p))).toEqual([expect.stringMatching(/^Needs a decision: Nursery volunteer at/u)]);
+    expect(decided.filter(p => /still needs 1 more person/u.test(p))).toEqual([expect.stringMatching(/^Nursery volunteer at 9:30 AM on November 22 still/u)]);
     expect(decided.join(" ")).not.toContain("Greeter");
   });
 });
@@ -578,8 +776,9 @@ describe("review Q: never an implied all clear, never blank, decided and set-asi
     const out = await openDecisions(tools, signal);
     const shown = out.paragraphs.map(p => out.fill(restoreLabels(p, tools.session, { names: data.capture!.names, timeZone: data.brief!.time_zone })));
     expect(shown[0]).toBe(ON_SUNDAY);
-    const kind = (p: string) => p.startsWith("Needs a decision: ") ? (p.endsWith(KEPT_HERE) ? "background check" : "decision") : p.startsWith("Room use needs review: ") ? "room"
-      : p.endsWith(" has no owner.") ? "follow-up" : p;
+    // The heading says each needs a decision, so none says it again (owner's read of 0.3.2); a room keeps the page's own label.
+    const kind = (p: string) => p.endsWith(KEPT_HERE) ? "background check" : p.startsWith("Room use needs review: ") ? "room"
+      : p.endsWith(" has no owner.") ? "follow-up" : /^[A-Z][\w ]+ at 9:30 AM on November 22 (?:still needs 1 more person|has (?:no|\d+) confirmed (?:person|people))/u.test(p) ? "decision" : p;
     expect(shown.slice(1).map(kind)).toEqual(["decision", "decision", "decision", "decision", "background check", "background check", "room", "follow-up"]);
     // Every role filled and no rooms or follow-ups read: nothing open, said plainly (with its gaps, never as all clear).
     const capture = nov22Capture();
@@ -624,14 +823,15 @@ describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
     const view = applyDecisions(data.brief!, data.decisions);
     expect(sundayShownCount(view, data.operations)).toMatchObject({ decisions: 7, looks: 4 });
     expect(view.items.filter(i => i.state !== "resolved" && i.finding.kind === "background-check").map(i => i.finding.tone)).toEqual(["decision", "decision"]);
-    expect(withDay).toContain("For Wednesday, November 25, this check found 5 items that need a decision and 4 worth a look. Some findings are shown only in Ozzie on this Mac, on the Wednesday page.");
+    // The page counts 7 and 4: the two kept on this Mac are said not to be counted here, so the counts never read as a contradiction.
+    expect(withDay).toContain("For Wednesday, November 25, 5 things need a decision and 4 are worth a look. Some findings are shown only in Ozzie on this Mac, on the Wednesday page, and aren't counted here.");
     expect(withDay.join(" ")).toContain("You decided: not needed this Wednesday.");
     expect(withDay.join(" ")).toMatch(/is scheduled \d+ weeks in a row/u);
     expect(withDay.join(" ")).toContain("They ask for a scheduled Wednesday lead for [Role");
     expect(withDay.join(" ")).toMatch(/1 person serving this Wednesday has a group meeting at the same time\./u);
     expect(withDay.join(" ")).toContain("(oversight of the team, not a serving assignment)");
     // Without them (what composeAnswer's callers pass today): the plan's own date, and neutral words otherwise.
-    expect(without).toContain("For Wednesday, November 25, this check found 5 items that need a decision and 4 worth a look. Some findings are shown only in Ozzie on this Mac.");
+    expect(without).toContain("For Wednesday, November 25, 5 things need a decision and 4 are worth a look. Some findings are shown only in Ozzie on this Mac and aren't counted here.");
     expect(without.join(" ")).toContain("You decided: not needed for this service.");
     expect(without.join(" ")).toContain("They ask for a scheduled lead for [Role");
     expect(without.join(" ")).toMatch(/1 person serving at this service has a group meeting at the same time\./u);
@@ -672,7 +872,7 @@ describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
     const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
     const overview = await tools.run("sunday.overview", {}, signal, "t");
     const head = composeAnswer(JSON.stringify({ answer: "facts", facts: [(overview.payload as { fact: string }).fact] }), [overview], data.brief!.day!).paragraphs[0];
-    expect(head).toMatch(/^For Sunday, November 22, this check found .* on the Sunday page\.$/u);
+    expect(head).toMatch(/^For Sunday, November 22, \d+ things need a decision .* on the Sunday page, and aren't counted here\.$/u);
     expect([ALSO_ON_SUNDAY, ON_SUNDAY, NOBODY_SCHEDULED]).toEqual([alsoOnPage(SUNDAY_WORDS), onPage(SUNDAY_WORDS), nobodyScheduled(SUNDAY_WORDS)]);
     expect(NOBODY_SCHEDULED).toBe("No one is confirmed or pending on your kids teams this Sunday, so there were no background checks to look at.");
     expect(setAside(1, "finding", data.brief!.day!)).toBe("One finding is set aside by your Church rules, so it isn't listed here; it's on the Sunday page.");

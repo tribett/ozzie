@@ -263,7 +263,7 @@ const at = (iso: string, now: string, zone: string) => localDate(iso, zoneOr(zon
  * open. Last checked 9:06 AM. Next check 10:06 AM."
  */
 export function regularLine(c: RegularCheck, now: string, zone: string): string {
-  const how = `Checks Planning Center ${every(c.intervalMinutes)} while Ozzie is open${c.runOnLaunch ? ", and when it opens" : ""}.`;
+  const how = `Checks Planning Center at least ${every(c.intervalMinutes)} while Ozzie is open${c.runOnLaunch ? ", and when it opens" : ""}.`;
   const last = c.last ? ` Last checked ${at(c.last.at, now, zone)}${c.last.ok ? "" : ", but that check couldn't finish"}.` : " Not checked yet.";
   const next = c.paused ? " Paused: nothing runs until you resume it in Keeping watch." : c.running ? " Checking now." : c.next ? ` Next check ${at(c.next, now, zone)}.` : "";
   return `${how}${last}${next}`;

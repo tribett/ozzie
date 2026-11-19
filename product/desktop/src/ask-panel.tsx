@@ -143,7 +143,8 @@ export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page:
       <span className="badge b-look"><Icon name="eye" small />Worth a look</span>
       {answer.gaps.length > 0 && <ul className="list">{answer.gaps.map(g => <li key={g}><Icon name="dot" small />{onDayPage(g, d)}</li>)}</ul>}
     </div>}
-    {answer.body && <div className="ask-lines">{onDayPage(answer.body, d).split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}</div>}
+    {/* A line ending in a colon heads the lines under it ("Needs a decision:", "On the Sunday page, needing a decision:"). */}
+    {answer.body && <div className="ask-lines">{onDayPage(answer.body, d).split(/\n{2,}/).map((p, i) => <p key={i} className={p.endsWith(":") ? "ask-group" : undefined}>{p}</p>)}</div>}
     {answer.local && <p className="small">{LOCAL_NOTE}</p>}
     {answer.composedHere && <p className="small">{COMPOSED_NOTE}</p>}
     {answer.draft && <DraftCard text={answer.draft} />}
@@ -218,7 +219,9 @@ export function turnAnnouncement(turn: Turn | undefined): string {
     case "refused": case "problem": case "cancelled": return turn.text;
     case "answered": {
       const a = turn.answer;
-      const first = a.body.split(/\n{2,}/u)[0]?.trim() ?? "";
+      // A group's label line ("Needs a decision:") is said with the line it heads, never on its own.
+      const parts = a.body.split(/\n{2,}/u).map(p => p.trim()).filter(Boolean);
+      const first = parts[0]?.endsWith(":") && parts[1] ? `${parts[0]} ${parts[1]}` : parts[0] ?? "";
       const more = [a.notCovered || a.gaps.length ? "Worth a look." : "", a.draft ? "A draft note is below." : ""].filter(Boolean).join(" ");
       return [first ? `Ozzie answered: ${first}` : "Ozzie answered.", more].filter(Boolean).join(" ");
     }
@@ -390,8 +393,10 @@ export function AskPanel(props: {
       if (e.key === "Escape") props.onClose();
       else if (isVoiceShortcut(e)) { e.preventDefault(); void toggleVoice(); }
     }}>
-    {/* Named with what it's for the first time it shows (spec §6): "Ask Ozzie (questions about Wednesday)". */}
-    <div className="convo-head"><AskIcon />Ask Ozzie<span className="small">&nbsp;(questions about {dayName(day)})</span><span className="spacer" />
+    {/* Named with what it's for (spec §6): "Ask Ozzie", and under it, quieter, "Questions about Wednesday", each kept on one
+        line (owner's read of 0.3.2: "Ask Ozzie (questions about Sunday)" wrapped into two columns at 380 px). */}
+    <div className="convo-head"><AskIcon /><div className="ask-head"><span className="ask-head-title">Ask Ozzie</span>
+      <span className="ask-head-scope">Questions about {dayName(day)}</span></div><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close Ask Ozzie" onClick={props.onClose}><Icon name="x" /></button></div>
     <div className="ask-scroll">
       {!answered && notes}

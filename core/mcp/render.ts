@@ -2,8 +2,8 @@
 // templates Ask Ozzie's answers use) for every fact in the shared tool results, with ISO times written out. Labels
 // stay labels: names live only in Ozzie on the leader's Mac, and nothing here could restore them.
 import type { Skill, ToolEnvelope } from "../src/harness/contract.js";
-import { composeAnswer, NOT_FREE, NOT_RANKED, overviewRowSources } from "../src/harness/compose.js";
-import { answerText, idsIn, VOCABULARY } from "../src/harness/fixed.js";
+import { composeFacts, NOT_FREE, NOT_RANKED, overviewRowSources } from "../src/harness/compose.js";
+import { idsIn } from "../src/harness/fixed.js";
 import { showTimes } from "../src/harness/session.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../src/harness/contract.js";
 import type { SharedCheck, SharedTask, SharedTool } from "./snapshot.js";
@@ -40,21 +40,16 @@ const HEADINGS: Readonly<Record<SharedTool, string>> = {
 const words = (text: string) => showTimes(text, null);
 const when = (iso: string) => words(iso);
 
-/** Ozzie's sentences for every fact one tool result holds, in Ozzie's order, with the closing notes once. */
+/**
+ * Ozzie's sentences for every fact one tool result holds, in Ozzie's order, with the closing notes once. All of them in
+ * one piece (composeFacts), however many: the overview's rows are grouped once under its sentence, and a count that only
+ * repeats the rows listed in full isn't said, as in Ask.
+ */
 export function factsText(envelope: ToolEnvelope): string[] {
   const ids = [...idsIn(envelope)].filter(id => id.startsWith("f")).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
-  const lines: string[] = [];
-  const closing = new Set<string>();
-  for (let i = 0; i < ids.length; i += VOCABULARY.answer.max_facts) {
-    const facts = ids.slice(i, i + VOCABULARY.answer.max_facts);
-    const composed = composeAnswer(answerText({ answer: "facts", facts, draft: null }), [envelope]);
-    if (composed.kind !== "facts") continue;
-    for (const p of composed.paragraphs) {
-      if (p === NOT_FREE || p === NOT_RANKED) closing.add(p);
-      else lines.push(p);
-    }
-  }
-  return [...lines, ...[NOT_FREE, NOT_RANKED].filter(p => closing.has(p))].map(words);
+  const paragraphs = composeFacts(ids, [envelope]);
+  const lines = paragraphs.filter(p => p !== NOT_FREE && p !== NOT_RANKED);
+  return [...lines, ...[NOT_FREE, NOT_RANKED].filter(p => paragraphs.includes(p))].map(words);
 }
 
 /** Each Planning Center product's own result in a copy, where the overview's rows about it are said in full. */

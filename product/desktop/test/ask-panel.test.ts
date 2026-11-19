@@ -160,6 +160,15 @@ describe("Ask Ozzie panel", () => {
     expect(said).not.toContain(answer.procedure!.body.slice(0, 40));
     const unsure: ShownAnswer = { ...answer, notCovered: true, draft: "Hi Riley" };
     expect(turnAnnouncement({ id: 1, question: "q", state: "answered", answer: unsure })).toMatch(/Worth a look\. A draft note is below\.$/u);
+    // An answer that opens with a group's label line is said with the line it heads, never as the bare label (review of the
+    // 0.3.2 wording change).
+    const grouped: ShownAnswer = { ...answer, body: "Needs a decision:\n\nGreeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.\n\nNursery at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count." };
+    expect(turnAnnouncement({ id: 1, question: "q", state: "answered", answer: grouped }))
+      .toBe("Ozzie answered: Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.");
+    // On screen, the label line reads as the heading of its group.
+    const lines = renderToStaticMarkup(React.createElement(Answer, { answer: grouped, onOpen: () => {} }));
+    expect(lines).toContain('<div class="ask-lines"><p class="ask-group">Needs a decision:</p><p>Greeter at 9:30 AM');
+    expect(readFileSync(new URL("../src/ask-panel.css", import.meta.url), "utf8")).toMatch(/\.oz \.ask-lines p\.ask-group \{[^}]*font-weight: 600;/u);
     // The thread itself is no longer a live region; only the status line is.
     const html = panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
     expect(html).not.toMatch(/class="thread ask-thread"[^>]*aria-live/u);
@@ -241,6 +250,17 @@ describe("Ask Ozzie panel", () => {
     for (const rule of askRules) for (const m of rule.matchAll(/font(?:-size)?:[^;]*?(\d+(?:\.\d+)?)px/gu)) expect(Number(m[1]), rule).toBeGreaterThanOrEqual(14);
     expect(css).toMatch(/\.oz \.ask-based \{[^}]*font-size: var\(--t-sm\)/u);
     expect(css).toMatch(/\.oz \.ask-links \.src \{[^}]*font-size: var\(--t-sm\)/u);
+  });
+
+  it("names itself on two lines that never wrap mid-phrase: Ask Ozzie, then quieter, what it answers (owner's read of 0.3.2)", () => {
+    const html = panel();
+    expect(html).toContain('<div class="ask-head"><span class="ask-head-title">Ask Ozzie</span><span class="ask-head-scope">Questions about Sunday</span></div>');
+    expect(text(html)).not.toMatch(/\(questions about/iu);
+    const css = readFileSync(new URL("../src/ask-panel.css", import.meta.url), "utf8");
+    // Stacked in the 56px header; each line one line at 360–420px (an ellipsis only if a panel were narrower still).
+    expect(css).toMatch(/\.oz \.ask-panel \.ask-head \{[^}]*flex-direction: column;[^}]*min-width: 0;/u);
+    expect(css).toMatch(/\.oz \.ask-panel \.ask-head > span \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/u);
+    expect(css).toMatch(/\.oz \.ask-panel \.ask-head-scope \{[^}]*font-size: var\(--t-sm\);[^}]*color: var\(--ink-3\);/u);
   });
 
   it("keeps earlier questions this session as a short list to reopen, newest first, with the newest card on show", async () => {
@@ -433,7 +453,9 @@ describe("Ask Ozzie for a Wednesday service", () => {
   it("asks about this Wednesday, says what Ask is for, and suggests Wednesday's questions", () => {
     const html = wedPanel();
     expect(html).toContain('placeholder="Ask about this Wednesday…"');
-    expect(text(html)).toContain("Ask Ozzie (questions about Wednesday)");
+    // Its name, then under it, quieter, what it answers: one line each, no parentheses (owner's read of 0.3.2).
+    expect(html).toMatch(/<div class="convo-head"><svg[^>]*>.*?<\/svg><div class="ask-head"><span class="ask-head-title">Ask Ozzie<\/span><span class="ask-head-scope">Questions about Wednesday<\/span><\/div><span class="spacer"><\/span>/u);
+    expect(text(html)).not.toMatch(/\(questions about/iu);
     expect(text(html)).toContain("What still needs a decision this Wednesday?");
     expect(text(html)).not.toMatch(/sunday/iu);
   });

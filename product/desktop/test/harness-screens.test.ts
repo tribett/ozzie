@@ -42,7 +42,7 @@ const interrupted = row({ task_id: "00000000-0000-4000-8000-000000000004", kind:
 describe("What happened: the task ledger in plain words", () => {
   it("gives each task one line: what it was, how it ended, how much was looked at, and when", () => {
     expect(taskLine(answered, { now })).toBe(`Answered a question · checked · 3 things looked at · ${clock}`);
-    expect(taskLine(automatic, { now, trigger: "automatic" })).toBe(`Planning Center check, on schedule · ${new Date("2026-11-20T21:00:00Z").toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`);
+    expect(taskLine(automatic, { now, trigger: "automatic" })).toBe(`Planning Center check, on its own · ${new Date("2026-11-20T21:00:00Z").toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`);
     expect(taskLine(automatic, { now, trigger: "manual" })).toMatch(/^Planning Center check you started · /u);
     expect(taskLine({ ...automatic, events: [...automatic.events.slice(0, 2), ev(2, "tool", "planning_center.refresh partial"), ev(3, "verified")] }, { now }))
       .toMatch(/^Planning Center check · part of it couldn't be read · /u);
@@ -60,11 +60,11 @@ describe("What happened: the task ledger in plain words", () => {
     // A Sunday check that couldn't finish says why, true to the cause (harness-bridge.ts checkFailure).
     const check = (failure: FailureCode) => row({ kind: "check", state: "failed", failure, events: [ev(0, "admitted"), ev(1, "running"), ev(2, "failed", failure)] });
     const why = (failure: FailureCode) => taskLine(check(failure), { now, trigger: "automatic" });
-    expect(why("denied")).toBe(`Planning Center check, on schedule · Couldn't finish: Planning Center access wasn't available · ${clock}`);
+    expect(why("denied")).toBe(`Planning Center check, on its own · Couldn't finish: Planning Center access wasn't available · ${clock}`);
     // Out of reach, a 429 or a 5xx alike (review N, 8).
-    expect(why("provider-failure")).toBe(`Planning Center check, on schedule · Couldn't finish: Planning Center didn't answer just now · ${clock}`);
-    expect(why("unverified")).toBe(`Planning Center check, on schedule · Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read · ${clock}`);
-    expect(why("cancelled")).toBe(`Planning Center check, on schedule · Couldn't finish: Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped · ${clock}`);
+    expect(why("provider-failure")).toBe(`Planning Center check, on its own · Couldn't finish: Planning Center didn't answer just now · ${clock}`);
+    expect(why("unverified")).toBe(`Planning Center check, on its own · Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read · ${clock}`);
+    expect(why("cancelled")).toBe(`Planning Center check, on its own · Couldn't finish: Ozzie's sign-in to Planning Center was busy with something else, or this Mac's credential storage was locked, so the check stopped · ${clock}`);
     expect(taskAccount(check("unverified"), { now, start: "automatic" }).ended)
       .toBe("Couldn't finish: Ozzie couldn't confirm which church its sign-in to Planning Center belongs to, so nothing was read.");
     expect(taskAccount(check("cancelled"), { now, start: "manual" }).ended)
@@ -94,7 +94,7 @@ describe("What happened: the task ledger in plain words", () => {
       { now, start: "on-this-mac" })).toMatchObject({ looked: ["Looked at the overview of the service — all of it"], ai: "No AI was used: Ozzie answered this on this Mac from its last check." });
     // The regular Sunday check, and one the leader started: Ozzie's own check, no AI.
     expect(taskAccount(automatic, { now, start: "automatic" })).toEqual({
-      started: `Ozzie checked Planning Center on schedule at ${t("2026-11-20T21:00:00Z")}.`, looked: ["Read the service from Planning Center — all of it"],
+      started: `Ozzie checked Planning Center on its own at ${t("2026-11-20T21:00:00Z")}.`, looked: ["Read the service from Planning Center — all of it"],
       ai: "No AI was used: this was Ozzie's own check of Planning Center.", ended: "Finished.",
     });
     expect(taskAccount(automatic, { now, start: "manual" }).started).toBe(`You asked Ozzie to check Planning Center at ${t("2026-11-20T21:00:00Z")}.`);
@@ -151,7 +151,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(t).toContain("What Ozzie did");
     expect(t).toContain("Recent work");
     expect(t).toContain("Every read in the latest check");
-    expect(t.indexOf("A question · Couldn't finish")).toBeLessThan(t.indexOf("Planning Center check, on schedule"));
+    expect(t.indexOf("A question · Couldn't finish")).toBeLessThan(t.indexOf("Planning Center check, on its own"));
     expect(html.match(/<details class="recent-task">/g)).toHaveLength(3);
     expect(html).not.toMatch(/<details[^>]*open/);
     expect(t).toContain("Looked at the open roles for the service — all of it");

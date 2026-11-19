@@ -50,14 +50,25 @@ const list = (items: readonly string[]) => items.length <= 1 ? items.join("") : 
 const labels = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 const sentence = (s: string) => /[.!?]$/u.test(s) ? s : `${s}.`;
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-/** " at <start>" for a service time, or nothing when it isn't known. */
-const at = (time: unknown) => { const t = (time as Row | null)?.["starts_at"]; return typeof t === "string" && t !== "not known" ? ` at ${t}` : ""; };
 /** A church-local ISO time's date and clock ("2026-11-29T10:15-05:00" → 2026-11-29, "10:15 AM"). Null for a UTC time or
  *  anything else, which keeps its full form so the app's restore can say UTC when the church's zone isn't known. */
 const LOCAL_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})[+-]\d{2}:\d{2}$/u;
 const dayClock = (iso: string | null) => {
   const m = iso ? LOCAL_TIME.exec(iso) : null;
   return m ? { day: m[1]!, clock: `${+m[2]! % 12 || 12}:${m[3]!} ${+m[2]! < 12 ? "AM" : "PM"}` } : null;
+};
+/**
+ * Whether a church-local date (YYYY-MM-DD) is the one date the answer's overview sentence already said above ("For Sunday,
+ * November 22, …"), so a service time on it is said by its clock alone. NO_DAY: nothing was said, every time keeps its date.
+ */
+type SaidDay = (day: string) => boolean;
+const NO_DAY: SaidDay = () => false;
+/** A service time: its clock alone when its date was already said, else the full ISO time the app shows in plain words. */
+const timeOf = (iso: string, said: SaidDay) => { const c = dayClock(iso); return c && said(c.day) ? c.clock : iso; };
+/** " at <start>" for a service time, or nothing when it isn't known. */
+const at = (time: unknown, said: SaidDay = NO_DAY) => {
+  const t = (time as Row | null)?.["starts_at"];
+  return typeof t === "string" && t !== "not known" ? ` at ${timeOf(t, said)}` : "";
 };
 /** The one date a span falls on, or null when it crosses midnight or isn't known. */
 const dayOf = (time: unknown) => {
@@ -66,13 +77,13 @@ const dayOf = (time: unknown) => {
   return a && b && a.day === b.day ? a.day : null;
 };
 /** A span: "on <date> from <start> to <end>" when it falls on one date, so the date is said once (and not again when
- *  `said` is that date); otherwise both times in full. The app shows the date and full times in plain words. */
-const fromTo = (time: unknown, said: string | null = null) => {
+ *  it was `said`); otherwise both times in full. The app shows the date and full times in plain words. */
+const fromTo = (time: unknown, said: SaidDay = NO_DAY) => {
   const t = time as Row | null;
   const a = str(t?.["starts_at"]), b = str(t?.["ends_at"]);
   if (!a || !b || a === "not known" || b === "not known") return "at a time that couldn't be read";
   const x = dayClock(a), y = dayClock(b);
-  if (x && y && x.day === y.day) return `${x.day === said ? "" : `on ${x.day} `}from ${x.clock} to ${y.clock}`;
+  if (x && y && x.day === y.day) return `${said(x.day) ? "" : `on ${x.day} `}from ${x.clock} to ${y.clock}`;
   return `from ${a} to ${b}`;
 };
 const needs = (row: Row) => {
@@ -108,29 +119,46 @@ const forService = (d: Day) => d && oneDay(d) ? d.thisOne : `for ${d?.thisOne ??
 const dayName = (d: DayWords) => d.kind === "weekday" ? d.day : d.thisOne;
 /** The tools' fixed value for a "not needed" decision (vocabulary.json, pinned with native and ozzie.church); said here in the service's own words. */
 const NOT_NEEDED = "not needed this Sunday";
+/** The overview's service, as its sentence names it: the day words' date ("Wednesday, November 25"; both dates of a
+ *  weekend), else the plan's church-local date with its own weekday, else neutral words. */
+const overviewWhen = (p: Row, day: Day) => {
+  const date = str(p["sunday"]), planDay = date && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? longDate(date) : null;
+  return day?.date ?? (planDay && !planDay.startsWith("Invalid") ? planDay : "this service");
+};
+/**
+ * The overview's counts in the Sunday page's words ("3 things need a decision and 2 are worth a look"), never a count of
+ * none (owner's read of 0.3.2). With nothing to decide it says what this check found, as the counts it replaces did:
+ * findings kept on this Mac, or reads that didn't complete, are said right after it.
+ */
+const overviewCounts = (d: number, w: number) => {
+  const decide = `${d} ${d === 1 ? "thing needs" : "things need"} a decision`;
+  return d && w ? `${decide} and ${w} ${w === 1 ? "is" : "are"} worth a look` : d ? decide
+    : w ? `this check found nothing that needs a decision, and ${plural(w, "thing", "things")} worth a look`
+      : "this check found nothing that needs a decision or is worth a look";
+};
 
 /** A finding in the overview or the open roles, by its kind. */
-function finding(row: Row): string | null {
+function finding(row: Row, said: SaidDay = NO_DAY): string | null {
   const role = str(row["role"]) ?? "A role", person = str(row["person"]) ?? "Someone";
   switch (row["kind"]) {
-    case "needs people": return `${role}${at(row["time"])} ${needs(row)}.`;
-    case "no scheduled lead": return `${role}${at(row["time"])} has no scheduled lead, and your Church rules ask for one.`;
-    case "lead couldn't be confirmed": return `${role}${at(row["time"])} has a scheduled lead, but their answer or serving time couldn't be confirmed.`;
-    case "pending": return `${person} is pending for ${role}${at(row["time"])}. ${request(row["request"])} Pending is not the same as asked.`;
+    case "needs people": return `${role}${at(row["time"], said)} ${needs(row)}.`;
+    case "no scheduled lead": return `${role}${at(row["time"], said)} has no scheduled lead, and your Church rules ask for one.`;
+    case "lead couldn't be confirmed": return `${role}${at(row["time"], said)} has a scheduled lead, but their answer or serving time couldn't be confirmed.`;
+    case "pending": return `${person} is pending for ${role}${at(row["time"], said)}. ${request(row["request"])} Pending is not the same as asked.`;
     case "check-in suggested": {
       const n = num(row["sundays_in_a_row"]);
       return `${person} is scheduled ${n === null ? "several" : n} weeks in a row. Your Church rules suggest a check-in, which is about care, not performance.`;
     }
     case "fewer confirmed than the church rules ask": {
       const c = num(row["confirmed"]) ?? 0, needed = num(row["needed"]), asked = num(row["asked_no_answer"]) ?? 0, unsent = num(row["request_not_sent"]) ?? 0;
-      return `${role}${at(row["time"])} has ${plural(c, "confirmed person", "confirmed people")}${needed === null ? "" : `, and your Church rules ask for at least ${needed}`}.` +
+      return `${role}${at(row["time"], said)} has ${c ? plural(c, "confirmed person", "confirmed people") : "no confirmed people"}${needed === null ? "" : `, and your Church rules ask for at least ${needed}`}.` +
         `${asked ? ` ${plural(asked, "more is", "more are")} asked with no answer yet.` : ""}${unsent ? ` ${plural(unsent, "more has", "more have")} a request not sent yet.` : ""}` +
         " Pending isn't counted, and Ozzie doesn't check ages.";
     }
     case "scheduled with a blockout at this time": {
       const serving = Array.isArray(row["serving"]) ? row["serving"] as Row[] : [];
       const times = new Set(serving.map(s => str((s["time"] as Row | null)?.["starts_at"]))).size;
-      return `${person} is scheduled for ${list(serving.map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"])}`)) || "a role"}` +
+      return `${person} is scheduled for ${list(serving.map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"], said)}`)) || "a role"}` +
         ` and has a blockout in Planning Center at ${times > 1 ? "those times" : "that time"}. Planning Center still counts them, so ${serving.length > 1 ? "they aren't open spots" : "it isn't an open spot"}.`;
     }
     case "part of the check couldn't be verified": {
@@ -138,50 +166,53 @@ function finding(row: Row): string | null {
       return `Part of this check couldn't be verified: ${plural(n, "Planning Center read", "Planning Center reads")} didn't complete.${row["too_old_to_treat_as_current"] === true ? " The check is also too old to treat as current." : ""}`;
     }
     // Rooms, follow-ups and group meetings in the overview (tools.ts #operationsShown), as their own tools say them.
-    case OVERVIEW_ROOM: return `${str(row["room"]) ?? "A room"} has bookings that overlap ${fromTo(row["overlap"])}.`;
+    case OVERVIEW_ROOM: return `${str(row["room"]) ?? "A room"} has bookings that overlap ${fromTo(row["overlap"], said)}.`;
     case OVERVIEW_FOLLOW_UP: return followUp(row);
     case OVERVIEW_UNCONFIRMED: return "Some room or follow-up details couldn't be confirmed.";
-    case OVERVIEW_GROUP: return groupMeets(row);
+    case OVERVIEW_GROUP: return groupMeets(row, said);
     default: return null;
   }
 }
-/** A follow-up with no owner, as followups.unowned and the overview give it. */
+/** A follow-up with no owner, as followups.unowned and the overview give it. Its due time keeps its date: it isn't the service's. */
 const followUp = (row: Row) => {
   const due = str(row["due"]);
   return `${str(row["workflow"]) ?? "A follow-up"}, step ${str(row["step"]) ?? "not known"}, ${due && due !== "not known" ? `was due ${due}` : "is overdue"} and has no owner.`;
 };
 /** Someone whose group meets while they serve, as groups.clashes and the overview give it. */
-const groupMeets = (row: Row) => {
+const groupMeets = (row: Row, said: SaidDay = NO_DAY) => {
   const person = str(row["person"]) ?? "Someone";
-  const serving = (Array.isArray(row["serving"]) ? row["serving"] as Row[] : []).map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"])}`);
-  const meetings = (Array.isArray(row["group_meetings"]) ? row["group_meetings"] as Row[] : []).map(m => at(m["time"]).trim()).filter(Boolean);
+  const serving = (Array.isArray(row["serving"]) ? row["serving"] as Row[] : []).map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"], said)}`);
+  const meetings = (Array.isArray(row["group_meetings"]) ? row["group_meetings"] as Row[] : []).map(m => at(m["time"], said).trim()).filter(Boolean);
   return `${person} is scheduled for ${list(serving) || "a role"} while their group meets${meetings.length ? ` ${list(meetings)}` : " at the same time"}.`;
 };
 /** A finding the leader settled: their decision, and no later check changed it. Listed, never counted as open (tools.ts #overview). */
 const settled = (row: Row) => typeof row["decision"] === "string" && row["changed_since_decision"] !== true;
+const DECIDE = "Needs a decision", LOOK = "Worth a look";
+/** One of the overview's rows in the Sunday page's tone: "Resolved by you" once the leader decided it, as the overview no longer counts it. */
+const toneOfRow = (row: Row) => settled(row) ? RESOLVED : row["tone"] === "needs a decision" ? DECIDE : LOOK;
+/** One of the overview's rows without its tone, which the answer says once for its group (composeAnswer). */
+const overviewRow = (row: Row, day: Day, said: SaidDay = NO_DAY) => { const text = finding(row, said); return text ? `${text}${decided(row, day)}` : null; };
 
 /** The sentence for one fact: a row of one of a tool's FACT_LISTS, or the payload itself (`list` null). */
-function sentenceFor(f: Fact, day: Day): string | null {
+function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY): string | null {
   const { tool, list: key, row, payload } = f;
   const role = str(row["role"]) ?? "this role", person = str(row["person"]) ?? "Someone";
   if (key === null) return summary(tool, payload, day);
   switch (`${tool} ${key}`) {
     case "sunday.overview findings": {
-      const text = finding(row);
-      if (!text) return null;
-      // In the Sunday page's tone: "Resolved by you" once the leader decided it, as the overview no longer counts it.
-      return `${settled(row) ? RESOLVED : row["tone"] === "needs a decision" ? "Needs a decision" : "Worth a look"}: ${text}${decided(row, day)}`;
+      const text = overviewRow(row, day, said);
+      return text ? `${toneOfRow(row)}: ${text}` : null;
     }
     case "sunday.open_needs needs": {
-      if (row["kind"] !== "needs people") { const text = finding(row); return text ? `${text}${notAccepted(row)}${leaders(row)}${decided(row, day)}` : null; }
+      if (row["kind"] !== "needs people") { const text = finding(row, said); return text ? `${text}${notAccepted(row)}${leaders(row)}${decided(row, day)}` : null; }
       const confirmed = labels(row["confirmed"]);
       const p = (row["people_listed"] ?? {}) as Row;
       const counts = [[p["no_overlap_found"], "with no overlap found"], [p["possible_conflict"], "with a possible conflict"],
         [p["needs_confirmation"], "whose availability needs confirmation"], [p["left_out"], "left out"]]
         .flatMap(([n, what]) => typeof n === "number" && n > 0 ? [`${n} ${what as string}`] : []);
-      return `${finding(row)}${confirmed.length ? ` Already confirmed: ${list(confirmed)}.` : ""}${counts.length ? ` On the team: ${list(counts)}.` : ""}${leaders(row)}${decided(row, day)}`;
+      return `${finding(row, said)}${confirmed.length ? ` Already confirmed: ${list(confirmed)}.` : ""}${counts.length ? ` On the team: ${list(counts)}.` : ""}${leaders(row)}${decided(row, day)}`;
     }
-    case "sunday.who_could_help times": return `${role}${at(row["time"])} ${needs(row)}.`;
+    case "sunday.who_could_help times": return `${role}${at(row["time"], said)} ${needs(row)}.`;
     case "sunday.who_could_help people":
       switch (row["status"]) {
         case "no overlap found": return `${person} has no overlap found for ${role}.${differs(row)}`;
@@ -190,7 +221,7 @@ function sentenceFor(f: Fact, day: Day): string | null {
         case "left out": return `${person} was left out for ${role}${reasons(row)}.${differs(row)}`;
         default: return null;
       }
-    case "sunday.pending_requests pending": return `${person} is pending for ${role}${at(row["time"])}. ${request(row["request"])}`;
+    case "sunday.pending_requests pending": return `${person} is pending for ${role}${at(row["time"], said)}. ${request(row["request"])}`;
     case "sunday.pending_requests leads_not_accepted": return `${person} is scheduled to lead ${role} but hasn't accepted.`;
     case "sunday.rule_checkins check_ins": {
       const n = num(row["sundays_in_a_row"]);
@@ -200,16 +231,16 @@ function sentenceFor(f: Fact, day: Day): string | null {
       const room = str(row["room"]) ?? "A room";
       // The overlap's date is said once; a booking on that same date doesn't say it again.
       const day = dayOf(row["overlap"]);
-      const bookings = (Array.isArray(row["bookings"]) ? row["bookings"] as Row[] : []).map(b => `${fromTo(b["time"], day)} (${str(b["approval"]) ?? "approval not known"})`);
+      const bookings = (Array.isArray(row["bookings"]) ? row["bookings"] as Row[] : []).map(b => `${fromTo(b["time"], d => d === day)} (${str(b["approval"]) ?? "approval not known"})`);
       const setup = num(row["setup_minutes"]);
       const rule = row["church_rule"] === "not shared" ? " Your Church rules say this room isn't shared." : " No room rule is set for it.";
       const worked = row["worked_out_in_planning_center"] === "not worked out" ? " Planning Center doesn't show it as worked out." : " Whether it was worked out couldn't be read.";
       // The Sunday page's own label: confirmed by a Church rule and Calendar's conflict record, or Worth a look.
       const tone = row["label"] === "Room use needs review" ? "Room use needs review" : "Worth a look";
-      return `${tone}: ${room} has bookings that overlap ${fromTo(row["overlap"])}${bookings.length ? `; the bookings are ${list(bookings)}` : ""}${setup ? `, with ${setup} minutes of setup time` : ""}.${rule}${worked}`;
+      return `${tone}: ${room} has bookings that overlap ${fromTo(row["overlap"], said)}${bookings.length ? `; the bookings are ${list(bookings)}` : ""}${setup ? `, with ${setup} minutes of setup time` : ""}.${rule}${worked}`;
     }
     case "followups.unowned follow_ups": return followUp(row);
-    case "groups.clashes clashes": return `Worth a look: ${groupMeets(row)}`;
+    case "groups.clashes clashes": return `Worth a look: ${groupMeets(row, said)}`;
     case "today.attention items": {
       const contacted = row["volunteers_contacted"] === "not contacted, according to the message" ? " The message says volunteers have not been contacted." : "";
       return `${row["label"] === "Needs a decision" ? "Needs a decision" : "Worth a look"}: ${str(row["event"]) ?? "An event"}${at({ starts_at: row["starts_at"] })}. ${sentence(capital(str(row["kind"]) ?? "something needs a look"))}${contacted}`;
@@ -228,20 +259,20 @@ function summary(tool: string, p: Row, day: Day): string | null {
   }
   switch (tool) {
     case "sunday.overview": {
-      // The service's own date from the day words ("Wednesday, November 25"; both dates of a weekend), else the plan's
-      // church-local date with its own weekday, else neutral words.
-      const date = str(p["sunday"]), planDay = date && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? longDate(date) : null;
-      const when = day?.date ?? (planDay && !planDay.startsWith("Invalid") ? planDay : "this service");
       const d = num(p["needs_a_decision"]) ?? 0, w = num(p["worth_a_look"]) ?? 0, failed = num(p["reads_not_completed"]) ?? 0;
       const mode = p["mode"] === "recording" ? " This is a saved copy of a check, not a current check." : p["mode"] === "fictional" ? " This is fictional example data." : "";
-      const kept = p["kept_on_this_mac"] === "some findings are shown only in Ozzie on this Mac" ? ` Some findings are shown only in Ozzie on this Mac${day ? `, on ${dayPage(day)}` : ""}.` : "";
-      return `For ${when}, this check found ${plural(d, "item", "items")} that need${d === 1 ? "s" : ""} a decision and ${w} worth a look.${failed ? ` ${plural(failed, "Planning Center read", "Planning Center reads")} didn't complete.` : ""}${kept}${mode}`;
+      // Background checks never reach the tools, so the counts above leave them out; said so, as the service's page counts
+      // them, so the two counts never read as a contradiction and "nothing" never reads as an all clear (review of 0.3.2 wording).
+      const kept = p["kept_on_this_mac"] === "some findings are shown only in Ozzie on this Mac" ? ` Some findings are shown only in Ozzie on this Mac${day ? `, on ${dayPage(day)},` : ""} and aren't counted here.` : "";
+      return `For ${overviewWhen(p, day)}, ${overviewCounts(d, w)}.${failed ? ` ${plural(failed, "Planning Center read", "Planning Center reads")} didn't complete.` : ""}${kept}${mode}`;
     }
     case "sunday.open_needs": {
       const rows = Array.isArray(p["needs"]) ? p["needs"] as Row[] : [];
       const open = rows.filter(r => r["kind"] === "needs people").length, lead = rows.filter(r => r["kind"] === "no scheduled lead").length;
-      if (!open && !lead && !rows.length) return "This check found no role that still needs people, and none without a scheduled lead.";
-      return `This check found ${plural(open, "role", "roles")} that still need${open === 1 ? "s" : ""} people and ${lead} with no scheduled lead.`;
+      if (!open && !lead) return "This check found no role that still needs people, and none without a scheduled lead.";
+      // A count of none isn't said (owner's read of 0.3.2): "and 0 with no scheduled lead" adds nothing.
+      const people = `${plural(open, "role", "roles")} that still need${open === 1 ? "s" : ""} people`;
+      return `This check found ${open && lead ? `${people} and ${lead} with no scheduled lead` : open ? people : `${plural(lead, "role", "roles")} with no scheduled lead`}.`;
     }
     case "sunday.who_could_help": {
       const role = str((p["asked_for"] as Row | null)?.["role"]) ?? "This role";
@@ -333,6 +364,99 @@ function ordered(facts: readonly Fact[]): Fact[] {
     (labelNumber(a.row["person"]) || 0) - (labelNumber(b.row["person"]) || 0) || a.id - b.id);
 }
 
+const isLead = (f: Fact) => f.tool === "sunday.overview" && f.list === null;
+/**
+ * The one date the overview's sentence names ("For Sunday, November 22, …"), so a time on it below can be said by its clock
+ * alone. NO_DAY when no overview sentence is said, it names no single date (a weekend's two, "this service"), or two
+ * overviews name different ones.
+ */
+function saidBy(leads: readonly Row[], day: Day): SaidDay {
+  const whens = new Set(leads.map(p => overviewWhen(p, day)));
+  const when = whens.size === 1 ? [...whens][0]! : null;
+  return when ? (d: string) => longDate(d) === when : NO_DAY;
+}
+/**
+ * Whether a fact is the open roles' own summary ("This check found 2 roles that still need people.") and the answer's
+ * other lines already say every role it counts, in full (owner's read of 0.3.2): then it adds nothing and isn't said. It
+ * is said whenever it adds a fact: a role it counts that no line says, or rows left out of it for length.
+ */
+function repeatsRows(f: Fact, chosen: readonly Fact[]): boolean {
+  if (f.tool !== "sunday.open_needs" || f.list !== null || (num(f.payload["left_out_for_length"]) ?? 0) > 0) return false;
+  const counted = rowsOf({ payload: f.payload } as ToolEnvelope, "needs").filter(r => r["kind"] === "needs people" || r["kind"] === "no scheduled lead");
+  const said = new Set(chosen.filter(g => g !== f).flatMap(keysOf));
+  return counted.length > 0 && counted.every(r => said.has(findingKey(str(r["kind"]), r)));
+}
+/**
+ * The overview's rows an answer says, grouped as the Sunday page groups them (needs a decision, worth a look, then what the
+ * leader resolved), each group under one short label line rather than a label on every row (owner's read of 0.3.2), in the
+ * overview's order within each group. With the overview's sentence said above (`lead`), no label when that sentence
+ * already says what every row is: it counts only decisions and every row needs one, or only worth a look and every row is.
+ * `last`: nothing but the closing notes follows. Otherwise a line after the group (another tool's follow-up or pending
+ * request, which has no tone of its own) would read as part of it, so each row keeps its own label, as it always did.
+ */
+function grouped(rows: readonly { tone: string; text: string }[], lead: Row | null, last: boolean): string[] {
+  if (!last) return rows.map(r => `${r.tone}: ${r.text}`);
+  const tones = [DECIDE, LOOK, RESOLVED].filter(t => rows.some(r => r.tone === t));
+  const d = num(lead?.["needs_a_decision"]) ?? 0, w = num(lead?.["worth_a_look"]) ?? 0;
+  const plain = lead !== null && tones.length === 1 && (tones[0] === DECIDE ? d > 0 && w === 0 : tones[0] === LOOK && d === 0 && w > 0);
+  return tones.flatMap(t => [...(plain ? [] : [`${t}:`]), ...rows.filter(r => r.tone === t).map(r => r.text)]);
+}
+
+/** Ozzie's lines for the chosen facts, in Ozzie's order, and the notes said after them. */
+function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[], day: Day): { lines: string[]; after: string[] } {
+  const all = factsIn(evidence);
+  const picked = facts.flatMap(id => all.get(id) ?? []);
+  // A room or follow-up chosen both from the overview and from its own tool is said once, in its own tool's fuller words.
+  const ownRows = new Set(picked.filter(f => f.tool !== "sunday.overview" && f.list !== null).flatMap(keysOf));
+  const chosen = ordered(picked.filter(f => !(f.tool === "sunday.overview" && f.list === "findings"
+    && (f.row["kind"] === OVERVIEW_ROOM || f.row["kind"] === OVERVIEW_FOLLOW_UP) && keysOf(f).some(k => ownRows.has(k)))));
+  // Each fact's sentence as it was always written (`key`, with every date and each overview row's own tone), which decides
+  // what is said once; what is shown can leave out what the answer already said.
+  const rendered = chosen.flatMap(f => {
+    if (repeatsRows(f, chosen)) return [];
+    const key = sentenceFor(f, day);
+    return key ? [{ f, key }] : [];
+  });
+  // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
+  // shown once, in the longer sentence's place.
+  const kept = rendered.filter((r, i) => !rendered.some((o, j) => j !== i && (o.key === r.key ? j < i : o.key.startsWith(`${r.key} `))));
+  // The overview's own sentence, as shown: the date it names isn't said again by a time on it after it.
+  const leads = new Map(kept.filter(r => isLead(r.f)).map(r => [r.f.envelope, r.f.payload]));
+  const from = kept.findIndex(r => isLead(r.f)), onDay = saidBy([...leads.values()], day);
+  const said = (i: number) => from >= 0 && i > from ? onDay : NO_DAY;
+  // The overview's rows stand together where its first one stands, grouped by tone (grouped).
+  const entries: ({ text: string } | { block: number })[] = [];
+  const blocks = new Map<number, { tone: string; text: string }[]>();
+  kept.forEach((r, i) => {
+    if (r.f.tool === "sunday.overview" && r.f.list === "findings") {
+      const text = overviewRow(r.f.row, day, said(i));
+      if (!text) return;
+      if (!blocks.has(r.f.envelope)) { blocks.set(r.f.envelope, []); entries.push({ block: r.f.envelope }); }
+      blocks.get(r.f.envelope)!.push({ tone: toneOfRow(r.f.row), text });
+      return;
+    }
+    const text = sentenceFor(r.f, day, said(i));
+    if (text) entries.push({ text });
+  });
+  const lines = entries.flatMap((e, i) => "text" in e ? [e.text] : grouped(blocks.get(e.block)!, leads.get(e.block) ?? null, i === entries.length - 1));
+  const people = rendered.filter(r => r.f.list !== null && PERSON_LISTS.has(r.f.list));
+  const after = [
+    ...(rendered.some(r => r.f.tool === "sunday.who_could_help" && r.f.row["status"] === "no overlap found") ? [NOT_FREE] : []),
+    ...(people.length > 1 ? [NOT_RANKED] : []),
+  ];
+  return { lines, after };
+}
+
+/**
+ * Every fact named, as an answer choosing them all would say them, without an answer's limit on how many: for the copy
+ * shared with other AI apps (core/mcp/render.ts), which says every fact a tool result holds in one piece, so the overview's
+ * rows are grouped once under its sentence. Placeholder form.
+ */
+export function composeFacts(facts: readonly string[], evidence: readonly ToolEnvelope[], day: DayWords | null = null): string[] {
+  const { lines, after } = composeLines(facts, evidence, day);
+  return lines.length ? [...lines, ...after] : [];
+}
+
 /**
  * The paragraphs for a verified answer (verify.ts), in placeholder form. A fact without a sentence is left out rather
  * than guessed at; an answer left with nothing to say says what wasn't covered. `day`: the watched service's day words
@@ -342,21 +466,7 @@ function ordered(facts: readonly Fact[]): Fact[] {
 export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[], day: DayWords | null = null): ComposedAnswer {
   const parsed = parseAnswer(answer);
   if (!parsed) return { kind: "not-covered", paragraphs: [NOT_COVERED], draft: null };
-  const all = factsIn(evidence);
-  const picked = parsed.facts.flatMap(id => all.get(id) ?? []);
-  // A room or follow-up chosen both from the overview and from its own tool is said once, in its own tool's fuller words.
-  const ownRows = new Set(picked.filter(f => f.tool !== "sunday.overview" && f.list !== null).flatMap(keysOf));
-  const chosen = ordered(picked.filter(f => !(f.tool === "sunday.overview" && f.list === "findings"
-    && (f.row["kind"] === OVERVIEW_ROOM || f.row["kind"] === OVERVIEW_FOLLOW_UP) && keysOf(f).some(k => ownRows.has(k)))));
-  const rendered = chosen.flatMap(f => { const s = sentenceFor(f, day); return s ? [{ f, s }] : []; });
-  // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
-  // shown once, in the longer sentence's place.
-  const lines = rendered.map(r => r.s).filter((s, i, all) => !all.some((o, j) => j !== i && (o === s ? j < i : o.startsWith(`${s} `))));
-  const people = rendered.filter(r => r.f.list !== null && PERSON_LISTS.has(r.f.list));
-  const after = [
-    ...(rendered.some(r => r.f.tool === "sunday.who_could_help" && r.f.row["status"] === "no overlap found") ? [NOT_FREE] : []),
-    ...(people.length > 1 ? [NOT_RANKED] : []),
-  ];
+  const { lines, after } = composeLines(parsed.facts, evidence, day);
   let draft: string | null = null;
   if (parsed.draft) {
     const drafted = evidence.find(e => (e.payload as Row | null)?.["draft_id"] === parsed.draft);
@@ -497,19 +607,21 @@ const once = (list: { source: string; check_time: string }[]) => list.filter((s,
  * A background-check finding in the Sunday page's words, in placeholder form, with its source and check time and that
  * it stays on this Mac. Never part of any tool result or request (forModels); the app restores it here.
  */
-export function backgroundSentence(f: Finding, person: string, role: string, zone: string | null, tone = toneOf(f), day: DayWords = SUNDAY_WORDS): string {
+export function backgroundSentence(f: Finding, person: string, role: string, zone: string | null, tone: string | null = toneOf(f), day: DayWords = SUNDAY_WORDS,
+  said: SaidDay = NO_DAY): string {
   const what = f.check === "expires-before-sunday" ? `${person}'s background check on file expires before ${dayName(day)}.`
     : f.check === "expires-on-sunday" ? `${person}'s background check on file expires on ${dayName(day)}.` : `${person} has no current background check on file.`;
   const start = localIso(f.position?.interval?.starts_at, zone), checked = localIso(f.checked_at, zone);
   const look = f.tone === "look" && f.check === "none-current"
     ? " Planning Center showed no current background checks for anyone on your kids teams; your Planning Center login may not be able to see them." : "";
-  return `${tone}: ${what} Scheduled for ${role}${start ? ` at ${start}` : ` ${atService(day)}`}. Your Church rules ask for a current background check before serving with kids.${look}` +
+  // `tone` null: under a heading that already says it ("On the Sunday page, needing a decision:").
+  return `${tone ? `${tone}: ` : ""}${what} Scheduled for ${role}${start ? ` at ${timeOf(start, said)}` : ` ${atService(day)}`}. Your Church rules ask for a current background check before serving with kids.${look}` +
     ` From ${f.source ?? PEOPLE_SOURCE}${checked ? `, checked ${checked}` : ""}. ${KEPT_HERE}`;
 }
 /** A background-check finding's sentence with kept names, and its source. */
-function kept(data: HarnessData, names: KeptNames, f: Finding, tone: string): { text: string; source: { source: string; check_time: string } } {
+function kept(data: HarnessData, names: KeptNames, f: Finding, tone: string | null, said: SaidDay = NO_DAY): { text: string; source: { source: string; check_time: string } } {
   return {
-    text: backgroundSentence(f, names.person(data, f.person_id), names.role(f.position?.name), data.brief?.time_zone ?? null, tone, serviceDay(data)),
+    text: backgroundSentence(f, names.person(data, f.person_id), names.role(f.position?.name), data.brief?.time_zone ?? null, tone, serviceDay(data), said),
     source: { source: f.source ?? PEOPLE_SOURCE, check_time: f.checked_at ?? data.brief?.checked_at ?? "" },
   };
 }
@@ -753,7 +865,10 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
   const day = serviceDay(data);
   const { head, none } = framing ?? { head: alsoOnPage(day), none: null };
   const all = factsIn(evidence), said = new Set<string>();
-  for (const id of parseAnswer(answer)?.facts ?? []) for (const k of all.has(id) ? keysOf(all.get(id)!) : []) said.add(k);
+  const chosen = (parseAnswer(answer)?.facts ?? []).flatMap(id => all.get(id) ?? []);
+  for (const f of chosen) for (const k of keysOf(f)) said.add(k);
+  // The answer above said the overview's date ("For Sunday, November 22, …"): a time on it here is said by its clock alone.
+  const onDay = saidBy(chosen.filter(isLead).map(f => f.payload), day);
   const read = reader(tools, signal);
   const overview = await read("sunday.overview"), rooms = await read("rooms.conflicts"), followUps = await read("followups.unowned");
   out.evidence = [overview, rooms, followUps].filter((e): e is ToolEnvelope => e !== null);
@@ -761,17 +876,18 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
   // Each finding's own row, by its place in the overview even when rows were left out for length (tools.ts rowAt).
   const shared = forModels(brief).findings;
   const items: string[] = [], sources: { source: string; check_time: string }[] = [];
+  // Every item here needs a decision, and the heading says so: no item says it again (owner's read of 0.3.2).
   for (const f of brief.findings) {
     if (f.tone !== "decision" || settled.has(f.id)) continue;
-    if (f.kind === "background-check") { const k = kept(data, names, f, toneOf(f)); items.push(k.text); sources.push(k.source); continue; }
+    if (f.kind === "background-check") { const k = kept(data, names, f, null, onDay); items.push(k.text); sources.push(k.source); continue; }
     const row = rowAt(overview, "findings", shared.findIndex(x => x.id === f.id));
     if (!row || !overview || said.has(findingKey(str(row["kind"]), row))) continue;
-    const text = sentenceFor(factOf(overview, "findings", row), day);
+    const text = overviewRow(row, day, onDay);
     if (text) items.push(text);
   }
   for (const row of rowsOf(rooms, "rooms")) {
     if (row["label"] !== "Room use needs review" || said.has(roomKey(row))) continue;
-    const text = sentenceFor(factOf(rooms!, "rooms", row), day);
+    const text = sentenceFor(factOf(rooms!, "rooms", row), day, onDay);
     if (text) items.push(text);
   }
   for (const row of rowsOf(followUps, "follow_ups")) {

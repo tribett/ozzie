@@ -20,7 +20,7 @@ import {
   agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, retryDenied, runtimeFor, StepFailure, stepFailure, StepNotes,
   type Invoke,
 } from "../src/harness-bridge.js";
-import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, CAN_DO_INSTEAD, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, ledgerDetail, taskLine } from "../src/harness-words.js";
 import { SUNDAY_WORDS } from "../../../core/src/service-day.js";
 import { sundayShownCount } from "../../../core/src/sunday-brief.js";
 import { applyDecisions } from "../../../core/src/sunday-decisions.js";
@@ -513,7 +513,7 @@ describe("Ask answers written on this Mac", () => {
       expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person, and your Church rules ask for at least 2\./u),
       expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\. .* From Planning Center People, checked 10:00 AM on November 20\. Kept on this Mac; never sent to an AI\.$/u),
     ]);
-    expect(a.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center People, checked .+; your Church rules$/u);
+    expect(a.basedOn).toMatch(/^Based on: Planning Center Services and People, checked [^;]+; your Church rules$/u);
     expect(a.steps).toEqual(["Looked at the overview of the service — all of it", "Looked at the open roles for the service — all of it", "Looked at background checks, kept on this Mac"]);
     expect(a.notCovered).toBe(false);
     expect(a.body).not.toMatch(/\[(?:Person|Role) \d+\]/u);
@@ -538,21 +538,24 @@ describe("Ask answers written on this Mac", () => {
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "What still needs a decision this Sunday?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
     const parts = turn.answer.body.split("\n\n");
-    expect(parts.slice(0, 4)).toEqual([
-      expect.stringMatching(/^Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person/u),
-      expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 still needs 1 more person/u),
-      expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person/u),
-      expect.stringMatching(/^Needs a decision: Lyrics at 9:30 AM on November 22 has 0 confirmed people/u),
+    // One label line for the rows the answer chose, none on each row; with no overview sentence chosen, each keeps its date.
+    expect(parts.slice(0, 5)).toEqual([
+      "Needs a decision:",
+      expect.stringMatching(/^Greeter at 9:30 AM on November 22 still needs 1 more person/u),
+      expect.stringMatching(/^Nursery volunteer at 9:30 AM on November 22 still needs 1 more person/u),
+      expect.stringMatching(/^Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person/u),
+      expect.stringMatching(/^Lyrics at 9:30 AM on November 22 has no confirmed people/u),
     ]);
-    expect(parts.slice(4)).toEqual([
+    // The heading says each of these needs a decision, so none says it again (owner's read of 0.3.2).
+    expect(parts.slice(5)).toEqual([
       "Also on the Sunday page, needing a decision:",
-      expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\..*Kept on this Mac; never sent to an AI\.$/u),
-      expect.stringMatching(/^Needs a decision: Cameron Larkspur's background check on file expires before Sunday\..*Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(/^Blake Ashgrove has no current background check on file\..*Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(/^Cameron Larkspur's background check on file expires before Sunday\..*Kept on this Mac; never sent to an AI\.$/u),
       expect.stringMatching(/^Room use needs review: Sanctuary \(fictional\) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM; the bookings are from /u),
       "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.",
     ]);
     expect(turn.answer.added).toBe(true);
-    expect(turn.answer.basedOn).toMatch(/Planning Center Services, checked .+Planning Center Calendar, checked .+Planning Center People, checked /u);
+    expect(turn.answer.basedOn).toMatch(/^Based on: Planning Center Services, Calendar and People, checked [^;]+$/u);
     expect(turn.answer.steps).toEqual(["Looked at the overview of the service — all of it",
       "Looked at room bookings — all of it", "Looked at follow-ups without an owner — all of it", "Looked at background checks, kept on this Mac"]);
     expect(JSON.stringify(m.requests)).not.toMatch(/background/iu);
@@ -573,8 +576,9 @@ describe("Ask answers written on this Mac", () => {
     const turn = await askOzzie(harness(scripted([look, every]).model, undefined, data), "Is there anything I need to decide?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
     const parts = turn.answer.body.split("\n\n");
-    expect(parts[0]).toMatch(/^For Sunday, November 22, this check found 2 items that need a decision and \d+ worth a look\./u);
-    expect(parts.slice(1)).toEqual([expect.stringMatching(/^Needs a decision: Sanctuary \(fictional\) has bookings that overlap /u), expect.stringMatching(/^Needs a decision: .* has no owner\.$/u)]);
+    expect(parts[0]).toBe("For Sunday, November 22, 2 things need a decision and 3 are worth a look.");
+    expect(parts.slice(1)).toEqual(["Needs a decision:", expect.stringMatching(/^Sanctuary \(fictional\) has bookings that overlap from 10:30 AM to 11:00 AM\.$/u),
+      expect.stringMatching(/^.* has no owner\.$/u)]);
     expect(turn.answer.added).toBeUndefined();
   });
 
@@ -901,8 +905,8 @@ describe("where the overview's rooms, follow-ups and group meetings come from (r
 
   it("the row for details that couldn't be confirmed names its own source: a room's is Calendar", async () => {
     const a = await choosing(live(), ["a detail couldn't be verified"]);
-    expect(a.body).toBe("Worth a look: Some room or follow-up details couldn't be confirmed.");
-    expect(a.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center Calendar, checked .+$/u);
+    expect(a.body).toBe("Worth a look:\n\nSome room or follow-up details couldn't be confirmed.");
+    expect(a.basedOn).toMatch(/^Based on: Planning Center Services and Calendar, checked [^;]+$/u);
     expect(a.basedOn).not.toContain("People");
   });
 
@@ -919,6 +923,30 @@ describe("where the overview's rooms, follow-ups and group meetings come from (r
   });
 });
 
+describe("Based on: each source and each check time said once (owner's read of 0.3.2)", () => {
+  const at = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const T = "2026-11-19T08:53:00Z", LATER = "2026-11-19T09:10:00Z";
+  const read = (source: string, check_time = T) => ({ source, check_time });
+  const all = ["Services", "Calendar", "Groups", "People"].map(p => read(`Planning Center ${p}`));
+
+  it("names the sources checked at the same time once, with that time, in the order they were read", () => {
+    expect(basedOnEvidence(all, "live")).toBe(`Based on: Planning Center Services, Calendar, Groups and People, checked ${at(T)}`);
+    expect(basedOnEvidence(all.slice(0, 2), "live")).toBe(`Based on: Planning Center Services and Calendar, checked ${at(T)}`);
+    expect(basedOnEvidence(all.slice(0, 1), "live")).toBe(`Based on: Planning Center Services, checked ${at(T)}`);
+  });
+
+  it("keeps each time when they differ, grouping only the sources that share one, and never drops a source or a time", () => {
+    const said = basedOnEvidence([...all.slice(0, 3), read("Planning Center People", LATER), read("Church rules on this Mac")], "live");
+    expect(said).toBe(`Based on: Planning Center Services, Calendar and Groups, checked ${at(T)}; Planning Center People, checked ${at(LATER)}; your Church rules`);
+    // A source read twice is said at its newest time.
+    expect(basedOnEvidence([read("Planning Center Services"), read("Planning Center Calendar", LATER), read("Planning Center Services", LATER)], "live"))
+      .toBe(`Based on: Planning Center Services and Calendar, checked ${at(LATER)}`);
+    // A saved copy and the fictional example are said as before.
+    expect(basedOnEvidence(all, "recording")).toBe(`Based on: a saved copy of the Planning Center check at ${at(T)}`);
+    expect(basedOnEvidence(all, "fictional")).toBe(`Based on: fictional example data as of ${at(T)}`);
+  });
+});
+
 describe("an overview too long for one answer (review item 6)", () => {
   it("says the full totals, every decision, and that findings were left out of the answer, never that Planning Center couldn't be read", async () => {
     const data = crowded();
@@ -928,8 +956,12 @@ describe("an overview too long for one answer (review item 6)", () => {
     const turn = await askOzzie(harness(scripted([() => calls(["sunday.overview"]), every]).model, undefined, data), "What still needs a decision this Sunday?", { skills });
     if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
     const parts = turn.answer.body.split("\n\n");
-    expect(parts[0]).toBe(`For Sunday, November 22, this check found ${shown.decisions} items that need a decision and ${shown.looks} worth a look.`);
-    expect(parts.slice(1).filter(p => /^(?:Needs a decision|Room use needs review): |has no owner\.$/u.test(p))).toHaveLength(shown.decisions);
+    // The full totals, though rows were left out to fit; then one label line and every decision under it.
+    expect(shown.looks).toBeGreaterThan(0);
+    expect(parts[0]).toBe(`For Sunday, November 22, ${shown.decisions} things need a decision and ${shown.looks} are worth a look.`);
+    expect(parts[1]).toBe("Needs a decision:");
+    expect(parts.slice(2)).toHaveLength(shown.decisions);
+    for (const p of parts.slice(2)) expect(p).not.toMatch(/^(?:Needs a decision|Worth a look|Resolved by you)|on November 22/u);
     expect(turn.answer.added).toBeUndefined();
     const cut = (turn.answer.gaps.join(" ").match(/so (\d+) findings were left out/u) ?? [])[1];
     expect(turn.answer.gaps).toEqual([`Planning Center Services: the list was too long to say in full, so ${cut} findings were left out of this answer. They're on the Sunday page.`]);
@@ -955,9 +987,10 @@ describe("a decision question says the Sunday page's count, on every route (live
   const looked: Turn = () => calls(["sunday.overview"], ["sunday.open_needs"], ["sunday.pending_requests"]);
   const roles: Turn = r => { const p = overviewIn(r); return answer(JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.filter(f => f.kind === "needs people").map(f => f.fact)] })); };
   const everyDecision: Turn = r => { const p = overviewIn(r); return answer(JSON.stringify({ answer: "facts", facts: [p.fact, ...p.findings.filter(f => f.tone === "needs a decision").map(f => f.fact)] })); };
-  const SUMMARY = "For Sunday, November 22, this check found 3 items that need a decision and 5 worth a look. This is fictional example data.";
-  const GREETER = "Needs a decision: Greeter at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.";
-  const NURSERY = "Needs a decision: Nursery at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.";
+  // The Sunday page's words for its counts; under it, the date it names isn't said again (owner's read of 0.3.2).
+  const SUMMARY = "For Sunday, November 22, 3 things need a decision and 5 are worth a look. This is fictional example data.";
+  const GREETER = "Greeter at 9:30 AM still needs 1 more person, by Planning Center's count.";
+  const NURSERY = "Nursery at 9:30 AM still needs 1 more person, by Planning Center's count.";
   const FOLLOW_UP = "Welcome follow-up (fictional), step Call a first-time guest, was due 5:27 PM on October 26 and has no owner.";
 
   it("an answer choosing the two roles: the page's count, then the follow-up it left out, once, on Ozzie's AI and on AI on this Mac", async () => {
@@ -965,7 +998,7 @@ describe("a decision question says the Sunday page's count, on every route (live
     for (const local of [false, true]) {
       const turn = await askOzzie(harness(scripted([looked, roles]).model), DECISION, { skills, local });
       if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
-      expect(turn.answer.body.split("\n\n"), String(local)).toEqual([SUMMARY, GREETER, NURSERY, "Also on the Sunday page, needing a decision:", FOLLOW_UP]);
+      expect(turn.answer.body.split("\n\n"), String(local)).toEqual([SUMMARY, "Needs a decision:", GREETER, NURSERY, "Also on the Sunday page, needing a decision:", FOLLOW_UP]);
       expect(turn.answer.page).toBe("sunday");
     }
   });
@@ -973,13 +1006,13 @@ describe("a decision question says the Sunday page's count, on every route (live
   it("an answer choosing every decision the overview holds: each said once, nothing added, and the follow-up's own source named", async () => {
     const turn = await askOzzie(harness(scripted([looked, everyDecision]).model), DECISION, { skills });
     if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
-    expect(turn.answer.body.split("\n\n")).toEqual([SUMMARY, GREETER, NURSERY, `Needs a decision: ${FOLLOW_UP}`]);
+    expect(turn.answer.body.split("\n\n")).toEqual([SUMMARY, "Needs a decision:", GREETER, NURSERY, FOLLOW_UP]);
     expect(turn.answer.added).toBeUndefined();
     expect(turn.answer.basedOn).toMatch(/^Based on: fictional example data as of /u);
     const live = buildHarnessData({ capture: withFictionalOperations(nov22Capture()), fictional: false, rules: RULES, decisions: [], status: null, configured: false, now: "2026-11-20T15:05:00Z" });
     const liveTurn = await askOzzie(harness(scripted([looked, everyDecision]).model, undefined, live), DECISION, { skills });
     if (liveTurn.state !== "answered") throw new Error(JSON.stringify(liveTurn));
-    expect(liveTurn.answer.basedOn).toMatch(/^Based on: Planning Center Services, checked .+; Planning Center People, checked .+$/u);
+    expect(liveTurn.answer.basedOn).toMatch(/^Based on: Planning Center Services and People, checked [^;]+$/u);
   });
 
   it("AI on this Mac choosing too many facts: Ozzie's own answer says the page's count and every decision once", async () => {
@@ -1048,7 +1081,7 @@ describe("AI on this Mac: an answer choosing more than 24 facts (native too-many
     expect(chosen.answer.composedHere).toBeUndefined();
     expect(a.body).toBe(chosen.answer.body.replace("Also on the Sunday page, needing a decision:", "On the Sunday page, needing a decision:"));
     const paragraphs = a.body.split("\n\n");
-    expect(paragraphs[0]).toMatch(/^For Sunday, November 22, this check found \d+ items? that needs? a decision and \d+ worth a look\./u);
+    expect(paragraphs[0]).toMatch(/^For Sunday, November 22, \d+ things? needs? a decision and \d+ (?:is|are) worth a look\./u);
     expect(paragraphs[1]).toBe("On the Sunday page, needing a decision:");
     expect(paragraphs.length).toBeGreaterThan(2);
     // Never presented as the AI's choice or as an answer without the AI.
@@ -1065,7 +1098,7 @@ describe("AI on this Mac: an answer choosing more than 24 facts (native too-many
     const turn = await ask(native(tooMany), "What still needs a decision about Riley?", true);
     if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
     expect(turn.answer.composedHere).toBe(true);
-    expect(turn.answer.body.split("\n\n")[0]).toMatch(/^For Sunday, November 22, this check found /u);
+    expect(turn.answer.body.split("\n\n")[0]).toMatch(/^For Sunday, November 22, \d+ things? needs? a decision/u);
     expect(COMPOSED_NOTE).toContain("it covers the whole service");
   });
 

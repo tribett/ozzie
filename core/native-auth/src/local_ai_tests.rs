@@ -453,7 +453,11 @@ fn check_that_it_answers_gives_each_verdict_and_saves_only_an_answer() {
 #[test]
 fn each_app_says_how_it_is_started_and_lm_studios_server_is_started_by_hand() {
     let found = find(&Mac::default(), |_| true, 16 * GIB);
-    assert!(found.apps[0].start_hint.contains("Open Ollama"));
+    // "Open Ollama" waits for Ollama and carries on by itself (2026-11-19): the hint says that, not to open it by hand.
+    assert_eq!(
+        found.apps[0].start_hint,
+        "Press Open Ollama, and Ozzie carries on once Ollama answers."
+    );
     assert!(
         found.apps[1].start_hint.contains("Start server"),
         "{}",

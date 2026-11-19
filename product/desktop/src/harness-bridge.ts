@@ -31,8 +31,8 @@ import type { SundayCapture, SundayRules } from "../../../core/src/sunday-captur
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { operationsGranted, type ConnectionStatus } from "./connection.js";
 import {
-  ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
-  type CheckTrigger, type TaskEnd, type TaskRow, type TaskStart,
+  ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, CHECK_FOUND, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
+  type CheckFound, type CheckTrigger, type TaskEnd, type TaskRow, type TaskStart,
 } from "./harness-words.js";
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -434,6 +434,8 @@ export class LedgerRecorder {
   started(taskId: string, start: TaskStart): void { try { this.#triggers?.set(taskId, start); } catch { /* per-device convenience only */ } }
   /** Which closed form a verified answer took, kept the same way. */
   ended(taskId: string, end: TaskEnd): void { try { if ((TASK_ENDS as readonly string[]).includes(end)) this.#triggers?.setEnd(taskId, end); } catch { /* per-device convenience only */ } }
+  /** What a finished check found (closed words), kept the same way for What happened. */
+  checked(taskId: string, found: CheckFound): void { try { if ((CHECK_FOUND as readonly string[]).includes(found)) this.#triggers?.setFound?.(taskId, found); } catch { /* per-device convenience only */ } }
 
   /**
    * The ModelStep, after this task is admitted and running in the ledger (native agent_step requires it),
@@ -457,10 +459,12 @@ export class LedgerRecorder {
   /**
    * One deterministic Sunday check as a "check" task under the Sunday ready procedure, with one tool
    * event for the Planning Center read. No model is involved. The check runs at once and is never held
-   * up by the ledger; its own result or error is returned unchanged.
+   * up by the ledger; its own result or error is returned unchanged. `onTask` is told its task id first, so
+   * what the check found can be kept beside it (proactive.ts).
    */
-  async check(work: () => Promise<SundayCapture>, trigger: CheckTrigger = "automatic"): Promise<SundayCapture> {
+  async check(work: () => Promise<SundayCapture>, trigger: CheckTrigger = "automatic", onTask?: (taskId: string) => void): Promise<SundayCapture> {
     const id = this.#newId();
+    try { onTask?.(id); } catch { /* per-device convenience only: never fails the check */ }
     const observer = this.task("check", "sunday-ready");
     let sequence = 0;
     const emit = (type: TaskEvent["type"], detail = "") => observer.onEvent({ task_id: id, sequence: ++sequence, at: new Date().toISOString(), type, detail });
@@ -529,19 +533,28 @@ export function checkFailure(error: unknown): FailureCode {
 }
 
 /**
- * How each task started ("automatic", "manual", a job's run …) and which closed form a verified answer took, by task id,
- * kept on this Mac only (the ledger has no field for either). Closed words only: never a question, answer or name.
+ * How each task started ("automatic", "manual", a job's run …), which closed form a verified answer took, and what a check
+ * found, by task id, kept on this Mac only (the ledger has no field for any of them). Closed words only: never a
+ * question, answer or name.
  */
 export interface TriggerStore {
   get(id: string): TaskStart | undefined;
   set(id: string, trigger: TaskStart): void;
   end(id: string): TaskEnd | undefined;
   setEnd(id: string, end: TaskEnd): void;
+  found?(id: string): CheckFound | undefined;
+  setFound?(id: string, found: CheckFound): void;
 }
 const TRIGGERS_KEY = "ozzie.ledger.checks.v1";
 const TRIGGERS_KEPT = 200;
+/**
+ * What each check found, under its own key: an earlier Ozzie reading the list above drops any entry with a word it
+ * doesn't know, start and all, so these never go there.
+ */
+const FOUND_LIST = "ozzie.ledger.found.v1";
 type Kept = [string, TaskStart | null, TaskEnd?];
-export function localTriggers(store: { getItem(k: string): string | null; setItem(k: string, v: string): void } | null = typeof localStorage === "undefined" ? null : localStorage): TriggerStore {
+export function localTriggers(store: { getItem(k: string): string | null; setItem(k: string, v: string): void } | null = typeof localStorage === "undefined" ? null : localStorage):
+  Required<TriggerStore> {
   const read = (): Kept[] => {
     try {
       const raw = JSON.parse(store?.getItem(TRIGGERS_KEY) ?? "[]") as unknown;
@@ -562,7 +575,19 @@ export function localTriggers(store: { getItem(k: string): string | null; setIte
     set: (id, trigger) => { if (isTaskStart(trigger)) write(id, e => e[2] ? [id, trigger, e[2]] : [id, trigger]); },
     end: id => read().find(([k]) => k === id)?.[2],
     setEnd: (id, end) => { if ((TASK_ENDS as readonly unknown[]).includes(end)) write(id, e => [id, e[1], end]); },
+    found: id => readFound().find(([k]) => k === id)?.[1],
+    setFound: (id, found) => {
+      if (!(CHECK_FOUND as readonly unknown[]).includes(found)) return;
+      try { store?.setItem(FOUND_LIST, JSON.stringify([[id, found], ...readFound().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ }
+    },
   };
+  function readFound(): [string, CheckFound][] {
+    try {
+      const raw = JSON.parse(store?.getItem(FOUND_LIST) ?? "[]") as unknown;
+      return Array.isArray(raw) ? raw.filter((e): e is [string, CheckFound] => Array.isArray(e) && e.length === 2 && typeof e[0] === "string"
+        && (CHECK_FOUND as readonly unknown[]).includes(e[1])) : [];
+    } catch { return []; }
+  }
 }
 
 let debugLines = false;

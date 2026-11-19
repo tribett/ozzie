@@ -138,6 +138,29 @@ describe("what the local check said (spec S9)", () => {
     }
   });
 
+  it("never promises \"on this Mac\" for LM Studio, whose LM Link can answer from another computer, and keeps Ollama's promise (2026-11-19)", () => {
+    // LM Studio's docs (developer/core/lmlink, lmlink/basics/faq, developer/rest/list): a model on another linked computer
+    // answers this Mac's localhost "as if it were loaded locally", and no field LM Studio's server lists says where it is.
+    expect(MAC.lmLink).toBe("LM Studio can be set up to run its models on another of your computers (its LM Link feature). Ozzie can't see that setting, so if you use LM Link, your questions may go to that computer.");
+    expect(localSaid("answers", "lm-studio", "qwen/qwen3-8b", "Sunday", 14).lines).toEqual([
+      "It answers. A typical answer took 14 seconds.", "Ozzie will use qwen/qwen3-8b through LM Studio.", MAC.lmLink]);
+    expect(localSaid("answers", "lm-studio", "qwen/qwen3-8b", "Sunday").lines[0]).toBe("It answers.");
+    expect(localSaid("answers", "ollama", "qwen3:8b", "Sunday", 14).lines).toEqual([
+      "It answers. A typical answer took 14 seconds on this Mac.", "Ozzie will use qwen3:8b on this Mac. Nothing leaves this Mac."]);
+    // LM Link's words only for LM Studio's success; Ollama's promise never for LM Studio.
+    for (const v of LOCAL_VERDICTS) for (const app of ["ollama", "lm-studio"] as const) {
+      const lines = localSaid(v, app, "m", "Sunday", 3, true).lines.join(" ");
+      expect(lines.includes(MAC.lmLink), `${v} ${app}`).toBe(app === "lm-studio" && v === "answers");
+      if (app === "lm-studio") expect(lines, v).not.toMatch(/Nothing leaves this Mac|will use \S+ on this Mac|seconds on this Mac/u);
+    }
+    // Settings: Ollama's promise for Ollama only; an app native didn't name is promised nothing.
+    expect(LIMIT.localChecked("November 17 at 9:14 AM", "ollama")).toBe("Answered Ozzie's check on November 17 at 9:14 AM. Nothing leaves this Mac.");
+    expect(LIMIT.localChecked("November 17 at 9:14 AM", "lm-studio")).toBe("Answered Ozzie's check on November 17 at 9:14 AM.");
+    expect(LIMIT.localChecked("November 17 at 9:14 AM", null)).toBe("Answered Ozzie's check on November 17 at 9:14 AM.");
+    expect(MAC.lmLink).not.toMatch(FORBIDDEN);
+    expect(MAC.lmLink).not.toMatch(/[—–]/u);
+  });
+
   it("says what to change in the app when it gave the model too little room, and names thinking that ran out (live, 2026-11-18)", () => {
     // Ollama's own setting, as its app names it (Settings, Context length, 8k on its slider); a key stays the other way.
     expect(localSaid("small-context", "ollama", "qwen3:8b", "Sunday").lines).toEqual([
@@ -843,6 +866,31 @@ describe("S9: AI on this Mac", () => {
     expect(seen()).not.toContain(MAC.ollamaRoom);
   });
 
+  it("says once, under LM Studio's models and then in its success, that LM Link can answer from another computer; never for Ollama (2026-11-19)", async () => {
+    const app = (name: string, over: Record<string, unknown>) => ({ app: name, installed: false, running: false, models: [], ...over });
+    const LM = { ...FOUND, apps: [app("ollama", {}), app("lm-studio", { installed: true, running: true, models: [{ id: "qwen/qwen3-8b", size_bytes: null, recommended: true }] })] };
+    const once = () => seen().includes(MAC.lmLink) && seen().indexOf(MAC.lmLink) === seen().lastIndexOf(MAC.lmLink);
+    const s = await mount(base({ local_ai_find: LM, local_ai_check: { verdict: "answers", seconds: 14, status: { configured: true, route: "local", label: "x", local_app: "lm-studio" } } }));
+    await toMac();
+    expect(seen()).toContain("Found LM Studio on this Mac, with 1 AI model ready.");
+    expect(seen().indexOf(MAC.lmLink)).toBeGreaterThan(seen().indexOf("qwen/qwen3-8b"));
+    expect(once()).toBe(true);
+    await press("Check that it answers");
+    expect(s.calls.find(c => c.command === "local_ai_check")?.args).toEqual({ app: "lm-studio", model: "qwen/qwen3-8b" });
+    expect(seen()).toContain("It answers. A typical answer took 14 seconds.");
+    expect(seen()).toContain("Ozzie will use qwen/qwen3-8b through LM Studio.");
+    expect(once()).toBe(true);
+    expect(seen()).not.toMatch(/Nothing leaves this Mac|seconds on this Mac/u);
+    await unmount!(); unmount = null;
+    // Ollama's models: its promise as before, and no word of LM Link before or after the check.
+    await mount(base({ local_ai_check: { verdict: "answers", seconds: 14, status: { configured: true, route: "local", label: "x", local_app: "ollama" } } }));
+    await toMac();
+    expect(seen()).not.toMatch(/LM Link/u);
+    await press("Check that it answers");
+    expect(seen()).toContain("Ozzie will use llama3.2 on this Mac. Nothing leaves this Mac.");
+    expect(seen()).not.toMatch(/LM Link/u);
+  });
+
   it("says nothing about memory when native couldn't tell it", async () => {
     await mount(base({ local_ai_find: { ...FOUND, memory_gb: null, advice: "unknown" } }));
     await toMac();
@@ -862,7 +910,12 @@ describe("S9: AI on this Mac", () => {
 
   it("uses each app's own start hint from native for an app that is on this Mac but not answering", async () => {
     const lmHint = "LM Studio's server doesn't start by itself. In LM Studio, open the Developer tab and turn on Start server, then press Look again.";
-    const olHint = "Open Ollama from your Applications folder. It starts by itself, then press Look again.";
+    // providers.json's own: "Open Ollama" waits for Ollama and carries on by itself (2026-11-19), so nothing says to open
+    // it from Applications by hand; Look again stays.
+    const olHint = "Press Open Ollama, and Ozzie carries on once Ollama answers.";
+    const local = (JSON.parse(readFileSync(new URL("../../../core/native-auth/src/providers.json", import.meta.url), "utf8")) as { local: Record<string, string> }).local;
+    expect(local.ollama_start).toBe(olHint);
+    expect(local.lm_studio_start).toBe(lmHint);
     const app = (name: string, over: Record<string, unknown>) => ({ app: name, installed: false, running: false, models: [], ...over });
     await mount(base({ local_ai_find: { ...FOUND, apps: [app("ollama", {}), app("lm-studio", { installed: true, start_hint: lmHint })] } }));
     await toMac();
@@ -873,6 +926,8 @@ describe("S9: AI on this Mac", () => {
     await mount(base({ local_ai_find: { ...FOUND, apps: [app("ollama", { installed: true, start_hint: olHint }), app("lm-studio", {})] } }));
     await toMac();
     expect(seen()).toContain(`Ollama is on this Mac but isn't open. ${olHint}`);
+    expect(seen()).not.toMatch(/Applications folder|starts by itself/u);
+    expect(button("Open Ollama")).not.toBeNull();
     expect(button("Look again")).not.toBeNull();
   });
 
@@ -1014,6 +1069,22 @@ describe("S9: models Ozzie downloads and sets up itself (owner's request, 2026-1
     await act(async () => { s.emit("ozzie:local-model", payload); });
     await settle();
   };
+
+  it("says LM Link's words once under LM Studio's own models beside Ozzie's offer, and never under Ollama's (2026-11-19)", async () => {
+    const LM_OWN = { ...SETUP, apps: [{ app: "ollama", installed: true, running: true, models: [] },
+      { app: "lm-studio", installed: true, running: true, models: [{ id: "qwen/qwen3-8b", size_bytes: null }] }] };
+    await mount(base({ local_ai_find: LM_OWN, local_model_progress: null }));
+    await toMac();
+    const text = seen();
+    expect(rows().map(r => r.textContent)).toContain("qwen/qwen3-8b");
+    expect(text.indexOf(MAC.lmLink)).toBeGreaterThan(text.indexOf("Or use a model you already have"));
+    expect(text.indexOf(MAC.lmLink)).toBe(text.lastIndexOf(MAC.lmLink));
+    await unmount!(); unmount = null;
+    await mount(base({ local_ai_find: SETUP, local_model_progress: null }));
+    await toMac();
+    expect(seen()).toContain("Or use a model you already have");
+    expect(seen()).not.toMatch(/LM Link/u);
+  });
 
   it("offers the models Ozzie offers with the one for this Mac chosen, says what downloading means, and keeps the person's own models under them", async () => {
     const s = await mount(base({ local_ai_find: SETUP, local_model_progress: null }));

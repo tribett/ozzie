@@ -214,6 +214,16 @@ describe("every tool's words, over every kind of check", () => {
     const overview = textOf(call(serverOver(() => text), "sunday_readiness")).split("\n## ")[1]!;
     expect(overview).toMatch(/^Overview \(from [^\n]+\)\nWorth a look: the list was too long to say in full, so \d+ findings were left out of this copy\.\n/u);
     expect(overview).not.toContain("couldn't be read");
+    // More rows than one answer holds, said in one piece as Ask says them (owner's read of 0.3.2): the overview's sentence
+    // once, without a count of none, then each group under one label line, in the Sunday page's order, and no row labelled.
+    const lines = overview.split("\n").slice(2);
+    expect(lines[0]).toMatch(/^For Sunday, November 22, \d+ things need a decision and \d+ (?:is|are) worth a look\./u);
+    expect(lines.filter(l => /^For /u.test(l))).toHaveLength(1);
+    const labels = lines.filter(l => /^(?:Needs a decision|Worth a look|Resolved by you):$/u.test(l));
+    expect(labels).toEqual(["Needs a decision:", "Worth a look:", "Resolved by you:"].filter(l => labels.includes(l)));
+    expect(labels[0]).toBe("Needs a decision:");
+    expect(lines.filter(l => /^(?:Needs a decision|Worth a look|Resolved by you): \S/u.test(l))).toEqual([]);
+    expect(lines.length - labels.length - 1).toBeGreaterThan(24);
   });
 
   it("says when the facts were checked (not when the copy was saved), which copy it is, and that labels hold only within it", async () => {

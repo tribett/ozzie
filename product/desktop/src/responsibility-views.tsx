@@ -11,12 +11,12 @@ import {
 import type { Autostart } from "./background.js";
 import type { NoticedItem, Runner, RunnerView, WriteUp } from "./responsibility-runner.js";
 import {
-  accountsText, areasText, assumedText, atText, daysText, foundText, isWeekdays, jobTitle, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT, NO_WRITEUP,
-  NOTICE_WORDS, noticedBadge, noticedChanges, noticedTitle, offerText, ONLY_WHILE, preparedTitle, purposeText, refusalText, REPORT_CHOICES, reportText, runText, scheduleText,
-  statusText, STOP_TEXT, templateTitle, togetherText, watchesText, whenText, WRITEUP_CHECK, WRITEUP_HOW, writeupHead,
+  accountsText, areasText, assumedText, atText, daysText, foundText, isWeekdays, jobTitle, keepAbout, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT,
+  NO_WRITEUP, NOTICE_WORDS, noticedBadge, noticedChanges, noticedTitle, offerText, oneOfEach, ONLY_WHILE, preparedTitle, purposeText, QUIT_LINE, refusalText, REPORT_CHOICES,
+  reportText, runText, scheduleText, statusText, STOP_TEXT, templateTitle, watchesText, WATCH_HOW, whenText, WRITEUP_CHECK, WRITEUP_HOW, writeupHead,
 } from "./responsibility-words.js";
 import { useDay } from "./day-words.js";
-import { dayName, keepTitle, watchTitle } from "./day-phrases.js";
+import { dayName, DayName, keepTitle, watchTitle } from "./day-phrases.js";
 import type { DayWords } from "../../../core/src/service-day.js";
 import { fillPeople } from "../../../core/src/harness/session.js";
 import { onDayPage } from "../../../core/src/ask.js";
@@ -304,12 +304,14 @@ export function checksBack(r: Responsibility, view: RunnerView, now: string): st
   return free && (!next || Date.parse(free) > Date.parse(next)) ? free : null;
 }
 
-function ResponsibilityCard({ r, view, context, runner, level = 3, names = {} }: {
+function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, about }: {
   r: Responsibility; view: RunnerView; context: PlanContext; runner: Runner;
   /** Its title's heading level: 4 inside the Sunday item. */
   level?: 3 | 4;
   /** Names from the check on screen, for its write-up (on this Mac only). */
   names?: Readonly<Record<string, string>>;
+  /** One short line under its title saying what it is (Keep {day} covered, beside the steady look). */
+  about?: string;
 }) {
   const Title = level === 4 ? "h4" : "h3";
   const d = useDay();
@@ -336,20 +338,22 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {} }:
   return <section className="find responsibility" aria-label={title}>
     <div className="find-top"><span className={`badge ${TONE[status.tone]}`}>{status.label}</span><span className="find-where">{areasText(r.template)}{context.church ? `, ${context.church}` : ""}</span></div>
     <Title className="find-title">{title}</Title>
+    {about && <p className="find-body">{about}</p>}
+    {/* Where it stands first (its last and next check, its checks used), then what it does. */}
     {editing
       ? <PlanEditor plan={plan} context={context} doneLabel="Save changes" onCancel={() => setEditing(false)}
         onDone={p => { setEditing(false); act(() => runner.edit(r.id, p)); }} />
       : <div className="sp">
-        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{watchesText(r.template, d)}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">When</span><span>{scheduleText(plan, at(plan, context), d)}{zoneNote(plan.zone, context)}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template, r.schedule.weekdays)}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now, reportFor(r.runs[0], view)) : "Not yet."}</span></div>
         {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
           <span>{back ? `It has used its checks for now. It can check again ${againText(back, now)}.` : next ? whenText(next, now)
             : context.signingIn ? "Once the Planning Center sign-in in your browser is done."
               : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
-        <div className="sp-row sp-2"><span className="sp-h">Today</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} checks used in the last 24 hours.</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Checks used</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} in the last 24 hours.</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{watchesText(r.template, d)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">When</span><span>{scheduleText(plan, at(plan, context), d)}{zoneNote(plan.zone, context)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template, r.schedule.weekdays)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>
       </div>}
     {!editing && lastItem && lastWriteup?.kind === "written" && <details className="listen-more today-writeup resp-writeup">
       <summary><Icon name="chev" small />Ozzie's write-up of the last check</summary>
@@ -373,7 +377,7 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {} }:
   </section>;
 }
 
-/** Keep {day} covered isn't on: offered beside the hourly look, opening its plan to confirm. */
+/** Keep {day} covered isn't on: offered under the steady look's card, opening its plan to confirm. */
 function KeepSundayOffer({ context, actions }: { context: PlanContext; actions: PlanActions }) {
   const [open, setOpen] = useState(false);
   const d = useDay();
@@ -387,9 +391,11 @@ function KeepSundayOffer({ context, actions }: { context: PlanContext; actions: 
 }
 
 /**
- * The home for responsibilities on Keeping watch. `sunday`: Ozzie's regular look at the watched service
+ * The home for responsibilities on Keeping watch. `sunday`: Ozzie's steady look at the watched service
  * (proactive-page.tsx), shown first as one item with Keep {day} covered (or an offer to set it up), so the two things that
- * look at the service read as one; the rest follow.
+ * look at the service read as one, each saying on its own card what it is; the rest follow. What is running comes before
+ * any explanation: one short line (what Pause everything stops, and that nothing runs after quitting or while asleep),
+ * the cards, then how it works in a "See how this works" fold.
  */
 export function ResponsibilityList({ view, context, runner, actions, sunday, names = {} }: {
   view: RunnerView; context: PlanContext; runner: Runner; actions: PlanActions; sunday?: ReactNode;
@@ -409,21 +415,19 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
   const stops = grouped && active.length ? `${watching}, and everything else here,` : grouped ? watching : active.length ? "everything here" : null;
   return <section className="stack responsibilities" aria-labelledby="resp-title">
     <div className="row resp-head">
-      <h2 id="resp-title" className="h3">What Ozzie is keeping an eye on</h2>
+      <h2 id="resp-title" className="h3">What Ozzie is watching</h2>
       <span className="spacer" />
       {view.paused_all
         ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => { void runner.pauseAll(false); }}>Resume everything</button>
         : stops && <button type="button" className="btn btn-secondary btn-sm" aria-describedby="pause-scope" onClick={() => { void runner.pauseAll(true); }}>Pause everything</button>}
     </div>
-    <p className="small">Ozzie keeps checking while its window is closed; it stays as the small Ozzie picture at the top of your screen. Nothing runs after you quit Ozzie or while this Mac is asleep, and it catches up once when it can. Ozzie keeps an eye on one of each kind at a time; change it rather than setting up another.</p>
-    {stops && !view.paused_all && <p id="pause-scope" className="small">Pause everything stops {stops} until you resume.</p>}
-    {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it keeps an eye on couldn't be read on this Mac right now.</p>}
+    <p className="small">{stops && !view.paused_all && <><span id="pause-scope">Pause everything stops {stops} until you resume.</span>{" "}</>}{QUIT_LINE}</p>
+    {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it watches couldn't be read on this Mac right now.</p>}
     {view.paused_all && <p className="panel-info" role="status"><Icon name="info" small />Everything is paused. Nothing runs on its own until you resume.</p>}
     {grouped && <section className="sunday-watch" aria-labelledby="sunday-watch-title">
-      <h3 id="sunday-watch-title" className="sunday-watch-h">Keeping an eye on {dayName(d)}</h3>
-      <p className="small">{togetherText(d)}</p>
+      <h3 id="sunday-watch-title" className="sunday-watch-h">{DayName(d)}</h3>
       {sunday}
-      {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} names={names} />
+      {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} names={names} about={keepAbout(d)} />
         : view.available && <KeepSundayOffer context={context} actions={actions} />}
     </section>}
     {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “{watchTitle(d)}”, or set one up here.</p>}
@@ -431,6 +435,9 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
     {picking
       ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
+    <details className="listen-more watch-how"><summary><Icon name="chev" small />See how this works</summary>
+      <ul className="small">{[...WATCH_HOW, oneOfEach(d)].map(line => <li key={line}>{line}</li>)}</ul>
+    </details>
     {ended.length > 0 && <details className="resp-ended"><summary><Icon name="chev" small />Ended recently</summary>
       <ul className="list">{ended.map(r => <li key={r.id}><Icon name="dot" small />{jobTitle(r, d)} · {lifetimeText(r.lifetime, r.template).replace(/ Then it stops on its own\.$/u, "")}</li>)}</ul>
     </details>}

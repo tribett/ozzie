@@ -2,6 +2,11 @@
    type, colours and readability live in hearth.css and styles.css. Every selector starts .oz and names its own
    component, so it never reaches another page. */
 
+/* ---- Ask Ozzie: its name, and under it what it answers, each on one line (owner's read of 0.3.2) ------------------ */
+.oz .ask-panel .ask-head { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.oz .ask-panel .ask-head > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oz .ask-panel .ask-head-scope { font-size: var(--t-sm); font-weight: 400; color: var(--ink-3); }
+
 /* ---- Ask Ozzie: one scrolling column above the question box --------------------------------------------------- */
 .oz .ask-panel .ask-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .oz .ask-panel .ask-scroll > .small { margin: 0; }
@@ -12,6 +17,8 @@
 .oz .ask-panel .ask-card .body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .oz .ask-lines { display: flex; flex-direction: column; gap: 6px; }
 .oz .ask-lines p { white-space: pre-line; overflow-wrap: anywhere; }
+/* A group's label line in an answer reads as its heading (owner's read of 0.3.2). */
+.oz .ask-lines p.ask-group { font-weight: 600; margin-top: 4px; }
 .oz .ask-panel .ask-current { scroll-margin-top: 12px; }
 .oz .ask-panel .ask-src { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .oz .ask-panel .ask-asked { overflow-wrap: anywhere; }

@@ -576,10 +576,16 @@ changeable any time under **Settings › AI help**:
 
 - **No AI.** Free. Everything except rewording a note, Ask Ozzie and "who
   could help" keeps working.
-- **AI on this Mac.** Free, and nothing leaves this Mac. Ozzie looks for
+- **AI on this Mac.** Free. Ozzie looks for
   [Ollama](https://ollama.com) at `127.0.0.1:11434` and LM Studio at
   `127.0.0.1:1234`, lists the models it finds there, and suggests a model size
-  that suits this Mac's memory. It talks to no other local address.
+  that suits this Mac's memory. It talks to no other local address. With
+  Ollama nothing leaves this Mac: a model Ollama runs elsewhere (its cloud
+  models, or one served from another computer) is never listed, checked or
+  asked. LM Studio can run its models on another of your own computers (its
+  LM Link feature), and nothing its local server reports says which computer
+  a model is on, so Ozzie can't tell; it says so wherever you choose or check
+  an LM Studio model.
 - **A key from an AI company.** Ozzie charges nothing; you pay the company
   directly. Choose the company, follow the short guide, copy your key, and
   press the button in Ozzie: the key is read once from the clipboard by the

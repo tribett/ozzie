@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn((command: string, args?: 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 import { AiSettings } from "../src/ai-settings.js";
 import { routeProblem, type ModelStatus } from "../src/model.js";
+import { MAC } from "../src/ai-words.js";
 import { HIDDEN_WORDS } from "./harness-fakes.js";
 
 const dom = installFakeDom();
@@ -68,10 +69,32 @@ describe("AI settings", () => {
     expect(ready.text).toContain("3 of 1,000 AI requests used this month. The count starts again on December 1.");
     expect(ready.text).not.toMatch(/paused|not answering|doesn't have/u);
     await unmount!(); unmount = null;
-    const local = await shown({ configured: true, route: "local", label: "AI model on this Mac (llama3.2:latest)", setup: "ready", key_account: null, checked_at_ms: Date.UTC(2026, 10, 17, 15, 14) });
+    const local = await shown({ configured: true, route: "local", label: "AI model on this Mac (llama3.2:latest)", setup: "ready", key_account: null, checked_at_ms: Date.UTC(2026, 10, 17, 15, 14),
+      local_app: "ollama" });
     expect(local.text).toContain("AI: on this Mac (llama3.2)");
     expect(local.text).toMatch(/Answered Ozzie's check on November 17(?:,| at) \d{1,2}:14 [AP]M\. Nothing leaves this Mac\./u);
     expect(local.text).not.toMatch(/key/iu);
+    expect(local.text).not.toMatch(/LM Link/u);
+  });
+
+  it("says plainly for a chosen LM Studio model that its LM Link can answer from another computer, and never that nothing leaves this Mac (2026-11-19)", async () => {
+    const lm = (over: Partial<ModelStatus>): ModelStatus => ({ configured: true, route: "local", label: "AI model on this Mac (qwen/qwen3-8b)", setup: "ready", key_account: null,
+      checked_at_ms: Date.UTC(2026, 10, 17, 15, 14), local_app: "lm-studio", ...over });
+    const ready = await shown(lm({}));
+    expect(ready.text).toMatch(/Answered Ozzie's check on November 17(?:,| at) \d{1,2}:14 [AP]M\./u);
+    expect(ready.text).not.toContain("Nothing leaves this Mac");
+    expect(ready.text).toContain(MAC.lmLink);
+    expect(ready.text.indexOf(MAC.lmLink)).toBe(ready.text.lastIndexOf(MAC.lmLink));
+    await unmount!(); unmount = null;
+    // Chosen, not checked yet: said too.
+    const unchecked = await shown(lm({ configured: false, setup: "not-checked", checked_at_ms: null }));
+    expect(unchecked.text).toContain("AI on this Mac is chosen, but Ozzie hasn't checked that it answers yet.");
+    expect(unchecked.text).toContain(MAC.lmLink);
+    await unmount!(); unmount = null;
+    // A model that runs elsewhere already says so, and isn't used: LM Link's words would only repeat it.
+    const away = await shown(lm({ configured: false, setup: "not-on-this-mac", label: "AI model on this Mac (far/model)" }));
+    expect(away.text).toContain("far/model runs on another computer, not on this Mac, so Ozzie doesn't use it here.");
+    expect(away.text).not.toContain(MAC.lmLink);
   });
 
   it("says plainly when a model name holds a person's name, or an address can't be used", () => {

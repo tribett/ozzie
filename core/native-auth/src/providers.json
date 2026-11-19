@@ -120,7 +120,7 @@
     "large": { "id": "gpt-oss:20b", "size_bytes": 13780173839, "offered": true, "tested": false },
     "reasoning_effort": "none",
     "ollama_download": "https://ollama.com/download/mac",
-    "ollama_start": "Open Ollama from your Applications folder. It starts by itself, then press Look again.",
+    "ollama_start": "Press Open Ollama, and Ozzie carries on once Ollama answers.",
     "lm_studio_start": "LM Studio's server doesn't start by itself. In LM Studio, open the Developer tab and turn on Start server, then press Look again."
   }
 }

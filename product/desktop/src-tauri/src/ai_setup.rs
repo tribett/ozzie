@@ -278,13 +278,15 @@ pub async fn local_ai_check(
     .map_err(|_| ModelError::ProviderFailure)?
 }
 
-/// Ozzie's window to the front again: after "Open Ollama", once Ollama answers, in case its app came in front.
+/// Ozzie's window to the front again: after "Open Ollama", once Ollama answers, in case its app came in front. When
+/// macOS keeps Ollama in front, `ask_to_front` opens Ozzie's own app.
 #[tauri::command]
 pub fn come_forward(app: tauri::AppHandle) {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_focus();
     }
+    crate::always_on::ask_to_front(&app);
 }
 
 /// Ozzie's AI card (spec S6): open for sign-up, with the price and allowance in ozzie.church's own words, or

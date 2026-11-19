@@ -52,18 +52,21 @@ describe("Keeping watch", () => {
   it("says what runs, which account, what it can do, and how to stop it", async () => {
     const page = text(render(await viewAfterDecline(), {}));
     expect(page).toContain("Keeping watch");
-    expect(page).toContain("Keeping an eye on Sunday");
-    expect(page).toContain("Ozzie keeps an eye on Sunday");
-    // Its interval, under Schedule and quiet hours, is named for it (Keep Sunday covered keeps its own times).
-    expect(page).toContain("Look at Sunday every");
+    expect(page).toContain("What Ozzie is watching");
+    expect(page).toContain("Ozzie keeps an eye on Sunday Runs by itself whenever Ozzie is open.");
+    // Its interval, under Schedule and quiet hours, is named for it (Keep Sunday covered keeps its own times), and is the
+    // longest it waits: with its window on screen Ozzie reads again sooner (App's stale refresh).
+    expect(page).toContain("Look at Sunday at least every");
     expect(page).toContain("Reads only. It never sends messages.");
-    // The church by its name when known; never its organization number (spec §6).
-    expect(page).toContain("Account Planning Center");
+    // Where Ozzie reads, with the church by its name when known; never its organization number (spec §6).
+    expect(page).toContain("Planning Center Services Ozzie keeps an eye on Sunday");
     expect(page).not.toContain("1001");
     expect(page).not.toMatch(/runs automatically|automatic checks|regular Sunday check/u);
-    // Closing the window no longer stops Ozzie (it stays in the menu bar); quitting does.
-    expect(page).toContain("When Ozzie opens, then every hour while Ozzie is running on this Mac, even with its window closed. Nothing runs after you quit it.");
-    expect(page).toContain("Time zone");
+    // Closing the window doesn't stop Ozzie (it stays in the menu bar); quitting does, and so does sleep, said outside any fold.
+    expect(page).toContain("How often When Ozzie opens, then at least every hour while it is running, even with its window closed. While its window is on screen, about every 30 minutes.");
+    expect(page).toContain("What Ozzie is watching Nothing runs after you quit Ozzie or while this Mac is asleep.");
+    expect(page).toContain("See how this works Ozzie keeps checking while its window is closed. It stays as the small Ozzie picture at the top of your screen.");
+    expect(page).toContain("Time zone: ");
     expect(page).toContain("Pause keeping an eye on Sunday");
     expect(page).toContain("Check now");
     expect(page).toContain("“Sunday coverage needs attention. Open Ozzie to see details.” It never includes names or details.");
@@ -87,6 +90,36 @@ describe("Keeping watch", () => {
     const paused = text(render({ ...view, schedule: { ...view.schedule, paused: true, next_run_at: null } }, {}));
     expect(paused).toContain("Resume keeping an eye on Sunday");
     expect(paused).toContain("Paused. Ozzie doesn't look at Sunday until you resume.");
+  });
+
+  it("says how often as the most it waits, and the window's quicker reads only when they are quicker", async () => {
+    const view = await viewAfterDecline();
+    const at = (intervalMinutes: number, runOnLaunch: boolean) => text(render({ ...view, prefs: { ...view.prefs, intervalMinutes, runOnLaunch } }, {}));
+    expect(at(120, false)).toContain("How often At least every 2 hours while it is running, even with its window closed. While its window is on screen, about every 30 minutes.");
+    // Every 30 or 15 minutes already is as often as the window's reads: nothing more to say.
+    expect(at(30, true)).toContain("How often When Ozzie opens, then at least every 30 minutes while it is running, even with its window closed. Telling you");
+    expect(at(15, false)).toContain("How often At least every 15 minutes while it is running, even with its window closed. Telling you");
+    for (const page of [at(60, true), at(60, false)]) expect(page).not.toMatch(/(?<!at least )\bevery hour\b/iu);
+  });
+
+  it("says a check outside the schedule was outside the schedule, never that someone pressed Check now", async () => {
+    // Check now, Ozzie's own re-read while its window is on screen and a job's check all start as "manual"; the schedule can't tell them apart.
+    const view = await viewAfterDecline();
+    const last = { ...view.schedule.last_run!, trigger: "manual" as const };
+    const page = text(render({ ...view, schedule: { ...view.schedule, last_run: last } }, {}));
+    expect(page).toMatch(/Last check [^.]+, outside the schedule\. Finished\./u);
+    expect(page).not.toMatch(/Last check [^.]+, Check now/u);
+    // Paused, a check someone asked for is still outside the schedule.
+    expect(text(render({ ...view, schedule: { ...view.schedule, paused: true, next_run_at: null, last_run: last } }, {}))).toMatch(/Last check [^.]+, outside the schedule\. Finished\./u);
+    // A check the schedule started still says so.
+    expect(text(render({ ...view, schedule: { ...view.schedule, last_run: { ...last, trigger: "scheduled" } } }, {}))).toMatch(/Last check [^.]+, on schedule\. Finished\./u);
+  });
+
+  it("lists what changed, and says only changes are listed once there is something to list", async () => {
+    const view = await viewAfterDecline();
+    expect(text(render(view, {}))).toContain("Only changes are listed. A check that finds the same facts as the one before adds nothing here.");
+    const empty = text(render({ ...view, history: [] }, {}));
+    expect(empty).toContain("What changed recently Nothing yet. After the first check, Ozzie lists what changes from one check to the next. Schedule and quiet hours");
   });
 
   it("uses plain product language", async () => {

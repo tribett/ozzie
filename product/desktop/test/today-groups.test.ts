@@ -504,8 +504,8 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
     last: { at: "2026-11-20T14:06:00.000Z", ok: true }, next: "2026-11-20T15:06:00.000Z", missed: [], ...over,
   });
   it("leads In progress with Ozzie keeping an eye on Sunday once it can run, with how often, when it last and next looks", () => {
-    expect(regularLine(regular(), FRI, ET)).toBe("Checks Planning Center every hour while Ozzie is open, and when it opens. Last checked 9:06 AM. Next check 10:06 AM.");
-    expect(regularLine(regular({ runOnLaunch: false, intervalMinutes: 30, last: null }), FRI, ET)).toBe("Checks Planning Center every 30 minutes while Ozzie is open. Not checked yet. Next check 10:06 AM.");
+    expect(regularLine(regular(), FRI, ET)).toBe("Checks Planning Center at least every hour while Ozzie is open, and when it opens. Last checked 9:06 AM. Next check 10:06 AM.");
+    expect(regularLine(regular({ runOnLaunch: false, intervalMinutes: 30, last: null }), FRI, ET)).toBe("Checks Planning Center at least every 30 minutes while Ozzie is open. Not checked yet. Next check 10:06 AM.");
     expect(regularLine(regular({ paused: true }), FRI, ET)).toContain("Paused: nothing runs until you resume it in Keeping watch.");
     expect(regularLine(regular({ running: true }), FRI, ET)).toContain("Checking now.");
     expect(regularLine(regular({ last: { at: "2026-11-19T14:06:00.000Z", ok: false } }), FRI, ET)).toContain("Last checked Thu 9:06 AM, but that check couldn't finish.");
@@ -531,7 +531,7 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
       brief: null, names: {}, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), regular: regular({ missed: ["2026-11-20T12:00:00.000Z"] }),
     })));
     const progress = page.slice(page.indexOf("In progress"));
-    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services Ozzie keeps an eye on Sunday Checks Planning Center every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
+    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services Ozzie keeps an eye on Sunday Checks Planning Center at least every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
     expect(page).not.toMatch(/under way/u);
     expect(page).not.toMatch(HIDDEN_WORDS);
   });

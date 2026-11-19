@@ -369,7 +369,12 @@ export function basedOnBrief(brief: SundayBrief): string {
   return `Based on: ${sunday}${brief.mode === "fictional" ? ", plus the fictional email import" : ""}`;
 }
 
-/** "Based on: …" for one verified answer: each source it read, with its check time, newest first per source. */
+/**
+ * "Based on: …" for one verified answer: each source it read, with its check time, newest first per source. Planning
+ * Center sources shown with the same check time are named once with it ("Planning Center Services, Calendar and People,
+ * checked …"; owner's read of 0.3.2), as the copy for other AI apps names them (core/mcp/render.ts). Every source and
+ * every time is still said.
+ */
 export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" | "check_time">[], mode: "live" | "recording" | "fictional"): string {
   if (!evidence.length) return "Based on: nothing Ozzie read";
   const latest = new Map<string, string>();
@@ -383,7 +388,12 @@ export function basedOnEvidence(evidence: readonly Pick<ToolEnvelope, "source" |
     const newest = pco.map(([, t]) => t).sort().at(-1)!;
     if (mode === "fictional") parts.push(`fictional example data as of ${when(newest)}`);
     else if (mode === "recording") parts.push(`a saved copy of the Planning Center check at ${when(newest)}`);
-    else parts.push(...pco.map(([source, t]) => `${source}, checked ${when(t)}`));
+    else {
+      const at = new Map<string, string[]>();
+      for (const [source, t] of pco) at.set(when(t), [...at.get(when(t)) ?? [], source.replace(PLANNING_CENTER, "")]);
+      const named = (products: string[]) => products.length > 1 ? `${products.slice(0, -1).join(", ")} and ${products.at(-1)!}` : products[0]!;
+      parts.push(...[...at].map(([t, products]) => `Planning Center ${named(products)}, checked ${t}`));
+    }
   }
   if (latest.has(IMPORT_SOURCE)) parts.push("the fictional email import");
   if (latest.has(RULES_SOURCE)) parts.push("your Church rules");
@@ -419,6 +429,14 @@ export type TaskStart = CheckTrigger | `job:${TemplateId}:${RunTrigger}` | "who-
 /** How a verified answer ended, kept the same way: which closed answer form it took. Never its facts or words. */
 export type TaskEnd = "facts" | "not-covered" | "nothing-needs-a-decision" | "draft";
 export const TASK_ENDS: readonly TaskEnd[] = ["facts", "not-covered", "nothing-needs-a-decision", "draft"];
+/**
+ * What a finished check of the service found, kept on this Mac by task id (proactive.ts `afterCapture`). "nothing-new":
+ * every read completed, the check right before it was of the same service, nothing changed (not even what the person's
+ * Church rules keep out of notices) and it showed exactly what that one did; "changes": something changed. Absent means
+ * not known (a first look at a service, a saved copy, a check kept before this was), and then nothing is folded.
+ */
+export type CheckFound = "changes" | "nothing-new";
+export const CHECK_FOUND: readonly CheckFound[] = ["changes", "nothing-new"];
 const RUN_TRIGGERS: readonly RunTrigger[] = ["start", "scheduled", "catch-up", "retry", "change", "manual"];
 /** Whether text is a TaskStart (what the local store accepts back). */
 export function isTaskStart(value: unknown): value is TaskStart {
@@ -447,7 +465,7 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
   let title: string, outcome: string | null;
   if (row.kind === "check") {
     // Said without the day: an older check may have been of another week's service.
-    title = options.trigger === "manual" ? "Planning Center check you started" : options.trigger === "automatic" ? "Planning Center check, on schedule" : "Planning Center check";
+    title = options.trigger === "manual" ? "Planning Center check you started" : options.trigger === "automatic" ? "Planning Center check, on its own" : "Planning Center check";
     outcome = row.state === "verified" ? (tools.some(e => !e.detail.endsWith(" complete") && e.detail !== "complete") ? "part of it couldn't be read" : null) : null;
   } else {
     // A job's run is named by the job; anything else by its procedure.
@@ -493,7 +511,7 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
   const job = start?.startsWith("job:") ? start.split(":") as [string, TemplateId, RunTrigger] : null;
   let started: string;
   if (row.kind === "check") {
-    started = start === "manual" ? `You asked Ozzie to check Planning Center at ${at}.` : start === "automatic" ? `Ozzie checked Planning Center on schedule at ${at}.` : `Ozzie checked Planning Center at ${at}.`;
+    started = start === "manual" ? `You asked Ozzie to check Planning Center at ${at}.` : start === "automatic" ? `Ozzie checked Planning Center on its own at ${at}.` : `Ozzie checked Planning Center at ${at}.`;
   } else if (row.kind === "ask") started = `You asked a question at ${at}.`;
   else if (job) started = jobStarted(job[1], job[2], at, d);
   else if (start === "who-could-help") started = `You asked Ozzie to look at who could help with a role, at ${at}.`;
@@ -530,4 +548,23 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
     default: ended = "Still running.";
   }
   return { started, looked, ai: aiText(row.kind, start, asked, row.state === "verified", row.events.some(e => e.type === "model")), ended };
+}
+
+/**
+ * A check What happened may fold with others like it: one Ozzie started by itself (its line says "on its own"), that
+ * finished with its read complete, and that is kept as having found nothing new. One whose outcome isn't known never is.
+ */
+export function quietCheck(row: TaskRow, start: TaskStart | undefined, found: CheckFound | undefined): boolean {
+  if (row.kind !== "check" || row.state !== "verified" || start !== "automatic" || found !== "nothing-new" || !Number.isFinite(Date.parse(row.created_at))) return false;
+  const tools = row.events.filter(e => e.type === "tool");
+  return tools.length > 0 && tools.every(e => e.detail === "planning_center.refresh complete");
+}
+/**
+ * The one line for two or more of those in a row on one day, under that day's heading: "Checked Planning Center 6 times on
+ * schedule, 9:00 AM to 2:00 PM · nothing new". It opens to each check's own line.
+ */
+export function quietChecksLine(rows: readonly Pick<TaskRow, "created_at">[]): string {
+  const at = rows.map(r => r.created_at).sort();
+  const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `Checked Planning Center ${timesText(rows.length)} on its own, ${time(at[0]!)} to ${time(at.at(-1)!)} · nothing new`;
 }

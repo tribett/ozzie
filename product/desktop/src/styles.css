@@ -257,6 +257,8 @@ body { background: #FAF6EE; }
 @media (prefers-reduced-motion: reduce) { .oz .recent-task > summary .ic { transition: none; } }
 .oz .recent-task[open] > summary { border-bottom: 1px solid var(--line); }
 .oz .recent-steps { padding: 10px 16px 12px; font-size: var(--t-sm); color: var(--ink-2); }
+/* Quiet checks in a row share one line; opened, each check's own line sits inside it, inset like a task's steps. */
+.oz .recent-fold > .log { margin: 10px 16px 12px; }
 .oz .recent-quiet { display: flex; gap: 8px; align-items: flex-start; }
 /* Keeping watch: the plan to confirm, What runs automatically, and Today */
 .oz .plan-card { display: flex; flex-direction: column; gap: 8px; }
@@ -275,10 +277,10 @@ body { background: #FAF6EE; }
 .oz .resp-ended > summary .ic { transition: transform .12s ease-out; }
 .oz .resp-ended[open] > summary .ic { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .oz .resp-ended > summary .ic { transition: none; } }
-/* What runs automatically: the regular Sunday check and Keep Sunday covered, grouped as one Sunday item */
+/* Keeping watch: Ozzie keeping an eye on the day and Keep {day} covered, grouped as one item under the day's name. Each card
+   says what it is under its own title, so the group has no line of its own under its heading. */
 .oz .sunday-watch { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; background: var(--sunken); border: 1px solid var(--line); }
 .oz .sunday-watch-h { font: 500 20px/1.25 var(--f-display); color: var(--ink); }
-.oz .sunday-watch > .small { margin-top: -6px; color: var(--ink-2); text-wrap: pretty; }
 .oz .sunday-watch .find-title { font-size: 21px; }
 .oz .noticed .find-title { font-size: 16px; }
 .oz .noticed-summary { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--sunken); border: 1px solid var(--line); font-size: var(--t-sm); }

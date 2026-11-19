@@ -1040,7 +1040,7 @@ export function App() {
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={p => proactive.setPrefs(p)}
           responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} names={changeNames} />} />}
         {page === "activity" && <ActivityPage capture={capture} notGranted={(operationsAsked.get() || operationsReads.on === true) && Boolean(status?.scopes) && !operationsGranted(status)}
-          tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} ollama={ollamaDone} />}
+          tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} found={triggers.found} ollama={ollamaDone} />}
         {page === "connection" && <ConnectionPage openAt={settingsAt} onOpenAt={() => setSettingsAt(null)} status={status} kept={keptConnection} settings={settings} onSettings={setSettings} onStatus={setStatus} cards={openCards} onDiscardCards={discardCards}
           recordingCount={recordings.length} onModel={setModelReady} onAiAnswer={how => setupMemo.set({ aiOffered: true, aiAnswer: how })} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}

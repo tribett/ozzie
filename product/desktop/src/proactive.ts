@@ -10,12 +10,13 @@ import {
   DEFAULT_QUIET_HOURS, DEFAULT_SCHEDULE, finishRun, holdNotice, inQuietHours, launchSchedule, newSchedule, noticeDecision, parseClock,
   pauseSchedule, releaseHeld, rescheduleFor, resumeSchedule, settledQuietHours, startManual, tickSchedule, type RunTrigger, type ScheduleState,
 } from "../../../core/src/schedule.js";
-import { changeFindingKind, feedbackOf, foundOf, rightAwayChanges, routeChanges } from "../../../core/src/finding-feedback.js";
-import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import { sundayOperations } from "../../../core/src/operations-capture.js";
+import { changeFindingKind, feedbackOf, foundOf, rightAwayChanges, routeChanges, stableFindingKey } from "../../../core/src/finding-feedback.js";
+import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { thisMacOnly, type NoticeOptions } from "./phone-notice.js";
 import { noticeDayOf } from "./day-phrases.js";
 import type { NoticeDay } from "./onboarding-bridge.js";
+import type { CheckFound } from "./harness-words.js";
 
 /**
  * The Sunday check the app has always run: re-verify a saved connection when needed, then read.
@@ -132,8 +133,12 @@ export interface ProactiveDeps {
   /**
    * One Sunday check. `trigger` is how it started (the desktop records each check in the task ledger);
    * `source` overrides how the ledger records it (a responsibility's run is automatic, though it asks like Check now).
+   * `onTask`: told the check's task id in the ledger, when it has one.
    */
-  check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic") => Promise<SundayCapture>;
+  check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic",
+    onTask?: (taskId: string) => void) => Promise<SundayCapture>;
+  /** Keeps what a finished check found (closed words) beside its task, for What happened. Best effort. */
+  found?: (taskId: string, found: CheckFound) => void;
   /** The coverage notice; `localOnly` when only background checks brought it (its phone line stays back), `day` its fixed line's day. */
   notify: (options?: NoticeOptions) => Promise<void>;
   /** Fixed local copy for a failed check. */
@@ -214,6 +219,31 @@ const validSchedule = (s: ScheduleState | null): s is ScheduleState =>
   s !== null && typeof s === "object" && s.version === 1 && typeof s.paused === "boolean" && typeof s.failures === "number";
 const keyOf = (organization: string, planId: string) => `${organization}:${planId}`;
 const worse = (e: HistoryEntry) => e.kind === "missed" || e.kind === "failed" || (e.kind === "changes" && Boolean(e.changes?.some(c => c.effect === "worse")));
+const sameKeys = (a: readonly string[], b: readonly string[]) => { const before = new Set(a), now = new Set(b); return before.size === now.size && [...now].every(k => before.has(k)); };
+/** Two checks' name-free facts (each role, lead and who is scheduled and how), apart from when each finished. */
+const sameFacts = (a: SundayCheckRecord, b: SundayCheckRecord) => JSON.stringify({ ...a, completed_at: "" }) === JSON.stringify({ ...b, completed_at: "" });
+/** When things were read, and the row-order ids and "Why I flagged this" lines that carry it: left out of a check's print. */
+const READ_TIMES: ReadonlySet<string> = new Set(["id", "why", "source", "checked_at", "check_time", "valid_until", "evaluated_at", "stale"]);
+/**
+ * What a check shows, as a short hash (cyrb53): the service page's findings and, while current, its rooms, follow-ups and
+ * group meetings, without when anything was read. Two checks that show the same have the same print. Ids and fixed words
+ * go in; only the hash is kept. A room or follow-up finding's id names the read it came from (its binding's access_epoch
+ * is the check's start, operations-capture.ts), so it goes in as its stable key, as foundOf keeps it.
+ */
+function shownPrint(brief: SundayBrief, ops: SundayOperations | null): string {
+  const fresh = ops && !ops.stale ? ops : null;
+  const result = fresh?.result ? { status: fresh.result.status, findings: fresh.result.findings, uncertainties: fresh.result.uncertainties, unchecked: fresh.result.unchecked_scope_ids } : null;
+  const text = JSON.stringify([brief.findings, result, fresh?.group_meetings ?? null],
+    (k, v: unknown) => READ_TIMES.has(k) ? undefined : k === "finding_id" && typeof v === "string" ? stableFindingKey(v) : v);
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) { const c = text.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+/** The Sunday the newest kept check was of. */
+const newestOf = (sundays: Record<string, SundayCheckMemory>) =>
+  Object.entries(sundays).sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at))[0]?.[0] ?? null;
 
 export function createProactive(deps: ProactiveDeps): ProactiveController {
   let prefs = loadPrefs(deps.store);
@@ -221,12 +251,15 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
   let schedule = validSchedule(loaded) ? loaded : newSchedule();
   let history = read<{ version: 1; entries: HistoryEntry[] }>(deps.store, KEYS.history)?.entries ?? [];
   // A record of another shape is dropped; the next check for that Sunday becomes a fresh baseline.
-  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]> }>(deps.store, KEYS.memory);
+  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]>; prints?: Record<string, string> }>(deps.store, KEYS.memory);
   let sundays = Object.fromEntries(Object.entries(remembered?.sundays ?? {})
     .filter(([, m]) => m?.latest?.version === 2 && m?.known?.version === 2));
   /** The finding keys (ids only) the newest check of each Sunday showed, so a kind told right away is told when it is new. */
   let foundBy: Record<string, string[]> = Object.fromEntries(Object.entries(remembered?.found ?? {})
     .filter(([k, keys]) => Object.hasOwn(sundays, k) && Array.isArray(keys) && keys.every(x => typeof x === "string")));
+  /** The print (shownPrint) of what the newest check of each Sunday showed, so a check can say it found nothing new. */
+  let printBy: Record<string, string> = Object.fromEntries(Object.entries(remembered?.prints ?? {})
+    .filter(([k, p]) => Object.hasOwn(sundays, k) && typeof p === "string"));
   let seenAt = read<string>(deps.store, KEYS.seen);
   /** While "Pause everything" is on: whether this check was paused on its own, to restore when it's lifted. */
   let beforeEverything = read<{ paused: boolean }>(deps.store, KEYS.everything);
@@ -272,32 +305,47 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     try { await (Object.keys(options).length ? deps.notify(options) : deps.notify()); return "sent"; } catch { return "unavailable"; }
   };
 
-  /** Compare with what was last known for this Sunday and decide on one notice. Never throws. */
-  async function afterCapture(capture: SundayCapture, trigger: RunTrigger, rules: SundayRules, now: string) {
-    if (capture.kind !== "live") return;
+  /**
+   * Compare with what was last known for this Sunday and decide on one notice. Never throws. Returns what the check found
+   * (harness-words.ts CheckFound), or null when that isn't known: not a live read, the first check of this Sunday, the
+   * check right before it of another service, or nothing kept from the check before to compare what it showed with.
+   */
+  async function afterCapture(capture: SundayCapture, trigger: RunTrigger, rules: SundayRules, now: string): Promise<CheckFound | null> {
+    if (capture.kind !== "live") return null;
     const record = recordSundayCheck(capture, rules, now);
     const key = keyOf(capture.organization, capture.plan_id);
     const prior = sundays[key] ?? null;
+    const follows = newestOf(sundays) === key;
     const { changes, memory } = compareSundayCheck(prior, record, { now, urgentWithinHours: prefs.urgentWithinHours });
     // Every finding this check shows, kids teams, rooms and follow-ups included, with what the last check of this Sunday showed.
     const entries = feedbackOf(rules);
     const brief = buildSundayBrief(capture, rules, now);
     checkedDay = noticeDayOf(brief.day);
-    const shown = foundOf(brief, sundayOperations(capture, rules, { now }));
+    const ops = sundayOperations(capture, rules, { now });
+    const shown = foundOf(brief, ops), print = shownPrint(brief, ops);
     const before = prior ? foundBy[key] ?? null : null;
+    const printBefore = prior ? printBy[key] ?? null : null;
     sundays = Object.fromEntries([...Object.entries({ ...sundays, [key]: memory })]
       .sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at)).slice(0, SUNDAYS_KEPT));
     foundBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, shown.map(f => f.key)]] : foundBy[k] ? [[k, foundBy[k]]] : []));
-    deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy }));
+    printBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, print]] : printBy[k] ? [[k, printBy[k]]] : []));
+    deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy, prints: printBy }));
     const about = { trigger, plan_id: capture.plan_id, plan_dates: record.plan_dates };
-    if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return; }
+    if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return null; }
     // The person's Church rules on notices: kinds kept for the briefing, kinds told right away (a kind the Sunday
     // comparison doesn't follow is told when this check newly finds one), and what they asked Ozzie to stop
     // flagging (left out here altogether, as they are on the Sunday page).
     const all = [...changes, ...rightAwayChanges(shown, before, entries)];
+    // What What happened may fold. Nothing new only when every read completed, the check right before this one was of
+    // this service, nothing changed (not even what the person asked Ozzie to stop flagging), and this check shows exactly
+    // what that one did: the same facts of each role and who is scheduled, and the same findings saying the same. Unsure is null.
+    const differs = all.length > 0 || (before !== null && !sameKeys(before, shown.map(f => f.key))) || (printBefore !== null && printBefore !== print)
+      || !sameFacts(prior.latest, record);
+    const outcome: CheckFound | null = differs ? "changes"
+      : follows && before !== null && printBefore !== null && capture.reads.every(r => r.outcome === "ok" || r.outcome === "not-requested") ? "nothing-new" : null;
     const routed = routeChanges(all, entries);
     const listed = all.filter(c => !routed.stopped.includes(c));
-    if (!listed.length) return;
+    if (!listed.length) return outcome;
     const found = { worse: routed.notify.length > 0, urgent: routed.urgent, macOnly: macOnlyFor(routed.notify) };
     // Keep Sunday covered is handed the Sunday's own changes. A new finding told right away is this check's notice
     // to send, so then nothing is handed over and one notice goes out.
@@ -313,6 +361,7 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     else if (found.worse) notice = await decide(found, now);
     else if (routed.briefing.length && trigger !== "manual") notice = "briefing";
     add({ at: now, kind: "changes", ...about, changes: listed, notice });
+    return outcome;
   }
   /** Send the notice now, or hold it for quiet hours (unless the person let urgent ones through). */
   async function decide(found: { worse: boolean; urgent: boolean; macOnly: boolean }, now: string): Promise<NonNullable<HistoryEntry["notice"]>> {
@@ -339,9 +388,13 @@ export function createProactive(deps: ProactiveDeps): ProactiveController {
     const ctx = hooks!.context();
     const work = (async () => {
       try {
-        const capture = await deps.check(ctx, s => hooks?.onStatus(s), trigger, ...(source ? [source] as const : []));
+        // The check's task in the ledger, so what it found is kept beside it for What happened.
+        const ledger: { task?: string } = {};
+        const capture = await deps.check(ctx, s => hooks?.onStatus(s), trigger, source, id => { ledger.task = id; });
         const now = deps.now();
-        try { await afterCapture(capture, trigger, ctx.rules, now); } catch { /* the check itself finished; comparing is best effort */ }
+        let found: CheckFound | null = null;
+        try { found = await afterCapture(capture, trigger, ctx.rules, now); } catch { /* the check itself finished; comparing is best effort */ }
+        if (found && ledger.task) try { deps.found?.(ledger.task, found); } catch { /* What happened then shows the check on its own */ }
         schedule = finishRun(schedule, scheduleSettings(), now, { ok: true });
         hooks?.onCapture(capture, trigger);
         return capture;
@@ -479,7 +532,10 @@ export function desktopProactive(): ProactiveController {
     now: () => new Date().toISOString(),
     timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     // Every check, automatic or manual, is a "check" task in the task ledger. No model is involved.
-    check: (ctx, onStatus, trigger, source) => desktopRecorder().check(() => verifiedSundayCheck(ctx, onStatus), source ?? (trigger === "manual" ? "manual" : "automatic")),
+    check: (ctx, onStatus, trigger, source, onTask) =>
+      desktopRecorder().check(() => verifiedSundayCheck(ctx, onStatus), source ?? (trigger === "manual" ? "manual" : "automatic"), onTask),
+    // What each check found, beside its task for What happened (closed words; harness-words.ts CheckFound).
+    found: (taskId, found) => desktopRecorder().checked(taskId, found),
     notify: notifySundayAttention,
     problem: sundayProblem,
     timers: { setInterval: (fn, ms) => setInterval(fn, ms), clearInterval: handle => clearInterval(handle as ReturnType<typeof setInterval>) },

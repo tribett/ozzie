@@ -405,7 +405,7 @@ function Result({ view, day, serviceName, intervalMinutes, aiOffered, onNext }: 
       </>}
     {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef(day)}.</p>}
     {partial && <p className="fr-note">Part of {day.day} couldn't be checked, so this isn't a full picture.</p>}
-    <p className="fr-note">Ozzie keeps an eye on {day.day} {hours(intervalMinutes)} while it's open, and moves on to the next {serviceName || "service"} plan by itself after this one.</p>
+    <p className="fr-note">Ozzie keeps an eye on {day.day} at least {hours(intervalMinutes)} while it's open, and moves on to the next {serviceName || "service"} plan by itself after this one.</p>
     <div className="fr-actions"><button type="button" className="btn btn-primary fr-primary" onClick={() => onNext(aiOffered ? "sunday" : "ai")}>{next}</button></div>
   </div>;
 }

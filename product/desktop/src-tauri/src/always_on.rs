@@ -247,13 +247,92 @@ pub(crate) fn show_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let _ = app.emit("ozzie:shown", ());
     }
 }
-/// Back from the browser (a sign-in or Ozzie's AI's connect ended; onboarding spec S4): the window comes forward,
-/// and the Dock icon bounces once in case macOS keeps the browser in front (cooperative activation, macOS 14+).
+/// Back from the browser (a sign-in or Ozzie's AI's connect ended; onboarding spec S4): the window comes forward
+/// (`ask_to_front`).
 pub(crate) fn bring_forward<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     show_main(app);
+    ask_to_front(app);
+}
+/// How long macOS is given to honour the window's own request to come forward before Ozzie looks again.
+pub(crate) const ACTIVATION_GRACE: Duration = Duration::from_millis(300);
+/// After the window asked to come forward (`set_focus`): the Dock icon bounces once, and when a moment later another
+/// app is still in front, LaunchServices opens Ozzie's own app, as `/usr/bin/open` with its path does
+/// (`front_step`). Since macOS 14 an app's activation is a request the system may refuse unless the app in front
+/// yields (Apple, "Passing control from one app to another with cooperative activation"); after Allow the browser
+/// kept the front (macOS 27.2, 2026-11-19). Opening the running app brings that one copy forward, as a person would.
+/// Never waits: the look runs on a thread of its own, and never in tests.
+pub(crate) fn ask_to_front<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
     }
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        let app = app.clone();
+        let _ = std::thread::Builder::new()
+            .name("ozzie-to-front".into())
+            .spawn(move || {
+                std::thread::sleep(ACTIVATION_GRACE);
+                if let FrontStep::OpenOwnApp(own) = front_step(is_active(&app), running_app()) {
+                    // Ozzie's own bundle path, from its running executable: nothing else is passed.
+                    let _ = std::process::Command::new("/usr/bin/open")
+                        .arg(&own)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            });
+    }
+}
+/// What `ask_to_front` does once macOS has had its moment.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FrontStep {
+    /// Ozzie is the active app: nothing more.
+    InFront,
+    /// Another app kept the front: open Ozzie's own app (this path).
+    OpenOwnApp(std::path::PathBuf),
+    /// Not running from an app, or whether Ozzie is active couldn't be learned: the Dock bounce is all.
+    BounceOnly,
+}
+/// `active`: whether Ozzie is the active app (None when that couldn't be learned). `own`: `own_app` of the running
+/// executable.
+pub(crate) fn front_step(active: Option<bool>, own: Option<std::path::PathBuf>) -> FrontStep {
+    match (active, own) {
+        (Some(true), _) => FrontStep::InFront,
+        (Some(false), Some(own)) => FrontStep::OpenOwnApp(own),
+        _ => FrontStep::BounceOnly,
+    }
+}
+/// The app an executable runs from, as the updater finds it (`updater::bundle_of`: `<name>.app/Contents/MacOS/<file>`,
+/// never a copy macOS runs from a temporary place, where opening it could start another copy), for an absolute path
+/// written plainly. None otherwise (a developer run from `target`, the tests).
+pub(crate) fn own_app(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+    let plain = exe.is_absolute()
+        && exe
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+        && exe.components().collect::<PathBuf>().as_os_str() == exe.as_os_str();
+    if !plain {
+        return None;
+    }
+    crate::updater::bundle_of(exe).1
+}
+/// The app Ozzie runs from, by its own running executable (never a name lookup).
+#[cfg(all(target_os = "macos", not(test)))]
+fn running_app() -> Option<std::path::PathBuf> {
+    own_app(&std::fs::canonicalize(std::env::current_exe().ok()?).ok()?)
+}
+/// Whether Ozzie is the active app, asked on the main thread; None when it doesn't answer within two seconds.
+#[cfg(all(target_os = "macos", not(test)))]
+fn is_active<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<bool> {
+    let (send, receive) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let active = objc2_foundation::MainThreadMarker::new()
+            .map(|mtm| objc2_app_kit::NSApplication::sharedApplication(mtm).isActive());
+        let _ = send.send(active);
+    })
+    .ok()?;
+    receive.recv_timeout(Duration::from_secs(2)).ok().flatten()
 }
 fn set_paused_everywhere<R: tauri::Runtime>(app: &tauri::AppHandle<R>, paused: bool) {
     if let Some(item) = app
@@ -800,6 +879,118 @@ pub async fn responsibility_agent_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live, 2026-11-19 (macOS 27.2, Chrome): after Connect again and Allow, Ozzie connected but Chrome kept the front;
+    /// the window's own request (`set_focus`) is refused while another app is active. When Ozzie still isn't active,
+    /// its own app is opened, the way a person would; never a name, never a path from data, never in tests.
+    #[test]
+    fn behind_the_browser_ozzie_opens_its_own_app_and_otherwise_does_nothing_more() {
+        use std::path::{Path, PathBuf};
+        let own = || Some(PathBuf::from("/Applications/Ozzie.app"));
+        assert_eq!(front_step(Some(true), own()), FrontStep::InFront);
+        assert_eq!(
+            front_step(Some(false), own()),
+            FrontStep::OpenOwnApp(PathBuf::from("/Applications/Ozzie.app"))
+        );
+        // A developer run (no app), or the main thread didn't answer: the Dock bounce alone.
+        assert_eq!(front_step(Some(false), None), FrontStep::BounceOnly);
+        assert_eq!(front_step(None, own()), FrontStep::BounceOnly);
+        assert_eq!(front_step(Some(true), None), FrontStep::InFront);
+        // macOS gets a moment to honour the window's own request, not long enough to feel like waiting.
+        assert_eq!(ACTIVATION_GRACE, Duration::from_millis(300));
+        // The app is the one the running executable sits in, exactly.
+        for (exe, app) in [
+            (
+                "/Applications/Ozzie.app/Contents/MacOS/ozzie-desktop",
+                Some("/Applications/Ozzie.app"),
+            ),
+            (
+                "/Applications/Other Folder/Ozzie 2.app/Contents/MacOS/ozzie-desktop",
+                Some("/Applications/Other Folder/Ozzie 2.app"),
+            ),
+            (
+                "/Ozzie.app/Contents/MacOS/ozzie-desktop",
+                Some("/Ozzie.app"),
+            ),
+            // Developer runs and the tests themselves.
+            (
+                "/repo/product/desktop/src-tauri/target/debug/ozzie-desktop",
+                None,
+            ),
+            (
+                "/repo/target/debug/deps/ozzie_desktop-0123456789abcdef",
+                None,
+            ),
+            // Anything else is no app.
+            ("Ozzie.app/Contents/MacOS/ozzie-desktop", None),
+            (
+                "/Applications/Ozzie.app/Contents/Resources/ozzie-desktop",
+                None,
+            ),
+            ("/Applications/Ozzie.app/Contents/MacOS", None),
+            ("/Applications/Ozzie/Contents/MacOS/ozzie-desktop", None),
+            ("/Applications/.app/Contents/MacOS/ozzie-desktop", None),
+            ("/Contents/MacOS/ozzie-desktop", None),
+            (
+                "/Applications/Ozzie.app/Contents/MacOS/../MacOS/ozzie-desktop",
+                None,
+            ),
+            (
+                "/Applications/x/../Ozzie.app/Contents/MacOS/ozzie-desktop",
+                None,
+            ),
+            (
+                "/Applications/./Ozzie.app/Contents/MacOS/ozzie-desktop",
+                None,
+            ),
+            (
+                "/Applications//Ozzie.app/Contents/MacOS/ozzie-desktop",
+                None,
+            ),
+            // A copy macOS runs from a temporary place (opened where it was downloaded).
+            (
+                "/private/var/folders/x/T/AppTranslocation/1234/d/Ozzie.app/Contents/MacOS/ozzie-desktop",
+                None,
+            ),
+        ] {
+            assert_eq!(own_app(Path::new(exe)), app.map(PathBuf::from), "{exe}");
+        }
+        // This test's own executable is no app, so nothing here could open one.
+        assert_eq!(own_app(&std::env::current_exe().unwrap()), None);
+        // Every way back from another app asks through `ask_to_front`: a sign-in's and a paid connect's
+        // `bring_forward`, and after Open Ollama. `open` gets the running app's own path and nothing else, only when
+        // macOS kept another app in front, and the look is compiled out of tests.
+        let code = |source: &'static str| source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let here = code(include_str!("always_on.rs"));
+        let bring = &here[here.find("pub(crate) fn bring_forward<").unwrap()..];
+        assert!(
+            bring[..bring.find("\n}\n").unwrap()]
+                .contains("show_main(app);\n    ask_to_front(app);")
+        );
+        let ask = &here[here.find("pub(crate) fn ask_to_front<").unwrap()..];
+        let ask = &ask[..ask.find("\n}\n").unwrap()];
+        assert!(ask.contains("#[cfg(all(target_os = \"macos\", not(test)))]"));
+        assert!(ask.contains(
+            "if let FrontStep::OpenOwnApp(own) = front_step(is_active(&app), running_app()) {"
+        ));
+        assert_eq!(ask.matches(".arg(").count(), 1);
+        assert!(
+            ask.contains("Command::new(\"/usr/bin/open\")\n                        .arg(&own)\n")
+        );
+        assert!(
+            here.contains("own_app(&std::fs::canonicalize(std::env::current_exe().ok()?).ok()?)")
+        );
+        let setup = code(include_str!("ai_setup.rs"));
+        let come = &setup[setup.find("pub fn come_forward(").unwrap()..];
+        assert!(
+            come[..come.find("\n}\n").unwrap()].contains("crate::always_on::ask_to_front(&app);")
+        );
+        let main = include_str!("main.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert_eq!(main.matches("always_on::bring_forward(&app)").count(), 3);
+    }
 
     #[test]
     fn quitting_asks_only_when_checks_are_on_or_cards_are_open_and_never_traps_anyone() {

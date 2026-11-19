@@ -441,8 +441,9 @@ fn sign_in_end(status: &ConnectionStatus, handed_over: bool) -> Option<SignInEnd
         _ => Some(SignInEnd::FromTheBrowser),
     }
 }
-/// Onboarding spec S4: when the browser sign-in ends, Ozzie comes to the front by itself (and the Dock bounces in
-/// case macOS keeps the browser in front), and the page hears `ozzie:signed-in` on a connection.
+/// Onboarding spec S4: when the browser sign-in ends, Ozzie comes to the front by itself (when macOS keeps the browser
+/// in front, Ozzie opens its own app, and the Dock bounces: `always_on::ask_to_front`), and the page hears
+/// `ozzie:signed-in` on a connection.
 fn watch_sign_in(app: tauri::AppHandle, auth: Arc<AuthController>) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
@@ -2291,6 +2292,42 @@ mod tests {
         /// The connection a check or a picker read gets (`read_renewing`'s lookup).
         fn connected_auth(consumer: &Consumer) -> Result<Arc<AuthController>, ConsumerError> {
             renewed_auth(consumer).map(|(auth, _)| auth)
+        }
+
+        /// Live, 2026-11-19: Connect again for the church already connected, Allow, connected, and Ozzie stayed behind
+        /// the browser. The watcher can't have ended before the browser opened: it looks at the sign-in's own
+        /// controller, a new one for every sign-in, which reads waiting from `begin_with` until its own callback,
+        /// whatever the connection before it, the church's saved sign-in or the page's status reads meanwhile.
+        #[test]
+        fn a_sign_in_again_for_the_connected_church_is_watched_until_its_own_callback() {
+            let (consumer, _, _) = launched();
+            let before = consumer.0.current().unwrap();
+            assert_eq!(before.status().unwrap().state, ConnectionState::Connected);
+            // As `sign_in` does: `prepare`, then `begin_with`, then the watcher starts.
+            let auth = consumer
+                .0
+                .prepare(
+                    "fictional-client".into(),
+                    "1001".into(),
+                    true,
+                    Purpose::SignIn,
+                )
+                .unwrap();
+            assert!(!Arc::ptr_eq(&before, &auth));
+            auth.begin_with(Scopes::default()).unwrap();
+            assert_eq!(auth.status().unwrap().state, ConnectionState::Waiting);
+            assert_eq!(
+                sign_in_end(&auth.status().unwrap(), auth.handed_over()),
+                None
+            );
+            // The page's status reads while the browser waits leave it waiting.
+            for _ in 0..3 {
+                let _ = consumer.0.view();
+                assert_eq!(
+                    sign_in_end(&auth.status().unwrap(), auth.handed_over()),
+                    None
+                );
+            }
         }
 
         /// A People grant for a note's To line can't turn the reads on through a church switch (review 2026-11-18): the

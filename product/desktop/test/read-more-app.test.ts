@@ -186,18 +186,18 @@ describe("Services only, after the first check", () => {
     expect(page()).toContain("Finish setting up");
     // The regular check keeps saying what was true before the sign-in started (review 2026-11-18): the church is still
     // connected, so never "Nothing runs yet … once Planning Center is connected".
-    expect(page()).toContain("Checks Planning Center every");
+    expect(page()).toContain("Checks Planning Center at least every");
     expect(page()).not.toContain("Nothing runs yet");
   }, 60_000);
 
   it("while any sign-in is in the browser, Today's regular check says what was true before it started (review 2026-11-18)", async () => {
     const app = await launch();
-    expect(page()).toContain("Checks Planning Center every");
+    expect(page()).toContain("Checks Planning Center at least every");
     // Sign in again, from Settings: a sign-in with no stated purpose.
     native.status = { ...native.status, state: "waiting", problem: null, revision: ++native.revision };
     const { act } = await import("react");
     for (let i = 0; i < 6; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await app.settle(5); }
-    expect(page()).toContain("Checks Planning Center every");
+    expect(page()).toContain("Checks Planning Center at least every");
     expect(page()).not.toContain("Nothing runs yet");
   }, 60_000);
 

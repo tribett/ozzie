@@ -3,7 +3,8 @@
 // is running, Ozzie offers the three models that suit Macs (small, medium, large), downloads the chosen one through
 // Ollama with a real progress bar and a Stop, sets it up with room for Ozzie's questions, and checks it (owner's request,
 // 2026-11-18). A model the person already has in Ollama, and LM Studio, keep today's path: choose, check, and Ollama's
-// Context length hint. Only loopback addresses are ever asked; nothing about the church leaves this Mac.
+// Context length hint. Only loopback addresses are ever asked. With Ollama nothing about the church leaves this Mac; LM
+// Studio can answer from another of the person's computers (its LM Link, which Ozzie can't see), so there it says so.
 // When nothing is found on a Mac that can run a model Ozzie offers, Ozzie offers to get Ollama itself (decision 25,
 // 2026-11-18): one card says what Ollama is, where it comes from and how Ozzie checks it, and nothing is downloaded
 // before "Download Ollama and set it up" is pressed; native proves it is Ollama's own signed and notarized app before
@@ -304,6 +305,10 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
   const ended = job && job.end !== null && pick?.kind === "catalogue" && job.model === pick.id ? job : null;
   const jobAnswered = ended?.end === "done" && ended.check?.verdict === "answers";
   const answered = check?.verdict === "answers" || jobAnswered;
+  // LM Studio can run a model on another of the person's computers (LM Link), unseen by Ozzie: said under its rows, and in
+  // the success instead once its check passes, so it shows once whenever LM Studio's models do.
+  const lmLinkLine = (app: LocalApp) => app === "lm-studio" && !(check?.verdict === "answers" && pick?.kind === "own" && pick.app === "lm-studio")
+    ? <p className="ai-body">{MAC.lmLink}</p> : null;
   /** Native's own sentence for starting an app that is on this Mac but not answering (contract N6 `start_hint`). */
   const hint = (app: LocalApp) => found && found !== "failed" ? found.apps.find(a => a.app === app)?.start_hint ?? null : null;
   // Models the app lists that run elsewhere (Ollama's cloud models) are never listed: said once, so the list isn't a puzzle.
@@ -416,6 +421,7 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
         <p className="ai-body ai-sub">{MAC.yourModels}</p>
         {ownRows(what.own)}
         {pick?.kind === "own" && !answered && what.own.app === "ollama" && <p className="ai-body">{MAC.ollamaRoom}</p>}
+        {lmLinkLine(what.own.app)}
       </>}
     </>}
     {what?.kind === "models" && <>
@@ -424,6 +430,7 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
       {memory && !tooSmall && <p className="ai-body">{memory}</p>}
       {ownRows(what.app)}
       {!answered && what.app.app === "ollama" && <p className="ai-body">{MAC.ollamaRoom}</p>}
+      {lmLinkLine(what.app.app)}
       {!answered && <p className="ai-body">{MAC.pickHint}</p>}
     </>}
     {(what?.kind === "ollama-closed" || what?.kind === "ollama-quiet") && openedAt === null

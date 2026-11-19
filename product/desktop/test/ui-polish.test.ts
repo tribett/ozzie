@@ -76,7 +76,7 @@ describe("Settings", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(text(html)).not.toMatch(/wording help/iu);
     // Named as everywhere else (onboarding spec §6): Ozzie keeps an eye on the watched service, by its day.
-    expect(text(html)).toContain("Ozzie keeps an eye on Sunday: every hour, and when Ozzie opens.");
+    expect(text(html)).toContain("Ozzie keeps an eye on Sunday: at least every hour, and when Ozzie opens.");
     expect(text(html)).toContain("Keep Sunday covered and other jobs are set up in Keeping watch.");
     expect(text(html)).toContain("Change these in Keeping watch");
   });

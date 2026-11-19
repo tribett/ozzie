@@ -13,6 +13,8 @@ import { ActivityPage } from "../src/activity-page.js";
 import { CardsReview, emptyUi } from "../src/cards-page.js";
 import { ConnectionPage } from "../src/connection-page.js";
 import { DEFAULT_PREFS } from "../src/proactive.js";
+import { ProactivePage } from "../src/proactive-page.js";
+import { newSchedule } from "../../../core/src/schedule.js";
 import { RulesPage } from "../src/rules-page.js";
 import type { UpdatesState } from "../src/updates.js";
 import { UpdatesSection } from "../src/updates-view.js";
@@ -28,6 +30,10 @@ const PAGES = {
   })),
   "Church rules": () => renderToStaticMarkup(React.createElement(RulesPage, { rules, onChange: () => undefined, positions: [] })),
   "What happened": () => renderToStaticMarkup(React.createElement(ActivityPage, { capture: nov22Capture(), tasks: [] })),
+  "Keeping watch": () => renderToStaticMarkup(React.createElement(ProactivePage, {
+    view: { prefs: DEFAULT_PREFS, schedule: newSchedule(), history: [], latest: {}, running: false, unseen: 0 }, names: {}, organization: "1001", planId: "92902197",
+    readiness: "ready", busy: false, now: "2026-11-20T15:00:00Z", onCheckNow() {}, onPause() {}, onResume() {}, onPrefs() {},
+  })),
   Settings: () => renderToStaticMarkup(React.createElement(ConnectionPage, {
     status: null, settings, onSettings: () => {}, onStatus: () => {}, prefs: DEFAULT_PREFS, onAutomatic: () => {}, onSetup: () => {},
   })),
@@ -128,6 +134,29 @@ describe("the last folds with the browser's triangle: A notice on your phone, AI
     for (const file of ["ai-settings.tsx", "phone-notice-section.tsx", "responsibility-views.tsx"]) {
       expect(source(file), file).not.toMatch(/<summary>(?!<Icon name="chev" small \/>)/u);
     }
+  });
+});
+
+describe("Keeping watch's See how this works opens like every other fold, after what is running (review 2026-11-19)", () => {
+  const CHEVRON = '<svg class="ic ic-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>';
+  const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+  it("is the app's See how this works fold, with the chevron, below the card and never above it", () => {
+    const html = PAGES["Keeping watch"]();
+    const fold = html.indexOf(`<details class="listen-more watch-how"><summary>${CHEVRON}See how this works</summary><ul class="small"><li>`);
+    expect(fold).toBeGreaterThan(-1);
+    expect(html.indexOf(">Last check<")).toBeLessThan(fold);
+    expect(html.indexOf("<h2", fold)).toBe(html.indexOf('<h2 id="changes-title"'));
+    // Both places that render it, the list on Keeping watch and the page without it, build it the same way.
+    for (const file of ["responsibility-views.tsx", "proactive-page.tsx"]) {
+      expect(source(file), file).toContain('<details className="listen-more watch-how"><summary><Icon name="chev" small />See how this works</summary>');
+      expect(source(file), file).not.toMatch(/<summary>(?!<Icon name="chev" small \/>)/u);
+    }
+    // The fold's own styles: the marker hidden, the chevron turned when open, no turning for reduced motion.
+    const css = source("styles.css");
+    expect(css).toMatch(/\.oz \.listen-more > summary \{[^}]*list-style: none;[^}]*\}/u);
+    expect(css).toMatch(/\.oz \.listen-more > summary::-webkit-details-marker \{ display: none; \}/u);
+    expect(css).toMatch(/\.oz \.listen-more\[open\] > summary \.ic \{ transform: rotate\(90deg\); \}/u);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.oz \.listen-more > summary \.ic \{ transition: none; \} \}/u);
   });
 });
 
