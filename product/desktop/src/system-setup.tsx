@@ -17,7 +17,7 @@ import {
 } from "./church-system.js";
 import { FIRST_RUN, Sheet, StepHead, useTitleFocus } from "./first-run-screens.js";
 import { Icon } from "./icons.js";
-import { pageRef } from "./day-phrases.js";
+import { eyeLine, pageRef } from "./day-phrases.js";
 import { systemPromise } from "./promises.js";
 import { browserStore, loadPrefs } from "./proactive.js";
 import { zoneLabel } from "./proactive-page.js";
@@ -417,15 +417,15 @@ function SystemResult({ view, day, system, aiOffered, onNext }: { view: SystemRe
           : people.scheduled === 0 ? `Nobody is scheduled for ${when} yet in ${words.name}.` : `Everything Ozzie checks is covered for ${when}.`}</p>
         {/* The facts first, then the limit (round 5); someone with no role is said here, as the service's page says it. */}
         {answersWhole && roster ? <p className="fr-note">{words.name} doesn't share how many people each role needs, so Ozzie can't say whether {when} is covered.
-          {roster.no_role.length > 0 ? ` ${onServiceWithoutRole(roster.no_role.length)}` : ""} {pageRef(day).charAt(0).toUpperCase() + pageRef(day).slice(1)} shows who is on each role.</p>
+          {roster.no_role.length > 0 ? ` ${onServiceWithoutRole(roster.no_role.length)}` : ""} {pageRef().charAt(0).toUpperCase() + pageRef().slice(1)} shows who is on each role.</p>
           : answersWhole && people.scheduled > 0 && <p className="fr-note">{people.scheduled === 1 ? "1 person" : `${people.scheduled} people`} scheduled. {people.yes} said yes{people.waiting ? `, ${people.waiting} ${people.waiting === 1 ? "hasn't" : "haven't"} answered yet` : ""}.</p>}
         <p className="fr-small">{source}</p>
       </>}
     {view.notices.map(n => <p key={n} className="fr-note">{n}</p>)}
-    {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef(day)}.</p>}
+    {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef()}.</p>}
     {partial && <p className="fr-note">Part of {day.day} couldn't be checked, so this isn't a full picture.</p>}
     {/* As Planning Center's first result says it (your-service.tsx), with the person's own schedule (proactive.ts loadPrefs). */}
-    <p className="fr-note">Ozzie keeps an eye on {day.day} at least {every(loadPrefs(browserStore).intervalMinutes)} while it's open, and moves on to the next {system === "b1" ? "plan" : "event"} by itself after this one. To read it now, press {words.checkNow} on {pageRef(day)}.</p>
+    <p className="fr-note">{eyeLine()} at least {every(loadPrefs(browserStore).intervalMinutes)} while it's open, and moves on to the next {system === "b1" ? "plan" : "event"} by itself after this one. To read it now, press {words.checkNow} on {pageRef()}.</p>
     <div className="fr-actions"><button type="button" className="btn btn-primary fr-primary" onClick={() => onNext(aiOffered ? "sunday" : "ai")}>{aiOffered ? `Open ${day.page}` : "Next: choose how Ozzie uses AI"}</button></div>
   </div>;
 }

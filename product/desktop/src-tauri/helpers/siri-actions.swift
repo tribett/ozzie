@@ -1,11 +1,11 @@
-// Ozzie's Siri actions (App Intents, ADR 0007): "Is Sunday covered" and opening Ozzie's Today and Sunday pages, offered
+// Ozzie's Siri actions (App Intents, ADR 0007): "Are my services covered" and opening Ozzie's Today and Services pages, offered
 // to Siri, Spotlight and the Shortcuts app with no setup and no "Allow Running Scripts". build.rs builds them with
 // xcodebuild (intents/OzzieIntents.xcodeproj) into Ozzie.app/Contents/Extensions/OzzieIntents.appex: an App Intents
 // extension, its own small process that never opens Ozzie's window, inside the App Sandbox with a read-only exception
 // for exactly two files (Entitlements-intents.plist): the copy for Shortcuts and its marker.
 //
 // The answering is shortcuts-answer.swift, the same code the ozzie-shortcuts helper runs over the same copy and switch:
-// "Is Sunday covered" asks it "sunday", the helper's own question, and says what comes back. The two pages open with
+// "Are my services covered" asks it "sunday", the helper's own question, and says what comes back. The two pages open with
 // the ozzie:// links the app already takes (shortcuts.rs), in the Ozzie this extension came with, and only while the
 // switch is on; otherwise the action says it's turned off, in the helper's words.
 //
@@ -49,7 +49,7 @@ enum SiriActions {
         case said(String)
     }
 
-    /// What "Is Sunday covered" says from the copy in `home`: the helper's answer to "sunday". Nil when none came back.
+    /// What "Are my services covered" says from the copy in `home`: the helper's answer to "sunday". Nil when none came back.
     static func sundayAnswer(home: String) -> String? {
         OzzieAnswers()?.answer("sunday", home: home)
     }
@@ -84,10 +84,10 @@ enum SiriActions {
 }
 
 struct IsSundayCoveredIntent: AppIntent {
-    static let title: LocalizedStringResource = "Is Sunday covered"
+    static let title: LocalizedStringResource = "Are my services covered"
     /// Never answered or opened from a locked Mac (review I, L2).
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
-    static let description = IntentDescription("Says how Sunday stands from Ozzie's last check on this Mac, and when that check was made. Ozzie's window doesn't open.")
+    static let description = IntentDescription("Says how your services stand from Ozzie's last check on this Mac, and when that check was made. Ozzie's window doesn't open.")
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         guard let home = accountHome(), let said = SiriActions.sundayAnswer(home: home) else {
@@ -98,10 +98,10 @@ struct IsSundayCoveredIntent: AppIntent {
 }
 
 struct OpenSundayPageIntent: AppIntent {
-    static let title: LocalizedStringResource = "Open Ozzie's Sunday page"
+    static let title: LocalizedStringResource = "Open Ozzie's Services page"
     /// Never answered or opened from a locked Mac (review I, L2).
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
-    static let description = IntentDescription("Opens Ozzie to the Sunday page.")
+    static let description = IntentDescription("Opens Ozzie to the Services page.")
 
     func perform() async throws -> some IntentResult {
         try await SiriActions.openPage(.sunday)
@@ -126,14 +126,16 @@ struct OzzieShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: IsSundayCoveredIntent(),
-            phrases: ["Is Sunday covered in \(.applicationName)", "Ask \(.applicationName) if Sunday is covered", "Ask \(.applicationName) about Sunday"],
-            shortTitle: "Is Sunday covered",
+            // The page was renamed Services (owner decision 2026-11-19); the earlier phrases still work for anyone who learned them.
+            phrases: ["Are my services covered in \(.applicationName)", "Ask \(.applicationName) if my services are covered", "Ask \(.applicationName) about my services",
+                      "Is Sunday covered in \(.applicationName)", "Ask \(.applicationName) if Sunday is covered", "Ask \(.applicationName) about Sunday"],
+            shortTitle: "Are my services covered",
             systemImageName: "checkmark.circle"
         )
         AppShortcut(
             intent: OpenSundayPageIntent(),
-            phrases: ["Open Sunday in \(.applicationName)", "Show Sunday in \(.applicationName)"],
-            shortTitle: "Sunday page",
+            phrases: ["Open Services in \(.applicationName)", "Show my services in \(.applicationName)", "Open Sunday in \(.applicationName)"],
+            shortTitle: "Services page",
             systemImageName: "calendar"
         )
         AppShortcut(

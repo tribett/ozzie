@@ -1,22 +1,28 @@
 // Small phrases built from the day words (core service-day.ts `dayWords`), for sentences the day words don't hold whole:
-// "Keep Wednesday covered", "Open this weekend", "Nothing on Wednesday needs a decision." Pure. A weekday is named on its
-// own ("Wednesday"); anything else by its "this one" form ("this weekend", "these services", "your service"), so a
-// service on another day is never called "Sunday" (onboarding spec §5).
-import type { DayWords } from "../../../core/src/service-day.js";
+// "Nothing on Wednesday needs a decision." Pure. A weekday is named on its own ("Wednesday"); anything else by its "this
+// one" form ("this weekend", "these services", "your service"), so a service on another day is never called "Sunday"
+// (onboarding spec §5). The page, the job and Ozzie's hourly look are named for "your services" whatever the day (owner
+// decision 2026-11-19): the day stays only where it says when.
+import { SERVICES_PAGE, type DayWords } from "../../../core/src/service-day.js";
 import type { NoticeDay } from "./onboarding-bridge.js";
 
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-/** The watched service by name mid-sentence: "Wednesday", "this weekend", "these services", "your service". */
+/** The watched service by its day mid-sentence: "Wednesday", "this weekend", "these services", "your service". */
 export const dayName = (d: DayWords): string => d.kind === "weekday" ? d.day : d.thisOne;
 /** The same at the start of a sentence: "Wednesday", "This weekend", "These services", "Your service". */
 export const DayName = (d: DayWords): string => capital(dayName(d));
-/** The job that also prepares notes, as shown: "Keep Wednesday covered", "Keep this weekend covered" (spec §5.2, §6). */
-export const keepTitle = (d: DayWords): string => `Keep ${dayName(d)} covered`;
-/** "Keep an eye on Wednesday" (the job), "Ozzie keeps an eye on Wednesday" (the hourly look, spec §6). */
-export const watchTitle = (d: DayWords): string => `Keep an eye on ${dayName(d)}`;
-export const eyeLine = (d: DayWords): string => `Ozzie keeps an eye on ${dayName(d)}`;
-/** The sidebar page for the service, mid-sentence: "the Wednesday page", "the “This weekend” page". */
-export const pageRef = (d: DayWords): string => d.kind === "weekday" ? `the ${d.page} page` : `the “${d.page}” page`;
+/** The services Ozzie watches, as a sentence names them whatever their day. */
+export const SERVICES = "your services";
+export const Services = "Your services";
+/** The button that opens the services' page. */
+export const OPEN_SERVICES = `Open ${SERVICES_PAGE}`;
+/** The job that also prepares notes, as shown (spec §5.2, §6; renamed 2026-11-19). The day words are no longer needed. */
+export const keepTitle = (): string => "Keep services covered";
+/** "Keep an eye on my services" (the job, as a person asks for it), "Ozzie keeps an eye on your services" (the hourly look, spec §6). */
+export const watchTitle = (): string => "Keep an eye on my services";
+export const eyeLine = (): string => `Ozzie keeps an eye on ${SERVICES}`;
+/** The services' sidebar page, mid-sentence: "the Services page". */
+export const pageRef = (): string => `the ${SERVICES_PAGE} page`;
 
 const NOTICE_WEEKDAYS: readonly NoticeDay[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 /**

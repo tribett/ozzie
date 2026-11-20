@@ -273,7 +273,7 @@ describe("Today", () => {
     expect(t).toContain("You resolved 1 yourself.");
     expect(t).toContain("Worth a look");
     expect(t).toContain("What I didn't check");
-    expect(t).toContain("Open Sunday to decide");
+    expect(t).toContain("Open Services to decide");
     expect(t.replaceAll("not ranked", "")).not.toMatch(FORBIDDEN);
     expect(text(renderToStaticMarkup(React.createElement(SundayReadyBrief, { brief: null, names, onSunday: () => undefined })))).toContain("Sunday hasn't been checked yet");
     // A kind with no line of its own reads its first fact.

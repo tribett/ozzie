@@ -126,19 +126,19 @@ describe("Preview this briefing for a Wednesday service", () => {
   const inWednesday = (brief: ReturnType<typeof buildSundayBrief> | null) => text(renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() },
     React.createElement(BriefingPreview, { ...briefingPreviewTimes(briefing(), MON, "UTC"), brief, names: wed.names, onSunday: () => undefined }))));
 
-  it("says Ready for Wednesday, before Wednesday and Open Wednesday to decide, and never Sunday", () => {
+  it("says Ready for Wednesday, before Wednesday and Open Services to decide, and never Sunday", () => {
     const t = inWednesday(wedBrief);
     expect(t).toContain("It brings together what still needs you before Wednesday");
     expect(t).toContain("also includes the full “Ready for Wednesday” brief.");
     expect(t).toContain("Ready for Wednesday · November 25, 2026");
     expect(t).toContain("Avery Brightwater is scheduled 3 weeks in a row.");
-    expect(t).toContain("Open Wednesday to decide");
+    expect(t).toContain("Open Services to decide");
     expect(t).not.toMatch(/sunday/iu);
   });
 
-  it("without a check yet, says Wednesday hasn't been checked and points to the Wednesday page", () => {
+  it("without a check yet, says Wednesday hasn't been checked and points to the Services page", () => {
     const t = inWednesday(null);
-    expect(t).toContain("Wednesday hasn't been checked yet, so this brief isn't here. Check it on the Wednesday page.");
+    expect(t).toContain("Wednesday hasn't been checked yet, so this brief isn't here. Check it on the Services page.");
     expect(t).not.toMatch(/sunday/iu);
   });
 });

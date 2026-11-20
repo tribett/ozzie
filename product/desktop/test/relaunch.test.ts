@@ -315,7 +315,7 @@ describe("while the launch check of a saved sign-in is under way (0.3.0 live: 'N
     });
     expect(polite.length).toBeGreaterThan(0);
     const nav = all(dom.root as unknown as { childNodes: unknown[] }).find(n => (n as { tagName?: string; textContent?: string }).tagName === "A"
-      && (n as { textContent: string }).textContent.startsWith("Sunday")) as Parameters<typeof dom.press>[0] | undefined;
+      && (n as { textContent: string }).textContent.startsWith("Services")) as Parameters<typeof dom.press>[0] | undefined;
     expect(nav).toBeDefined();
     const props = (nav as unknown as Record<string, { onClick?: (e: unknown) => void }>)[Object.keys(nav as object).find(k => k.startsWith("__reactProps$"))!];
     await app.act(async () => { props?.onClick?.({ preventDefault() {} }); await tick(); });

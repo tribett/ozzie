@@ -269,16 +269,16 @@ describe("Ask with no AI leads to the AI choice, and back to the page it was ove
   it("from the service's page: the way back names that page, and goes there", async () => {
     native.model = { ...NONE };
     const app = await launch();
-    // The service's page is named by the watched service's day, not read yet here: the sidebar says "Your service", and the
-    // way back says it as a sentence would (setup-flow.test.ts backToName: "Sunday", "this weekend", "your service").
+    // The services' page is "Services" whatever the day (owner decision 2026-11-19), and the way back names it so
+    // (setup-flow.test.ts backToName).
     const name = all(tagged("ASIDE")).find(n => n.tagName === "A" && n.getAttribute?.("href") === "#sunday")!.textContent;
-    expect(name).toBe("Your service");
+    expect(name).toBe("Services");
     await go(app, name);
     const title = all(main()).find(n => n.tagName === "H1")!.textContent;
     await askFrom(app);
     expect(inPage("Back to Your service")).toBeNull();
-    expect(inPage("Back to your service")).not.toBeNull();
-    await press(app, "Back to your service");
+    expect(inPage("Back to Services")).not.toBeNull();
+    await press(app, "Back to Services");
     expect(dom.seen()).not.toContain(CHOOSE);
     expect(all(main()).find(n => n.tagName === "H1")?.textContent).toBe(title);
   }, 60_000);

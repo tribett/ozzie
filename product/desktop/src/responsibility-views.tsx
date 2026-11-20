@@ -16,7 +16,7 @@ import {
   reportText, runText, scheduleText, statusText, STOP_TEXT, templateTitle, watchesText, WATCH_HOW, whenText, WRITEUP_CHECK, WRITEUP_HOW, writeupHead,
 } from "./responsibility-words.js";
 import { useDay } from "./day-words.js";
-import { dayName, DayName, keepTitle, watchTitle } from "./day-phrases.js";
+import { keepTitle, OPEN_SERVICES, SERVICES, Services, watchTitle } from "./day-phrases.js";
 import type { DayWords } from "../../../core/src/service-day.js";
 import { fillPeople } from "../../../core/src/harness/session.js";
 import { onDayPage } from "../../../core/src/ask.js";
@@ -188,7 +188,7 @@ export function PlanCard({ plan: initial, assumed = [], context, actions }: {
     () => existingFor(initial.template, context) ? "exists" : "review");
   const [problem, setProblem] = useState<string | null>(null);
   const d = useDay();
-  const title = templateTitle(plan.template, d);
+  const title = templateTitle(plan.template);
   const access = missingAccess(plan.template, context.granted);
   const assumption = stage === "review" && plan === initial ? assumedText(plan, assumed) : null;
   const early = endsEarly(plan, context);
@@ -253,16 +253,15 @@ export function PlanCard({ plan: initial, assumed = [], context, actions }: {
 
 /** A question back when the request left something important unclear, then the plan. */
 export function PlanTurn({ parsed, context, actions }: { parsed: Exclude<Parsed, { kind: "none" }>; context: PlanContext; actions: PlanActions }) {
-  const d = useDay();
   const [chosen, setChosen] = useState<{ plan: Plan; assumed: readonly string[] } | null>(parsed.kind === "plan" ? { plan: parsed.plan, assumed: parsed.assumed } : null);
   if (chosen) return <PlanCard plan={chosen.plan} assumed={chosen.assumed} context={context} actions={actions} />;
   if (parsed.kind === "ask" && parsed.need === "what") return <div className="find plan-card">
     <p className="find-body">What should Ozzie keep an eye on?</p>
     <div className="plan-choices">{parsed.choices.map(id => <button key={id} type="button" className="btn btn-secondary btn-sm"
-      onClick={() => setChosen({ plan: defaultPlan(id, context.now(), context.zone, planOptions(context)), assumed: ["lifetime"] })}>{templateTitle(id, d)}</button>)}</div>
+      onClick={() => setChosen({ plan: defaultPlan(id, context.now(), context.zone, planOptions(context)), assumed: ["lifetime"] })}>{templateTitle(id)}</button>)}</div>
   </div>;
   if (parsed.kind === "ask") return <div className="find plan-card">
-    <p className="find-body">{templateTitle(parsed.template, d)}: until when?</p>
+    <p className="find-body">{templateTitle(parsed.template)}: until when?</p>
     <div className="plan-choices">{parsed.choices.map(l => <button key={lifetimeKey(l)} type="button" className="btn btn-secondary btn-sm"
       onClick={() => setChosen({ plan: { ...defaultPlan(parsed.template, context.now(), context.zone, planOptions(context)), lifetime: l }, assumed: [] })}>{lifetimeChoice(l)}</button>)}</div>
   </div>;
@@ -277,7 +276,7 @@ export function TemplatePicker({ context, actions, onCancel }: { context: PlanCo
   return <div className="find template-picker">
     <h3 className="find-title">What should Ozzie keep an eye on?</h3>
     <ul className="list template-list">{TEMPLATE_IDS.map(id => <li key={id}>
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicked(id)}>{templateTitle(id, d)}</button>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicked(id)}>{templateTitle(id)}</button>
       <span className="small">{purposeText(id, d)}</span>
     </li>)}</ul>
     <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={onCancel}>Cancel</button></div>
@@ -315,7 +314,7 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
 }) {
   const Title = level === 4 ? "h4" : "h3";
   const d = useDay();
-  const title = jobTitle(r, d);
+  const title = jobTitle(r);
   const [editing, setEditing] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -384,9 +383,9 @@ function KeepSundayOffer({ context, actions }: { context: PlanContext; actions: 
   if (open) return <PlanCard plan={defaultPlan("keep-sunday-covered", context.now(), context.zone, planOptions(context))} context={context} actions={actions} />;
   return <section className="find" aria-labelledby="keep-sunday-offer">
     <div className="find-top"><span className="badge b-muted">Not on</span></div>
-    <h4 id="keep-sunday-offer" className="find-title">{keepTitle(d)}</h4>
+    <h4 id="keep-sunday-offer" className="find-title">{keepTitle()}</h4>
     <p className="find-body">{offerText(d)}</p>
-    <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>Set up {keepTitle(d)}</button></div>
+    <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>Set up {keepTitle()}</button></div>
   </section>;
 }
 
@@ -411,7 +410,7 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
   const others = active.filter(r => r !== keep);
   // Pause everything pauses the regular look at the service too (proactive.ts pauseWithEverything), so it is
   // offered whenever anything runs on its own, that look alone included.
-  const watching = `Ozzie keeping an eye on ${dayName(d)}`;
+  const watching = `Ozzie keeping an eye on ${SERVICES}`;
   const stops = grouped && active.length ? `${watching}, and everything else here,` : grouped ? watching : active.length ? "everything here" : null;
   return <section className="stack responsibilities" aria-labelledby="resp-title">
     <div className="row resp-head">
@@ -425,21 +424,21 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
     {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it watches couldn't be read on this Mac right now.</p>}
     {view.paused_all && <p className="panel-info" role="status"><Icon name="info" small />Everything is paused. Nothing runs on its own until you resume.</p>}
     {grouped && <section className="sunday-watch" aria-labelledby="sunday-watch-title">
-      <h3 id="sunday-watch-title" className="sunday-watch-h">{DayName(d)}</h3>
+      <h3 id="sunday-watch-title" className="sunday-watch-h">{Services}</h3>
       {sunday}
       {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} names={names} about={keepAbout(d)} />
         : view.available && <KeepSundayOffer context={context} actions={actions} />}
     </section>}
-    {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “{watchTitle(d)}”, or set one up here.</p>}
+    {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “{watchTitle()}”, or set one up here.</p>}
     {others.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} names={names} />)}
     {picking
       ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
     <details className="listen-more watch-how"><summary><Icon name="chev" small />See how this works</summary>
-      <ul className="small">{[...WATCH_HOW, oneOfEach(d)].map(line => <li key={line}>{line}</li>)}</ul>
+      <ul className="small">{[...WATCH_HOW, oneOfEach()].map(line => <li key={line}>{line}</li>)}</ul>
     </details>
     {ended.length > 0 && <details className="resp-ended"><summary><Icon name="chev" small />Ended recently</summary>
-      <ul className="list">{ended.map(r => <li key={r.id}><Icon name="dot" small />{jobTitle(r, d)} · {lifetimeText(r.lifetime, r.template).replace(/ Then it stops on its own\.$/u, "")}</li>)}</ul>
+      <ul className="list">{ended.map(r => <li key={r.id}><Icon name="dot" small />{jobTitle(r)} · {lifetimeText(r.lifetime, r.template).replace(/ Then it stops on its own\.$/u, "")}</li>)}</ul>
     </details>}
   </section>;
 }
@@ -461,9 +460,9 @@ export function WriteUpBlock({ item, writeup, names, now }: {
   // With no AI route set up the card simply shows the check (review H, L15); "stopped" was a pause during the write-up.
   if (writeup.kind !== "written") return writeup.why === "off" || writeup.why === "stopped" ? null
     : <p className="small writeup-none"><Icon name="info" small />{NO_WRITEUP[writeup.why ?? "unavailable"]}</p>;
-  const started = item.trigger ? jobStarted(item.template, item.trigger, atText(item.at, now).replace(/^(?:at|on) /u, ""), d) : null;
+  const started = item.trigger ? jobStarted(item.template, item.trigger, atText(item.at, now).replace(/^(?:at|on) /u, "")) : null;
   return <section className="writeup" aria-label="Ozzie's write-up">
-    <p className="writeup-head">{writeupHead(item, now, d)}</p>
+    <p className="writeup-head">{writeupHead(item, now)}</p>
     {(writeup.gaps?.length ?? 0) > 0 && <div className="stack-tight"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
       <ul className="list">{writeup.gaps!.map(g => <li key={g}><Icon name="dot" small />{onDayPage(g, d)}</li>)}</ul></div>}
     <div className="writeup-lines">{(writeup.lines ?? []).map((l, i) => <p key={i}>{fillPeople(l, names)}</p>)}</div>
@@ -529,7 +528,7 @@ export function CopyDraft({ text, describedBy, open }: { text: string; described
  */
 /** Quiet success, loud problems: one line for the week's regular jobs in the morning briefing, and each one that couldn't finish. */
 function WeekLine({ view, now }: { view: RunnerView; now: string }) {
-  const week = weekRollup(view.items, now, useDay());
+  const week = weekRollup(view.items, now);
   if (!week.line && !week.problems.length) return null;
   return <div className="small noticed-week">
     {week.line && <p>{week.line}</p>}
@@ -566,9 +565,9 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
   return <article className="find noticed" aria-labelledby={titleId}>
     <div className="find-top"><span className={`badge ${TONE[badge.tone]}`}>{badge.label}</span>
       {item.overnight && !own && <span className="badge b-muted"><Icon name="clock" small />Overnight</span>}
-      <span className="find-where">{own ? "Ozzie prepared" : "Ozzie noticed"} · {templateTitle(item.template, d)}{age ? "" : ` · ${whenText(item.at, now)}`}</span>
+      <span className="find-where">{own ? "Ozzie prepared" : "Ozzie noticed"} · {templateTitle(item.template)}{age ? "" : ` · ${whenText(item.at, now)}`}</span>
       {age && <span className="find-age">{age}</span>}</div>
-    <h3 id={titleId} className="find-title">{written ? preparedTitle(written, d) : noticedTitle(item, now, d)}</h3>
+    <h3 id={titleId} className="find-title">{written ? preparedTitle(written) : noticedTitle(item, now, d)}</h3>
     <WriteUpBlock item={item} writeup={writeup} names={names} now={now} />
     {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
     {item.kind === "briefing" && item.sunday_ready && sundayReady}
@@ -582,7 +581,7 @@ export function NoticedCard({ item, view, names, now, onOpen, titleId, age, prep
     {item.drafts && !own ? <p className="small">{item.drafts === 1 ? "1 note is" : `${item.drafts} notes are`} ready for you to review and send yourself.</p> : null}
     <div className="find-next">
       <button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={() => onOpen(page)}>
-        {page === "sunday" ? `Open ${dayName(d)}` : page === "connection" ? "Open Settings" : "Open Keeping watch"}</button>
+        {page === "sunday" ? OPEN_SERVICES : page === "connection" ? "Open Settings" : "Open Keeping watch"}</button>
       {notice && <span className="small">{notice}</span>}
     </div>
     {children}

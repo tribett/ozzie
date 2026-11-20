@@ -123,7 +123,7 @@ async function wednesdayView(): Promise<ProactiveView> {
 
 describe("the Wednesday fixture", () => {
   it("is a Wednesday, read by the same day words every page gets", () => {
-    expect(WED).toMatchObject({ kind: "weekday", day: "Wednesday", question: "Is Wednesday covered?", thisOne: "this Wednesday" });
+    expect(WED).toMatchObject({ kind: "weekday", day: "Wednesday", question: "Are your services covered?", thisOne: "this Wednesday" });
     expect(brief().day).toEqual(WED);
     expect(JSON.stringify(wednesdayWithOperations())).not.toMatch(/Sunday/u);
   });
@@ -133,15 +133,15 @@ describe("no page calls a Wednesday service Sunday (onboarding spec §5.1)", () 
   it("Today: decisions, Ozzie's hourly look, a missed check, and each card's buttons", () => {
     const html = today();
     expect(html).toContain("Wednesday has");
-    expect(html).toContain("Ozzie keeps an eye on Wednesday");
-    expect(html).toContain("Open Wednesday");
+    expect(html).toContain("Ozzie keeps an eye on your services");
+    expect(html).toContain("Open Services");
     expect(sundays(html)).toEqual([]);
   });
 
   it("Today before a check, before a plan, and before Planning Center is connected", () => {
     const unchecked = today({ brief: null, regular: regular({ ready: false, last: null, missed: [] }) });
-    expect(unchecked).toContain("Is Wednesday covered?");
-    expect(unchecked).toContain("Check Wednesday");
+    expect(unchecked).toContain("Are your services covered?");
+    expect(unchecked).toContain("Open Services");
     const waiting = today({ brief: null, waiting: waitingText("Youth Night") });
     expect(waiting).toContain("Ozzie is waiting for the next Youth Night plan in Planning Center.");
     const notConnected = today({ brief: null, regular: null, notConnected: { onConnect: () => {}, onExample: () => {} } });
@@ -155,7 +155,7 @@ describe("no page calls a Wednesday service Sunday (onboarding spec §5.1)", () 
     expect(b.findings.map(f => f.kind)).toEqual(expect.arrayContaining(["needs-people", "lead-missing", "streak", "background-check"]));
     const ops = sundayOperations(wednesdayWithOperations(), rules, { now: NOW });
     const html = sundayPage(b, { operations: ops, worthALook: React.createElement("p", null, "WORTH-A-LOOK-SLOT") });
-    expect(html).toContain("Is Wednesday covered?");
+    expect(html).toContain("Are your services covered?");
     expect(html).toContain("WORTH-A-LOOK-SLOT");
     expect(sundays(html)).toEqual([]);
   });
@@ -187,7 +187,7 @@ describe("no page calls a Wednesday service Sunday (onboarding spec §5.1)", () 
     const html = onWednesday(React.createElement(RulesPage, {
       rules: kidsRules, onChange: () => {}, positions: captureToCoverage(capture, kidsRules, NOW).positions, names: capture.names, rooms: [],
     }));
-    expect(html).toContain("How your church wants Wednesday checked");
+    expect(html).toContain("How your church wants its services checked");
     expect(html).toContain("Wednesday leads");
     expect(sundays(html)).toEqual([]);
     const empty = onWednesday(React.createElement(RulesPage, { rules: { sundayLeads: [], checkInAfterSundaysInARow: 3 }, onChange: () => {}, positions: [] }));
@@ -215,7 +215,7 @@ describe("no page calls a Wednesday service Sunday (onboarding spec §5.1)", () 
       autostart: { get: async () => false, set: async () => false }, recordingCount: 2, onDeleteRecordings: () => {}, nameStore: { get: () => "", set: () => {} },
     }));
     expect(html).toContain("Which service Ozzie watches");
-    expect(html).toContain("Ozzie keeps an eye on Wednesday");
+    expect(html).toContain("Ozzie keeps an eye on your services");
     expect(html).toContain("Check my setup");
     expect(html).toContain("Walk through setup again");
     for (const known of NOT_YET_CONVERTED) expect(html, known.file).toContain(known.text);
@@ -359,7 +359,7 @@ describe("Ask's answers name the service's real day and page (review H4)", () =>
 
   it("a decision question, with the decisions its answer left out under the page's real name", async () => {
     const body = await asked(wednesdayData(), "What still needs a decision this week?", overviewTurns);
-    expect(body).toContain("Also on the Wednesday page, needing a decision:");
+    expect(body).toContain("Also on the Services page, needing a decision:");
     expect(body).toMatch(/background check on file expires before Wednesday\./u);
     expect(sundays(body)).toEqual([]);
   });
@@ -373,19 +373,19 @@ describe("Ask's answers name the service's real day and page (review H4)", () =>
         hidden: data.brief!.findings.filter(f => f.kind === "background-check").map(finding => ({ finding, entry: { type: "correction" } as never })) } }, "Any background check problems?"),
       await asked(wednesdayData({ ...rules, kidsTeams: [{ team_id: "7599999", min_confirmed: 2 }] }), "Any background check problems?"),
     ];
-    expect(bodies[2]).toContain("they're on the Wednesday page.");
+    expect(bodies[2]).toContain("they're on the Services page.");
     expect(bodies[3]).toContain("No one is confirmed or pending on your kids teams this Wednesday, so there were no background checks to look at.");
     // The same answers' parts, straight from what writes them.
     const tools = new HarnessTools(data, new HarnessSession(), { now: () => NOW }), signal = new AbortController().signal;
     const parts = [await kidsAnswer(tools, kidsQuestion("Who could cover the nursery?", data)!, signal), await decisionsLeftOut(tools, '{"answer":"not-covered"}', [], signal),
       await openDecisions(tools, signal)].flatMap(a => a.paragraphs);
-    expect(parts).toContain("On the Wednesday page, needing a decision:");
+    expect(parts).toContain("On the Services page, needing a decision:");
     for (const body of [...bodies, ...parts]) expect(sundays(body)).toEqual([]);
   });
 
   it("the fictional church is a Sunday, and its answers keep saying so", async () => {
     const body = await asked(appData(withFictionalOperations(withFictionalBackgroundChecks(nov22Capture()))), "What still needs a decision this week?", overviewTurns);
-    expect(body).toContain("Also on the Sunday page, needing a decision:");
+    expect(body).toContain("Also on the Services page, needing a decision:");
     expect(body).toMatch(/background check on file expires before Sunday\./u);
   });
 });
@@ -399,12 +399,12 @@ const dayChanges = [change("lead-missing"), change("lead-confirmed", { effect: "
 const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
 
 describe("NM3: what changed, Church rules' own words, lists, cards and other AI apps say the real day or none", () => {
-  it("what changed between checks names this Wednesday and the Wednesday page, on Keeping watch, Today and a job's card", async () => {
+  it("what changed between checks names this Wednesday and the Services page, on Keeping watch, Today and a job's card", async () => {
     const nameOf = (id: string) => wednesdayCapture().names[id];
     expect(dayChanges.map(c => describeChange(c, nameOf, WED))).toEqual([
       "No one is confirmed to lead Nursery this Wednesday now.",
       "Someone is confirmed to lead Nursery this Wednesday now.",
-      `${nameOf("501")!} is now left out for Nursery. The Wednesday page shows why.`,
+      `${nameOf("501")!} is now left out for Nursery. The Services page shows why.`,
     ]);
     // The fictional church is a Sunday, and keeps its own words.
     expect(describeChange(dayChanges[0]!, nameOf)).toBe("No one is confirmed to lead Nursery this Sunday now.");
@@ -415,7 +415,7 @@ describe("NM3: what changed, Church rules' own words, lists, cards and other AI 
       onCheckNow: () => {}, onPause: () => {}, onResume: () => {}, onPrefs: () => {},
     }));
     expect(html).toContain("No one is confirmed to lead Nursery this Wednesday now.");
-    expect(html).toContain("The Wednesday page shows why.");
+    expect(html).toContain("The Services page shows why.");
     expect(sundays(html)).toEqual([]);
     // Today and a job's card list the worse ones with the page's own day words.
     const item = { changes: dayChanges } as unknown as NoticedItem;

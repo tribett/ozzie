@@ -16,7 +16,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Icon } from "./icons.js";
 import { useDay, type DayWords } from "./day-words.js";
-import { dayName } from "./day-phrases.js";
+import { dayName, SERVICES } from "./day-phrases.js";
 import { promise } from "./promises.js";
 import { connection, granted, onSignInStart, operationsGranted, type ConnectionStatus } from "./connection.js";
 import { CopyForAdministrator, useConnectionControl } from "./planning-center-forms.js";
@@ -95,11 +95,11 @@ export const MORE_CHECK = "Check Planning Center now";
 
 /** How a press ended. `granted`/`on`: the reads start at the next check. The others changed nothing. */
 export type ReadMoreEnd = "granted" | "on" | "not-granted" | "cancelled" | "denied" | "expired" | "failed" | "switch-failed";
-export const moreNext = (d: DayWords) => `Ozzie reads rooms, follow-ups and group meetings from its next check of ${dayName(d)}.`;
-export function moreEnd(end: ReadMoreEnd, d: DayWords): string {
+export const moreNext = () => `Ozzie reads rooms, follow-ups and group meetings from its next check of ${SERVICES}.`;
+export function moreEnd(end: ReadMoreEnd): string {
   switch (end) {
-    case "granted": return `Planning Center added Calendar, People and Groups. ${moreNext(d)}`;
-    case "on": return moreNext(d);
+    case "granted": return `Planning Center added Calendar, People and Groups. ${moreNext()}`;
+    case "on": return moreNext();
     case "not-granted": return "Planning Center didn't add Calendar, People and Groups this time, so nothing changed. "
       + "If the account you signed in with can't use them, a Planning Center administrator at your church can give it access.";
     case "cancelled": return "Nothing changed.";
@@ -214,7 +214,7 @@ export function ReadMore({ need, place, status, settings, onStatus, church, read
 
   if (!waiting && need === null) {
     if (end === "granted" || end === "on") return wrap(<>
-      <p className="panel-ok" role="status"><Icon name="check" small /><span>{moreEnd(end, d)}</span></p>
+      <p className="panel-ok" role="status"><Icon name="check" small /><span>{moreEnd(end)}</span></p>
       {onCheck && <div className="finish-acts"><button type="button" className="btn btn-secondary btn-sm" onClick={onCheck}>{MORE_CHECK}</button></div>}
     </>);
     const refused = place === "service" ? refusedProducts(reads) : [];
@@ -239,7 +239,7 @@ export function ReadMore({ need, place, status, settings, onStatus, church, read
     <p className="small">{shown === "switch" ? moreHeld() : moreAccess()}</p>
     {shown === "sign-in" && <p className="small">{MORE_PEOPLE_TO}</p>}
     <p className="people-wait" aria-live="polite">{waiting && <><Icon name="spinner" small spin />{status?.state === "checking" ? PEOPLE_CHECKING : PEOPLE_WAITING}</>}</p>
-    {failed && !waiting && <p role={end === "cancelled" ? undefined : "alert"} className={end === "cancelled" ? "small" : "problem"}>{moreEnd(end, d)}</p>}
+    {failed && !waiting && <p role={end === "cancelled" ? undefined : "alert"} className={end === "cancelled" ? "small" : "problem"}>{moreEnd(end)}</p>}
     {/* The access was there before: an administrator may have narrowed what this account is given. */}
     {(end === "not-granted" || (shown === "lost" && !end)) && !waiting && <CopyForAdministrator message={productsAdminMessage(ALL)} />}
     {problem && <p role="alert" className="problem">{problem}</p>}

@@ -49,7 +49,7 @@ describe("Church rules: Kids teams", () => {
     expect(t).toContain("never its details");
     expect(t).toContain("It needs People in your Planning Center connection");
     expect(t).not.toMatch(FORBIDDEN);
-    expect(text(renderToStaticMarkup(React.createElement(KidsTeamsRules, { rules: base, onChange: () => undefined, teams: [] })))).toContain("Check Sunday first to see its teams.");
+    expect(text(renderToStaticMarkup(React.createElement(KidsTeamsRules, { rules: base, onChange: () => undefined, teams: [] })))).toContain("Check your services first to see their teams.");
   });
 });
 

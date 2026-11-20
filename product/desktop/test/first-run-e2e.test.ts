@@ -99,7 +99,7 @@ describe("first run, end to end on a fake native side", () => {
     expect(JSON.parse(r.kept.get("ozzie.setup.v2")!).lastAttempt).toBe("cancelled");
     await r.allow();
     const t = r.seen();
-    expect(t).toContain("Is Sunday covered?");
+    expect(t).toContain("Are your services covered?");
     expect(t).toMatch(/\d+ things? needs? a decision for Sunday, November 22\.|Everything Ozzie checks is covered for Sunday, November 22\./u);
     expect(t).toContain("Next: choose how Ozzie uses AI");
     expect(r.clicks()).toBe(3);
@@ -124,7 +124,7 @@ describe("first run, end to end on a fake native side", () => {
     expect(r.seen()).toContain("Which service should Ozzie watch?");
     expect(r.seen()).toContain("Connected to Fictional Grace Church");
     await r.click("Sunday Morning");
-    expect(r.seen()).toContain("Is Sunday covered?");
+    expect(r.seen()).toContain("Are your services covered?");
     expect(r.seen()).toContain("Next: choose how Ozzie uses AI");
     expect(r.clicks()).toBe(4);
     await r.unmount();

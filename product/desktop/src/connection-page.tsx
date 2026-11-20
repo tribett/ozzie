@@ -16,8 +16,7 @@ import { quietLine, scheduleLine } from "./proactive-page.js";
 import { Icon } from "./icons.js";
 import type { Autostart } from "./background.js";
 import { AutostartToggle } from "./responsibility-views.js";
-import { useDay } from "./day-words.js";
-import { dayName, eyeLine, keepTitle } from "./day-phrases.js";
+import { eyeLine, keepTitle, SERVICES, Services } from "./day-phrases.js";
 import { promise } from "./promises.js";
 import { useSystemWords } from "./church-system.js";
 
@@ -64,7 +63,6 @@ export function SavedRecordings({ count, onDelete, sharing, siri = false, confir
   count: number; onDelete?: (() => void) | undefined; sharing: boolean; siri?: boolean; confirming?: boolean;
 }) {
   const [confirm, setConfirm] = useState(confirming);
-  const d = useDay();
   const w = useSystemWords();
   const it = count === 1 ? "it" : "them";
   return <>
@@ -74,7 +72,7 @@ export function SavedRecordings({ count, onDelete, sharing, siri = false, confir
         onClick={() => setConfirm(!confirm)}>Delete saved checks</button>}
     </div>
     {count > 0 && onDelete && confirm && <div id="delete-recordings" className="decide" role="group" aria-labelledby="delete-recordings-q">
-      <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved check" : `all ${count} saved checks`} from this Mac? {dayName(d).replace(/^./u, c => c.toUpperCase())} can't be shown
+      <p id="delete-recordings-q" className="find-body">Delete {count === 1 ? "the saved check" : `all ${count} saved checks`} from this Mac? {Services} can't be shown
         from {it} afterwards.{sharing ? " The copy for other AI apps is removed too." : ""}{siri ? " The copy Siri and Shortcuts answer from is removed too." : ""} {w.name} doesn't change.</p>
       <div className="find-next">
         <button type="button" className="btn btn-forget btn-sm" onClick={() => { setConfirm(false); onDelete(); }}>Yes, delete {it}</button>
@@ -186,7 +184,6 @@ export function ConnectionPage({ system, others, status, kept = null, settings, 
   openAt?: "ai-title" | null;
   onOpenAt?: () => void;
 }) {
-  const d = useDay();
   const w = useSystemWords();
   const control = useConnectionControl(settings, onStatus, status, oneClick);
   const { canSignIn, working, pending, run } = control;
@@ -314,11 +311,11 @@ export function ConnectionPage({ system, others, status, kept = null, settings, 
       <h2 id="runs-title" className="h3" tabIndex={-1} ref={at("runs-title")}>What Ozzie runs and notices</h2>
       <section className="find" aria-labelledby="auto-title">
         <h3 id="auto-title" className="settings-t">Keeping watch</h3>
-        {/* Named as everywhere else (spec §6): Ozzie keeps an eye on the watched service by its real day, and the job beside it. */}
-        <p className="find-body">{!w.checksOnItsOwn ? `Ozzie reads ${dayName(d)} from ${w.name} when Ozzie starts, and when you press ${w.checkNow}. Checking on a schedule, and its notices, work with Planning Center only for now.`
-          : prefs ? `${eyeLine(d)}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : `${eyeLine(d)} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
-        {w.jobs ? <p className="small">{keepTitle(d)} and other jobs are set up in Keeping watch.</p>
-          : <p className="small">{w.notHere(`${keepTitle(d)} and the morning briefing`, true)}</p>}
+        {/* Named as everywhere else (spec §6): Ozzie keeps an eye on your services, and the job beside it. */}
+        <p className="find-body">{!w.checksOnItsOwn ? `Ozzie reads ${SERVICES} from ${w.name} when Ozzie starts, and when you press ${w.checkNow}. Checking on a schedule, and its notices, work with Planning Center only for now.`
+          : prefs ? `${eyeLine()}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : `${eyeLine()} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
+        {w.jobs ? <p className="small">{keepTitle()} and other jobs are set up in Keeping watch.</p>
+          : <p className="small">{w.notHere(`${keepTitle()} and the morning briefing`, true)}</p>}
         {onAutomatic && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onAutomatic}>Change these in Keeping watch</button></div>}
       </section>
       {autostart && <section className="find" aria-labelledby="background-title">
@@ -365,7 +362,7 @@ export function ConnectionPage({ system, others, status, kept = null, settings, 
     <section className="settings-sec" aria-labelledby="saved-title">
       <h2 id="saved-title" className="h3" tabIndex={-1} ref={at("saved-title")}>Saved checks</h2>
       <div className="find">
-        <p className="find-body">{w.savedChecks ? `Each check saves a copy on this Mac, so ${dayName(d)} can still be shown if ${w.name} can't be reached. These saved checks include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each service.`
+        <p className="find-body">{w.savedChecks ? `Each check saves a copy on this Mac, so ${SERVICES} can still be shown if ${w.name} can't be reached. These saved checks include volunteers' names and stay only on this Mac. Ozzie keeps the five newest for each service.`
           : `Ozzie doesn't save copies of ${w.name} checks: each one stays only while Ozzie is open. Any saved checks below are from Planning Center.`}</p>
         <SavedRecordings count={recordingCount} onDelete={onDeleteRecordings} sharing={Boolean(sharing?.on)} siri={Boolean(siri?.on)} />
       </div>

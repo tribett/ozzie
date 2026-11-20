@@ -272,11 +272,11 @@ describe("the service step for a system", () => {
       list: async () => ({ outcome: "ok", choices: [] }), read: async () => "ok", result, day: result.brief.day!,
     }));
     const t = dom.seen();
-    expect(t).toContain("Is Sunday covered?");
+    expect(t).toContain("Are your services covered?");
     expect(t).toContain("3 things need a decision for Sunday, November 22.");
     expect(t).toContain("B1 Church · checked");
     // Kept watch over on a schedule, as Planning Center's first result says (round 2).
-    expect(t).toContain("Ozzie keeps an eye on Sunday at least every hour while it's open, and moves on to the next plan by itself after this one. To read it now, press Check B1 Church now on");
+    expect(t).toContain("Ozzie keeps an eye on your services at least every hour while it's open, and moves on to the next plan by itself after this one. To read it now, press Check B1 Church now on");
     expect(t).not.toContain("Planning Center Services");
     await done.unmount();
   });
@@ -324,7 +324,7 @@ describe("the service's page on another system", () => {
 
   it("names the plan's own title beside its date only when it adds something (round 3)", () => {
     const titled = (title: string) => { const c = b1Capture({ labels: { ...b1Capture().labels, service: title } }); return page("b1", resultOf(c).brief, c.names); };
-    expect(titled("Sunday Gathering")).toContain("Sunday, November 22 · Sunday Gathering");
+    expect(titled("Sunday Gathering")).toContain("Sunday, November 22 · 9:00 AM · Sunday Gathering");
     expect(titled("Sunday Nov 22")).not.toContain("Sunday Nov 22");
     expect(titled("Sunday Nov 22")).toContain("Sunday, November 22");
   });

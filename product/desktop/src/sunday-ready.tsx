@@ -12,7 +12,7 @@ import { backgroundTitle, fewConfirmedTitle } from "./sunday-page.js";
 import { keptLines } from "./responsibility-words.js";
 import type { NoticedItem } from "./responsibility-runner.js";
 import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
-import { dayName, DayName, pageRef } from "./day-phrases.js";
+import { dayName, DayName, OPEN_SERVICES, pageRef } from "./day-phrases.js";
 
 type Names = Readonly<Record<string, string>>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -46,7 +46,7 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   const d = useDay();
   if (!brief) return <div className="sunday-ready panel-sunken">
     <p className="bold">{readyTitle(d)}</p>
-    <p className="small">{DayName(d)} hasn't been checked yet, so this brief isn't here. Check it on {pageRef(d)}.</p>
+    <p className="small">{DayName(d)} hasn't been checked yet, so this brief isn't here. Check it on {pageRef()}.</p>
   </div>;
   const view = applyDecisions(brief, decisions);
   const open = view.items.filter(i => i.state !== "resolved");
@@ -81,7 +81,7 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
     {others.length > 0 && <><p className="small bold">Rooms, follow-ups and group meetings</p>{list(others)}</>}
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
     <p className="small">{brief.mode === "recording" ? "From the saved copy of a check made" : `Read from ${brief.source ?? "Planning Center"}`} {time(brief.checked_at ?? brief.completed_at)}.</p>
-    <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSunday}>Open {dayName(d)} to decide</button></div>
+    <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onSunday}>{OPEN_SERVICES} to decide</button></div>
   </section>;
 }
 
@@ -91,13 +91,12 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
  * when nothing is kept.
  */
 export function KeptForBriefing({ item }: { item: Pick<NoticedItem, "kind" | "kept"> }) {
-  const d = useDay();
   const lines = keptLines(item);
   if (!lines.length) return null;
   return <section aria-label="Kept for your briefing">
     <p className="small bold">Kept for your briefing</p>
     <ul className="list">{lines.map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>
-    <p className="small">Your Church rules keep these for the briefing instead of a notice. Each one is on {pageRef(d)}.</p>
+    <p className="small">Your Church rules keep these for the briefing instead of a notice. Each one is on {pageRef()}.</p>
   </section>;
 }
 

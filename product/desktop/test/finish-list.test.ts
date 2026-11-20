@@ -79,13 +79,13 @@ describe("the card", () => {
     expect(text(html)).toContain("Hide this list");
   });
 
-  it("says item 1 with the real day, and its two answers, Yes first", () => {
+  it("says item 1 of your services, whatever their day, and its two answers, Yes first", () => {
     const html = render(ALL_OPEN);
-    expect(text(html)).toContain("Ozzie can only keep an eye on Sunday while it's running.");
+    expect(text(html)).toContain("Ozzie can only keep an eye on your services while it's running.");
     expect(text(html)).toMatch(/Yes, start Ozzie with this Mac No, I'll open it myself Not now/u);
     const wednesday = dayWords({ sort_date: "2026-11-25T19:00:00Z" }, null);
     const onWednesday = renderToStaticMarkup(React.createElement(DayProvider, { value: wednesday }, React.createElement(FinishSettingUp, props(ALL_OPEN))));
-    expect(text(onWednesday)).toContain("Ozzie can only keep an eye on Wednesday while it's running.");
+    expect(text(onWednesday)).toContain("Ozzie can only keep an eye on your services while it's running.");
     expect(onWednesday).not.toContain("Sunday");
     expect(render(ALL_OPEN, { startFailed: true })).toContain(`<p role="alert" class="problem finish-problem">${START_FAILED_LINE.replaceAll("'", "&#x27;")}</p>`);
   });

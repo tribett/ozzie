@@ -294,12 +294,12 @@ export function regularMissedText(c: RegularCheck, now: string, zone: string): s
  * In progress with nothing in it: what would start something, never a pointer to Ask (audit item 4). Named by the
  * watched service's real day (`d`, onboarding spec §5); the fictional example is a Sunday.
  */
-export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean, d: DayWords = SUNDAY_WORDS,
+export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean,
   system: { name: string; jobs: boolean } = { name: "Planning Center", jobs: true }): string {
   if (example) return "Nothing runs in the fictional example.";
   // A church on B1 Church or Breeze: jobs work with Planning Center only for now, so none is offered as starting here.
-  const jobs = system.jobs ? `${keepTitle(d)} and other jobs start when you set them up` : `${keepTitle(d)} and other jobs work with Planning Center only for now`;
-  if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine(d)} once ${system.name} is connected and a service is chosen; ${jobs}.`;
+  const jobs = system.jobs ? `${keepTitle()} and other jobs start when you set them up` : `${keepTitle()} and other jobs work with Planning Center only for now`;
+  if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine()} once ${system.name} is connected and a service is chosen; ${jobs}.`;
   return system.jobs ? `Nothing is running. ${jobs} in Keeping watch.` : `Nothing is running. ${jobs}.`;
 }
 
@@ -359,7 +359,7 @@ export const sundayCountText = (n: number) => `${n} ${n === 1 ? "thing" : "thing
 
 /** Notes ready on the Sunday page for a report folded into the Sunday card (less one an older version counted as the AI's). */
 export const pageNotes = (item: NoticedItem) => Math.max(0, (item.drafts ?? 0) - (item.drafted ? 1 : 0));
-export const notesReadyText = (n: number, d: DayWords = SUNDAY_WORDS) => `Ozzie has ${n === 1 ? "a note" : `${n} notes`} ready for these on ${pageRef(d)}. Nothing has been sent.`;
+export const notesReadyText = (n: number) => `Ozzie has ${n === 1 ? "a note" : `${n} notes`} ready for these on ${pageRef()}. Nothing has been sent.`;
 
 /**
  * The line under the page title, from the counts alone. `unknownNeed`: the service is on a church system that doesn't

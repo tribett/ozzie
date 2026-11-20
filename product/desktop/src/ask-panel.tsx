@@ -27,7 +27,7 @@ import { ChooseAiButton, ChooseAiContext } from "./ai-line.js";
 import { NEEDS_AI } from "./ai-words.js";
 import { Icon } from "./icons.js";
 import { useDay } from "./day-words.js";
-import { dayName, pageRef } from "./day-phrases.js";
+import { OPEN_SERVICES, pageRef, SERVICES } from "./day-phrases.js";
 import { ProcedureBody } from "./procedure-text.js";
 import { DraftActions, type OpenDraft } from "./draft-actions.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
@@ -179,7 +179,7 @@ export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page:
       <BasedOn text={answer.basedOn} />
       <div className="row ask-links">
         <button type="button" className="src" onClick={() => onOpen(answer.page)}>
-          <Icon name={answer.page === "today" ? "clock" : "sun"} small />{answer.page === "today" ? "Open Today" : `Open ${dayName(d)}`}</button>
+          <Icon name={answer.page === "today" ? "clock" : "sun"} small />{answer.page === "today" ? "Open Today" : OPEN_SERVICES}</button>
       </div>
     </div>
     <button type="button" className="btn btn-quiet btn-sm ask-how" aria-expanded={how} onClick={() => setHow(!how)}><Icon name="info" small />See how this works</button>
@@ -255,12 +255,11 @@ export function turnAnnouncement(turn: Turn | undefined): string {
   }
 }
 
-/** Where to go first when nothing has been read: Settings to connect, Sunday to check. Never a button to the page already on screen. */
+/** Where to go first when nothing has been read: Settings to connect, Services to check. Never a button to the page already on screen. */
 function NextSteps({ page, onOpen }: { page: string | undefined; onOpen: (page: Page) => void }) {
-  const d = useDay();
   return <div className="row">
     {page !== "connection" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("connection")}>Open Settings</button>}
-    {page !== "sunday" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("sunday")}>Open {dayName(d)}</button>}
+    {page !== "sunday" && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("sunday")}>{OPEN_SERVICES}</button>}
   </div>;
 }
 
@@ -319,7 +318,6 @@ export function AskPanel(props: {
   initialVoice?: VoiceStatus;
 }) {
   const { brief, modelReady } = props;
-  const day = useDay();
   const words = useSystemWords();
   const voice = props.voice ?? nativeVoice;
   // "Choose how Ozzie uses AI" from inside the panel closes the panel as it opens the AI screens, which the panel would
@@ -437,21 +435,21 @@ export function AskPanel(props: {
       if (e.key === "Escape") props.onClose();
       else if (isVoiceShortcut(e)) { e.preventDefault(); void toggleVoice(); }
     }}>
-    {/* Named with what it's for (spec §6): "Ask Ozzie", and under it, quieter, "Questions about Wednesday", each kept on one
-        line (owner's read of 0.3.2: "Ask Ozzie (questions about Sunday)" wrapped into two columns at 380 px). */}
+    {/* Named with what it's for (spec §6): "Ask Ozzie", and under it, quieter, "Questions about your services", each kept on
+        one line (owner's read of 0.3.2: "Ask Ozzie (questions about Sunday)" wrapped into two columns at 380 px). */}
     <div className="convo-head"><AskIcon /><div className="ask-head"><span className="ask-head-title">Ask Ozzie</span>
-      <span className="ask-head-scope">Questions about {dayName(day)}</span></div><span className="spacer" />
+      <span className="ask-head-scope">Questions about {SERVICES}</span></div><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close Ask Ozzie" onClick={props.onClose}><Icon name="x" /></button></div>
     <div className="ask-scroll">
       {!answered && !props.notHere && notes}
       {/* No button to the page already on screen. */}
       {props.notHere && <div className="panel-info"><Icon name="info" /><p>{props.notHere}</p></div>}
       {!brief && !props.notHere && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
-        <p>{words.say(props.connection === "checking" ? `Nothing has been checked yet. Ozzie is checking Planning Center now. You can also open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
-          : props.connection === "unchecked" ? `Nothing has been checked yet, and Ozzie couldn't check Planning Center just now. You can open the fictional example on ${pageRef(day)}, or ask what Ozzie can do.`
-          : props.connection === "connected" ? `Nothing has been checked yet. Check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`
-          : `Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on ${pageRef(day)}. You can also open the fictional example there, or ask what Ozzie can do.`)}</p>
-        {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>Open {dayName(day)}</button></div>}</div></div>}
+        <p>{words.say(props.connection === "checking" ? `Nothing has been checked yet. Ozzie is checking Planning Center now. You can also open the fictional example on ${pageRef()}, or ask what Ozzie can do.`
+          : props.connection === "unchecked" ? `Nothing has been checked yet, and Ozzie couldn't check Planning Center just now. You can open the fictional example on ${pageRef()}, or ask what Ozzie can do.`
+          : props.connection === "connected" ? `Nothing has been checked yet. Check Planning Center on ${pageRef()}. You can also open the fictional example there, or ask what Ozzie can do.`
+          : `Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on ${pageRef()}. You can also open the fictional example there, or ask what Ozzie can do.`)}</p>
+        {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>{OPEN_SERVICES}</button></div>}</div></div>}
       {!modelReady && !props.notHere && <NeedsModel />}
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
       {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />A saved copy of a check from {time(brief.completed_at)}. Not a current check.</p>}
@@ -469,7 +467,7 @@ export function AskPanel(props: {
       <label htmlFor="ask-input" className="sr-only">Your question</label>
       <textarea id="ask-input" ref={inputRef} className="ask-input" rows={2} maxLength={MAX_QUESTION_CHARS} value={input} disabled={!canType || busy}
         readOnly={listening !== "no"}
-        placeholder={listening !== "no" ? "Listening…" : ready ? `Ask about ${day.thisOne}…` : props.plans ? "Ask Ozzie to keep an eye on something…"
+        placeholder={listening !== "no" ? "Listening…" : ready ? `Ask about ${SERVICES}…` : props.plans ? "Ask Ozzie to keep an eye on something…"
           : canType ? "Ask what Ozzie can do…" : "Ask Ozzie isn't available yet"}
         onChange={e => { setInput(e.target.value); setVoiceNote(null); }}
         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} />

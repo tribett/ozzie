@@ -186,12 +186,12 @@ describe("the app", () => {
     for (const line of [...Object.values(FAILURE_TEXT), ...Object.values(RESUME_LINE)]) expect(line).not.toMatch(/Sunday/u);
   });
 
-  it("the AI screens over a page name it as a sentence would: Back to your service, never Back to Your service", () => {
+  it("the AI screens over a page name it by its sidebar name: Back to Services, whatever day the service is on", () => {
     const weekend = dayWords({ sort_date: "2026-11-21T17:00:00Z", times: ["2026-11-21T22:00:00Z", "2026-11-22T15:00:00Z"] }, "America/New_York");
     expect(weekend.kind).toBe("weekend");
-    expect(backToName("sunday", UNKNOWN_WORDS)).toBe("your service");
-    expect(backToName("sunday", weekend)).toBe("this weekend");
-    expect(backToName("sunday", SUNDAY_WORDS)).toBe("Sunday");
+    expect(backToName("sunday", UNKNOWN_WORDS)).toBe("Services");
+    expect(backToName("sunday", weekend)).toBe("Services");
+    expect(backToName("sunday", SUNDAY_WORDS)).toBe("Services");
     expect(backToName("today", UNKNOWN_WORDS)).toBe("Today");
     expect(backToName("connection", UNKNOWN_WORDS)).toBe("Settings");
     expect(backToName("automatic", SUNDAY_WORDS)).toBe("Keeping watch");

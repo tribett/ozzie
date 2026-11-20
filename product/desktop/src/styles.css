@@ -530,3 +530,9 @@ body { background: #FAF6EE; }
 /* Calendars and Updates are sections of their own; the box around each is where Settings' index moves to. */
 .oz .settings-slot { display: flex; flex-direction: column; }
 .oz .settings-slot:focus { outline: none; }
+/* Several services on one Services page (owner decision 2026-11-19): each one a part of its own under its name, set apart
+   by a rule; its date and times above its name as the one-service page has them above its question. */
+.oz .services .service-part-wrap { padding-top: 20px; border-top: 1px solid var(--line); }
+.oz .service-part > .h2 { margin: 0; }
+.oz .watched-services .list li { align-items: center; flex-wrap: wrap; }
+.oz .watched-services .decide { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }

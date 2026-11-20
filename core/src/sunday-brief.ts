@@ -8,7 +8,7 @@ import { captureToCoverage, isChurchRead, isKidsRead, isOperationsRead, LIVE_CHE
 import type { DecidedBrief } from "./sunday-decisions.js";
 import type { SundayOperations } from "./operations-capture.js";
 import type { OperationsResult } from "./operations-findings/index.js";
-import { dayWords, planTimes, type DayWords } from "./service-day.js";
+import { dayWords, planTimes, sortedTimes, timeLabel, type DayWords } from "./service-day.js";
 
 export interface BriefPerson { person_id: string; reasons: string[] }
 export interface Finding {
@@ -123,6 +123,12 @@ export interface SundayBrief {
   /** The church's IANA time zone from Planning Center Services; null when it wasn't read. Never this Mac's zone. */
   time_zone: string | null;
   /**
+   * The plan's service times (their starts, as instants, earliest first; rehearsals left out), as read: Planning Center's
+   * `plan_times`, a church system's one service time. Empty when none was read or the service has no time of day.
+   * Absent only on a brief built by hand (a test).
+   */
+  times?: string[];
+  /**
    * The words for this plan's real day (service-day.ts): "Wednesday", "this weekend's services". Every fixed sentence
    * here and in what reads a brief names the service with these, never a fixed "Sunday" (onboarding spec §5).
    * Absent only on a brief built by hand (a test); readers then use the Sunday words.
@@ -236,7 +242,8 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   // People forms, Check-Ins and Registrations are reported by core/src/church-reads, never as Services reads.
   const services = capture.reads.filter(r => !isOperationsRead(r) && !isKidsRead(r) && !isChurchRead(r) && r.collection !== ORGANIZATION_COLLECTION);
   const time_zone = churchTimeZone(capture);
-  const day = dayWords({ sort_date: mapped.plan.sort_date, times: planTimes(capture.reads) }, time_zone);
+  const times = sortedTimes(planTimes(capture.reads));
+  const day = dayWords({ sort_date: mapped.plan.sort_date, times }, time_zone);
   // "a scheduled Wednesday lead", "a scheduled lead": the rule names the service's real day, never a fixed Sunday (spec §5).
   const dayLead = day.kind === "weekday" ? `${day.day} lead` : "lead";
   const checkTimes = services.map(r => r.checked_at).sort();
@@ -390,7 +397,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   return {
     mode: fictional ? "fictional" : capture.kind,
     plan: { id: capture.plan_id, ...mapped.plan, date: planDate(mapped.plan.sort_date), starts_at: planStart(mapped.plan.sort_date, time_zone) },
-    time_zone, day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
+    time_zone, times, day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
     sources: { reads: services.length, failed },
     findings: kept.shown,
     ...(kept.hidden.length ? { hidden: kept.hidden.map(h => ({ finding: h.item, entry: h.entry })) } : {}),
@@ -410,6 +417,38 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
       ...(stale ? ["Anything changed in Planning Center since this check isn't shown. Check again before relying on it."] : []),
     ],
   };
+}
+
+/**
+ * The one service time a finding is about, as an instant: its role's serving time, a blockout's one serving time, a kids
+ * team's time. Null when it names no single time (a role Planning Center lists at more than one time, a person's run of
+ * weeks, a check that couldn't be completed).
+ */
+export function findingTime(f: Pick<Finding, "kind" | "serving" | "position">): string | null {
+  if (f.kind === "worth-a-look" || f.kind === "streak") return null;
+  return (f.kind === "blockout" ? blockoutTime(f) : f.position?.interval ?? null)?.starts_at ?? null;
+}
+/** One service time's part of the page: its start (null for what names no single time), its heading and its items. */
+export interface TimeGroup<T> { at: string | null; label: string; items: T[] }
+/** The heading for what names no single service time. */
+export const NO_ONE_TIME = "Not tied to one service time";
+/**
+ * A plan with two or more service times (9:00 and 11:00 in one plan), its items by the time each is about, so a pastor
+ * sees what each service needs: one group per service time in order (empty ones included, so every service is named),
+ * then what names no single time, or a time that isn't one of the plan's service times. Null when the plan has fewer
+ * than two service times: the page then lists everything together, as before. Order within a group is kept.
+ */
+export function byServiceTime<T>(items: readonly T[], timeOf: (item: T) => string | null, times: readonly string[] | undefined, zone: string | null): TimeGroup<T>[] | null {
+  const sorted = sortedTimes(times ?? []);
+  if (sorted.length < 2) return null;
+  const groups: TimeGroup<T>[] = sorted.map(at => ({ at, label: timeLabel(at, sorted, zone), items: [] }));
+  const rest: TimeGroup<T> = { at: null, label: NO_ONE_TIME, items: [] };
+  for (const item of items) {
+    const at = timeOf(item);
+    const ms = at === null ? NaN : Date.parse(at);
+    (groups.find(g => Date.parse(g.at!) === ms) ?? rest).items.push(item);
+  }
+  return rest.items.length ? [...groups, rest] : groups;
 }
 
 /**

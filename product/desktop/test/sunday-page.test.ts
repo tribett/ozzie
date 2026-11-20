@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { DecisionForm, DraftBox, LeaderNote, OperationsSection, SundayPage } from "../src/sunday-page.js";
 import { DayProvider } from "../src/day-words.js";
 import { wednesdayCapture, wednesdayWords, WEDNESDAY_TITLE } from "../../../core/test/fixtures/service-days/wednesday.js";
+import { twoTimes } from "../../../core/test/fixtures/service-days/two-times.js";
 import { RulesPage } from "../src/rules-page.js";
 import { buildSundayBrief, teamLeaders, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
@@ -303,12 +304,12 @@ describe("the plan's own title is beside its date, never glued to the count (cli
   const lede = (html: string) => text(/<p class="lede">(.*?)<\/p>/u.exec(html)![1]!).trim();
   const titled = (title: string | null) => ({ ...live, plan: { ...live.plan, title } });
 
-  it("the eyebrow names the date, then the plan; the count leads the page alone", () => {
+  it("the eyebrow names the day and date, the service times, then the plan; the count leads the page alone", () => {
     const html = page(live);
     const m = head(html);
     expect(m).not.toBeNull();
-    expect(m![1]).toBe('November 22, 2026 · <span class="eyebrow-plan">Ozzie Demo — Main Sunday (fictional)</span>');
-    expect(m![2]).toBe("Is Sunday covered?");
+    expect(m![1]).toBe('Sunday, November 22 · 9:30 AM · <span class="eyebrow-plan">Ozzie Demo — Main Sunday (fictional)</span>');
+    expect(m![2]).toBe("Are your services covered?");
     expect(lede(html)).toMatch(/^\d+ things need a decision and \d+ are worth a look\.$/u);
     // Said once on the page, and still the page's only h1.
     expect(text(html).match(/Ozzie Demo — Main Sunday \(fictional\)/gu)).toHaveLength(1);
@@ -318,7 +319,7 @@ describe("the plan's own title is beside its date, never glued to the count (cli
   it("a plan with no title shows the date alone", () => {
     for (const title of [null, "", "   "]) {
       const html = page(titled(title));
-      expect(head(html)![1], JSON.stringify(title)).toBe("November 22, 2026");
+      expect(head(html)![1], JSON.stringify(title)).toBe("Sunday, November 22 · 9:30 AM");
       expect(html).not.toContain("eyebrow-plan");
     }
   });
@@ -326,7 +327,7 @@ describe("the plan's own title is beside its date, never glued to the count (cli
   it("a very long title is there whole, for VoiceOver too, and wraps rather than running off the page", () => {
     const long = `${"Advent ".repeat(20)}${"Candlelight".repeat(12)} — Lessons and Carols`;
     const html = page(titled(long));
-    expect(head(html)![1]).toBe(`November 22, 2026 · <span class="eyebrow-plan">${long}</span>`);
+    expect(head(html)![1]).toBe(`Sunday, November 22 · 9:30 AM · <span class="eyebrow-plan">${long}</span>`);
     expect(lede(html)).not.toContain("Advent");
     const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.oz \.eyebrow-plan \{[^}]*overflow-wrap: anywhere;[^}]*\}/u);
@@ -340,10 +341,10 @@ describe("the plan's own title is beside its date, never glued to the count (cli
       brief: wed, names: wednesdayCapture().names, busy: false, problem: "", sender: "Pat", connected: true, hasRecording: false, configured: true,
       canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
     })));
-    expect(head(html)![1]).toBe(`November 25, 2026 · <span class="eyebrow-plan">${WEDNESDAY_TITLE}</span>`);
-    expect(head(html)![2]).toBe("Is Wednesday covered?");
+    expect(head(html)![1]).toBe(`Wednesday, November 25 · 9:30 AM · <span class="eyebrow-plan">${WEDNESDAY_TITLE}</span>`);
+    expect(head(html)![2]).toBe("Are your services covered?");
     expect(lede(html)).not.toContain(WEDNESDAY_TITLE);
-    expect(head(page(brief()))![1]).toBe('November 22, 2026 · <span class="eyebrow-plan">Ozzie Demo — Main Sunday (fictional)</span>');
+    expect(head(page(brief()))![1]).toBe('Sunday, November 22 · 9:30 AM · <span class="eyebrow-plan">Ozzie Demo — Main Sunday (fictional)</span>');
     const unchecked = renderToStaticMarkup(React.createElement(SundayPage, {
       brief: null, names: {}, busy: false, problem: "", sender: "", connected: true, hasRecording: false, configured: true,
       canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
@@ -436,3 +437,33 @@ describe("Church rules page", () => {
     expect(text(html)).toContain("choose the lead's position from the team's positions, or type its name as it appears in Planning Center");
   });
 });
+
+describe("one service with two service times: each time is its own section (owner decision 2026-11-19)", () => {
+  const two = brief(twoTimes());
+  const html = page(two);
+  const t = text(html);
+  const at = (s: string) => t.indexOf(s);
+
+  it("names both times under the question, and heads each time's findings with it, in order", () => {
+    expect(/<p class="eyebrow">([^<]*)</u.exec(html)![1]).toBe("Sunday, November 22 · 9:30 AM and 11:00 AM · ");
+    const heads = [...html.matchAll(/<h2 id="service-time-\d+" class="h3">([^<]+)<\/h2>/gu)].map(m => m[1]);
+    expect(heads).toEqual(["9:30 AM service", "11:00 AM service", "Not tied to one service time"]);
+    // Greeter and the pending Lyrics request at 9:30, Nursery at 11:00, the weeks-in-a-row check-in under neither.
+    expect(at("9:30 AM service")).toBeLessThan(at("Greeter still needs"));
+    expect(at("Greeter still needs")).toBeLessThan(at("11:00 AM service"));
+    expect(at("11:00 AM service")).toBeLessThan(at("Nursery still needs"));
+    expect(at("Nursery still needs")).toBeLessThan(at("Not tied to one service time"));
+    expect(at("Not tied to one service time")).toBeLessThan(at("3 weeks in a row"));
+  });
+
+  it("the lead still counts across both times, and nothing is lost or said twice", () => {
+    expect(text(/<p class="lede">(.*?)<\/p>/u.exec(html)![1]!)).toMatch(/^ ?2 things need a decision and 2 are worth a look\. ?$/u);
+    expect(t.match(/Greeter still needs/gu)).toHaveLength(1);
+    expect(t.match(/Nursery still needs/gu)).toHaveLength(1);
+  });
+
+  it("one service time: no time headings, the page as before", () => {
+    expect(page(brief())).not.toContain("service-time-");
+  });
+});
+

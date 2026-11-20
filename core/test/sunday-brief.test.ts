@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildSundayBrief, leadKey, needKey, shownUncertainties, sundayShownCount, teamLeaders } from "../src/sunday-brief.js";
+import { buildSundayBrief, byServiceTime, findingTime, leadKey, needKey, NO_ONE_TIME, shownUncertainties, sundayShownCount, teamLeaders } from "../src/sunday-brief.js";
 import type { SundayCapture } from "../src/sunday-capture.js";
 import { nov22Capture, PEOPLE, SERVICE, TEAMS } from "../src/fictional-sunday.js";
 import { fictionalOperations, withFictionalOperations } from "../src/fictional-operations.js";
 import { sundayOperations, type SundayOperations } from "../src/operations-capture.js";
 import { applyDecisions, decide } from "../src/sunday-decisions.js";
 import { wednesdayCapture, wednesdayWords } from "./fixtures/service-days/wednesday.js";
+import { twoTimes } from "./fixtures/service-days/two-times.js";
 
 const NOW = "2026-11-20T15:05:00Z";
 const rules = { sundayLeads: [], checkInAfterSundaysInARow: 3 };
@@ -367,3 +368,39 @@ describe("a Wednesday plan", () => {
     expect([...why, ...b.not_checked, ...b.findings.flatMap(f => f.unread ?? []), b.plan.title ?? ""].join(" ")).not.toMatch(/sunday/iu);
   });
 });
+
+describe("one plan with two service times: what each service needs (owner decision 2026-11-19)", () => {
+  const two = twoTimes();
+  const brief = buildSundayBrief(two, rules, two.completed_at, true);
+  const shown = (groups: ReturnType<typeof byServiceTime<(typeof brief.findings)[number]>>) =>
+    groups?.map(g => [g.label, g.items.map(f => `${f.kind}${f.position ? ` ${f.position.name}` : ""}`)]);
+
+  it("keeps both service times, earliest first, as read", () => {
+    expect(brief.times).toEqual([SERVICE.starts_at, "2026-11-22T16:00:00Z"]);
+  });
+
+  it("puts each finding under the service time it is about, every time named, and what names no one time last", () => {
+    expect(shown(byServiceTime(brief.findings, findingTime, brief.times, brief.time_zone))).toEqual([
+      ["9:30 AM", ["needs-people Greeter", "pending Lyrics"]],
+      ["11:00 AM", ["needs-people Nursery"]],
+      [NO_ONE_TIME, ["streak"]],
+    ]);
+    // A time with nothing open is still named, so a pastor sees each service.
+    const greeterOnly = brief.findings.filter(f => f.position?.name === "Greeter");
+    expect(shown(byServiceTime(greeterOnly, findingTime, brief.times, brief.time_zone))).toEqual([["9:30 AM", ["needs-people Greeter"]], ["11:00 AM", []]]);
+  });
+
+  it("a plan with one service time isn't grouped: the page lists everything together, as before", () => {
+    const one = buildSundayBrief(nov22Capture(), rules, nov22Capture().completed_at, true);
+    expect(one.times).toEqual([SERVICE.starts_at]);
+    expect(byServiceTime(one.findings, findingTime, one.times, one.time_zone)).toBeNull();
+    expect(byServiceTime(brief.findings, findingTime, undefined, brief.time_zone)).toBeNull();
+  });
+
+  it("a check that couldn't be completed, and a person's weeks in a row, name no single time", () => {
+    expect(findingTime({ kind: "worth-a-look" })).toBeNull();
+    expect(findingTime({ kind: "streak" })).toBeNull();
+    expect(findingTime({ kind: "needs-people", position: { id: "p", team_id: "t", name: "Greeter", interval: null } })).toBeNull();
+  });
+});
+

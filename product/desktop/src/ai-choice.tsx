@@ -5,7 +5,7 @@
 // AI is offered only when the server's offer is open.
 import { useEffect, useMemo, useState } from "react";
 import { useDay } from "./day-words.js";
-import { dayName } from "./day-phrases.js";
+import { SERVICES_PAGE } from "../../../core/src/service-day.js";
 import { AI, CHOICE } from "./ai-words.js";
 import { AiPlaceContext, InUseTag, Problem, Quiet, Screen, SentSheet, useAiPlace, type AiPlace, type InUse } from "./ai-parts.js";
 import { CompaniesScreen, KeyScreen, OwnScreen } from "./ai-own-key.js";
@@ -38,7 +38,6 @@ export interface AiChoiceProps {
 export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboarding, start = { at: "choose" }, focusOnMount = true, backTo }: AiChoiceProps & {
   start?: AiStep; focusOnMount?: boolean;
 }) {
-  const day = useDay();
   const [step, setStep] = useState<AiStep>(start);
   const [moved, setMoved] = useState(false);
   const [offer, setOffer] = useState<Offer | null>(null);
@@ -62,8 +61,8 @@ export function AiFlow({ mode, onModel, onDone, onCheckSetup, bridge = onboardin
   const held = now === undefined ? null : holdsOzzie(now);
   const refused = now?.managed === "reconnect";
   const go = (s: AiStep) => { setStep(s); setMoved(true); };
-  // The service's page as a sentence says it: "Next: open Sunday", "Next: open your service" (never "Your service").
-  const done = mode === "settings" ? AI.backTo(backTo ?? "Settings") : AI.next(dayName(day));
+  // The services' page by its name: "Next: open Services".
+  const done = mode === "settings" ? AI.backTo(backTo ?? "Settings") : AI.next(SERVICES_PAGE);
   const chosen = () => onDone("chosen");
   const later = () => onDone("later");
   const back = start.at === step.at && start.at !== "choose" && mode === "settings" ? later : null;

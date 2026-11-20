@@ -850,7 +850,7 @@ export async function kidsAnswer(tools: HarnessTools, q: KidsQuestion, signal: A
 const WEEKDAYS = "sunday|monday|tuesday|wednesday|thursday|friday|saturday";
 /** Questions about what still needs a decision or attention for the service (review Q L4: also problems, issues, "are we good"). */
 export const DECISION_QUESTION = new RegExp("(?<![\\p{L}\\p{N}])(?:decisions?|decide|attention|outstanding|open\\s+items?|to-?dos?|left\\s+to\\s+(?:do|decide|sort\\s+out)" +
-  "|what(?:'s|\\s+is)\\s+(?:left|open|missing|wrong)|(?:is|are)\\s+(?:we|everything|things|it|this\\s+weekend|" + WEEKDAYS + ")\\s+(?:all\\s+)?(?:ready|set|covered|good|ok|okay)" +
+  "|what(?:'s|\\s+is)\\s+(?:left|open|missing|wrong)|(?:is|are)\\s+(?:we|everything|things|it|this\\s+weekend|(?:my|our|your|the|all\\s+(?:my|our|the))\\s+services?|" + WEEKDAYS + ")\\s+(?:all\\s+)?(?:ready|set|covered|good|ok|okay)" +
   "|(?:" + WEEKDAYS + ")\\s+ready|ready\\s+for\\s+(?:" + WEEKDAYS + "|this\\s+weekend)|problems?|issues?|concerns?" +
   "|anything\\s+(?:else\\s+)?(?:i|we)\\s+(?:should|need\\s+to|must|ought\\s+to)\\s+(?:know|look\\s+at|do|deal\\s+with|worry\\s+about|handle))(?![\\p{L}\\p{N}])", "iu");
 export const isDecisionQuestion = (typed: string) => DECISION_QUESTION.test(fold(typed));

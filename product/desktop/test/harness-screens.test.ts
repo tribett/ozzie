@@ -102,12 +102,12 @@ describe("What happened: the task ledger in plain words", () => {
     const job = row({ kind: "skill", skill_id: "sunday-ready", state: "verified", events: [ev(0, "admitted"), ev(1, "running"), ev(2, "model", "1"), ev(3, "model", "1 tool_calls"),
       ev(4, "tool", "sunday.overview complete"), ev(5, "tool", "sunday.not_checked complete"), ev(6, "model", "2"), ev(7, "model", "2 stop"), ev(8, "verified")] });
     expect(taskAccount(job, { now, start: "job:keep-sunday-covered:scheduled" })).toEqual({
-      started: `Keep Sunday covered ran on schedule, at ${clock}.`,
+      started: `Keep services covered ran on schedule, at ${clock}.`,
       looked: ["Looked at the overview of the service — all of it", "Looked at what the check couldn't read — all of it"],
       ai: "Ozzie asked the AI twice. The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything.",
       ended: "Finished. Ozzie wrote up the facts the AI chose, and the write-up is with this job.",
     });
-    expect(taskLine(job, { now, trigger: "job:keep-sunday-covered:scheduled", procedures: skills })).toBe(`Keep Sunday covered · checked · 2 things looked at · ${clock}`);
+    expect(taskLine(job, { now, trigger: "job:keep-sunday-covered:scheduled", procedures: skills })).toBe(`Keep services covered · checked · 2 things looked at · ${clock}`);
     expect(taskAccount(job, { now, start: "who-could-help" }).started).toBe(`You asked Ozzie to look at who could help with a role, at ${clock}.`);
     // Who could help: true to what the AI did, whether it asked for the list of people, and never a note shown (review G, N3, N4).
     const look = row({ kind: "skill", skill_id: "who-could-help", state: "verified", events: [ev(0, "model", "1"), ev(1, "model", "1 tool_calls"),
@@ -265,16 +265,16 @@ describe("Sunday: See how this works says the finding came from Ozzie's own chec
 });
 
 describe("What happened for a church whose service is on a Wednesday (onboarding spec §5)", () => {
-  it("names jobs and the procedure by the real day, and points to the Wednesday page; a check's own line names no day", () => {
+  it("names jobs and the procedure by the real day, and points to the Services page; a check's own line names no day", () => {
     const day = wednesdayWords();
     const job = row({ kind: "skill", skill_id: "sunday-ready", state: "verified", events: [ev(0, "admitted"), ev(1, "running"), ev(2, "tool", "sunday.overview complete"), ev(3, "verified")] });
-    expect(taskLine(job, { now, day, trigger: "job:keep-sunday-covered:scheduled", procedures: skills })).toBe(`Keep Wednesday covered · checked · 1 thing looked at · ${clock}`);
-    expect(taskAccount(job, { now, day, start: "job:keep-sunday-covered:scheduled" }).started).toBe(`Keep Wednesday covered ran on schedule, at ${clock}.`);
+    expect(taskLine(job, { now, day, trigger: "job:keep-sunday-covered:scheduled", procedures: skills })).toBe(`Keep services covered · checked · 1 thing looked at · ${clock}`);
+    expect(taskAccount(job, { now, day, start: "job:keep-sunday-covered:scheduled" }).started).toBe(`Keep services covered ran on schedule, at ${clock}.`);
     expect(taskAccount(job, { now, day, procedures: skills }).started).toBe(`Ready for Wednesday ran at ${clock}.`);
     const lines = [taskLine(automatic, { now, day, trigger: "automatic" }), JSON.stringify(taskAccount(automatic, { now, day, start: "automatic" })), JSON.stringify(taskAccount(job, { now, day }))];
     for (const line of lines) expect(line).not.toContain("Sunday");
     const page = text(renderToStaticMarkup(React.createElement(DayProvider, { value: day }, React.createElement(ActivityPage, { capture: null, tasks: [], now }))));
-    expect(page).toContain("Every read appears here once Wednesday is checked, or when you open the fictional example on the Wednesday page.");
+    expect(page).toContain("Every read appears here once your services are checked, or when you open the fictional example on the Services page.");
     expect(page).not.toContain("Sunday");
     expect(page).not.toMatch(HIDDEN_WORDS);
   });

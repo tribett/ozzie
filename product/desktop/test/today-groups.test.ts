@@ -186,8 +186,8 @@ describe("Sunday's decisions show once", () => {
     expect(pageNotes(report())).toBe(1);
     expect(pageNotes(report({ drafts: 2, drafted: true }))).toBe(1);
     expect(pageNotes(report({ drafts: 0 }))).toBe(0);
-    expect(notesReadyText(1)).toBe("Ozzie has a note ready for these on the Sunday page. Nothing has been sent.");
-    expect(notesReadyText(2)).toBe("Ozzie has 2 notes ready for these on the Sunday page. Nothing has been sent.");
+    expect(notesReadyText(1)).toBe("Ozzie has a note ready for these on the Services page. Nothing has been sent.");
+    expect(notesReadyText(2)).toBe("Ozzie has 2 notes ready for these on the Services page. Nothing has been sent.");
   });
 
   it("puts Keep Sunday covered's write-up on the Sunday card, never as an item of its own", () => {
@@ -198,7 +198,7 @@ describe("Sunday's decisions show once", () => {
     // Why there is none goes on the card the same way.
     const none = writeup("keep-found", { none: true, why: "off" });
     expect(todayItems(input({ watch: keepWatch({ writeups: { "keep-found": none } }), sunday: sundayAt(CHECKED) }))[0]!.subject).toMatchObject({ writeup: none });
-    expect(preparedTitle({ summary: null, draft: "Hi" })).toBe("Ozzie drafted a note for Sunday.");
+    expect(preparedTitle({ summary: null, draft: "Hi" })).toBe("Ozzie drafted a note for your services.");
   });
 
   it("leaves a report about another Sunday, or read by a newer check than the card's, as its own item", () => {
@@ -223,8 +223,8 @@ describe("Sunday's decisions show once", () => {
     const page = text(html);
     const attention = page.slice(page.indexOf("Needs your attention"), page.indexOf("Ready to review"));
     // Names are filled in on this Mac from the check on screen; the stored write-up holds only the id.
-    expect(attention).toMatch(new RegExp(`Sunday has 2 things to decide\\. Ozzie checked Sunday at ${new Date(FRI).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}: For Sunday November 22, this check found 2 items that need a decision and 2 worth a look\\. Avery Brightwater hasn't accepted Greeter yet\\. Based on: Planning Center Services, checked Fri, Nov 20, 9:00 AM See how this works Greeter: `, "u"));
-    expect(attention).toMatch(/Ozzie noticed this at .+ while keeping an eye on Sunday\. Notes ready Ozzie has a note ready for these on the Sunday page\. Nothing has been sent\. Open Sunday/u);
+    expect(attention).toMatch(new RegExp(`Sunday has 2 things to decide\\. Ozzie checked your services at ${new Date(FRI).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}: For Sunday November 22, this check found 2 items that need a decision and 2 worth a look\\. Avery Brightwater hasn't accepted Greeter yet\\. Based on: Planning Center Services, checked Fri, Nov 20, 9:00 AM See how this works Greeter: `, "u"));
+    expect(attention).toMatch(/Ozzie noticed this at .+ while keeping an eye on your services\. Notes ready Ozzie has a note ready for these on the Services page\. Nothing has been sent\. Open Services/u);
     expect(html).not.toContain("Read Ozzie&#x27;s write-up");
     // No extra item: the write-up is on the card it belongs to.
     expect(page).toContain("Ready to review 0 items");
@@ -233,7 +233,7 @@ describe("Sunday's decisions show once", () => {
     const spent = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
       watch: watchWith(writeup("keep-found", { none: true, why: "spent" })) })));
     expect(spent).toMatch(/Sunday has 2 things to decide\. No write-up this time: AI help has reached its limit for now\. This card shows what Ozzie's own check of Planning Center found\. Greeter: /u);
-    const bare = page.replace(/Ozzie checked Sunday at .+? See how this works /u, "");
+    const bare = page.replace(/Ozzie checked your services at .+? See how this works /u, "");
     // One run's own limit is not the allowance (review G).
     const ranPast = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
       watch: watchWith(writeup("keep-found", { none: true, why: "run-limit" })) })));
@@ -505,7 +505,7 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
     ready: true, paused: false, running: false, intervalMinutes: 60, runOnLaunch: true,
     last: { at: "2026-11-20T14:06:00.000Z", ok: true }, next: "2026-11-20T15:06:00.000Z", missed: [], ...over,
   });
-  it("leads In progress with Ozzie keeping an eye on Sunday once it can run, with how often, when it last and next looks", () => {
+  it("leads In progress with Ozzie keeping an eye on your services once it can run, with how often, when it last and next looks", () => {
     expect(regularLine(regular(), FRI, ET)).toBe("Checks Planning Center at least every hour while Ozzie is open, and when it opens. Last checked 9:06 AM. Next check 10:06 AM.");
     expect(regularLine(regular({ runOnLaunch: false, intervalMinutes: 30, last: null }), FRI, ET)).toBe("Checks Planning Center at least every 30 minutes while Ozzie is open. Not checked yet. Next check 10:06 AM.");
     expect(regularLine(regular({ paused: true }), FRI, ET)).toContain("Paused: nothing runs until you resume it in Keeping watch.");
@@ -516,7 +516,7 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
     expect(items.filter(i => GROUP_OF[i.state] === "progress").map(i => i.id)).toEqual(["regular:sunday-check", `watching:${KEEP}`]);
     // Not until it can run: then In progress says what starts it.
     expect(todayItems(input({ regular: regular({ ready: false }) })).map(i => i.id)).toEqual(["sunday-unchecked"]);
-    expect(progressEmptyText(regular({ ready: false }), false)).toBe("Nothing runs yet. Ozzie keeps an eye on Sunday once Planning Center is connected and a service is chosen; Keep Sunday covered and other jobs start when you set them up.");
+    expect(progressEmptyText(regular({ ready: false }), false)).toBe("Nothing runs yet. Ozzie keeps an eye on your services once Planning Center is connected and a service is chosen; Keep services covered and other jobs start when you set them up.");
     expect(progressEmptyText(null, true)).toBe("Nothing runs in the fictional example.");
   });
 
@@ -533,7 +533,7 @@ describe("Today says what is running and what was missed (audit item 24)", () =>
       brief: null, names: {}, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), regular: regular({ missed: ["2026-11-20T12:00:00.000Z"] }),
     })));
     const progress = page.slice(page.indexOf("In progress"));
-    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services Ozzie keeps an eye on Sunday Checks Planning Center at least every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
+    expect(progress).toMatch(/^In progress 1 item Always on Planning Center Services Ozzie keeps an eye on your services Checks Planning Center at least every hour while Ozzie is open, and when it opens\. Last checked 9:06 AM\. Next check 10:06 AM\. A check was due at 7:00 AM, but Ozzie wasn't running or this Mac was asleep\. It checked again at 9:06 AM\./u);
     expect(page).not.toMatch(/under way/u);
     expect(page).not.toMatch(HIDDEN_WORDS);
   });
@@ -586,7 +586,7 @@ describe("Today names the decisions (audit item 17)", () => {
     const opened: string[] = [];
     const html = renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(), onSundayCard: (k: string) => { opened.push(k); } }));
     const card = text(html).slice(text(html).indexOf("Sunday has 2 things to decide."), text(html).indexOf("Ready to review"));
-    expect(card).toMatch(/Greeter: 1 more person needed, .+\. 1 on the team is clear for that time\. See who could help Nursery: 1 more person needed, .+\. No one else on the team is clear for that time\. Open on Sunday/u);
+    expect(card).toMatch(/Greeter: 1 more person needed, .+\. 1 on the team is clear for that time\. See who could help Nursery: 1 more person needed, .+\. No one else on the team is clear for that time\. Open in Services/u);
     expect(card).toContain("Also 2 things worth a look on Sunday.");
     expect(card).not.toContain("more on Sunday.");
     expect(html).toMatch(/<span id="([^"]+)-d0">Greeter[^<]*<\/span><button type="button" class="btn btn-quiet btn-sm" aria-describedby="\1-d0">See who could help<\/button>/u);

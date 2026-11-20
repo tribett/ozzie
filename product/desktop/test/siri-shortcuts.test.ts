@@ -203,7 +203,7 @@ describe("Settings", () => {
   it("names the Siri actions as Ozzie's actions and phrases do (helpers/siri-actions.swift)", () => {
     const actions = readFileSync(new URL("../src-tauri/helpers/siri-actions.swift", import.meta.url), "utf8");
     for (const phrase of ACTION_PHRASES) expect(actions).toContain(`"${phrase.replace(/\?$/u, "").replace("Ozzie", "\\(.applicationName)")}"`);
-    expect([...ACTION_NAMES]).toEqual(["Is Sunday covered", "Open Ozzie's Sunday page", "Open Ozzie's Today page"]);
+    expect([...ACTION_NAMES]).toEqual(["Are my services covered", "Open Ozzie's Services page", "Open Ozzie's Today page"]);
     for (const title of ACTION_NAMES) {
       expect(ACTIONS_IN_SHORTCUTS).toContain(title);
       expect(actions).toContain(`static let title: LocalizedStringResource = "${title}"`);

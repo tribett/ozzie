@@ -11,6 +11,12 @@ export interface ServiceDayPlan {
   times?: readonly string[];
 }
 export type DayKind = "weekday" | "weekend" | "spread" | "unknown";
+/**
+ * The sidebar page for the services Ozzie watches, and the question it asks, whatever day they are on (owner decision
+ * 2026-11-19: "instead of Sunday - we should refer to it as Services"). The day stays where it says when.
+ */
+export const SERVICES_PAGE = "Services";
+export const SERVICES_QUESTION = "Are your services covered?";
 export interface DayWords {
   kind: DayKind;
   /** 0 Sunday … 6 Saturday for a service on one weekday; null otherwise. */
@@ -19,9 +25,9 @@ export interface DayWords {
   day: string;
   /** At the start of a sentence: "Sunday", "This weekend's services", "These services", "Your service". */
   Day: string;
-  /** The sidebar page and its title: "Sunday", "Saturday", "This weekend", "These services", "Your service". */
+  /** The sidebar page and its title: always "Services" (SERVICES_PAGE). */
   page: string;
-  /** "Is Sunday covered?", "Are this weekend's services covered?". */
+  /** The page's question: always "Are your services covered?" (SERVICES_QUESTION). */
   question: string;
   /** "Wednesday, November 25"; two dates for a weekend or a spread; null when nothing is known. */
   date: string | null;
@@ -78,12 +84,12 @@ const nextDate = (date: string) => new Date(Date.parse(`${date}T00:00:00Z`) + 86
 function oneDay(date: string): DayWords {
   const weekday = weekdayOf(date);
   const name = WEEKDAYS[weekday]!;
-  return { kind: "weekday", weekday, day: name, Day: name, page: name, question: `Is ${name} covered?`, date: longDate(date), thisOne: `this ${name}` };
+  return { kind: "weekday", weekday, day: name, Day: name, page: SERVICES_PAGE, question: SERVICES_QUESTION, date: longDate(date), thisOne: `this ${name}` };
 }
 
 /** Nothing chosen yet: no day to name. */
 export const UNKNOWN_WORDS: DayWords = Object.freeze({
-  kind: "unknown", weekday: null, day: "your service", Day: "Your service", page: "Your service", question: "Is your service covered?", date: null,
+  kind: "unknown", weekday: null, day: "your service", Day: "Your service", page: SERVICES_PAGE, question: SERVICES_QUESTION, date: null,
   thisOne: "your service",
 });
 /** A Sunday with no date: the fictional example church and the words pages show when nothing says otherwise. */
@@ -110,11 +116,38 @@ export function dayWords(plan: ServiceDayPlan | null, zone: string | null): DayW
   const first = dates[0]!, last = dates[dates.length - 1]!;
   if (dates.length === 1) return oneDay(first);
   if (dates.length === 2 && weekdayOf(first) === 6 && nextDate(first) === last) {
-    return { kind: "weekend", weekday: null, day: "this weekend's services", Day: "This weekend's services", page: "This weekend",
-      question: "Are this weekend's services covered?", date: `${longDate(first)} and ${longDate(last)}`, thisOne: "this weekend" };
+    return { kind: "weekend", weekday: null, day: "this weekend's services", Day: "This weekend's services", page: SERVICES_PAGE,
+      question: SERVICES_QUESTION, date: `${longDate(first)} and ${longDate(last)}`, thisOne: "this weekend" };
   }
-  return { kind: "spread", weekday: null, day: "these services", Day: capital("these services"), page: "These services", question: "Are these services covered?",
+  return { kind: "spread", weekday: null, day: "these services", Day: capital("these services"), page: SERVICES_PAGE, question: SERVICES_QUESTION,
     date: `${longDate(first)} to ${longDate(last)}`, thisOne: "these services" };
+}
+
+/** "9:30 AM" on the church's clock, or this Mac's when the church's zone isn't known. */
+export function clockAt(iso: string, zone: string | null): string {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...(zone && isTimeZone(zone) ? { timeZone: zone } : {}) });
+}
+const andList = (items: readonly string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
+/** The distinct service-time starts, earliest first (as instants, so the same time written two ways counts once). */
+export function sortedTimes(times: readonly string[]): string[] {
+  const seen = new Map<number, string>();
+  for (const t of times) { const ms = Date.parse(t); if (Number.isFinite(ms) && !seen.has(ms)) seen.set(ms, t); }
+  return [...seen.entries()].sort(([a], [b]) => a - b).map(([, t]) => t);
+}
+/**
+ * One service time as a heading names it: "9:30 AM", or "Saturday 5:00 PM" when the plan's times fall on more than one
+ * day in the church's zone, so a weekend's two days are told apart.
+ */
+export function timeLabel(iso: string, times: readonly string[], zone: string | null): string {
+  const days = new Set(times.map(t => zone && isTimeZone(zone) ? localDate(t, zone) : new Date(t).toDateString()));
+  if (days.size <= 1) return clockAt(iso, zone);
+  const weekday = new Date(iso).toLocaleDateString("en-US", { weekday: "long", ...(zone && isTimeZone(zone) ? { timeZone: zone } : {}) });
+  return `${weekday} ${clockAt(iso, zone)}`;
+}
+/** A plan's service times in one phrase: "9:30 AM and 11:00 AM", "Saturday 5:00 PM and Sunday 9:30 AM"; null when none. */
+export function timesText(times: readonly string[], zone: string | null): string | null {
+  const sorted = sortedTimes(times);
+  return sorted.length ? andList(sorted.map(t => timeLabel(t, sorted, zone))) : null;
 }
 
 interface ReadLike { collection: string; outcome: string; body?: unknown }

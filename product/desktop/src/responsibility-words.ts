@@ -9,7 +9,7 @@ import { describeChange } from "../../../core/src/sunday-changes.js";
 import { kindWords } from "../../../core/src/finding-feedback.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
 import type { NoticedItem } from "./responsibility-runner.js";
-import { dayName, keepTitle, pageRef } from "./day-phrases.js";
+import { dayName, keepTitle, pageRef, SERVICES } from "./day-phrases.js";
 import { promise } from "./promises.js";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -40,12 +40,12 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 // titles the store keeps are unchanged; a title is put in the day's words only when shown. Without day words (a caller
 // that has none, a test), the Sunday words apply.
 
-/** A template's title as shown: Keep Sunday covered becomes "Keep Wednesday covered", "Keep this weekend covered". */
-export const templateTitle = (template: TemplateId, d: DayWords = SUNDAY_WORDS): string =>
-  template === "keep-sunday-covered" ? keepTitle(d) : TEMPLATES[template].title;
+/** A template's title as shown: Keep Sunday covered is "Keep services covered" (renamed 2026-11-19; the store keeps its own title). */
+export const templateTitle = (template: TemplateId): string =>
+  template === "keep-sunday-covered" ? keepTitle() : TEMPLATES[template].title;
 /** A job's title as shown: its template's in the day's words while it still has the template's own title. */
-export const jobTitle = (r: Pick<Responsibility, "template" | "title">, d: DayWords = SUNDAY_WORDS): string =>
-  r.template && Object.hasOwn(TEMPLATES, r.template) && r.title === TEMPLATES[r.template].title ? templateTitle(r.template, d) : r.title;
+export const jobTitle = (r: Pick<Responsibility, "template" | "title">): string =>
+  r.template && Object.hasOwn(TEMPLATES, r.template) && r.title === TEMPLATES[r.template].title ? templateTitle(r.template) : r.title;
 /** The morning briefing's fuller brief, by the service's day, as its own heading says it (sunday-ready.tsx): "“Ready for Wednesday” brief". */
 export const readyBriefName = (d: DayWords = SUNDAY_WORDS): string => `“Ready for ${dayName(d)}” brief`;
 
@@ -90,12 +90,12 @@ export const WATCH_HOW: readonly string[] = Object.freeze([
   "If a check is missed because Ozzie was quit or this Mac was asleep, Ozzie catches up once when it can.",
 ]);
 /** The same fold's line about jobs, where jobs are listed. */
-export const oneOfEach = (d: DayWords = SUNDAY_WORDS): string =>
-  `Ozzie runs one job of each kind at a time, such as one ${keepTitle(d)}. To change one, use Change on its card instead of setting up another.`;
+export const oneOfEach = (): string =>
+  `Ozzie runs one job of each kind at a time, such as one ${keepTitle()}. To change one, use Change on its card instead of setting up another.`;
 /** Every automatic check depends on this; said wherever a plan says when it checks. */
 export const ONLY_WHILE = "Only while this Mac is awake and Ozzie is running.";
 /** What the run checks, finishing "Ozzie couldn't check …". */
-const subject = (template: TemplateId, d: DayWords) => template === "keep-sunday-covered" ? dayName(d)
+const subject = (template: TemplateId) => template === "keep-sunday-covered" ? SERVICES
   : ({ "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups", "group-night-clashes": "group nights", "morning-briefing": "your morning briefing" } as const)[template];
 
 /** Which Planning Center areas it reads: "Planning Center Services and Calendar". */
@@ -224,7 +224,7 @@ export function runText(run: RunRow, now?: string, report?: NoticedItem | null):
 // ---- A job's write-up (audit item 6) -------------------------------------------------------------------
 
 /** What a job's run checked, finishing "Ozzie checked … at 9:06 AM:". */
-const checked = (template: TemplateId, d: DayWords) => template === "keep-sunday-covered" ? dayName(d) : template === "morning-briefing" ? `${dayName(d)} for your briefing`
+const checked = (template: TemplateId) => template === "keep-sunday-covered" ? SERVICES : template === "morning-briefing" ? `${SERVICES} for your briefing`
   : ({ "watch-room-bookings": "room bookings", "follow-ups-without-owner": "follow-ups", "group-night-clashes": "group nights" } as const)[template];
 /** "at 9:06 AM" today on this Mac's clock, otherwise "on Sat at 7:02 AM". */
 export function atText(iso: string, now?: string): string {
@@ -234,7 +234,7 @@ export function atText(iso: string, now?: string): string {
   return d.toDateString() === (now ? new Date(now) : new Date()).toDateString() ? `at ${time}` : `on ${d.toLocaleDateString("en-US", { weekday: "short" })} at ${time}`;
 }
 /** The first line of a job's write-up: "Ozzie checked Wednesday at 9:06 AM:". */
-export const writeupHead = (item: Pick<NoticedItem, "template" | "at">, now?: string, d: DayWords = SUNDAY_WORDS) => `Ozzie checked ${checked(item.template, d)} ${atText(item.at, now)}:`;
+export const writeupHead = (item: Pick<NoticedItem, "template" | "at">, now?: string) => `Ozzie checked ${checked(item.template)} ${atText(item.at, now)}:`;
 /**
  * Said quietly on a job's card when AI help is set up and its run has no write-up, so the card is never blank about it.
  * A run paused during its write-up says nothing (none is kept), and "off" is shown nowhere (review H, L15).
@@ -255,10 +255,9 @@ export const WRITEUP_HOW = "The AI saw labels such as [Person 1] and [Role 1], n
 export const WRITEUP_CHECK = "Ozzie read Planning Center and worked out what it found itself, with no AI.";
 
 /** The title of what the AI wrote for a report whose decisions are on the service's card: what was written, never the decisions again. */
-export function preparedTitle(ready: { summary: string | null; draft: string | null }, d: DayWords = SUNDAY_WORDS): string {
-  const day = dayName(d);
-  return ready.summary && ready.draft ? `Ozzie wrote up where ${day} stands and drafted a note.`
-    : ready.draft ? `Ozzie drafted a note for ${day}.` : `Ozzie wrote up where ${day} stands.`;
+export function preparedTitle(ready: { summary: string | null; draft: string | null }): string {
+  return ready.summary && ready.draft ? `Ozzie wrote up where ${SERVICES} stand and drafted a note.`
+    : ready.draft ? `Ozzie drafted a note for ${SERVICES}.` : `Ozzie wrote up where ${SERVICES} stand.`;
 }
 /** Why a run couldn't finish or couldn't start, finishing "Couldn't finish: …". Says only what is known. */
 export function problemText(code: string | null | undefined): string {
@@ -301,7 +300,7 @@ export function statusText(r: Responsibility, pausedAll: boolean, problem = fals
 const AT_TIME = (iso: string, now?: string) => whenText(iso, now);
 /** The headline of one "Ozzie noticed" item. Names come only from `names`, resolved on this Mac. `d`: the watched service's day words. */
 export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUNDAY_WORDS): string {
-  const title = templateTitle(item.template, d);
+  const title = templateTitle(item.template);
   switch (item.kind) {
     case "found": {
       const parts: string[] = [];
@@ -326,7 +325,7 @@ export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUND
       const at = AT_TIME(item.scheduled_for ?? item.at, now);
       const why = item.code === "denied" && item.access ? "this connection doesn't include what it needs" : problemText(item.code);
       const next = item.retry_at ? ` It will try again at ${AT_TIME(item.retry_at, now)}.` : item.access ? " Add access under Settings, then it can check." : " It will try again at its next scheduled time.";
-      return `Ozzie couldn't check ${subject(item.template, d)} at ${at} — ${why}.${next}`;
+      return `Ozzie couldn't check ${subject(item.template)} at ${at} — ${why}.${next}`;
     }
     case "missed": {
       const at = AT_TIME(item.scheduled_for!, now), ran = AT_TIME(item.ran_at ?? item.at, now);
@@ -348,7 +347,7 @@ export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUND
     case "limit": return `${title} has used its checks for now. It will check again later, within its limits.`;
     // "As planned" only when it didn't miss any of its checks on the way.
     case "ended": return item.until
-      ? `${title} ended after ${dateText(item.until)}${item.missed_count ? "" : ", as planned"}. Anything still open is on ${pageRef(d)}.`
+      ? `${title} ended after ${dateText(item.until)}${item.missed_count ? "" : ", as planned"}. Anything still open is on ${pageRef()}.`
       : `${title} has ended.`;
   }
 }
@@ -368,10 +367,9 @@ const WEEK_MS = 7 * 86_400_000;
  * such job gets its own plain sentence. A run paused part-way isn't a problem, and one still running isn't
  * counted yet. Nothing ran this week: nothing to say (null). Job titles are fixed; no names.
  */
-export function weekRollup(jobs: readonly (Pick<Responsibility, "title" | "runs"> & Partial<Pick<Responsibility, "template">>)[], now: string,
-  d: DayWords = SUNDAY_WORDS): { line: string | null; problems: string[] } {
+export function weekRollup(jobs: readonly (Pick<Responsibility, "title" | "runs"> & Partial<Pick<Responsibility, "template">>)[], now: string): { line: string | null; problems: string[] } {
   const since = Date.parse(now) - WEEK_MS;
-  const ran = jobs.map(j => ({ title: j.template ? jobTitle({ template: j.template, title: j.title }, d) : j.title, runs: j.runs.filter(r => r.outcome !== null && Date.parse(r.started_at) > since && Date.parse(r.started_at) <= Date.parse(now)) }))
+  const ran = jobs.map(j => ({ title: j.template ? jobTitle({ template: j.template, title: j.title }) : j.title, runs: j.runs.filter(r => r.outcome !== null && Date.parse(r.started_at) > since && Date.parse(r.started_at) <= Date.parse(now)) }))
     .filter(j => j.runs.length > 0);
   if (!ran.length) return { line: null, problems: [] };
   const problems = ran.map(j => ({ title: j.title, total: j.runs.length, failed: j.runs.filter(r => r.outcome !== "ok" && r.code !== "cancelled").length }))

@@ -477,7 +477,7 @@ describe("Church rules says what the procedures are for, and that Sunday's own c
   it("names the three things that run them", async () => {
     const { HowOzzieChecks } = await import("../src/rules-page.js");
     const t = text(renderToStaticMarkup(React.createElement(HowOzzieChecks, { procedures: [...skills.values()] })));
-    expect(t).toContain("These are the steps the AI follows when Ozzie asks it for help: answering a question in Ask, writing up a job Ozzie keeps an eye on, and looking at who could help with a role. Ozzie's own checks of Sunday don't use them.");
+    expect(t).toContain("These are the steps the AI follows when Ozzie asks it for help: answering a question in Ask, writing up a job Ozzie keeps an eye on, and looking at who could help with a role. Ozzie's own checks of your services don't use them.");
     expect(t).not.toMatch(HIDDEN_WORDS);
   });
 });

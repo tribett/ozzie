@@ -203,7 +203,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     // A write-up is kept apart from the item (writeups), so the item never says whether one was written.
     expect(item).not.toHaveProperty("drafted");
     expect(item).not.toHaveProperty("summarized");
-    expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 3 things need a decision.");
+    expect(noticedTitle(item, FRI)).toBe("Keep services covered: 3 things need a decision.");
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.check).toHaveBeenCalledTimes(1);
     expect(h.lines).toContain("responsibility: created template=keep-sunday-covered lifetime=until:2026-11-22");
@@ -223,7 +223,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     await h.start(sunday());
     const item = h.runner.view().noticed[0]!;
     expect(item).toMatchObject({ kind: "found", decisions: page([]).decisions, looks: page([]).looks });
-    expect(noticedTitle(item, FRI)).toBe("Keep Sunday covered: 3 things need a decision.");
+    expect(noticedTitle(item, FRI)).toBe("Keep services covered: 3 things need a decision.");
     // A role the leader settled on the Sunday page isn't counted here either.
     const need = buildSundayBrief(captureAt(FRI), CONTEXT_RULES, FRI).findings.find(f => f.kind === "needs-people")!;
     const settled = [decide(need, "covered-outside", "A parent is covering", FRI)];
@@ -231,7 +231,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     await d.start(sunday());
     expect(d.runner.view().noticed[0]).toMatchObject({ decisions: page(settled).decisions, looks: page(settled).looks });
     expect(page(settled).decisions).toBe(2);
-    expect(noticedTitle(d.runner.view().noticed[0]!, FRI)).toBe("Keep Sunday covered: 2 things need a decision.");
+    expect(noticedTitle(d.runner.view().noticed[0]!, FRI)).toBe("Keep services covered: 2 things need a decision.");
   });
 
   it("the morning briefing's run line says the Sunday page's count too, never Services alone beside its follow-ups (polish pass)", async () => {
@@ -330,7 +330,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     await h.runner.tick();
     const item = h.runner.view().noticed[0]!;
     expect(item).toMatchObject({ kind: "couldnt-check", code: "provider-failure", retry_at: "2026-11-20T18:00:00.000Z", notice: "sent" });
-    expect(noticedTitle(item, "2026-11-20T17:00:00.000Z")).toMatch(/^Ozzie couldn't check Sunday at .+ — Planning Center didn't answer\. It will try again at .+\.$/u);
+    expect(noticedTitle(item, "2026-11-20T17:00:00.000Z")).toMatch(/^Ozzie couldn't check your services at .+ — Planning Center didn't answer\. It will try again at .+\.$/u);
     expect(h.notify).toHaveBeenCalledWith("couldnt-check");
     expect(h.fake.calls.at(-1)).toBe("end failed provider-failure 0 0");
     h.set("2026-11-20T18:00:00.000Z");
@@ -646,7 +646,7 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     const ended = h.runner.view().noticed.filter(i => i.kind === "ended");
     expect(ended).toHaveLength(1);
     expect(h.runner.view().noticed.some(i => i.kind === "missed")).toBe(false);
-    expect(noticedTitle(ended[0]!)).toBe("Keep Sunday covered ended after Sunday, November 22, as planned. Anything still open is on the Sunday page.");
+    expect(noticedTitle(ended[0]!)).toBe("Keep services covered ended after Sunday, November 22, as planned. Anything still open is on the Services page.");
   });
 
   it("before saying it ended, says which checks it missed, and doesn't call that “as planned”", async () => {
@@ -665,9 +665,9 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     const [ended, missed] = again.view().noticed;
     expect(missed).toMatchObject({ kind: "missed", before_end: true, missed_count: 2, scheduled_for: "2026-11-21T22:00:00.000Z", missed_reason: "closed" });
     expect(missed!.ran_at).toBeUndefined();
-    expect(noticedTitle(missed!, monday)).toMatch(/^Ozzie wasn't running at .+ and 1 other time, and Keep Sunday covered ended before it could check again\.$/u);
+    expect(noticedTitle(missed!, monday)).toMatch(/^Ozzie wasn't running at .+ and 1 other time, and Keep services covered ended before it could check again\.$/u);
     expect(ended).toMatchObject({ kind: "ended", missed_count: 2 });
-    expect(noticedTitle(ended!)).toBe("Keep Sunday covered ended after Sunday, November 22. Anything still open is on the Sunday page.");
+    expect(noticedTitle(ended!)).toBe("Keep services covered ended after Sunday, November 22. Anything still open is on the Services page.");
     // Nothing ran after the end.
     expect(h.fake.calls.filter(c => c.startsWith("begin"))).toEqual(["begin start", ...Array(4).fill("begin scheduled")]);
   });
@@ -741,7 +741,7 @@ describe("something due that can't run never asks to be woken now (no busy loop)
     await h.start(sunday());
     const item = h.runner.view().noticed[0]!;
     expect(item).toMatchObject({ kind: "couldnt-check", code: "unavailable", retry_at: at(FRI, RETRY_MS / 60_000), notice: "in-app" });
-    expect(noticedTitle(item, FRI)).toMatch(/^Ozzie couldn't check Sunday at .+ — its list of what to keep an eye on couldn't be read on this Mac\. It will try again at .+\.$/u);
+    expect(noticedTitle(item, FRI)).toMatch(/^Ozzie couldn't check your services at .+ — its list of what to keep an eye on couldn't be read on this Mac\. It will try again at .+\.$/u);
     expect(await wakesFromTheNativeTimer(h)).toBe(0);
     h.fake.refuse.always = null;
     h.set(at(FRI, RETRY_MS / 60_000));

@@ -7,7 +7,7 @@ import { useDay } from "./day-words.js";
 import { BY_DESIGN_OUTCOME, NOT_YET_OUTCOME, READ_LABELS, readOutcome, useSystemWords } from "./church-system.js";
 import { SYSTEMS, type CapturePart, type SystemId } from "../../../core/src/church-systems/types.js";
 import { PART_NAMES, shortByDesign } from "../../../core/src/church-systems/reads.js";
-import { dayName, pageRef } from "./day-phrases.js";
+import { pageRef, SERVICES } from "./day-phrases.js";
 import { promise, systemPromise } from "./promises.js";
 import { OLLAMA, ollamaDoneSaid } from "./ai-words.js";
 import type { OllamaHistory } from "./onboarding-bridge.js";
@@ -180,7 +180,6 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
   /** Each time Ozzie got Ollama (native `ollama_install_history`), oldest first: a time and a closed word, never a path. */
   ollama?: OllamaHistory["done"] | null;
 }) {
-  const d = useDay();
   const w = useSystemWords();
   return <div className="col">
     <p className="eyebrow">What happened</p>
@@ -199,7 +198,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
     </section>}
     {system && <section className="stack" aria-labelledby="reads-title">
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
-      {!system.check && <p className="panel-sunken">No check has run yet. Every read appears here once {dayName(d)} is checked.</p>}
+      {!system.check && <p className="panel-sunken">No check has run yet. Every read appears here once {SERVICES} are checked.</p>}
       {system.check && <>
         <p className="checkline">{system.name} · started {new Date(system.check.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {system.check.reads.length} reads</p>
         <ol className="log">{system.check.reads.map((r, i) => {
@@ -215,7 +214,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
     </section>}
     {!system && <section className="stack" aria-labelledby="reads-title">
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
-      {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {dayName(d)} is checked, or when you open the fictional example on {pageRef(d)}.</p>}
+      {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {SERVICES} are checked, or when you open the fictional example on {pageRef()}.</p>}
       {capture && <>
         <p className="checkline">{capture.kind === "recording" ? "Saved copy of a check" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
         <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>

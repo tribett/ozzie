@@ -79,7 +79,7 @@ describe("Ask Ozzie panel", () => {
     expect(text(html)).toContain("Riley Thornbury has no overlap found for Greeter.");
     expect(html).toContain("Based on: fictional example data as of");
     expect(html).toContain("See how this works");
-    expect(html).toContain(">Open Sunday<");
+    expect(html).toContain(">Open Services<");
     expect(html).not.toMatch(/\[(?:Person|Role) \d+\]|Approve|>\s*Send/u);
   });
 
@@ -208,7 +208,7 @@ describe("Ask Ozzie panel", () => {
     const answer = await shown();
     const html = panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "answered", answer }] });
     expect(html).toMatch(/<article class="find ask-card" aria-labelledby="ask-q-1"><div class="find-top"><span class="badge b-ok">Answered<\/span><span class="find-where">Ask Ozzie<\/span><\/div><h3 id="ask-q-1" class="find-title ask-q">Who could cover Greeter\?<\/h3>/u);
-    expect(text(html)).toMatch(/Riley Thornbury has no overlap found for Greeter\. .*Based on: fictional example data as of .* Open Sunday See how this works/u);
+    expect(text(html)).toMatch(/Riley Thornbury has no overlap found for Greeter\. .*Based on: fictional example data as of .* Open Services See how this works/u);
     expect(html).not.toMatch(/msg-me|msg-oz|class="thread/u);
     // Suggested questions wrap rather than scroll off the panel's edge.
     expect(html).not.toContain("is-compact");
@@ -255,7 +255,7 @@ describe("Ask Ozzie panel", () => {
 
   it("names itself on two lines that never wrap mid-phrase: Ask Ozzie, then quieter, what it answers (owner's read of 0.3.2)", () => {
     const html = panel();
-    expect(html).toContain('<div class="ask-head"><span class="ask-head-title">Ask Ozzie</span><span class="ask-head-scope">Questions about Sunday</span></div>');
+    expect(html).toContain('<div class="ask-head"><span class="ask-head-title">Ask Ozzie</span><span class="ask-head-scope">Questions about your services</span></div>');
     expect(text(html)).not.toMatch(/\(questions about/iu);
     const css = readFileSync(new URL("../src/ask-panel.css", import.meta.url), "utf8");
     // Stacked in the 56px header; each line one line at 360–420px (an ellipsis only if a panel were narrower still).
@@ -392,7 +392,7 @@ describe("Ask before anything is connected, and what Ozzie can do (owner decisio
     expect(text(html)).toContain(ASK_START);
     expect(text(html)).toContain("Nothing was sent.");
     expect(html).toContain(">Open Settings</button>");
-    expect(html).toContain(">Open Sunday</button>");
+    expect(html).toContain(">Open Services</button>");
     expect(html).not.toMatch(/role="alert"/u);
     expect(text(html)).not.toMatch(HIDDEN_WORDS);
   });
@@ -425,14 +425,14 @@ describe("Ask before anything is connected, and what Ozzie can do (owner decisio
     const how = text(renderToStaticMarkup(React.createElement(HowItWorks, { answer })));
     expect(how).toContain("Ozzie asked the AI twice.");
     expect(how).toContain("The AI's answer listed more than 24 facts, so Ozzie wrote this answer itself from what it read.");
-    expect(how).toContain("so Ozzie set it aside and wrote this answer itself on this Mac from the same check: its counts, then each open decision in the order the Sunday page shows them.");
+    expect(how).toContain("so Ozzie set it aside and wrote this answer itself on this Mac from the same check: its counts, then each open decision in the order the Services page shows them.");
     // Never what an answer from the AI's own choice says.
     expect(how).not.toContain("The AI only chose which facts answer your question");
     expect(how).not.toContain("The AI answered with a list of facts");
     expect(how).not.toMatch(HIDDEN_WORDS);
     // A Wednesday service names its own page.
     const wed = text(renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() }, React.createElement(HowItWorks, { answer }))));
-    expect(wed).toContain("in the order the Wednesday page shows them.");
+    expect(wed).toContain("in the order the Services page shows them.");
   });
 });
 
@@ -453,24 +453,24 @@ describe("Ask Ozzie for a Wednesday service", () => {
 
   it("asks about this Wednesday, says what Ask is for, and suggests Wednesday's questions", () => {
     const html = wedPanel();
-    expect(html).toContain('placeholder="Ask about this Wednesday…"');
+    expect(html).toContain('placeholder="Ask about your services…"');
     // Its name, then under it, quieter, what it answers: one line each, no parentheses (owner's read of 0.3.2).
-    expect(html).toMatch(/<div class="convo-head"><svg[^>]*>.*?<\/svg><div class="ask-head"><span class="ask-head-title">Ask Ozzie<\/span><span class="ask-head-scope">Questions about Wednesday<\/span><\/div><span class="spacer"><\/span>/u);
+    expect(html).toMatch(/<div class="convo-head"><svg[^>]*>.*?<\/svg><div class="ask-head"><span class="ask-head-title">Ask Ozzie<\/span><span class="ask-head-scope">Questions about your services<\/span><\/div><span class="spacer"><\/span>/u);
     expect(text(html)).not.toMatch(/\(questions about/iu);
     expect(text(html)).toContain("What still needs a decision this Wednesday?");
     expect(text(html)).not.toMatch(/sunday/iu);
   });
 
-  it("before anything is checked, points to the Wednesday page and opens it by name", () => {
+  it("before anything is checked, points to the Services page and opens it by name", () => {
     const html = wedPanel({ brief: null, page: "today" });
-    expect(text(html)).toContain("check Planning Center on the Wednesday page.");
-    expect(html).toContain(">Open Wednesday</button>");
+    expect(text(html)).toContain("check Planning Center on the Services page.");
+    expect(html).toContain(">Open Services</button>");
     expect(text(html)).not.toMatch(/sunday/iu);
   });
 
-  it("a refusal that points to the Sunday page points to the Wednesday page instead", () => {
+  it("a refusal that points to the Sunday page points to the Services page instead", () => {
     const html = inWednesday(React.createElement(TurnBody, { turn: { id: 1, question: "q", state: "refused", text: REFUSALS.background } as Turn, onOpen: () => {} }));
-    expect(text(html)).toContain("look at the Wednesday page.");
+    expect(text(html)).toContain("look at the Services page.");
     expect(text(html)).not.toMatch(/sunday/iu);
   });
 });

@@ -229,7 +229,7 @@ export function FromYourCards({ feedback }: { feedback: FeedbackControls | null 
   </li>;
   return <section className="find from-cards" aria-labelledby="from-cards-title">
     <h2 id="from-cards-title" className="h3">What you've told Ozzie</h2>
-    <p className="find-body">What you said on findings on {pageRef(d)} and Today. Each applies right away, using what was already read, and to every later check; delete one here any time. Nothing here changes {useSystemWords().name}.</p>
+    <p className="find-body">What you said on findings on {pageRef()} and Today. Each applies right away, using what was already read, and to every later check; delete one here any time. Nothing here changes {useSystemWords().name}.</p>
     {!feedback.entries.length && <p className="small">Nothing yet. On a finding, choose “This isn't right”, “Stop flagging this”, “Always do this”, “Always tell me right away” or “Put this in the briefing”, and it shows here.</p>}
     {stops.length > 0 && <><h3 className="bold">Don't flag</h3>
       <ul className="list">{stops.map(e => row(e, stopText(e, who), "Start flagging this again", "Ozzie flags this again, starting now."))}</ul></>}
@@ -240,7 +240,7 @@ export function FromYourCards({ feedback }: { feedback: FeedbackControls | null 
         <span className="small">{URGENCY_NOW[e.level](e.kind, d)}</span>))}</ul></>}
     {corrections.length > 0 && <><h3 className="bold">Corrections you've made</h3>
       <ul className="list">{corrections.map(e => row(e, `${correctionSubject(e, who)}${e.labels.occurrence ? `, ${e.labels.occurrence}` : ""}`, "Delete my correction",
-        hidesFinding(e) ? `Your correction is deleted. If Planning Center still shows it, it's back on ${pageRef(d)}.` : "Your note is deleted.",
+        hidesFinding(e) ? `Your correction is deleted. If Planning Center still shows it, it's back on ${pageRef()}.` : "Your note is deleted.",
         <span className="small">{e.note ? `You said: “${e.note}”` : e.what === "person" ? "You said a person's details were wrong." : e.what === "other" ? "You said something else wasn't right." : "You said this wasn't right."} {
           !hidesFinding(e) ? "It still shows." : e.kind === "attention" ? "Hidden for that import only." : "Hidden for that service only, while Planning Center shows the same."}</span>))}</ul></>}
   </section>;

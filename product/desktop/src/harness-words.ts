@@ -269,7 +269,7 @@ export function overviewCut(e: Partial<Pick<ToolEnvelope, "tool" | "payload">>):
 }
 /** Said under Worth a look for an overview cut to fit: rows left out of the answer, never that Planning Center couldn't be read. */
 export const leftOutOfAnswer = (source: string, n: number) =>
-  `${source}: the list was too long to say in full, so ${n === 1 ? "1 finding was" : `${n} findings were`} left out of this answer. ${n === 1 ? "It's" : "They're"} on the Sunday page.`;
+  `${source}: the list was too long to say in full, so ${n === 1 ? "1 finding was" : `${n} findings were`} left out of this answer. ${n === 1 ? "It's" : "They're"} on the Services page.`;
 /** A step's words for how much of a read it had: an overview cut only to fit is "a shortened list", as who could help says it. */
 const stepStatus = (e: Pick<ToolEnvelope, "completeness"> & Partial<Pick<ToolEnvelope, "tool" | "payload">>, status: string) =>
   status === "partial" && overviewCut(e).only ? "a shortened list" : STATUS_WORDS[status];
@@ -518,7 +518,7 @@ export function taskLine(row: TaskRow, options: { procedures?: ReadonlyMap<strin
   } else {
     // A job's run is named by the job; anything else by its procedure.
     const template = options.trigger?.startsWith("job:") ? options.trigger.split(":")[1] as TemplateId : undefined;
-    const job = template && Object.hasOwn(TEMPLATES, template) ? templateTitle(template, d) : undefined;
+    const job = template && Object.hasOwn(TEMPLATES, template) ? templateTitle(template) : undefined;
     const procedure = row.kind === "skill" ? job ?? procedureTitle(options.procedures?.get(row.skill_id)?.title, d) ?? "A check Ozzie ran" : null;
     title = row.kind === "ask" ? row.state === "verified" ? options.trigger === "on-this-mac" ? "Answered on this Mac" : "Answered a question" : "A question" : procedure!;
     outcome = row.state === "verified" ? `checked · ${things(tools.length)}` : null;
@@ -540,8 +540,8 @@ const JOB_WHY: Readonly<Record<RunTrigger, string>> = Object.freeze({
   change: "because something changed", manual: "when you chose Check now",
 });
 const timesText = (n: number) => n === 1 ? "once" : n === 2 ? "twice" : `${n} times`;
-/** "Keep Wednesday covered ran on schedule, at 9:00 AM." */
-export const jobStarted = (template: TemplateId, trigger: RunTrigger, at: string, d: DayWords = SUNDAY_WORDS) => `${templateTitle(template, d)} ran ${JOB_WHY[trigger]}, at ${at}.`;
+/** "Keep services covered ran on schedule, at 9:00 AM." */
+export const jobStarted = (template: TemplateId, trigger: RunTrigger, at: string) => `${templateTitle(template)} ran ${JOB_WHY[trigger]}, at ${at}.`;
 /** "Ozzie asked the AI twice." with what the AI does, or that no AI was used and why. */
 export function aiText(kind: TaskRow["kind"], start: TaskStart | undefined, asked: number, verified: boolean, unanswered = false, source = "Planning Center"): string {
   if (kind === "check") return `No AI was used: this was Ozzie's own check of ${source}.`;
@@ -564,7 +564,7 @@ export function taskAccount(row: TaskRow, options: { start?: TaskStart | undefin
     const of = options.source ?? "Planning Center";
     started = start === "manual" ? `You asked Ozzie to check ${of} at ${at}.` : start === "automatic" ? `Ozzie checked ${of} on its own at ${at}.` : `Ozzie checked ${of} at ${at}.`;
   } else if (row.kind === "ask") started = `You asked a question at ${at}.`;
-  else if (job) started = jobStarted(job[1], job[2], at, d);
+  else if (job) started = jobStarted(job[1], job[2], at);
   else if (start === "who-could-help") started = `You asked Ozzie to look at who could help with a role, at ${at}.`;
   else started = `${procedureTitle(options.procedures?.get(row.skill_id)?.title, d) ?? "A check Ozzie runs"} ran at ${at}.`;
   // Which parts a church system's check didn't read in full, when kept beside it: said after its read and its ending.

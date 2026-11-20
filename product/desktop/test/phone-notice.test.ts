@@ -583,7 +583,7 @@ describe("the phone notice rides on the notices the page already holds back", ()
     };
   }
 
-  it("Keep Sunday covered: a background check newly found missing stays on this Mac; with an open role too, the phone line goes", async () => {
+  it("Keep services covered: a background check newly found missing stays on this Mac; with an open role too, the phone line goes", async () => {
     for (const mixed of [false, true]) {
       const h = keepSundayCovered();
       await h.start();

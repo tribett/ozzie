@@ -6,7 +6,7 @@ import { INTERVAL_CHOICES, type HistoryEntry, type ProactiveController, type Pro
 import { Icon } from "./icons.js";
 import { EYE_ABOUT, QUIT_LINE, WATCH_HOW } from "./responsibility-words.js";
 import { useDay } from "./day-words.js";
-import { dayName, eyeLine, keepTitle, noticeDayOf, noticeLine } from "./day-phrases.js";
+import { eyeLine, keepTitle, noticeDayOf, noticeLine, SERVICES } from "./day-phrases.js";
 import { promise } from "./promises.js";
 import { CHECK_REFUSED } from "./sunday-source.js";
 import { CopyForAdministrator } from "./planning-center-forms.js";
@@ -75,10 +75,10 @@ const why: Record<RunTrigger, string> = {
 };
 /** With its window on screen, Ozzie reads again once what it shows is this old (App's stale refresh, core LIVE_CHECK_VALID_MS). */
 const FRESH_MINUTES = LIVE_CHECK_VALID_MS / 60_000;
-const notice = (d: DayWords): Record<NonNullable<HistoryEntry["notice"]>, string | null> => ({
+const notice = (): Record<NonNullable<HistoryEntry["notice"]>, string | null> => ({
   sent: "Notice sent", held: "Notice waiting for quiet hours to end", "sent-later": "Notice sent after quiet hours",
   "in-app": "Seen in Ozzie", unavailable: "The Mac didn't show the notice", briefing: "Kept for your briefing, as your Church rules say",
-  handed: `${keepTitle(d)} is checking this`, responsibility: `${keepTitle(d)} took care of the notice`, none: null,
+  handed: `${keepTitle()} is checking this`, responsibility: `${keepTitle()} took care of the notice`, none: null,
 });
 const RECENT_MS = 24 * 3_600_000;
 
@@ -108,7 +108,7 @@ function Entry({ entry, names, d }: { entry: HistoryEntry; names: Names; d: DayW
   return <li className={attention ? "is-problem" : ""}>
     <span className="log-t">{time(entry.at)}</span>
     <div>{body}</div>
-    <span className="small">{entry.notice ? notice(d)[entry.notice] : ""}</span>
+    <span className="small">{entry.notice ? notice()[entry.notice] : ""}</span>
   </li>;
 }
 
@@ -146,7 +146,8 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
   const d = useDay();
   // The church's own system (Planning Center's words unchanged): a church on B1 Church or Breeze is kept watch over the same way.
   const w = useSystemWords();
-  const day = dayName(d);
+  // Ozzie's hourly look is at "your services", whatever day they are on (owner decision 2026-11-19).
+  const day = SERVICES;
   const last = schedule.last_run;
   const latest = view.latest[`${organization}:${planId}`];
   const running = busy || view.running;
@@ -192,7 +193,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
       {/* The church by its name, as a job's card says it (spec §6); never its organization number. */}
       <div className="find-top">{state}<span className="find-where">{!organization ? `${w.services}, not connected yet`
         : church ? `${w.services}, ${church}` : w.services}</span></div>
-      <Title id="job-title" className="find-title">{eyeLine(d)}</Title>
+      <Title id="job-title" className="find-title">{eyeLine()}</Title>
       <p className="find-body">{EYE_ABOUT}</p>
       {/* Where it stands first, then what it does. The time zone is said under Schedule and quiet hours. */}
       <div className="sp">

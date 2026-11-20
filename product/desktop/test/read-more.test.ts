@@ -331,7 +331,7 @@ describe("pressing it: Settings' own sign-in", () => {
     expect(sent("set_operations_reads")).toEqual([]);
     await page.show(GRANTED);
     expect(sent("set_operations_reads")).toEqual([{ on: true, pressed: false }]);
-    expect(dom.seen()).toContain("Planning Center added Calendar, People and Groups. Ozzie reads rooms, follow-ups and group meetings from its next check of Sunday.");
+    expect(dom.seen()).toContain("Planning Center added Calendar, People and Groups. Ozzie reads rooms, follow-ups and group meetings from its next check of your services.");
     expect(dom.button(MORE_CHECK)).not.toBeNull();
     expect(dom.seen()).not.toContain(MORE_LEAD);
     await page.unmount();
@@ -358,7 +358,7 @@ describe("pressing it: Settings' own sign-in", () => {
     expect(sent("connect_planning_center_app")).toEqual([]);
     // A person's press, with the access held: native allows it.
     expect(sent("set_operations_reads")).toEqual([{ on: true, pressed: true }]);
-    expect(dom.seen()).toContain("Ozzie reads rooms, follow-ups and group meetings from its next check of Sunday.");
+    expect(dom.seen()).toContain("Ozzie reads rooms, follow-ups and group meetings from its next check of your services.");
     await page.unmount();
   });
 

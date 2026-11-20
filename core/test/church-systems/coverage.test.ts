@@ -295,7 +295,7 @@ describe("the service's real day", () => {
     for (const day of ["2026-11-25", null]) {
       const result = mapped(b1Capture({ service: { id: "PLA-wed", day, starts_at: "2026-11-25T18:30:00-06:00", ends_at: "2026-11-25T20:00:00-06:00", shared: true } }));
       expect(result.time_zone).toBe("America/Chicago");
-      expect(result.day, String(day)).toMatchObject({ kind: "weekday", weekday: 3, day: "Wednesday", question: "Is Wednesday covered?", date: "Wednesday, November 25" });
+      expect(result.day, String(day)).toMatchObject({ kind: "weekday", weekday: 3, day: "Wednesday", question: "Are your services covered?", date: "Wednesday, November 25" });
     }
   });
 

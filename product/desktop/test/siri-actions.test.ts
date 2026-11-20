@@ -93,7 +93,7 @@ describe("the Siri actions' source", () => {
     const phrases = [...code(read(ACTIONS)).matchAll(/phrases: \[([^\]]*)\]/gu)].flatMap(m => literals(m[1]!));
     expect(phrases.length).toBeGreaterThanOrEqual(6);
     for (const phrase of phrases) expect(phrase, phrase).toContain("\\(.applicationName)");
-    for (const title of ["Is Sunday covered", "Open Ozzie's Sunday page", "Open Ozzie's Today page"]) expect(words).toContain(`"${title}"`);
+    for (const title of ["Are my services covered", "Open Ozzie's Services page", "Open Ozzie's Today page"]) expect(words).toContain(`"${title}"`);
   });
 });
 
@@ -161,6 +161,8 @@ describe.skipIf(appexWhy !== null)("the built Siri actions (binaries/OzzieIntent
 // The check program: the Siri actions' own Swift (shared answers and actions, without the extension's entry point)
 // with a small main that calls what each action's perform() calls, for a home folder given on the command line, and
 // (`ozzie`) the Ozzie that an extension at a given path came with.
+/** Apple's module builds for the check program's compile, kept between runs (see the compile below). */
+const MODULE_CACHE = join(tmpdir(), "ozzie-siri-actions-module-cache");
 const CHECK_MAIN = `import Foundation
 @main
 enum SiriActionsCheck {
@@ -201,11 +203,16 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
     writeFileSync(join(work, "answers.js"), script);
     writeFileSync(join(work, "check.swift"), CHECK_MAIN);
     const arch = process.arch === "arm64" ? "arm64" : "x86_64";
-    const compiled = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", "-target", `${arch}-apple-macos14.0`, "-module-cache-path", join(work, "mc"),
+    // The SDK's module cache (Foundation, AppKit, AppIntents) is kept between runs: built afresh in each run's own folder it
+    // took about 3 minutes on this Mac whatever the actions' code (timed 2026-11-19 at load 6-10: 180 s for 0.4.1's actions,
+    // 194 s for "Services"; 4.4 s each with the cache kept), and under heavy load ran past the 240 s limit. The cache holds
+    // only Apple's own module builds, keyed by compiler and SDK, so a kept one is never stale. The first run on a Mac
+    // still builds it, so its time limit allows for that under load.
+    const compiled = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", "-target", `${arch}-apple-macos14.0`, "-module-cache-path", MODULE_CACHE,
       "-o", CHECK, new URL(SHARED, SRC).pathname, new URL(ACTIONS, SRC).pathname, join(work, "check.swift"),
-      "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__ozzie_answers", "-Xlinker", join(work, "answers.js")], { timeout: 240_000 });
+      "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__ozzie_answers", "-Xlinker", join(work, "answers.js")], { timeout: 540_000 });
     expect(compiled.status, compiled.stderr.toString()).toBe(0);
-  }, 300_000);
+  }, 600_000);
   afterAll(() => { rmSync(work, { recursive: true, force: true }); });
 
   const homes: string[] = [];

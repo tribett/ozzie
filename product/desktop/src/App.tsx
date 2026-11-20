@@ -60,7 +60,7 @@ import { useOperationsReads } from "./operations-reads.js";
 import { PhoneMoment, phoneMomentNow } from "./phone-moment.js";
 import { CheckMySetup } from "./check-setup.js";
 import { hasPassed, moveOn, WAIT_AGAIN_MS, waitingText, type WatchedPlan } from "./move-on.js";
-import { dayName, keepTitle, noticeDayOf } from "./day-phrases.js";
+import { keepTitle, noticeDayOf } from "./day-phrases.js";
 import { onboarding, type ModelProgress, type NoticeDay, type OllamaHistory, type OllamaProgress } from "./onboarding-bridge.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { pausedWhen, type ModelStatus } from "./model.js";
@@ -99,18 +99,15 @@ import { ListsSystemName } from "./church-notes.js";
 import { refusalLine, SystemNotices } from "./system-pages.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
-/** The sidebar's pages. The service's own page is named by its real day ("Sunday", "Saturday", "This weekend"). */
+/** The sidebar's pages. The services' own page is "Services", whatever day they are on (owner decision 2026-11-19). */
 const navFor = (day: DayWords): { id: Page; label: string; icon: string }[] => [
   { id: "today", label: "Today", icon: "clock" }, { id: "sunday", label: day.page, icon: "sun" }, { id: "cards", label: "Visitor cards", icon: "user" },
   { id: "rules", label: "Church rules", icon: "rules" }, { id: "lists", label: "Church lists", icon: "table" },
   { id: "automatic", label: "Keeping watch", icon: "repeat" },
   { id: "activity", label: "What happened", icon: "history" }, { id: "connection", label: "Settings", icon: "sliders" },
 ];
-/**
- * A page named mid-sentence ("Back to Today"): the service's page as a sentence says it ("Sunday", "this weekend", "your
- * service"), every other page by its sidebar name.
- */
-export const backToName = (page: Page, day: DayWords): string => page === "sunday" ? dayName(day) : navFor(day).find(n => n.id === page)?.label ?? "Today";
+/** A page named mid-sentence ("Back to Today", "Back to Services"): every page by its sidebar name. */
+export const backToName = (page: Page, day: DayWords): string => navFor(day).find(n => n.id === page)?.label ?? "Today";
 /** The sidebar's first entry while setup is unfinished (review M11). */
 export const SETTING_UP = "Setting up";
 const WATCHED_DAY = "ozzie.watched-day.v1";
@@ -1331,7 +1328,7 @@ export function App() {
           church={sys.connection?.church_name ?? null} readiness={systemReadiness} busy={sys.busy} now={now}
           churchTimeZone={sys.capture?.church.time_zone ?? sys.connection?.zone ?? null}
           onCheckNow={systemCheck} onPause={() => systemProactive.pause()} onResume={() => systemProactive.resume()} onPrefs={setPrefs}
-          note={words.notHere(`${keepTitle(day)}, the morning briefing and other jobs`, true)} notReady={systemNotReady} />}
+          note={words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true)} notReady={systemNotReady} />}
         {page === "automatic" && !onSystem && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId} church={inUse?.name ?? null}
           readiness={readiness} shownReadiness={shownReadiness} busy={busy} now={now} churchTimeZone={churchZone}
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={setPrefs}
@@ -1378,7 +1375,7 @@ export function App() {
       {quitAsk && <QuitQuestion ask={quitAsk} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
       <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={brief} modelReady={modelReady} onOpen={setPage}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
-        page={showSetup ? "setup" : page} {...(onSystem ? { jobsNotHere: { parse: plans.parse, text: words.notHere(`${keepTitle(day)}, the morning briefing and other jobs`, true) } } : { plans })} />
+        page={showSetup ? "setup" : page} {...(onSystem ? { jobsNotHere: { parse: plans.parse, text: words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true) } } : { plans })} />
     </div>
   </div></ChooseAiContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
 }

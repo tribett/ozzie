@@ -1,6 +1,6 @@
-import { titleOnlyDate } from "../../../core/src/service-day.js";
+import { timesText, titleOnlyDate } from "../../../core/src/service-day.js";
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { blockoutCounted, blockoutRoles, blockoutTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutCounted, blockoutRoles, blockoutTime, byServiceTime, findingTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { useSystemWords, type SystemWords } from "./church-system.js";
@@ -1155,6 +1155,10 @@ export function SundayPage(props: {
   // The plan's own title, unless it only says the date the eyebrow already names (round 3: "Sunday Nov 22").
   const titled = brief?.plan.title?.trim() || null;
   const planTitle = titled && brief?.plan.date && titleOnlyDate(titled, brief.plan.date) ? null : titled;
+  // Under the page's question, the facts of the plan checked: its day and date, then its service times on the church's
+  // clock ("Sunday, November 22 · 9:30 AM and 11:00 AM"), then its own title.
+  const dateText = brief?.day?.date ?? brief?.plan.dates ?? d.date ?? DayName(d);
+  const timeText = brief ? timesText(brief.times ?? [], brief.time_zone) : null;
   const setAside = [...(brief?.hidden ?? []).map(h => h.entry), ...(props.operations?.hidden ?? []).map(h => h.entry)];
   const stamp = useMemo(() => brief ? time(brief.checked_at ?? brief.completed_at) : null, [brief]);
   const view = useMemo(() => brief ? applyDecisions(brief, decisions) : null, [brief, decisions]);
@@ -1168,6 +1172,12 @@ export function SundayPage(props: {
   // Incomplete checks first, then anything that came back, then Planning Center's order.
   const rank = (i: DecidedItem) => i.finding.kind === "worth-a-look" ? 0 : i.state === "reopened" ? 1 : 2;
   const open = view ? view.items.filter(i => i.state !== "resolved").sort((a, b) => rank(a) - rank(b)) : [];
+  // A plan with two or more service times (9:00 and 11:00): each time's findings under its own heading, so a pastor sees
+  // what each service needs (core sunday-brief.ts byServiceTime, from the times the findings carry). A check that couldn't
+  // be completed stays first, above them all; with one time, everything is listed together as before.
+  const lead = open.filter(i => i.finding.kind === "worth-a-look");
+  const timed = brief ? byServiceTime(open.filter(i => i.finding.kind !== "worth-a-look"), i => findingTime(i.finding), brief.times, brief.time_zone) : null;
+  const groups = timed && timed.some(g => g.items.length > 0) ? timed : null;
   const resolved = view ? view.items.filter(i => i.state === "resolved") : [];
   const history = view?.history ?? [];
   // Opened from Today at one card: move there once it's laid out, with its people (and their Prepare a note) open.
@@ -1181,10 +1191,14 @@ export function SundayPage(props: {
   }, [props.focus, brief]);
   const onDecide = (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) =>
     onDecisions(withDecision(decisions, decide(finding, choice, reason, new Date().toISOString(), previous)));
+  const card = (i: DecidedItem) => brief && <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword}
+    onDecide={onDecide} whoCouldHelp={props.whoCouldHelp} asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter}
+    planId={brief.plan.id} titleRef={titleRef(i.finding.key)} pane={props.pane} feedback={controls} occurrence={occurrence} beside={props.beside}
+    people={brief.mode === "fictional" ? null : props.people} />;
   return <div className="col">
     {/* The plan's own title from Planning Center, after its date as the plan picker shows it (click-through, 2026-11-19:
         added to the lede, it read as a sentence of its own). In its own case, and wrapped whole when long. */}
-    <p className="eyebrow">{brief?.plan.dates ?? d.date ?? DayName(d)}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
+    <p className="eyebrow">{dateText}{timeText && ` · ${timeText}`}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
     <h1 className="h1">{d.question}</h1>
     {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />Saved copy of the check from {time(brief.completed_at)}. This is not a current check.</p>}
     {/* The fictional example's band is across the top of every page (App.tsx ExampleBand); the line below still says it. */}
@@ -1229,15 +1243,18 @@ export function SundayPage(props: {
     {brief && <section className="stack" aria-labelledby="sunday-open-title">
       <h2 id="sunday-open-title" className="sr-only">Open for {d.thisOne}</h2>
       {notice}
-      {open.map(i => <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword} onDecide={onDecide} whoCouldHelp={props.whoCouldHelp}
-        asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter} planId={brief.plan.id} titleRef={titleRef(i.finding.key)} pane={props.pane}
-        feedback={controls} occurrence={occurrence} beside={props.beside} people={brief.mode === "fictional" ? null : props.people} />)}
-      {props.worthALook}
+      {(groups ? lead : open).map(card)}
+      {!groups && props.worthALook}
       {roster && <RosterSection roster={roster} names={names} source={source} at={brief.checked_at ?? brief.completed_at} />}
       {brief.findings.length === 0 && !roster && <p className="lede">{brief.hidden?.length ? "Nothing open in what was read, apart from what your Church rules set aside below."
         : "No open needs, pending requests or Church-rule check-ins in what was read."}</p>}
       {brief.findings.length > 0 && open.length === 0 && <p className="lede">Everything left is something you resolved yourself, below.</p>}
     </section>}
+    {brief && groups?.map((g, n) => <section key={g.at ?? "none"} className="stack service-time" aria-labelledby={`service-time-${n}`}>
+      <h2 id={`service-time-${n}`} className="h3">{g.at ? `${g.label} service` : g.label}</h2>
+      {g.items.length ? g.items.map(card) : <p className="small">Nothing open for this service time in what was read.</p>}
+    </section>)}
+    {brief && groups && props.worthALook && <section className="stack" aria-label="Also worth a look">{props.worthALook}</section>}
     {(resolved.length > 0 || history.length > 0) && <section className="stack" aria-label="Resolved by you">
       <h2 className="h3">Resolved by you</h2>
       <p className="small">Your own decisions for {d.thisOne} only. They aren't coverage in {w.name}, and they come back here if something there changes.</p>

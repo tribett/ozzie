@@ -10,7 +10,7 @@ import { Icon } from "./icons.js";
 import { copySetup, temporaryPath } from "./other-ai-apps-setup.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
 
-export const SIRI_BODY = "Ask Ozzie from Spotlight without opening this window, for example \"Is Sunday covered?\" The answer comes from Ozzie's last saved check on this Mac and always says when that check was made.";
+export const SIRI_BODY = "Ask Ozzie from Spotlight without opening this window, for example \"Are my services covered?\" The answer comes from Ozzie's last saved check on this Mac and always says when that check was made.";
 export const SIRI_SEES = "Siri and Shortcuts hear counts and times from Ozzie's last check: open spots and how many roles they're in, how many people are pending, with and without a request sent, teams without a confirmed lead, kids teams with fewer confirmed people than your Church rules ask, how many room booking overlaps and overdue follow-ups with no owner need a decision, what Ozzie isn't sure of as Worth a look, how many you marked as handled, whether part of the check couldn't be read or was too long to say in full, that some findings are shown only in Ozzie when your Church rules keep them there, and when it was checked.";
 export const SIRI_NEVER = "They never hear a name, a role, team or room name, a background check or anything you asked Ozzie. Answering reads nothing from Planning Center, uses no AI help, and can't change or send anything. Siri hears your question as it hears any other; what Apple keeps is up to Apple.";
 export const SIRI_HOW = [
@@ -24,22 +24,22 @@ export const SIRI_HOW = [
 ] as const;
 /** Ozzie's own Siri actions (helpers/siri-actions.swift): what to say to Siri, and where they are in Shortcuts. */
 /** The actions' own names (their titles in helpers/siri-actions.swift): what Spotlight finds and runs. */
-export const ACTION_NAMES = ["Is Sunday covered", "Open Ozzie's Sunday page", "Open Ozzie's Today page"] as const;
+export const ACTION_NAMES = ["Are my services covered", "Open Ozzie's Services page", "Open Ozzie's Today page"] as const;
 export const ACTIONS_READY = "Once Ozzie is in your Applications folder and has been opened from there, press \u2318 Space, type one of these and choose Run:";
-export const ACTION_PHRASES = ["Is Sunday covered in Ozzie?", "Open Sunday in Ozzie", "Open Today in Ozzie"] as const;
-export const ACTIONS_IN_SHORTCUTS = "They are also listed in the Shortcuts app under Ozzie as Is Sunday covered, Open Ozzie's Sunday page and Open Ozzie's Today page, to use in shortcuts of your own.";
+export const ACTION_PHRASES = ["Are my services covered in Ozzie?", "Open Services in Ozzie", "Open Today in Ozzie"] as const;
+export const ACTIONS_IN_SHORTCUTS = "They are also listed in the Shortcuts app under Ozzie as Are my services covered, Open Ozzie's Services page and Open Ozzie's Today page, to use in shortcuts of your own.";
 /**
  * Owner's spoken test and the coordinator's typed ones, 2026-11-16, macOS 27.2: the newest Siri ran neither Ozzie's
  * actions nor another app's of the same kind, while Spotlight ran Ozzie's. Said plainly rather than promised.
  */
-export const ACTIONS_SIRI = `Siri: on macOS 27.2, Siri didn't run Ozzie's actions when this was checked. Asked "${"Is Sunday covered in Ozzie?"}", it may answer by itself, without Ozzie's check. Use Spotlight instead.`;
+export const ACTIONS_SIRI = `Siri: on macOS 27.2, Siri didn't run Ozzie's actions when this was checked. Asked "${"Are my services covered in Ozzie?"}", it may answer by itself, without Ozzie's check. Use Spotlight instead.`;
 export const ACTIONS_NOT_FOUND = "If Spotlight or Shortcuts doesn't find them, move Ozzie to your Applications folder, open it from there, and try again.";
 export const BY_HAND = "Make the shortcuts yourself instead";
-export const ASK_NAME = "Is Sunday covered";
-export const OPEN_NAME = "Open Ozzie's Sunday page";
+export const ASK_NAME = "Are my services covered";
+export const OPEN_NAME = "Open Ozzie's Services page";
 export const OPEN_LINK = "ozzie://sunday";
 /** Said before the steps (review K M3): the setting isn't Ozzie's, and it reaches every shortcut. */
-export const SCRIPTS_SETTING = "Allow Running Scripts is a setting for all of Shortcuts on this Mac: once it's on, any shortcut you have or add later can run commands as you, not only Ozzie's, so only add shortcuts you trust. You can turn it off again in the same place; then \"Is Sunday covered\" stops answering.";
+export const SCRIPTS_SETTING = "Allow Running Scripts is a setting for all of Shortcuts on this Mac: once it's on, any shortcut you have or add later can run commands as you, not only Ozzie's, so only add shortcuts you trust. You can turn it off again in the same place; then \"Are my services covered\" stops answering.";
 export const ASK_STEPS = [
   "Open the Shortcuts app. Choose Shortcuts > Settings, click Advanced and turn on Allow Running Scripts, which the Run Shell Script step needs.",
   `Choose File > New Shortcut and name it "${ASK_NAME}".`,

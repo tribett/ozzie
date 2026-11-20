@@ -534,21 +534,24 @@ describe("a Wednesday service in Ask's fixed words", () => {
     for (const chip of chips) expect(prepareAsk(new AskSession(), context, chip).ok, chip).toBe(true);
   });
 
-  it("says background checks stay on the Wednesday page", () => {
+  it("says background checks stay on the Services page", () => {
     const wed = wednesdayWithChecks();
     const kids = { ...rules, kidsTeams: [{ team_id: TEAMS.nursery, min_confirmed: 1 }] };
     const context = contextFor(new AskSession(), buildSundayBrief(wed, kids, wed.completed_at, true), wed.names, wed.organization);
-    expect(context.gaps).toContain("Background checks are shown on the Wednesday page only; they're never sent to an AI.");
+    expect(context.gaps).toContain("Background checks are shown on the Services page only; they're never sent to an AI.");
     expect(context.gaps.join(" ")).not.toMatch(/sunday/iu);
   });
 
   it("points to the watched service's own page, keeping each refusal the same sentence callers compare", () => {
     const wednesday = wednesdayWords();
     const weekend = dayWords({ sort_date: "2026-11-21T17:00:00Z", times: ["2026-11-21T23:00:00Z", "2026-11-22T15:00:00Z"] }, "America/Chicago");
-    expect(dayPage(wednesday)).toBe("the Wednesday page");
-    expect(dayPage(weekend)).toBe("the “This weekend” page");
-    expect(onDayPage(REFUSALS.background, wednesday)).toBe(REFUSALS.background.replace("the Sunday page", "the Wednesday page"));
-    expect(onDayPage("The Sunday page shows who.", weekend)).toBe("The “This weekend” page shows who.");
+    expect(dayPage(wednesday)).toBe("the Services page");
+    expect(dayPage(weekend)).toBe("the Services page");
+    // The refusals name the Services page themselves; an older line naming the Sunday page is said with it too.
+    expect(onDayPage(REFUSALS.background, wednesday)).toBe(REFUSALS.background);
+    expect(REFUSALS.background).toContain("look at the Services page.");
+    expect(onDayPage("The Sunday page shows who.", weekend)).toBe("The Services page shows who.");
+    expect(onDayPage("Look at the Sunday page.", SUNDAY_WORDS)).toBe("Look at the Services page.");
     expect(onDayPage(REFUSALS.backgroundNote, SUNDAY_WORDS)).toBe(REFUSALS.backgroundNote);
     expect(onDayPage(REFUSALS.backgroundNoteAlone, wednesday)).not.toMatch(/sunday/iu);
   });

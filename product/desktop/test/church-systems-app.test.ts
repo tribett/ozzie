@@ -159,14 +159,14 @@ describe("a fresh Mac that hasn't chosen what its church uses (round 5)", () => 
     await app.press("Leave the example");
     // Back to the choice, not Planning Center's own service page.
     await app.waitFor("What does your church use?");
-    for (const page of ["Today", "Your service", "Keeping watch", "What happened", "Visitor cards"]) {
+    for (const page of ["Today", "Services", "Keeping watch", "What happened", "Visitor cards"]) {
       await app.go(page);
       // Planning Center is named only among the choices ("Ozzie reads Planning Center, B1 Church or Breeze").
       expect(misnamed(dom.seen().replace(/Ozzie reads Planning Center, B1 Church or Breeze/gu, "")), page).toEqual([]);
     }
     await app.go("Today");
     expect(dom.seen()).toContain("Choose what your church uses to see your service");
-    expect(dom.seen()).toContain("Nothing runs yet. Ozzie keeps an eye on your service once your church's system is connected");
+    expect(dom.seen()).toContain("Nothing runs yet. Ozzie keeps an eye on your services once your church's system is connected");
     await app.press("Choose what your church uses");
     await app.waitFor("What does your church use?");
     await app.go("Settings");
@@ -206,7 +206,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     await app.waitFor("B1 Church: Cedar Hollow Fellowship");
     expect(native.calls.filter(([c]) => c === "church_system_check")).toHaveLength(1);
     expect(dom.seen()).not.toContain("What does your church use?");
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Live read from B1 Church");
     const sunday = dom.seen();
     expect(sunday).toContain("Check B1 Church now");
@@ -229,7 +229,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     expect(dom.seen()).toContain("Other church systems");
     expect(dom.seen()).toContain("Also read Genesis: groups, events and forms");
     // Check now reads B1 Church again, never Planning Center.
-    await app.go("Sunday");
+    await app.go("Services");
     await app.press("Check B1 Church now");
     expect(native.calls.filter(([c]) => c === "church_system_check")).toHaveLength(2);
     expect(native.calls.map(([c]) => c)).not.toContain("check_sunday");
@@ -269,7 +269,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     // Planning Center was signed out by the switch.
     native.pcStatus = { state: "disconnected", organization: "", checked_at_ms: null, source: "", problem: null };
     const app = await launch();
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Live read from B1 Church");
     const t = dom.seen();
     // The sidebar's count is B1 Church's, whatever Planning Center's status says.
@@ -292,7 +292,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     kept.set("ozzie.settings.v1", JSON.stringify({ clientId: "", organization: "1001", serviceTypeId: "8001", planId: "9001" }));
     native.pcStatus = { state: "connected", organization: "1001", checked_at_ms: Date.parse("2026-11-20T15:00:00Z"), source: "", problem: null };
     const app = await launch();
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Also read from B1 Church");
     expect(dom.seen()).toContain("Youth Night");
     const { act } = await import("react");
@@ -322,7 +322,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     seed("b1");
     native.keyGone = true;
     const app = await launch();
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("B1 Church no longer accepts the key Ozzie has");
   }, 60_000);
 
@@ -373,7 +373,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     native.keyGone = true;
     native.saved = JSON.stringify(b1Capture({ started_at: "2026-11-19T14:59:58Z", completed_at: "2026-11-19T15:00:04Z", reads: b1Capture().reads.map(r => ({ ...r, checked_at: "2026-11-19T15:00:00Z" })) }));
     const app = await launch();
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Saved copy of a check of B1 Church");
     expect(dom.seen()).toContain("This is not a current check.");
     await app.waitFor("B1 Church no longer accepts the key Ozzie has");
@@ -382,7 +382,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     // Settings counts it, and deleting it removes it from this Mac.
     await app.go("Settings");
     expect(dom.seen()).toContain("1 saved for this church.");
-    expect(dom.seen()).toContain("so Sunday can still be shown if B1 Church can't be reached");
+    expect(dom.seen()).toContain("so your services can still be shown if B1 Church can't be reached");
     await app.press("Delete saved checks");
     await app.press("Yes, delete it");
     expect(native.calls.filter(([c]) => c === "church_system_delete_checks").map(([, a]) => a)).toEqual([{ system: "b1", churchId: "CHU0000cedar" }]);
@@ -393,12 +393,12 @@ describe("a Mac set up on B1 Church, opened again", () => {
     seed("b1");
     native.saved = JSON.stringify(b1Capture({ started_at: "2026-11-19T14:59:58Z", completed_at: "2026-11-19T15:00:04Z", reads: b1Capture().reads.map(r => ({ ...r, checked_at: "2026-11-19T15:00:00Z" })) }));
     const app = await launch();
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Live read from B1 Church");
     // Today follows the live check once it lands, with no restart (round 5).
     await app.go("Today");
     expect(dom.seen()).not.toContain("Saved copy of the check from");
-    await app.go("Sunday");
+    await app.go("Services");
     await app.press("Show the last saved check");
     await app.waitFor("Saved copy of a check of B1 Church");
     await app.press("Check B1 Church now");
@@ -424,7 +424,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     }
     expect(misnamed(dom.seen())).toEqual([]);
     await app.go("Keeping watch");
-    expect(dom.seen()).toContain("Keep Sunday covered, the morning briefing and other jobs work with Planning Center only for now. Ozzie can't do these with B1 Church yet.");
+    expect(dom.seen()).toContain("Keep services covered, the morning briefing and other jobs work with Planning Center only for now. Ozzie can't do these with B1 Church yet.");
     // Asked to take something on, Ask says the same, here, and sends nothing.
     await app.press("Ask Ozzie");
     await app.type("ask-input", "Keep an eye on Sunday for me");
@@ -432,7 +432,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     const form = all(dom.root as unknown as { childNodes: unknown[] }).find(n => (n as { tagName?: string }).tagName === "FORM" && byIdIn(n, "ask-input"));
     await act(async () => { (propsOf(form) as unknown as { onSubmit: (e: unknown) => void }).onSubmit({ preventDefault() {} }); });
     await app.settle();
-    expect(dom.seen()).toContain("Keep Sunday covered, the morning briefing and other jobs work with Planning Center only for now.");
+    expect(dom.seen()).toContain("Keep services covered, the morning briefing and other jobs work with Planning Center only for now.");
     expect(native.calls.map(([c]) => c)).not.toContain("agent_step");
   }, 60_000);
 
@@ -440,7 +440,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     seed("b1");
     const app = await launch();
     await app.waitFor("B1 Church: Cedar Hollow Fellowship");
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Live read from B1 Church");
     await app.press("Ask Ozzie");
     const t = dom.seen();
@@ -499,7 +499,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     expect(dom.seen()).toContain("On Sunday, 4 people are listed: 2 said yes, 1 hasn't answered, 1 said no.");
     expect(dom.seen()).toContain("Greeter: Wren Fictional hasn't answered yet.");
     expect(dom.seen()).toContain("Breeze doesn't share how many people each role needs, so Ozzie can't say whether this Sunday is covered.");
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Live read from Breeze");
     expect(dom.seen()).toContain("Breeze doesn't share how many people each role needs, so Ozzie can't say whether this Sunday is covered.");
     expect(dom.seen()).toContain("Wren Fictional hasn't answered yet.");
@@ -518,7 +518,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
       { id: "71002", position_id: "9628", person_id: "157802", status: "accepted", asked: null }] }));
     const app = await launch();
     await app.waitFor("Breeze: Juniper Street Church");
-    await app.go("Sunday");
+    await app.go("Services");
     await app.waitFor("Live read from Breeze");
     expect(dom.seen()).toContain("Breeze doesn't say whether the request was sent.");
     expect(misnamed(dom.seen())).toEqual([]);

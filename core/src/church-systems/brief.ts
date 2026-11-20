@@ -218,7 +218,8 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
     mode: options.fictional ? "fictional" : options.saved ? "recording" : "live", source: name,
     plan: { id: mapped.service_id, title: label("service"), dates: occurrence.dates, sort_date: null,
       date: service.day ?? null, starts_at: timed ? service.starts_at : null },
-    time_zone: mapped.time_zone, day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
+    // Its one service time, named only on the church's own clock and never for a service with no time of day.
+    time_zone: mapped.time_zone, times: timed && mapped.time_zone ? [service.starts_at] : [], day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
     sources: { reads: reads.length, failed },
     findings: kept.shown,
     ...(kept.hidden.length ? { hidden: kept.hidden.map(h => ({ finding: h.item, entry: h.entry })) } : {}),

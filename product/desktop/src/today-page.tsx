@@ -12,7 +12,7 @@ import { Icon } from "./icons.js";
 import { BriefingPanel } from "./briefing.js";
 import type { RunnerView } from "./responsibility-runner.js";
 import { NoticedCard, watchLine, WriteUpBlock } from "./responsibility-views.js";
-import { noticedChanges, noticedTitle, whenText } from "./responsibility-words.js";
+import { jobTitle, noticedChanges, noticedTitle, whenText } from "./responsibility-words.js";
 import { browserStore, type KeyValueStore } from "./proactive.js";
 import {
   ageText, backText, CAN_SET_ASIDE, countText, decisionLines, GROUP_OF, groupToday, ledeText, notesReadyText, pageNotes, progressEmptyText, regularLine, regularMissedText, setAsideChoices,
@@ -25,7 +25,8 @@ import type { CalendarRead } from "../../../core/src/calendar/events.js";
 import { CalendarGroup } from "./calendar-today.js";
 import { AskedNote, CHECK_CONNECTION, CHECKING_LINE, STUCK_LINE, type AskedLine } from "./sunday-page.js";
 import { useDay, type DayWords } from "./day-words.js";
-import { DayName, dayName, eyeLine } from "./day-phrases.js";
+import { DayName, dayName, eyeLine, OPEN_SERVICES, SERVICES } from "./day-phrases.js";
+import { SERVICES_PAGE } from "../../../core/src/service-day.js";
 import { promise } from "./promises.js";
 import { systemWords, useSystemWords, type SystemWords } from "./church-system.js";
 
@@ -125,8 +126,8 @@ function itemTitle(item: TodayItem, now: string, d: DayWords, w: SystemWords = s
     case "sunday-unchecked": return d.question;
     case "connect": return w.unchosen ? `Choose what your church uses to see ${yourService(d)}` : connectTitle(d, w.name);
     case "noticed": return noticedTitle(s.item, now, d);
-    case "watching": return s.responsibility.title;
-    case "regular": return eyeLine(d);
+    case "watching": return jobTitle(s.responsibility);
+    case "regular": return eyeLine();
     case "answers": return `Waiting for an answer in ${w.name}`;
   }
 }
@@ -302,15 +303,15 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           {s.noticed && <WriteUpBlock item={s.noticed} writeup={s.writeup} names={names} now={now} />}
           {named && named.named.length > 0 && <ul className="list today-decisions">{named.named.map((l, i) => <li key={l.key}>
             <span id={`${titleId}-d${i}`}>{l.text}</span>
-            <button type="button" className="btn btn-quiet btn-sm" aria-describedby={`${titleId}-d${i}`} onClick={() => toCard(l.key)}>{l.people ? "See who could help" : `Open on ${dayName(words)}`}</button>
+            <button type="button" className="btn btn-quiet btn-sm" aria-describedby={`${titleId}-d${i}`} onClick={() => toCard(l.key)}>{l.people ? "See who could help" : `Open in ${SERVICES_PAGE}`}</button>
           </li>)}</ul>}
           {named && named.more > 0 && <p className="small">And {named.more} more on {dayName(words)}.</p>}
           {named && named.looks > 0 && <p className="small today-looks">Also {named.looks === 1 ? "1 thing" : `${named.looks} things`} worth a look on {dayName(words)}.</p>}
-          {s.noticed && <p className="find-body">Ozzie noticed this at {whenText(s.noticed.at, now)} while keeping an eye on {dayName(words)}.</p>}
+          {s.noticed && <p className="find-body">Ozzie noticed this at {whenText(s.noticed.at, now)} while keeping an eye on {SERVICES}.</p>}
           {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
-          {notes > 0 && <p className="today-notes"><span className="badge b-ok"><Icon name="check" small />Notes ready</span><span>{notesReadyText(notes, words)}</span></p>}
+          {notes > 0 && <p className="today-notes"><span className="badge b-ok"><Icon name="check" small />Notes ready</span><span>{notesReadyText(notes)}</span></p>}
           {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}
-          <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
+          <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
           {later}
         </article>;
       }
@@ -321,7 +322,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, roster)}</h3>
         <ul className="list today-decisions">{rosterNeedsYou(roster).map(r => <li key={r.position_id}><span>{needsYouLine(r, names)}</span></li>)}</ul>
         <p className="find-body">{brief?.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether {words.thisOne} is covered.</p>
-        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
+        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
         {later}
       </article>;
       // No next plan of the watched service yet (move-on.ts): said plainly, with nothing to press; Ozzie looks again each hour.
@@ -332,7 +333,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         <div className="find-top"><span className="badge b-muted"><Icon name="sun" small />{words.page}</span><span className="find-where">{w.services}</span></div>
         <h3 id={titleId} className="find-title">{words.question}</h3>
         <p className="find-body">{DayName(words)} hasn't been checked yet.</p>
-        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Check {dayName(words)}</button></div>
+        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
         {later}
       </article>;
       case "connect": return notConnected && <article key={item.id} className="find today-connect" aria-labelledby={titleId}>
@@ -351,7 +352,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         return <article key={item.id} className="find today-watch" aria-labelledby={titleId}>
           <div className="find-top"><span className={`badge ${r.status === "paused" || watch?.view.paused_all ? "b-muted" : "b-ok"}`}><Icon name="repeat" small />
             {r.status === "paused" || watch?.view.paused_all ? "Paused" : "Keeping an eye on it"}</span>{age && <span className="find-age">{age}</span>}</div>
-          <h3 id={titleId} className="find-title">{r.title}</h3>
+          <h3 id={titleId} className="find-title">{jobTitle(r)}</h3>
           {watch && <p className="find-body">{watchLine(r, watch.view, now)}</p>}
           {s.notes.length > 0 && <ul className="list resp-problems">{s.notes.map(n => <li key={n.id}><Icon name="clock" small />
             {n.overnight && <span className="badge b-muted">Overnight</span>}{noticedTitle(n, now, words)}</li>)}</ul>}
@@ -368,7 +369,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         return <article key={item.id} className="find today-watch" aria-labelledby={titleId}>
           <div className="find-top"><span className={`badge ${s.check.paused ? "b-muted" : "b-ok"}`}><Icon name="repeat" small />{s.check.paused ? "Paused" : "Always on"}</span>
             <span className="find-where">{w.services}</span></div>
-          <h3 id={titleId} className="find-title">{eyeLine(words)}</h3>
+          <h3 id={titleId} className="find-title">{eyeLine()}</h3>
           <p className="find-body">{regularLine(s.check, now, zone, w.name)}</p>
           {missed && <ul className="list resp-problems"><li><Icon name="clock" small />{missed}</li></ul>}
         </article>;
@@ -378,7 +379,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
         <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
         <p className="find-body">{w.name} shows a request was sent for {list(s.positions)} and hasn't been accepted yet.</p>
-        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>Open {dayName(words)}</button></div>
+        <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
       </article>;
     }
   };
@@ -388,7 +389,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     return <section key={id} className={`today-group today-${id}`} aria-labelledby={`today-group-${id}`}>
       <h2 id={`today-group-${id}`} className="h3 today-group-h" tabIndex={-1} ref={el => { headings.current[id] = el; }}>
         {GROUPS[id].title}<span className="today-count">{countText(shown.length)}</span></h2>
-      {shown.length === 0 && <p className="today-empty">{id === "progress" ? progressEmptyText(regular, example, words, w) : GROUPS[id].empty}</p>}
+      {shown.length === 0 && <p className="today-empty">{id === "progress" ? progressEmptyText(regular, example, w) : GROUPS[id].empty}</p>}
       {shown.map(card)}
       {extra}
     </section>;
@@ -398,7 +399,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   // what is known, and that Ozzie can't say whether it is covered. The card above says it when someone needs a look.
   const sundayCalm = brief && sunday && sunday.decisions === 0 && !sunday.unknownNeed?.needsYou && <><p className="today-calm"><Icon name="sun" small />
     <span>{roster ? `On ${dayName(words)}, ${lowerFirst(rosterSummary(roster))} ${brief.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether ${words.thisOne} is covered.`
-      : `Nothing on ${dayName(words)} needs a decision.`}</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>Open {dayName(words)}</button></p>
+      : `Nothing on ${dayName(words)} needs a decision.`}</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>{OPEN_SERVICES}</button></p>
     {/* With no Sunday card, what the leader said they'd send is said here instead. */}
     {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}</>;
   const progressMore = watch && <div className="today-more">

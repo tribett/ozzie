@@ -10,7 +10,7 @@ import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import { onboarding, reasonOf, type OnboardingBridge, type PlanOption, type ReadProgress, type ReadStage, type ServiceOption, type ServicePick } from "./onboarding-bridge.js";
 import { promise } from "./promises.js";
-import { pageRef } from "./day-phrases.js";
+import { eyeLine, pageRef } from "./day-phrases.js";
 import { planFromAddress } from "./planning-center-forms.js";
 import type { Settings } from "./sunday-source.js";
 import { Icon } from "./icons.js";
@@ -403,9 +403,9 @@ function Result({ view, day, serviceName, intervalMinutes, aiOffered, onNext }: 
         {people.scheduled > 0 && <p className="fr-note">{people.scheduled === 1 ? "1 person" : `${people.scheduled} people`} scheduled. {people.yes} said yes{people.waiting ? `, ${people.waiting} ${people.waiting === 1 ? "hasn't" : "haven't"} answered yet` : ""}.</p>}
         <p className="fr-small">{source}</p>
       </>}
-    {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef(day)}.</p>}
+    {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef()}.</p>}
     {partial && <p className="fr-note">Part of {day.day} couldn't be checked, so this isn't a full picture.</p>}
-    <p className="fr-note">Ozzie keeps an eye on {day.day} at least {hours(intervalMinutes)} while it's open, and moves on to the next {serviceName || "service"} plan by itself after this one.</p>
+    <p className="fr-note">{eyeLine()} at least {hours(intervalMinutes)} while it's open, and moves on to the next {serviceName || "service"} plan by itself after this one.</p>
     <div className="fr-actions"><button type="button" className="btn btn-primary fr-primary" onClick={() => onNext(aiOffered ? "sunday" : "ai")}>{next}</button></div>
   </div>;
 }

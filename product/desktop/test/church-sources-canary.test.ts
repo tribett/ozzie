@@ -325,7 +325,8 @@ describe("App passes list state only to the Church lists page and the box beside
       /^function FindingCard\(\{ item, names, checkedAt, sender, sunday, canReword, onDecide, whoCouldHelp, feedback = null, occurrence, beside, people = null, asked = null,$/u,
       /^ {2}beside\?: Beside \| undefined;$/u,
       /^ {4}\{beside\?\.\(\{ kind: finding\.kind, \.\.\.\(finding\.position \? \{ team_id: finding\.position\.team_id, position_id: finding\.position\.id, name: finding\.position\.name \} : \{\}\) \}\)\}$/u,
-      /^ {8}feedback=\{controls\} occurrence=\{occurrence\} beside=\{props\.beside\} people=\{brief\.mode === "fictional" \? null : props\.people\} \/>\)\}$/u,
+      // The page's one card maker (every open card, grouped by service time or not, comes from it).
+      /^ {4}planId=\{brief\.plan\.id\} titleRef=\{titleRef\(i\.finding\.key\)\} pane=\{props\.pane\} feedback=\{controls\} occurrence=\{occurrence\} beside=\{props\.beside\}$/u,
     ];
     const uses = code("../src/sunday-page.tsx").filter(l => /\b[Bb]eside\b/u.test(l));
     for (const line of uses) expect(allowed.some(a => a.test(line)), line).toBe(true);

@@ -107,7 +107,7 @@ async function launch(): Promise<Mounted> {
   const app = { settle, act };
   await waitFor(app, TODAY);
   // The check of the watched service names its day in the sidebar.
-  const named = () => all(tagged("ASIDE")).some(n => n.tagName === "A" && n.textContent.startsWith("Sunday"));
+  const named = () => all(tagged("ASIDE")).some(n => n.tagName === "A" && n.textContent.startsWith("Services"));
   for (let i = 0; i < 40 && !named(); i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await settle(5); }
   if (!named()) throw new Error(`the service's page was never named Sunday: ${dom.seen().slice(0, 1200)}`);
   // And the launch's check of the saved sign-in has answered, so it can't land on top of a sign-in started after it.
@@ -145,7 +145,7 @@ describe("Services only, after the first check", () => {
     await waitFor(app, ITEM);
     // One item open at a time: starting with this Mac comes first; this one is a line until then.
     expect(page()).toContain("Start Ozzie when this Mac starts");
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, CARD);
     expect(page()).toContain("Check the rooms booked for Sunday for times that overlap: needs Planning Center Calendar.");
   }, 60_000);
@@ -173,7 +173,7 @@ describe("Services only, after the first check", () => {
 
   it("while its sign-in is in the browser, Today never says Planning Center isn't connected (review L8)", async () => {
     const app = await launch();
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, CARD);
     await press(app, BUTTON);
     await waitFor(app, "Waiting for you to choose Allow in your browser");
@@ -214,7 +214,7 @@ describe("Services only, after the first check", () => {
     native.status = null; native.sent = []; native.reads = false;
     (await import("../src/operations-reads.js")).resetOperationsReads();
     const app = await launch();
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, CARD);
     await press(app, BUTTON);
     expect(sent("connect_planning_center_app")).toEqual(fromSettings);
@@ -228,7 +228,7 @@ describe("Services only, after the first check", () => {
     await go(app, "Today");
     expect(page()).toContain("Finish setting up");
     expect(page()).not.toContain("Connect Planning Center");
-    await go(app, "Sunday");
+    await go(app, "Services");
     expect(page()).toContain("Waiting for you to choose Allow in your browser");
     // The person chooses Allow; Planning Center grants Calendar, People and Groups.
     native.status = { ...CHECKED, scopes: "services-and-operations", revision: ++native.revision };
@@ -275,7 +275,7 @@ describe("a sign-in for the church already connected (review items 4 and 7)", ()
     expect(page()).not.toContain("After Planning Center is connected");
     // A job's plan doesn't say Planning Center isn't connected either.
     await press(app, "Set up something new");
-    await press(app, "Keep Sunday covered");
+    await press(app, "Keep services covered");
     expect(page()).toContain("Looks good — start it");
     expect(page()).not.toContain("Planning Center isn't connected yet");
     // Words only: the checks still waited while the sign-in was in the browser.
@@ -321,7 +321,7 @@ describe("the reads on, and a later sign-in without the access (review 2026-11-1
   it("the service's page, Settings and What happened each say so", async () => {
     native.reads = true;
     const app = await launch();
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, LOST);
     expect(page()).not.toContain("Right now Ozzie doesn't read Calendar, People or Groups");
     expect(page()).toContain("Copy a message for your administrator");
@@ -332,7 +332,7 @@ describe("the reads on, and a later sign-in without the access (review 2026-11-1
     await waitFor(app, "Not asked — Planning Center didn't grant this");
     expect(page()).not.toContain("Not asked — turned off in Settings");
     // Asking again is the offer's own sign-in, for these reads.
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, LOST);
     await press(app, "Allow Calendar, People and Groups again in my browser");
     expect(sent("connect_planning_center_app")).toEqual([{ operations: true, purpose: "operations" }]);
@@ -344,7 +344,7 @@ describe("a People grant for a note's To line starts nothing else (review M1)", 
     // The Friday the fictional check was made, so its open roles (and their notes) are current.
     vi.setSystemTime(new Date("2026-11-20T15:05:00Z"));
     const app = await launch();
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, CARD);
     // "Let Ozzie read more in Planning Center", and the browser tab is left unfinished.
     await press(app, BUTTON);
@@ -378,7 +378,7 @@ describe("a People grant for a note's To line starts nothing else (review M1)", 
 describe("dismissed", () => {
   it("Don't show this again holds across a quit and a relaunch, on the service's page and on Today", async () => {
     const app = await launch();
-    await go(app, "Sunday");
+    await go(app, "Services");
     await waitFor(app, CARD);
     await press(app, "Don't show this again");
     expect(page()).toContain("Ozzie won't offer this again.");
@@ -393,7 +393,7 @@ describe("dismissed", () => {
     const { act } = await import("react");
     for (let i = 0; i < 8; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await again.settle(5); }
     expect(page()).not.toContain(ITEM);
-    await go(again, "Sunday");
+    await go(again, "Services");
     await again.settle();
     expect(page()).toContain("Rooms and follow-ups weren't checked. Turn this on in Settings.");
     expect(page()).not.toContain("What else Ozzie can check");

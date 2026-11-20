@@ -47,7 +47,7 @@ describe("which service Ozzie watches", () => {
     const s = await mount({ pick_service: pickReply(SUNDAY_MORNING, NOTHING_PLANNED) });
     expect(s.seen()).not.toContain("Which service should Ozzie watch?");
     expect(s.settings()).toMatchObject({ serviceTypeId: "1500", planId: "92902197" });
-    expect(s.seen()).toContain("Is Sunday covered?");
+    expect(s.seen()).toContain("Are your services covered?");
     expect(s.seen()).toContain("Ozzie is watching Sunday, November 22 · 9:00 and 11:00 AM · Sunday Morning");
     expect(s.reads).toEqual(["92902197"]);
     await s.unmount();
@@ -55,7 +55,7 @@ describe("which service Ozzie watches", () => {
 
   it("a Wednesday service is asked about as Wednesday, never Sunday", async () => {
     const s = await mount({ pick_service: pickReply(YOUTH_NIGHT) });
-    expect(s.seen()).toContain("Is Wednesday covered?");
+    expect(s.seen()).toContain("Are your services covered?");
     expect(s.seen()).toContain("Wednesday, November 25 · 7:00 PM · Youth Night");
     expect(s.seen()).not.toContain("Sunday");
     await s.unmount();
@@ -74,7 +74,7 @@ describe("which service Ozzie watches", () => {
     await s.act(async () => { dom.press(buttonStarting("Saturday Night")!); });
     await s.act(async () => { await tick(); });
     expect(s.settings()).toMatchObject({ serviceTypeId: "1600", planId: "93000001" });
-    expect(s.seen()).toContain("Is Saturday covered?");
+    expect(s.seen()).toContain("Are your services covered?");
     await s.unmount();
   });
 

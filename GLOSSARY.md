@@ -84,5 +84,5 @@ The smaller shared check that Ozzie's Siri actions and its bundled helper answer
 _Avoid_: Siri integration, export
 
 **Siri actions**:
-Ozzie's own actions in Siri, Spotlight and the Shortcuts app with no setup: "Is Sunday covered", "Open Ozzie's Sunday page" and "Open Ozzie's Today page" (App Intents in a sandboxed extension bundled with Ozzie, ADR 0007). They answer with the helper's own code from the copy for Siri and Shortcuts, and only while the switch is on. In UI copy, use "Ozzie's actions".
+Ozzie's own actions in Siri, Spotlight and the Shortcuts app with no setup: "Are my services covered", "Open Ozzie's Services page" and "Open Ozzie's Today page" (until 2026-11-19 "Is Sunday covered" and "Open Ozzie's Sunday page"; those phrases still work) (App Intents in a sandboxed extension bundled with Ozzie, ADR 0007). They answer with the helper's own code from the copy for Siri and Shortcuts, and only while the switch is on. In UI copy, use "Ozzie's actions".
 _Avoid_: intents, App Intents, extension (on user surfaces)

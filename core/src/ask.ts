@@ -501,17 +501,16 @@ export type AskPrepared = { ok: true; asked: AskedQuestion } | { ok: false; refu
 const asked = new WeakSet<AskedQuestion>();
 
 /**
- * The sidebar page of the watched service, mid-sentence, by its real day (onboarding spec §5): "the Sunday page", "the
- * Wednesday page", "the “This weekend” page" (the same shape as the desktop's day-phrases.ts `pageRef`).
+ * The sidebar page of the watched services, mid-sentence: "the Services page", whatever day they are on (owner decision
+ * 2026-11-19; the same words as the desktop's day-phrases.ts `pageRef`).
  */
-export const dayPage = (d: DayWords): string => d.kind === "weekday" ? `the ${d.page} page` : `the “${d.page}” page`;
+export const dayPage = (d: DayWords): string => `the ${d.page} page`;
 /**
- * A fixed sentence that names "the Sunday page" (the REFUSALS below, which callers compare by identity, and the app's
- * fixed answer lines), said with the watched service's page instead, for display only. Nothing else is changed.
+ * A fixed sentence that names "the Sunday page" (an older line kept anywhere), said with the services' page instead, for
+ * display only. Nothing else is changed.
  */
 export const onDayPage = (text: string, d: DayWords): string =>
-  d.kind === "weekday" && d.weekday === 0 ? text
-    : text.replace(/\b([Tt])he Sunday page\b/gu, (_m, t: string) => t === "T" ? dayPage(d).replace(/^t/u, "T") : dayPage(d));
+  text.replace(/\b([Tt])he Sunday page\b/gu, (_m, t: string) => t === "T" ? dayPage(d).replace(/^t/u, "T") : dayPage(d));
 
 export const REFUSALS = {
   empty: "Type a question first.",
@@ -521,10 +520,10 @@ export const REFUSALS = {
   religious: "Ozzie doesn't write prayers, sermons, scripture or devotionals. That work stays with people.",
   care: "Ozzie doesn't give pastoral care, comfort or counsel. That stays with people.",
   /** Background checks stay on this Mac (owner decision 2026-11-14); the app answers these here instead (harness-bridge.ts). */
-  background: "Ozzie doesn't send questions with background-check or child-safety screening wording to the AI, so this one wasn't sent. Ask about the team by its role instead, or look at the Sunday page.",
-  backgroundNote: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. Here is what the Sunday page shows; you can write that note yourself.",
-  /** A note request with that wording and nothing from the Sunday page to show beside it. */
-  backgroundNoteAlone: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. You can write that note yourself, or look at the Sunday page.",
+  background: "Ozzie doesn't send questions with background-check or child-safety screening wording to the AI, so this one wasn't sent. Ask about the team by its role instead, or look at the Services page.",
+  backgroundNote: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. Here is what the Services page shows; you can write that note yourself.",
+  /** A note request with that wording and nothing from the Services page to show beside it. */
+  backgroundNoteAlone: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. You can write that note yourself, or look at the Services page.",
   /** A character no question may hold once cleaned (hiddenInQuestion): the native and ozzie.church checks refuse it too. */
   hidden: "This question has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Try typing it again in plain words.",
   send: "Ozzie can't send messages or change Planning Center. It can draft a note for you to send yourself.",

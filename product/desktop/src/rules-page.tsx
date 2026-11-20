@@ -10,7 +10,7 @@ import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import { FromYourCards, useFeedback } from "./finding-feedback.js";
 import { useDay } from "./day-words.js";
 import { useSystemWords, type SystemWords } from "./church-system.js";
-import { dayName, pageRef, procedurePurpose } from "./day-phrases.js";
+import { dayName, pageRef, procedurePurpose, SERVICES } from "./day-phrases.js";
 import { procedureTitle } from "./harness-words.js";
 import { ProcedureBody } from "./procedure-text.js";
 
@@ -36,7 +36,7 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
   const d = useDay();
   return <section className="find how-checks" aria-labelledby="how-checks-title">
     <h2 id="how-checks-title" className="h3">{PROCEDURES_TITLE}</h2>
-    <p className="find-body">These are the steps the AI follows when Ozzie asks it for help: answering a question in Ask, writing up a job Ozzie keeps an eye on, and looking at who could help with a role. Ozzie's own checks of {dayName(d)} don't use them. They can't be changed here, and none of them changes anything in Planning Center.</p>
+    <p className="find-body">These are the steps the AI follows when Ozzie asks it for help: answering a question in Ask, writing up a job Ozzie keeps an eye on, and looking at who could help with a role. Ozzie's own checks of {SERVICES} don't use them. They can't be changed here, and none of them changes anything in Planning Center.</p>
     {procedures.map(p => <div key={p.id} id={`procedure-${p.id}`} className="procedure">
       <p className="bold">{procedureTitle(p.title, d) ?? p.title}</p>
       <p className="small">{procedurePurpose(p.purpose, d)}</p>
@@ -94,8 +94,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   };
   return <div className="col">
     <p className="eyebrow">Church rules</p>
-    <h1 className="h1">How your church wants {dayName(d)} checked</h1>
-    <p className="lede">These are your church's choices. Changing one updates {pageRef(d)} right away using what was already read. Nothing in {w.name} changes.</p>
+    <h1 className="h1">How your church wants its services checked</h1>
+    <p className="lede">These are your church's choices. Changing one updates {pageRef()} right away using what was already read. Nothing in {w.name} changes.</p>
     {other && <section className="find">
       <h2 className="h3">What Ozzie checks with {w.name}</h2>
       <p className="find-body">{SYSTEM_RULES(w)}</p>
@@ -114,7 +114,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     <section className="find">
       <h2 className="h3">{d.kind === "weekday" ? `${d.day} leads` : "Scheduled leads"}</h2>
       <p className="find-body">If a team should always have a scheduled lead on {dayName(d)}, choose the lead's position from the team's positions, or type its name as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.</p>
-      {teams.length === 0 && <p className="small">Check {dayName(d)} first to see its teams.</p>}
+      {teams.length === 0 && <p className="small">Check {SERVICES} first to see their teams.</p>}
       {teams.map(([team, positionNames]) => <div className="rule-team" key={team}>
         <div className="row rule-row">
           <label htmlFor={`lead-${team}`}>{positionNames.join(", ")} team</label>

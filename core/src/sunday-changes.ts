@@ -261,8 +261,8 @@ export function changeStillHolds(change: SundayChange, memory: SundayCheckMemory
 
 // Wording follows the Sunday page ("Greeter still needs one more person.").
 const people = (n: number) => n === 1 ? "one more person" : `${n} more people`;
-/** The watched service's sidebar page at the start of a sentence: "The Wednesday page", "The “This weekend” page" (ask.ts `dayPage`). */
-const PageOf = (d: DayWords) => d.kind === "weekday" ? `The ${d.page} page` : `The “${d.page}” page`;
+/** The services' sidebar page at the start of a sentence: "The Services page" (ask.ts `dayPage`). */
+const PageOf = (d: DayWords) => `The ${d.page} page`;
 /**
  * Plain-language sentence for one change. Names come only from the local resolver, at render time. `d`: the watched
  * service's day words, so a change names its real day and page (onboarding spec §5); the Sunday words otherwise.

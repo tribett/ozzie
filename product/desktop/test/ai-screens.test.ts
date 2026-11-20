@@ -690,7 +690,7 @@ describe("S7–S8: a key from an AI company", () => {
       for (const c of checks) expect(c.args).toEqual({ provider: "openai" });
       if (verdict === "works") {
         expect(s.onModel).toHaveBeenCalledWith(true);
-        await press("Next: open Sunday");
+        await press("Next: open Services");
         expect(s.onDone).toHaveBeenCalledWith("chosen");
       }
       if (said && !said.extra && !said.again && verdict !== "works") expect(button("Check this key again")).toBeNull();
@@ -1757,14 +1757,14 @@ describe("S10: Ozzie's AI", () => {
     await press("Start Ozzie's AI");
   };
 
-  it("with the service's day not known yet, its way on reads as a sentence: Next: open your service (walk-through, 2026-11-18)", async () => {
+  it("with the service's day not known yet, its way on reads as a sentence: Next: open Services (walk-through, 2026-11-18)", async () => {
     const s = await mount(base({ managed_connect: PAID, set_model_route: ROUTE }), "first-run", UNKNOWN_WORDS);
     // The choice's own words with no day known: "your questions about your service".
     expect(seen()).toContain("answer your questions about your service, and look at who could help with a role.");
     await press("Ozzie's AI");
     await press("Pay $19 a month in my browser");
     expect(button("Next: open Your service")).toBeNull();
-    await press("Next: open your service");
+    await press("Next: open Services");
     expect(s.onDone).toHaveBeenCalledWith("chosen");
   });
 
@@ -1790,7 +1790,7 @@ describe("S10: Ozzie's AI", () => {
     expect(s.calls.find(c => c.command === "set_model_route")?.args).toEqual({ route: "managed", baseUrl: null, model: null });
     expect(seen()).toContain("Ozzie's AI is on. About 400 answers this month; it starts again on December 17.");
     expect(s.onModel).toHaveBeenCalledWith(true);
-    await press("Next: open Sunday");
+    await press("Next: open Services");
     expect(s.onDone).toHaveBeenCalledWith("chosen");
   });
 
@@ -1824,7 +1824,7 @@ describe("S10: Ozzie's AI", () => {
     await press("Ozzie's AI"); await press("Pay $19 a month in my browser");
     expect(seen()).toContain("Payment received. Turning on Ozzie's AI…");
     s.onModel.mockClear();
-    await press("Open Sunday (Ozzie keeps checking)");
+    await press("Open Services (Ozzie keeps checking)");
     expect(s.onDone).toHaveBeenCalledWith("chosen");
     await unmount!(); unmount = null;
     const { act } = await import("react");
@@ -2094,7 +2094,7 @@ describe("S10: a Mac that still holds its connection to Ozzie's AI (live, 2026-1
       expect(seen()).toContain("Ozzie's AI is in use on this Mac.");
       expect(seen()).toContain("About 300 answers left this month. They start again on December 18.");
       expect(seen()).not.toContain("About 400 answers");
-      await press(mode === "settings" ? "Back to Settings" : "Next: open Sunday");
+      await press(mode === "settings" ? "Back to Settings" : "Next: open Services");
       expect(s.onDone).toHaveBeenCalledWith("chosen");
       await unmount!(); unmount = null;
     }

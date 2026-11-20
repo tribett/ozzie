@@ -23,7 +23,8 @@ describe("buildSystemBrief: B1 Church", () => {
     expect(b.mode).toBe("live");
     expect(b.plan).toEqual({ id: "PLA0000nov22", title: "Sunday Gathering", dates: "Sunday, November 22", sort_date: null, date: "2026-11-22",
       starts_at: "2026-11-22T09:00:00-06:00" });
-    expect(b.day?.question).toBe("Is Sunday covered?");
+    expect(b.day?.question).toBe("Are your services covered?");
+    expect(b.day?.day).toBe("Sunday");
     expect(b.status).toBe("findings");
     expect(kinds(b1Capture())).toEqual([["needs-people", "Vocals"], ["needs-people", "Guitar"], ["needs-people", "Greeter"], ["pending", "Greeter"]]);
     expect(b.positions).toEqual([
@@ -78,7 +79,8 @@ describe("buildSystemBrief: B1 Church", () => {
     const look = built.brief.findings.find(f => f.kind === "worth-a-look")!;
     expect(look.why[0]).toBe("Ozzie is waiting for you to confirm your church's time zone before it checks this plan.");
     // No day is named while the zone waits.
-    expect(built.brief.day?.question).toBe("Is your service covered?");
+    expect(built.brief.day?.question).toBe("Are your services covered?");
+    expect(built.brief.day?.day).toBe("your service");
   });
 
   it("a read that didn't finish is Worth a look with the part named, never covered", () => {

@@ -56,7 +56,7 @@ describe("templates", () => {
     expect([MIN_GAP_MS, FAST_MIN_GAP_MS, RUN_TIMEOUT_MS]).toEqual([5 * 60_000, 20_000, 10 * 60_000]);
   });
 
-  it("Keep Sunday covered: daily at 7:00, sooner on change, every week until stopped by default (audit item 23)", () => {
+  it("Keep services covered: daily at 7:00, sooner on change, every week until stopped by default (audit item 23)", () => {
     expect(defaultPlan("keep-sunday-covered", SAT, ZONE)).toEqual({
       template: "keep-sunday-covered", schedule: { time: "07:00", weekdays: [], on_change: true }, report: "decisions-only",
       lifetime: { kind: "until-stopped" }, limits: { checks_per_day: 6, ai_steps_per_day: 12 }, zone: ZONE,

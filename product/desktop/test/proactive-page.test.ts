@@ -53,13 +53,13 @@ describe("Keeping watch", () => {
     const page = text(render(await viewAfterDecline(), {}));
     expect(page).toContain("Keeping watch");
     expect(page).toContain("What Ozzie is watching");
-    expect(page).toContain("Ozzie keeps an eye on Sunday Runs by itself whenever Ozzie is open.");
+    expect(page).toContain("Ozzie keeps an eye on your services Runs by itself whenever Ozzie is open.");
     // Its interval, under Schedule and quiet hours, is named for it (Keep Sunday covered keeps its own times), and is the
     // longest it waits: with its window on screen Ozzie reads again sooner (App's stale refresh).
-    expect(page).toContain("Look at Sunday at least every");
+    expect(page).toContain("Look at your services at least every");
     expect(page).toContain("Reads only. It never sends messages.");
     // Where Ozzie reads, with the church by its name when known; never its organization number (spec §6).
-    expect(page).toContain("Planning Center Services Ozzie keeps an eye on Sunday");
+    expect(page).toContain("Planning Center Services Ozzie keeps an eye on your services");
     expect(page).not.toContain("1001");
     expect(page).not.toMatch(/runs automatically|automatic checks|regular Sunday check/u);
     // Closing the window doesn't stop Ozzie (it stays in the menu bar); quitting does, and so does sleep, said outside any fold.
@@ -67,7 +67,7 @@ describe("Keeping watch", () => {
     expect(page).toContain("What Ozzie is watching Nothing runs after you quit Ozzie or while this Mac is asleep.");
     expect(page).toContain("See how this works Ozzie keeps checking while its window is closed. It stays as the small Ozzie picture at the top of your screen.");
     expect(page).toContain("Time zone: ");
-    expect(page).toContain("Pause keeping an eye on Sunday");
+    expect(page).toContain("Pause keeping an eye on your services");
     expect(page).toContain("Check now");
     expect(page).toContain("“Sunday coverage needs attention. Open Ozzie to see details.” It never includes names or details.");
   });
@@ -88,8 +88,8 @@ describe("Keeping watch", () => {
     const view = await viewAfterDecline();
     expect(text(render(view, {}, "not-connected"))).toContain("Not running yet. Connect Planning Center under Settings");
     const paused = text(render({ ...view, schedule: { ...view.schedule, paused: true, next_run_at: null } }, {}));
-    expect(paused).toContain("Resume keeping an eye on Sunday");
-    expect(paused).toContain("Paused. Ozzie doesn't look at Sunday until you resume.");
+    expect(paused).toContain("Resume keeping an eye on your services");
+    expect(paused).toContain("Paused. Ozzie doesn't look at your services until you resume.");
   });
 
   it("says how often as the most it waits, and the window's quicker reads only when they are quicker", async () => {

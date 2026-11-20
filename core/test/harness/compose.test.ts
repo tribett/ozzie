@@ -701,10 +701,10 @@ describe("review Q: never an implied all clear, never blank, decided and set-asi
     // A finding set aside with "This isn't right": counted, never read as "no one".
     const both = await ask(setAsideIn(kidsData(), f => f.kind === "background-check"));
     expect(both.restored).toEqual([setAside(2, "background check")]);
-    expect(setAside(2, "background check")).toBe("2 background checks are set aside by your Church rules, so they aren't listed here; they're on the Sunday page.");
+    expect(setAside(2, "background check")).toBe("2 background checks are set aside by your Church rules, so they aren't listed here; they're on the Services page.");
     const one = await ask(setAsideIn(kidsData(), f => f.kind === "background-check" && f.position?.team_id === TEAMS.nursery));
     expect(one.restored).toEqual([expect.stringMatching(/^Needs a decision: Cameron Larkspur's background check/u),
-      "One background check is set aside by your Church rules, so it isn't listed here; it's on the Sunday page."]);
+      "One background check is set aside by your Church rules, so it isn't listed here; it's on the Services page."]);
     // An out-of-date check, and a saved recording, aren't current.
     const stale = await ask(harnessData({ mode: "live", rules: KIDS_RULES, capture: allCleared(), now: "2026-11-20T17:00:00Z" }));
     expect(stale.restored).toEqual([BACKGROUND_UNCONFIRMED]);
@@ -771,6 +771,8 @@ describe("review Q: never an implied all clear, never blank, decided and set-asi
     for (const q of ["Who could cover Greeter?", "When is the youth retreat?", "Draft a note to Riley"]) expect(isDecisionQuestion(q), q).toBe(false);
     // A church that meets on another day asks about its own day (decision 18).
     for (const q of ["Is Wednesday covered?", "Are we ready for Saturday?", "Wednesday ready?", "Is this weekend covered?"]) expect(isDecisionQuestion(q), q).toBe(true);
+    // The page's own question, whatever day (owner decision 2026-11-19), and as a pastor asks it.
+    for (const q of ["Are your services covered?", "Are my services covered?", "Are all our services ready?", "Is the service covered?"]) expect(isDecisionQuestion(q), q).toBe(true);
   });
 
   it("lists every open decision here when a decision question names background checks, and says when nothing is open (H2, M2)", async () => {
@@ -826,7 +828,7 @@ describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
     expect(sundayShownCount(view, data.operations)).toMatchObject({ decisions: 7, looks: 4 });
     expect(view.items.filter(i => i.state !== "resolved" && i.finding.kind === "background-check").map(i => i.finding.tone)).toEqual(["decision", "decision"]);
     // The page counts 7 and 4: the two kept on this Mac are said not to be counted here, so the counts never read as a contradiction.
-    expect(withDay).toContain("For Wednesday, November 25, 5 things need a decision and 4 are worth a look. Some findings are shown only in Ozzie on this Mac, on the Wednesday page, and aren't counted here.");
+    expect(withDay).toContain("For Wednesday, November 25, 5 things need a decision and 4 are worth a look. Some findings are shown only in Ozzie on this Mac, on the Services page, and aren't counted here.");
     expect(withDay.join(" ")).toContain("You decided: not needed this Wednesday.");
     expect(withDay.join(" ")).toMatch(/is scheduled \d+ weeks in a row/u);
     expect(withDay.join(" ")).toContain("They ask for a scheduled Wednesday lead for [Role");
@@ -854,10 +856,10 @@ describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
     }
     const checks = await run(data, t => kidsAnswer(t, kidsQuestion("Any background check problems?", data)!, signal));
     expect(checks.join(" ")).toMatch(/background check on file expires before Wednesday\./u);
-    expect((await run(data, t => decisionsLeftOut(t, '{"answer":"not-covered"}', [], signal)))[0]).toBe("Also on the Wednesday page, needing a decision:");
-    expect((await run(data, t => openDecisions(t, signal)))[0]).toBe("On the Wednesday page, needing a decision:");
+    expect((await run(data, t => decisionsLeftOut(t, '{"answer":"not-covered"}', [], signal)))[0]).toBe("Also on the Services page, needing a decision:");
+    expect((await run(data, t => openDecisions(t, signal)))[0]).toBe("On the Services page, needing a decision:");
     const aside = await run(setAsideIn(data, f => f.kind === "background-check"), t => kidsAnswer(t, kidsQuestion("Any background check problems?", data)!, signal));
-    expect(aside).toEqual(["2 background checks are set aside by your Church rules, so they aren't listed here; they're on the Wednesday page."]);
+    expect(aside).toEqual(["2 background checks are set aside by your Church rules, so they aren't listed here; they're on the Services page."]);
     const nobody = wednesdayData({ ...RULES, kidsTeams: [{ team_id: "7599999", min_confirmed: 2 }] });
     const quiet = await run(nobody, t => kidsAnswer(t, kidsQuestion("Any background check problems?", nobody)!, signal));
     expect(quiet).toEqual(["No one is confirmed or pending on your kids teams this Wednesday, so there were no background checks to look at."]);
@@ -874,17 +876,17 @@ describe("a Wednesday church's answers never say Sunday (decision 18)", () => {
     const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
     const overview = await tools.run("sunday.overview", {}, signal, "t");
     const head = composeAnswer(JSON.stringify({ answer: "facts", facts: [(overview.payload as { fact: string }).fact] }), [overview], data.brief!.day!).paragraphs[0];
-    expect(head).toMatch(/^For Sunday, November 22, \d+ things need a decision .* on the Sunday page, and aren't counted here\.$/u);
+    expect(head).toMatch(/^For Sunday, November 22, \d+ things need a decision .* on the Services page, and aren't counted here\.$/u);
     expect([ALSO_ON_SUNDAY, ON_SUNDAY, NOBODY_SCHEDULED]).toEqual([alsoOnPage(SUNDAY_WORDS), onPage(SUNDAY_WORDS), nobodyScheduled(SUNDAY_WORDS)]);
     expect(NOBODY_SCHEDULED).toBe("No one is confirmed or pending on your kids teams this Sunday, so there were no background checks to look at.");
-    expect(setAside(1, "finding", data.brief!.day!)).toBe("One finding is set aside by your Church rules, so it isn't listed here; it's on the Sunday page.");
+    expect(setAside(1, "finding", data.brief!.day!)).toBe("One finding is set aside by your Church rules, so it isn't listed here; it's on the Services page.");
   });
 
   it("a weekend, or a day not known, gets its own words, never a fixed Sunday", () => {
     const weekend = dayWords({ sort_date: "2026-11-21T17:00:00Z", times: ["2026-11-21T23:00:00Z", "2026-11-22T15:00:00Z"] }, "America/Chicago");
-    expect(alsoOnPage(weekend)).toBe("Also on the “This weekend” page, needing a decision:");
+    expect(alsoOnPage(weekend)).toBe("Also on the Services page, needing a decision:");
     expect(nobodyScheduled(weekend)).toBe("No one is confirmed or pending on your kids teams this weekend, so there were no background checks to look at.");
     expect(nobodyScheduled(UNKNOWN_WORDS)).toBe("No one is confirmed or pending on your kids teams for your service, so there were no background checks to look at.");
-    expect(setAside(2, "finding", UNKNOWN_WORDS)).toBe("2 findings are set aside by your Church rules, so they aren't listed here; they're on the “Your service” page.");
+    expect(setAside(2, "finding", UNKNOWN_WORDS)).toBe("2 findings are set aside by your Church rules, so they aren't listed here; they're on the Services page.");
   });
 });

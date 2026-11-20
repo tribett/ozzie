@@ -113,7 +113,7 @@ invented people). No church data is shown.
   listed on the Church rules page, where you can delete it. Nothing is
   learned silently.
 - **Says what to do when a read is refused.** When Planning Center doesn't
-  allow a read, the Sunday page says which access could be missing, that a
+  allow a read, the Services page says which access could be missing, that a
   Planning Center administrator at your church can give it, and opens Settings
   for the next step.
 - **Sorts Today.** Needs your attention, Ready to review and In progress,
@@ -138,10 +138,10 @@ invented people). No church data is shown.
   at, whether and how often it asked the AI, and how it ended, never a
   question, answer or name.
 - **Keeps an eye on things when you ask it to.** From Ask Ozzie you can hand
-  it an ongoing job (Keep Sunday covered, room bookings, follow-ups without
+  it an ongoing job (Keep services covered, room bookings, follow-ups without
   an owner, group night clashes, a morning briefing). Ozzie shows the plan
   (schedule, limits, how long) and starts only after you confirm it. Keep
-  Sunday covered runs every week until you stop it, or only until this Sunday
+  services covered runs every week until you stop it, or only until this Sunday
   if you choose. Ozzie lives in the menu bar and keeps running when you close
   its window. Setup asks "Start Ozzie when you turn on this Mac?" with Yes
   chosen (an install set up earlier is asked once, on Today), and Ozzie asks
@@ -190,9 +190,9 @@ invented people). No church data is shown.
   VS Code, LM Studio and Gemini CLI, and **Add Ozzie to Claude** hands Claude
   for Mac a small setup file that Claude asks you to install. See
   [core/docs/mcp.md](core/docs/mcp.md).
-- **Answers "Is Sunday covered?" from Spotlight and Shortcuts, if you turn it
+- **Answers "Are my services covered?" from Spotlight and Shortcuts, if you turn it
   on.** Off by default (Settings › Siri and Shortcuts). Ozzie's own actions,
-  "Is Sunday covered", "Open Ozzie's Sunday page" and "Open Ozzie's Today
+  "Are my services covered", "Open Ozzie's Services page" and "Open Ozzie's Today
   page", run from Spotlight and the Shortcuts app once Ozzie is in your
   Applications folder and has been opened from there. The answer is
   counts and times from a small copy of Ozzie's last check, never a name, a

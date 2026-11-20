@@ -55,9 +55,9 @@ describe("Ask Ozzie beside Settings", () => {
     // No AI: the same sentence on every page, Settings included; its one step opens the AI choice over the page (App's
     // ChooseAiContext, ask-panel.test.ts), not Settings (walk-through, 2026-11-18).
     expect(panel("connection")).toContain("Ask Ozzie needs AI, but everything else in Ozzie works without it.");
-    expect(panel("sunday")).not.toContain(">Open Sunday</button>");
+    expect(panel("sunday")).not.toContain(">Open Services</button>");
     expect(panel("today")).not.toContain(">Open Settings</button>");
-    expect(panel("today")).toContain(">Open Sunday</button>");
+    expect(panel("today")).toContain(">Open Services</button>");
   });
 });
 
@@ -76,8 +76,8 @@ describe("Settings", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(text(html)).not.toMatch(/wording help/iu);
     // Named as everywhere else (onboarding spec §6): Ozzie keeps an eye on the watched service, by its day.
-    expect(text(html)).toContain("Ozzie keeps an eye on Sunday: at least every hour, and when Ozzie opens.");
-    expect(text(html)).toContain("Keep Sunday covered and other jobs are set up in Keeping watch.");
+    expect(text(html)).toContain("Ozzie keeps an eye on your services: at least every hour, and when Ozzie opens.");
+    expect(text(html)).toContain("Keep services covered and other jobs are set up in Keeping watch.");
     expect(text(html)).toContain("Change these in Keeping watch");
   });
   it("uses the same sign-in form in first run (a copy built yourself) as Settings, and keeps the plan fields in Settings", () => {
@@ -97,11 +97,11 @@ describe("Settings", () => {
     expect(closed).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-controls="delete-recordings"[^>]*>Delete saved checks<\/button>/u);
     expect(closed).not.toContain("Yes, delete");
     const open = text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 3, onDelete: () => {}, sharing: true, confirming: true })));
-    expect(open).toContain("Delete all 3 saved checks from this Mac? Sunday can't be shown from them afterwards. The copy for other AI apps is removed too.");
+    expect(open).toContain("Delete all 3 saved checks from this Mac? Your services can't be shown from them afterwards. The copy for other AI apps is removed too.");
     expect(open).toContain("Yes, delete them");
     expect(open).toContain("Keep them");
     const one = text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 1, onDelete: () => {}, sharing: false, confirming: true })));
-    expect(one).toContain("Delete the saved check from this Mac? Sunday can't be shown from it afterwards. Planning Center doesn't change.");
+    expect(one).toContain("Delete the saved check from this Mac? Your services can't be shown from it afterwards. Planning Center doesn't change.");
     expect(one).toContain("Keep it");
     expect(text(renderToStaticMarkup(React.createElement(SavedRecordings, { count: 0, onDelete: () => {}, sharing: false, confirming: true }))))
       .toBe(" No saved checks for this church. ");

@@ -548,7 +548,7 @@ describe("Ask answers written on this Mac", () => {
     ]);
     // The heading says each of these needs a decision, so none says it again (owner's read of 0.3.2).
     expect(parts.slice(5)).toEqual([
-      "Also on the Sunday page, needing a decision:",
+      "Also on the Services page, needing a decision:",
       expect.stringMatching(/^Blake Ashgrove has no current background check on file\..*Kept on this Mac; never sent to an AI\.$/u),
       expect.stringMatching(/^Cameron Larkspur's background check on file expires before Sunday\..*Kept on this Mac; never sent to an AI\.$/u),
       expect.stringMatching(/^Room use needs review: Sanctuary \(fictional\) has bookings that overlap on November 22 from 10:30 AM to 11:00 AM; the bookings are from /u),
@@ -639,7 +639,7 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
       if (turn.state !== "answered") throw new Error(turn.state);
       const parts = turn.answer.body.split("\n\n");
       // It says first why it was answered here (review B2 L-3).
-      expect(parts.slice(0, 2)).toEqual([BACKGROUND_HERE, "On the Sunday page, needing a decision:"]);
+      expect(parts.slice(0, 2)).toEqual([BACKGROUND_HERE, "On the Services page, needing a decision:"]);
       expect(parts.join(" ")).toMatch(/Greeter at 9:30 AM.*Blake Ashgrove has no current background check.*Room use needs review.*has no owner\./su);
     }
   });
@@ -678,7 +678,7 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
       }
     }
     expect(REFUSALS.background).toBe("Ozzie doesn't send questions with background-check or child-safety screening wording to the AI, so this one wasn't sent. "
-      + "Ask about the team by its role instead, or look at the Sunday page.");
+      + "Ask about the team by its role instead, or look at the Services page.");
   });
 
   it("keeps the kids-team note beside a background-check note request when no kids team is marked, and refuses other note wording plainly", async () => {
@@ -767,7 +767,7 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "Is everything ready for Sunday, including the kids?", { skills });
     expect(m.requests.length).toBeGreaterThan(0);
     if (turn.state !== "answered") throw new Error(turn.state);
-    expect(turn.answer.body).toMatch(/Greeter at 9:30 AM[^]*Also on the Sunday page, needing a decision:[^]*Blake Ashgrove has no current background check/u);
+    expect(turn.answer.body).toMatch(/Greeter at 9:30 AM[^]*Also on the Services page, needing a decision:[^]*Blake Ashgrove has no current background check/u);
   });
 
   it("doesn't offer what it can do below decisions it added", async () => {
@@ -775,7 +775,7 @@ describe("background checks never reach the AI, by any Ask path (review Q H2)", 
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "What still needs a decision this Sunday?", { skills });
     if (turn.state !== "answered") throw new Error(turn.state);
     expect(turn.answer.body.split("\n\n")[0]).toBe("Ozzie can't tell from what it read.");
-    expect(turn.answer.body).toContain("Also on the Sunday page, needing a decision:");
+    expect(turn.answer.body).toContain("Also on the Services page, needing a decision:");
     expect(turn.answer.body).not.toContain(CAN_DO_INSTEAD);
   });
 
@@ -964,7 +964,7 @@ describe("an overview too long for one answer (review item 6)", () => {
     for (const p of parts.slice(2)) expect(p).not.toMatch(/^(?:Needs a decision|Worth a look|Resolved by you)|on November 22/u);
     expect(turn.answer.added).toBeUndefined();
     const cut = (turn.answer.gaps.join(" ").match(/so (\d+) findings were left out/u) ?? [])[1];
-    expect(turn.answer.gaps).toEqual([`Planning Center Services: the list was too long to say in full, so ${cut} findings were left out of this answer. They're on the Sunday page.`]);
+    expect(turn.answer.gaps).toEqual([`Planning Center Services: the list was too long to say in full, so ${cut} findings were left out of this answer. They're on the Services page.`]);
     expect(Number(cut)).toBeGreaterThan(0);
     expect(turn.answer.steps).toContain("Looked at the overview of the service — a shortened list");
     expect(JSON.stringify(turn.answer)).not.toContain("couldn't be read");
@@ -973,7 +973,7 @@ describe("an overview too long for one answer (review item 6)", () => {
     failed.brief = { ...failed.brief!, sources: { ...failed.brief!.sources, failed: [{ collection: "team_members", outcome: "timeout" }] } };
     const both = await askOzzie(harness(scripted([() => calls(["sunday.overview"]), every]).model, undefined, failed), "What still needs a decision this Sunday?", { skills });
     if (both.state !== "answered") throw new Error(JSON.stringify(both));
-    expect(both.answer.gaps).toEqual(["Planning Center Services: part of this couldn't be read.", expect.stringMatching(/^Planning Center Services: the list was too long to say in full, so \d+ findings were left out of this answer\. They're on the Sunday page\.$/u)]);
+    expect(both.answer.gaps).toEqual(["Planning Center Services: part of this couldn't be read.", expect.stringMatching(/^Planning Center Services: the list was too long to say in full, so \d+ findings were left out of this answer\. They're on the Services page\.$/u)]);
   });
 });
 
@@ -998,7 +998,7 @@ describe("a decision question says the Sunday page's count, on every route (live
     for (const local of [false, true]) {
       const turn = await askOzzie(harness(scripted([looked, roles]).model), DECISION, { skills, local });
       if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
-      expect(turn.answer.body.split("\n\n"), String(local)).toEqual([SUMMARY, "Needs a decision:", GREETER, NURSERY, "Also on the Sunday page, needing a decision:", FOLLOW_UP]);
+      expect(turn.answer.body.split("\n\n"), String(local)).toEqual([SUMMARY, "Needs a decision:", GREETER, NURSERY, "Also on the Services page, needing a decision:", FOLLOW_UP]);
       expect(turn.answer.page).toBe("sunday");
     }
   });
@@ -1027,7 +1027,7 @@ describe("a decision question says the Sunday page's count, on every route (live
     const turn = await askOzzie(h, DECISION, { skills, notes, local: true });
     if (turn.state !== "answered") throw new Error(JSON.stringify(turn));
     expect(turn.answer.composedHere).toBe(true);
-    expect(turn.answer.body.split("\n\n")).toEqual([SUMMARY, "On the Sunday page, needing a decision:", GREETER, NURSERY, FOLLOW_UP]);
+    expect(turn.answer.body.split("\n\n")).toEqual([SUMMARY, "On the Services page, needing a decision:", GREETER, NURSERY, FOLLOW_UP]);
   });
 });
 
@@ -1079,10 +1079,10 @@ describe("AI on this Mac: an answer choosing more than 24 facts (native too-many
     const chosen = await ask(summaryOnly, DECISION, true);
     if (chosen.state !== "answered") throw new Error(chosen.state);
     expect(chosen.answer.composedHere).toBeUndefined();
-    expect(a.body).toBe(chosen.answer.body.replace("Also on the Sunday page, needing a decision:", "On the Sunday page, needing a decision:"));
+    expect(a.body).toBe(chosen.answer.body.replace("Also on the Services page, needing a decision:", "On the Services page, needing a decision:"));
     const paragraphs = a.body.split("\n\n");
     expect(paragraphs[0]).toMatch(/^For Sunday, November 22, \d+ things? needs? a decision and \d+ (?:is|are) worth a look\./u);
-    expect(paragraphs[1]).toBe("On the Sunday page, needing a decision:");
+    expect(paragraphs[1]).toBe("On the Services page, needing a decision:");
     expect(paragraphs.length).toBeGreaterThan(2);
     // Never presented as the AI's choice or as an answer without the AI.
     expect([a.local, a.end, a.added]).toEqual([undefined, undefined, undefined]);

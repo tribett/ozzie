@@ -26,7 +26,7 @@ const status = (scopes: string): ConnectionStatus =>
 /** The live-style church: two roles that need people and a follow-up with no owner (no room rule, so its overlap is worth a look). */
 const live = (): SundayCapture => ({ ...withFictionalOperations(nov22Capture()), kind: "live" });
 
-/** What Today, the sidebar and the Sunday page count, built as App builds it from the check on screen. */
+/** What Today, the sidebar and the Services page count, built as App builds it from the check on screen. */
 function page(capture: SundayCapture, decisions: readonly SundayDecision[]) {
   const brief = buildSundayBrief(capture, RULES, NOW, false);
   const operations = sundayOperations(capture, RULES, { now: NOW });

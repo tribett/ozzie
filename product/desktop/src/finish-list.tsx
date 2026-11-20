@@ -6,7 +6,7 @@
 // It also holds the small styles for the other at-the-moment questions (finish.css).
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons.js";
-import { useDay } from "./day-words.js";
+import { SERVICES } from "./day-phrases.js";
 import { finishMemory, type FinishItemId, type FinishStore } from "./moments.js";
 import { useSystemWords } from "./church-system.js";
 import "./first-run.css";
@@ -99,7 +99,6 @@ export interface FinishSettingUpProps {
 }
 
 export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKidsRules, onChooseAi, moreBody, startFailed = false, store = finishMemory }: FinishSettingUpProps) {
-  const { day } = useDay();
   // The church's own system: Planning Center's words unchanged.
   const w = useSystemWords();
   const [memory, setMemory] = useState(() => store.get());
@@ -125,7 +124,7 @@ export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKids
   const body = (item: FinishItemId) => {
     switch (item) {
       case "start": return <>
-        <p className="finish-body">{`Ozzie can only keep an eye on ${day} while it's running.`}</p>
+        <p className="finish-body">{`Ozzie can only keep an eye on ${SERVICES} while it's running.`}</p>
         <div className="finish-acts">
           <button type="button" className="btn btn-primary" onClick={() => onStartWithMac(true)}>Yes, start Ozzie with this Mac</button>
           <button type="button" className="btn btn-secondary" onClick={() => onStartWithMac(false)}>No, I'll open it myself</button>
