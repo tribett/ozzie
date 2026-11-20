@@ -25,7 +25,8 @@ import { buildSystemBrief } from "../../../core/src/church-systems/brief.js";
 import { cannotSee, howToConnect } from "../../../core/src/church-systems/facts.js";
 import { applyDecisions } from "../../../core/src/sunday-decisions.js";
 import { sundayShownCount } from "../../../core/src/sunday-brief.js";
-import { B1_READS, b1Capture, breezeCapture, breezeUntimedCapture, NOW, readsOf } from "../../../core/test/church-systems/fixtures.js";
+import { B1_READS, b1Capture, breezeCapture, breezeUntimedCapture, factsCapture, NOW, readsOf } from "../../../core/test/church-systems/fixtures.js";
+import { systemPromises } from "../src/system-setup.js";
 import { decisionLines } from "../src/today-groups.js";
 import { dayWords } from "../src/day-words.js";
 
@@ -673,5 +674,30 @@ describe("What can you do? before anything is chosen (release review L5)", () =>
     expect(fresh.first).toMatch(/^To start, choose what your church uses in Settings, or open the fictional example/u);
     expect(`${fresh.intro} ${fresh.never} ${fresh.first}`).not.toContain("Planning Center");
     expect(helpFor(systemWords("planning-center"))).toBe(HELP);
+  });
+});
+
+describe("Also read Genesis as seen live (2026-11-19)", () => {
+  it("says no attendance for an event to come, a form's slug readably, and no names promise it doesn't need", () => {
+    const capture = factsCapture("genesis", {
+      church: { id: "ORG-maple", time_zone: "America/New_York" }, completed_at: "2026-11-25T17:00:00Z",
+      events: [{ id: "picnic", starts_at: "2026-12-02T11:00:00-05:00", ends_at: "2026-12-02T14:00:00-05:00", attendance: 0 },
+        { id: "dinner", starts_at: "2026-11-24T18:00:00-05:00", ends_at: "2026-11-24T20:00:00-05:00", attendance: 31 }],
+      forms: [{ id: "FRMv", submissions: 18 }],
+      labels: { ...factsCapture("genesis").labels, "event:picnic": "Spring Family Picnic", "event:dinner": "Harvest Dinner", "form:FRMv": "visitor-connection-card" },
+    });
+    const t = text(renderToStaticMarkup(React.createElement(SystemFactsList, { capture, zone: "America/New_York", folded: false })));
+    // The picnic to come: its day and time, then straight on to the next event, with nothing about attendance.
+    expect(t).toContain("Spring Family Picnic, Wed, Dec 2, 11:00 AM Harvest Dinner");
+    expect(t).not.toContain("0 attended");
+    expect(t).toContain("Harvest Dinner, Tue, Nov 24, 6:00 PM: 31 attended");
+    expect(t).toContain("Visitor connection card: 18 entries");
+    expect(t).not.toContain("visitor-connection-card");
+    expect(t).not.toContain("hasn't happened");
+    // Genesis's key reads no People: no promise about names it never reads; B1 Church and Breeze keep theirs.
+    expect(systemPromises("genesis")).toContain("Ozzie reads no one's name from Genesis.");
+    expect(systemPromises("genesis").join(" ")).not.toContain("stand-ins");
+    for (const system of ["b1", "breeze"] as const) expect(systemPromises(system).join(" ")).toContain("The AI sees stand-ins instead.");
+    expect(howToConnect("genesis")).toContain("Untick Read for People, which Genesis ticks for you: Ozzie doesn't read anyone's name from Genesis.");
   });
 });

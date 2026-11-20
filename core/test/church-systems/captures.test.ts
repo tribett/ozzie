@@ -163,7 +163,8 @@ const EXPECTED: Record<string, Summary> = {
     system: "genesis", coverage: "no-sunday-check",
     facts: {
       groups: [["grp-1", 12, null], ["grp-2", null, "not-given"]],
-      events: [["evt-1", 142, null], ["evt-2", null, "not-given"]],
+      // evt-1 is on 22 November and the check ran on the 17th: Genesis's count for it isn't said yet (live, 2026-11-19).
+      events: [["evt-1", null, "upcoming"], ["evt-2", null, "not-given"]],
       forms: [["FRMfall", 2, null], ["FRMcare", 0, null]],
     },
   },

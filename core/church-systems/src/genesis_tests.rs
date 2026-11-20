@@ -467,3 +467,27 @@ fn an_end_before_its_start_with_no_end_date_is_left_out_and_said() {
     assert!(event.ends_at.is_none());
     assert_eq!(event.attendance, Some(28));
 }
+
+/// A form's title is its label when Genesis gives one as text; otherwise its name (live: a slug). A title of another
+/// type is ignored rather than failing the read (live check 2026-11-19).
+#[test]
+fn a_forms_title_is_preferred_and_an_odd_title_is_ignored() {
+    let value = json!({"data": [
+        {"id": "FRMa", "name": "visitor-connection-card", "title": "Visitor Connection Card"},
+        {"id": "FRMb", "name": "visitor-connection-card"},
+        {"id": "FRMc", "name": "prayer-card", "title": 7},
+        {"id": "FRMd", "name": "serve", "title": "   "}],
+        "limit": 200, "offset": 0});
+    let (forms, more) = project_forms(&value).unwrap();
+    assert!(!more);
+    let labels: Vec<Option<&str>> = forms.iter().map(|l| l.1.as_deref()).collect();
+    assert_eq!(
+        labels,
+        vec![
+            Some("Visitor Connection Card"),
+            Some("visitor-connection-card"),
+            Some("prayer-card"),
+            Some("serve")
+        ]
+    );
+}

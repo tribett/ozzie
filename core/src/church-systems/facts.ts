@@ -17,9 +17,10 @@ export interface PartRead { outcome: FactOutcome; checked_at: string | null }
  * doesn't read it yet; "not-checked", its read didn't finish; "not-in-newest", Ozzie counts only the newest few (for
  * Breeze, at most 5 forms a check) and didn't count this one; "not-ended", the service hadn't ended when Ozzie checked,
  * so its check-ins weren't final (Breeze's people checked in by name are read only once the service has ended);
- * "no-end-time", the system gives the service no end time, so its check-ins are never read.
+ * "no-end-time", the system gives the service no end time, so its check-ins are never read; "upcoming", the event
+ * hadn't ended when Ozzie checked, so whatever count the system gives (Genesis: 0) isn't said (live, 2026-11-19).
  */
-export type NullCount = "not-given" | "not-read-yet" | "not-checked" | "not-in-newest" | "not-ended" | "no-end-time";
+export type NullCount = "not-given" | "not-read-yet" | "not-checked" | "not-in-newest" | "not-ended" | "no-end-time" | "upcoming";
 export const NEWEST_ONLY = "not-in-newest" satisfies NullCount;
 interface FactBase {
   source: string; checked_at: string | null; outcome: FactOutcome;
@@ -67,6 +68,11 @@ const EXACT_COUNTS: Readonly<Record<SystemId, ReadonlySet<FactPart>>> = Object.f
   b1: new Set<FactPart>(), breeze: new Set<FactPart>(["forms"]), genesis: new Set<FactPart>(),
 });
 
+/**
+ * Systems that give an event's attendance before it has happened (Genesis sends 0 for next week's picnic, live
+ * 2026-11-19): a count is said only once the event has ended. Breeze's is read only after its service ends (native).
+ */
+const COUNTS_BEFORE_END: ReadonlySet<SystemId> = new Set(["genesis"]);
 /** Systems whose attendance Ozzie reads for the service's own event only. */
 const SERVICE_ONLY_ATTENDANCE: ReadonlySet<SystemId> = new Set(["breeze"]);
 
@@ -162,10 +168,14 @@ export function systemFacts(capture: SystemCapture,
   return {
     system: capture.system, source, reads, counts, waiting_for_zone: held,
     groups: capture.groups.map(g => ({ group_id: g.id, members: g.members, ...base("groups", g.members, "members") })),
-    events: (held ? [] : capture.events).filter(e => inWindow(e.starts_at)).map(e => ({
-      event_id: e.id, starts_at: e.starts_at, ends_at: e.ends_at, attendance: e.attendance, ...base("events", e.attendance, "attendance",
-        SERVICE_ONLY_ATTENDANCE.has(capture.system) && e.id === capture.service?.id),
-    })),
+    events: (held ? [] : capture.events).filter(e => inWindow(e.starts_at)).map(e => {
+      // Attendance only for an event that had ended when Ozzie checked: before then a count (Genesis gives 0) says
+      // nothing about who came (live check 2026-11-19: "Spring Family Picnic … 0 attended" for next week's picnic).
+      const upcoming = COUNTS_BEFORE_END.has(capture.system) && e.attendance !== null && instant(e.ends_at ?? e.starts_at) > instant(capture.completed_at);
+      const attendance = upcoming ? null : e.attendance;
+      const counted = base("events", attendance, "attendance", SERVICE_ONLY_ATTENDANCE.has(capture.system) && e.id === capture.service?.id);
+      return { event_id: e.id, starts_at: e.starts_at, ends_at: e.ends_at, attendance, ...counted, ...(upcoming ? { why_null: "upcoming" as const } : {}) };
+    }),
     forms: capture.forms.map(f => ({ form_id: f.id, submissions: f.submissions, ...base("forms", f.submissions, "submissions") })),
     cannot_see: cannotSee(capture.system),
   };
@@ -373,6 +383,7 @@ export function whyNullSentence(system: SystemId, why: NullCount): string {
       : `Ozzie counts only the newest forms from ${name}, and this one wasn't among them.`;
     case "not-ended": return "The service hasn't ended yet, so check-ins aren't final.";
     case "no-end-time": return `${name} gives this service no end time, so Ozzie doesn't count the people checked in to it.`;
+    case "upcoming": return "Not yet: this event hasn't happened.";
   }
 }
 
@@ -408,7 +419,17 @@ const HOW_TO_CONNECT: Readonly<Record<SystemId, readonly string[]>> = Object.fre
     "That key can make changes in Breeze, but Ozzie only reads."]),
   genesis: Object.freeze([
     "An owner or admin makes a key in Genesis under Settings > Integrations, in the section AI Assistants & Developer API: on the API keys tab, press Create key, give the key a name, and tick Read for Groups, Events and Forms only.",
+    // Genesis's Create key dialog ticks People read by default (live check 2026-11-19); Ozzie reads no names there.
+    "Untick Read for People, which Genesis ticks for you: Ozzie doesn't read anyone's name from Genesis.",
     "Genesis shows the key only once, so paste it into Ozzie straight away.",
   ]),
 });
 export const howToConnect = (system: SystemId): readonly string[] => HOW_TO_CONNECT[system];
+
+/**
+ * A name a system gives as a slug, made readable: "visitor-connection-card" (Genesis's form names, live 2026-11-19)
+ * reads "Visitor connection card". Any other name is left exactly as the church wrote it.
+ */
+export function readableName(name: string): string {
+  return /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/u.test(name) ? `${name.charAt(0).toUpperCase()}${name.slice(1).replace(/[-_]+/gu, " ")}` : name;
+}

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   B1_KEY_BOXES, cannotSee, FACT_READS, howToConnect, noRoles, notSharedYet, NULL_COUNTS, onServiceWithoutRole, readProblem, systemFacts, toConfirm,
-  notSharedNotice, sharedLabel, unknownNeed, waitingForZone, whyNullSentence,
+  notSharedNotice, readableName, sharedLabel, unknownNeed, waitingForZone, whyNullSentence,
 } from "../../src/church-systems/facts.js";
 import { READ_OUTCOMES, readsFor, SYSTEM_IDS, SYSTEMS } from "../../src/church-systems/types.js";
 import { NEWEST_ONLY } from "../../src/church-systems/facts.js";
@@ -393,6 +393,7 @@ describe("cannotSee and toConfirm", () => {
     ]);
     expect(howToConnect("genesis")).toEqual([
       "An owner or admin makes a key in Genesis under Settings > Integrations, in the section AI Assistants & Developer API: on the API keys tab, press Create key, give the key a name, and tick Read for Groups, Events and Forms only.",
+      "Untick Read for People, which Genesis ticks for you: Ozzie doesn't read anyone's name from Genesis.",
       "Genesis shows the key only once, so paste it into Ozzie straight away.",
     ]);
   });
@@ -467,5 +468,22 @@ describe("cannotSee and toConfirm", () => {
       expect(line.match(FORBIDDEN)?.[0] ?? null, line).toBeNull();
       expect(line.match(NEVER)?.[0] ?? null, line).toBeNull();
     }
+  });
+});
+
+describe("Genesis as seen live (2026-11-19)", () => {
+  it("says no attendance for an event still to come, and says it for one that has ended", () => {
+    const facts = systemFacts(factsCapture("genesis", { church: { id: "ORG-maple", time_zone: "America/New_York" }, completed_at: "2026-11-25T17:00:00Z", events: [
+      { id: "picnic", starts_at: "2026-12-02T11:00:00-05:00", ends_at: "2026-12-02T14:00:00-05:00", attendance: 0 },
+      { id: "dinner", starts_at: "2026-11-24T18:00:00-05:00", ends_at: "2026-11-24T20:00:00-05:00", attendance: 31 },
+      { id: "nightly", starts_at: "2026-11-25T11:00:00-05:00", ends_at: null, attendance: 4 }] }), { confirmedZone: "America/New_York" });
+    expect(facts.events.map(e => [e.event_id, e.attendance, e.why_null])).toEqual([["picnic", null, "upcoming"], ["dinner", 31, null], ["nightly", 4, null]]);
+    expect(whyNullSentence("genesis", "upcoming")).toBe("Not yet: this event hasn't happened.");
+  });
+
+  it("makes a form's slug readable and leaves a church's own wording alone", () => {
+    expect(readableName("visitor-connection-card")).toBe("Visitor connection card");
+    expect(readableName("prayer_card")).toBe("Prayer card");
+    for (const kept of ["Prayer Card", "prayer", "Fall Sign-up", "Youth Night 2026", "a-b c"]) expect(readableName(kept)).toBe(kept);
   });
 });

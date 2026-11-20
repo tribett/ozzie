@@ -2,7 +2,7 @@
 // other systems: switching the main system (one at a time, said plainly with what it forgets) and Genesis, read beside
 // the main system for groups, events and forms only (design §8). Keys go only through native (church-system.ts).
 import { Fragment, useState, type ReactNode } from "react";
-import { readProblem, sharedLabel, systemFacts, type FactOutcome, type NullCount, type SystemFacts } from "../../../core/src/church-systems/facts.js";
+import { readableName, readProblem, sharedLabel, systemFacts, type FactOutcome, type NullCount, type SystemFacts } from "../../../core/src/church-systems/facts.js";
 import { labelsOf } from "../../../core/src/church-systems/placeholders.js";
 import { parseSystemCaptureText, SYSTEMS, type SystemCapture, type SystemId } from "../../../core/src/church-systems/types.js";
 import {
@@ -270,6 +270,8 @@ export function SystemFactsList({ capture, zone, folded = true }: { capture: Sys
   const system = capture.system;
   const sysName = SYSTEMS[system].name;
   const name = (key: string, fallback: string) => Object.hasOwn(labels, key) ? labels[key]! : fallback;
+  // A form's name as the system gave it, or made readable when it is a slug (Genesis: "visitor-connection-card").
+  const formName = (id: string) => readableName(name(`form:${id}`, "A form without a name"));
   const line = (outcome: FactOutcome) => readProblem(system, outcome);
   const checked = clock(Date.parse(capture.completed_at));
   // The church's zone as the system gave it, or as the person confirmed it, only when this Mac knows it; else this Mac's.
@@ -282,8 +284,9 @@ export function SystemFactsList({ capture, zone, folded = true }: { capture: Sys
     : system === "b1" && part === "forms" ? <p className="small">Ozzie sees only the forms the person who made the key can manage.</p>
     : <p className="small">{readProblem(system, "truncated")}</p>;
   const failed = (part: "groups" | "events" | "forms") => cut(part) ? null : line(facts.reads[part].outcome);
+  // An event still to come says nothing about attendance, not even why (live check 2026-11-19).
   const limits = (part: "groups" | "events" | "forms", whys: readonly (NullCount | null)[]) =>
-    [...new Set(whys.filter((w): w is NullCount => w !== null))].map(w => <p key={w} className="small">{limitSentence(system, part, w)}</p>);
+    [...new Set(whys.filter((w): w is NullCount => w !== null && w !== "upcoming"))].map(w => <p key={w} className="small">{limitSentence(system, part, w)}</p>);
   const tags = system === "breeze";
   const counted = facts.groups.filter(g => g.members !== null), named = facts.groups.filter(g => g.members === null);
   const formsCounted = facts.forms.filter(f => f.submissions !== null), formsNamed = facts.forms.filter(f => f.submissions === null);
@@ -313,8 +316,8 @@ export function SystemFactsList({ capture, zone, folded = true }: { capture: Sys
       : <>
         {cutLine("forms")}
         {limits("forms", formsNamed.map(f => f.why_null))}
-        {formsCounted.length > 0 && <Capped items={formsCounted} max={8} render={f => `${name(`form:${f.form_id}`, "A form without a name")}: ${f.at_least ? "at least " : ""}${f.submissions} ${f.submissions === 1 ? "entry" : "entries"}`} />}
-        {formsNamed.length > 0 && <Capped wrap items={formsNamed} max={8} render={f => name(`form:${f.form_id}`, "A form without a name")} />}
+        {formsCounted.length > 0 && <Capped items={formsCounted} max={8} render={f => `${formName(f.form_id)}: ${f.at_least ? "at least " : ""}${f.submissions} ${f.submissions === 1 ? "entry" : "entries"}`} />}
+        {formsNamed.length > 0 && <Capped wrap items={formsNamed} max={8} render={f => formName(f.form_id)} />}
       </>}
     <details className="listen-more"><summary><Icon name="chev" small />What Ozzie can't see in {sysName}</summary>
       <ul className="small">{facts.cannot_see.map(l => <li key={l}>{l}</li>)}</ul></details>

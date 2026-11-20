@@ -26,7 +26,8 @@
 //!   read if Genesis ever sends one);
 //! - events: `id`, `title`, `start_date` (`YYYY-MM-DD`), `start_time` and `end_time` (`HH:MM:SS`), `end_date` (or
 //!   null), `attendance_adults`, `attendance_children`, `attendance_students` (integers), and fields not read here;
-//! - forms: `id`, `name`, and fields not read here.
+//! - forms: `id`, `name` (seen live 2026-11-19 as a slug, "visitor-connection-card"), and on some a `title` (the name a
+//!   person gave it), preferred when it is text; a `title` of any other type is ignored, never a failed read.
 //!
 //! Genesis's event times are local wall-clock times with no zone, and its API names no zone anywhere (the church's
 //! zone is a setting on Genesis's own site). So `check` takes the church's zone from the caller (one the person has
@@ -343,7 +344,17 @@ fn project_forms(value: &Value) -> Result<Projected<Labelled<Form>>, ReadError> 
             id,
             submissions: None,
         };
-        Ok((form, optional_text(row, "name")?.map(str::to_owned)))
+        // The form's title when Genesis gives one as text, else its name (live: a slug the page makes readable).
+        let title = row
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        let label = match title {
+            Some(title) => Some(title.to_owned()),
+            None => optional_text(row, "name")?.map(str::to_owned),
+        };
+        Ok((form, label))
     })
 }
 /// How many submissions a page holds: each must be an object with an id, and nothing else in one is read or kept.

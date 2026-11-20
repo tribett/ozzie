@@ -56,10 +56,13 @@ export function ChooseSystem({ onChoose, onExample }: { onChoose: (system: MainS
   </section>;
 }
 
-/** The promises on a system's connect screen: it only reads, names stay here, and the one host Ozzie contacts. */
+/**
+ * The promises on a system's connect screen: it only reads, names stay here, and the one host Ozzie contacts. Genesis's
+ * key reads no People, so there Ozzie reads no one's name at all (live check 2026-11-19).
+ */
 export function systemPromises(system: SystemId): string[] {
   const name = SYSTEMS[system].name;
-  return [systemPromise("connectReads", name), systemPromise("names", name), HOST_SENTENCE[system]];
+  return [systemPromise("connectReads", name), system === "genesis" ? "Ozzie reads no one's name from Genesis." : systemPromise("names", name), HOST_SENTENCE[system]];
 }
 const Checks = ({ lines }: { lines: readonly string[] }) =>
   <ul className="fr-checks">{lines.map(line => <li key={line}><Icon name="check" small /><span>{line}</span></li>)}</ul>;
