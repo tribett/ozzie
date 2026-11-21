@@ -49,10 +49,10 @@ export const jobTitle = (r: Pick<Responsibility, "template" | "title">): string 
 /** The morning briefing's fuller brief, by the service's day, as its own heading says it (sunday-ready.tsx): "“Ready for Wednesday” brief". */
 export const readyBriefName = (d: DayWords = SUNDAY_WORDS): string => `“Ready for ${dayName(d)}” brief`;
 
-/** What each one watches, in a sentence. */
-export function watchesText(template: TemplateId, d: DayWords = SUNDAY_WORDS): string {
+/** What each one watches, in a sentence. `several`: more than one service is watched, and Keep services covered reads each. */
+export function watchesText(template: TemplateId, d: DayWords = SUNDAY_WORDS, several = false): string {
   switch (template) {
-    case "keep-sunday-covered": return "Open roles, who has accepted or declined, and scheduled leads for the service Ozzie watches.";
+    case "keep-sunday-covered": return `Open roles, who has accepted or declined, and scheduled leads for ${several ? "each service" : "the service"} Ozzie watches.`;
     case "watch-room-bookings": return `Room bookings on ${dayName(d)} that overlap under your room rules.`;
     case "follow-ups-without-owner": return "Follow-ups in Planning Center People that are overdue with no one assigned.";
     case "group-night-clashes": return `Group meetings at the same time as someone is serving on ${dayName(d)}.`;

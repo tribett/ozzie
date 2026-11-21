@@ -7,7 +7,7 @@
 // Mac's own voice, and `<`, `>` and `&` never reach it (no markup a voice could act on).
 import type { AttentionReport } from "./attention-import/index.js";
 import { operationsNotChecked, type SundayOperations } from "./operations-capture.js";
-import { blockoutRoles, blockoutTime, rosterNeedsYou, rosterSummary, unnumberedRoster, type Finding, type SundayBrief } from "./sunday-brief.js";
+import { blockoutRoles, blockoutTime, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "./sunday-brief.js";
 import type { DecidedBrief, DecidedItem } from "./sunday-decisions.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
@@ -53,6 +53,12 @@ export interface BriefingOptions {
   /** Off by default: "Someone on the Greeter team". On: names from this check, spoken on this Mac only. */
   includeNames?: boolean;
   names?: Readonly<Record<string, string>>;
+  /**
+   * With more than one service watched, each team's service by its own name (desktop services-merge.ts teamServices):
+   * every role is said with its service ("Greeter (Youth Night)"), since one briefing speaks of every service. Absent with
+   * one service, which reads as before.
+   */
+  teamServices?: TeamServices;
 }
 export type SectionId = "intro" | "decisions" | "looks" | "unchecked" | "times" | "close";
 export interface BriefingSection { id: SectionId; heading: string; sentences: string[] }
@@ -75,15 +81,21 @@ const clock = (iso: string, timeZone: string) => plain(new Intl.DateTimeFormat("
  * `d`: the service's day words; `name` it mid-sentence ("Wednesday", "this weekend"), never a fixed "Sunday" for a
  * service on another day (onboarding spec §5).
  */
-interface Ctx { timeZone: string; nameOf: (id: string | undefined) => string | null; d: DayWords; name: string }
+interface Ctx { timeZone: string; nameOf: (id: string | undefined) => string | null; d: DayWords; name: string; services?: TeamServices | undefined }
 const dayCtx = (d: DayWords) => ({ d, name: d.kind === "weekday" ? d.day : d.thisOne });
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/**
+ * When a role's line has no time of its own: the service's day words ("this Wednesday"), or nothing once the role is said
+ * with its own service (several services watched), whose day words are every service's ("your services").
+ */
+const noTime = (f: Finding, ctx: Ctx) => serviceOfTeam(f.position?.team_id, ctx.services) ? "" : ` ${ctx.d.thisOne}`;
 
 function needsPeople(f: Finding, ctx: Ctx): string {
   const pos = f.position!;
-  const at = pos.interval ? ` at the ${clock(pos.interval.starts_at, ctx.timeZone)} service` : ` ${ctx.d.thisOne}`;
+  const at = pos.interval ? ` at the ${clock(pos.interval.starts_at, ctx.timeZone)} service` : noTime(f, ctx);
   const n = f.people?.suggestions.length ?? 0, c = f.people?.conflicts.length ?? 0, u = f.people?.unverified.length ?? 0;
-  const help = n + c === 0 ? "No one else on this team is clear for this time."
+  // "For this time" only when there is one: a role said with its own service may have none.
+  const help = n + c === 0 ? `No one else on this team is clear${at ? " for this time" : ""}.`
     : n === 0 ? `No one else on the team is clear with no overlap found; ${c === 1 ? "one person has" : `${c} people have`} a possible conflict.`
       : `${n === 1 ? "One person" : `${n} people`} on the team could help with no overlap found${c ? `, and ${c === 1 ? "one" : c} with a possible conflict` : ""}.`;
   // People whose availability couldn't be confirmed are neither clear nor ruled out: say how many.
@@ -94,7 +106,7 @@ function needsPeople(f: Finding, ctx: Ctx): string {
 /** Kids team count: confirmed people only (pending isn't counted), never "adults". */
 function fewConfirmed(f: Finding, ctx: Ctx): string {
   const pos = f.position!, c = f.confirmed?.length ?? 0, asked = f.asked?.length ?? 0;
-  const at = pos.interval ? ` at the ${clock(pos.interval.starts_at, ctx.timeZone)} service` : ` ${ctx.d.thisOne}`;
+  const at = pos.interval ? ` at the ${clock(pos.interval.starts_at, ctx.timeZone)} service` : noTime(f, ctx);
   const who = c === 0 ? "No confirmed people" : `Only ${one(c, "confirmed person", "confirmed people")}`;
   const more = asked ? ` ${asked === 1 ? "One more is asked but hasn't" : `${asked} more are asked but haven't`} answered.` : "";
   const unsure = f.tone === "look" ? " Planning Center doesn't show which service time some confirmed people serve, so it's worth a look." : "";
@@ -106,9 +118,11 @@ function fewConfirmed(f: Finding, ctx: Ctx): string {
  */
 function background(f: Finding, ctx: Ctx): string {
   const one = `One person on ${f.position?.name ?? "a kids team"}`;
+  // With more than one service watched, the team's own service, never every service's words ("your services").
+  const day = serviceOfTeam(f.position?.team_id, ctx.services) ?? ctx.name;
   switch (f.check) {
-    case "expires-before-sunday": return `${one} has a background check on file that expires before ${ctx.name}.`;
-    case "expires-on-sunday": return `${one} has a background check on file that expires on ${ctx.name}.`;
+    case "expires-before-sunday": return `${one} has a background check on file that expires before ${day}.`;
+    case "expires-on-sunday": return `${one} has a background check on file that expires on ${day}.`;
     default: return `${one} has no current background check on file.${f.tone === "look" ? " Your Planning Center login may not be able to see background checks." : ""}`;
   }
 }
@@ -132,7 +146,7 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
       // The streak finding carries no position, so none is named (no guessing from other findings).
       return `${name ?? "Someone"} has been scheduled ${f.sundays} weeks in a row. Your Church rules suggest a quick check-in.`;
     case "lead-missing":
-      return `No one is scheduled to lead ${pos} ${ctx.d.thisOne}. Your Church rules ask for a scheduled lead.`;
+      return `No one is scheduled to lead ${pos}${noTime(f, ctx)}. Your Church rules ask for a scheduled lead.`;
     case "lead-unverified":
       return `Ozzie couldn't confirm the scheduled lead for ${pos}, so it isn't counting it as covered.`;
     case "blockout": {
@@ -197,10 +211,12 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   const { attention, sunday } = input;
   const names = options.includeNames ? options.names ?? {} : {};
   const ctx: Ctx = {
-    timeZone: options.timeZone, ...dayCtx(sunday?.day ?? options.day ?? SUNDAY_WORDS),
+    timeZone: options.timeZone, ...dayCtx(sunday?.day ?? options.day ?? SUNDAY_WORDS), services: options.teamServices,
     nameOf: id => id && Object.hasOwn(names, id) && typeof names[id] === "string" && names[id]!.trim() ? names[id]!.trim() : null,
   };
-  const items: DecidedItem[] = sunday ? input.decided?.items ?? sunday.findings.map(finding => ({ finding, state: "open", decision: null, changes: [] })) : [];
+  // With more than one service watched, each role with its service: one briefing speaks of every service.
+  const items: DecidedItem[] = (sunday ? input.decided?.items ?? sunday.findings.map(finding => ({ finding, state: "open" as const, decision: null, changes: [] })) : [])
+    .map(i => options.teamServices ? { ...i, finding: withServices(i.finding, options.teamServices) } : i);
   const open = items.filter(i => i.state !== "resolved");
   const resolved = items.length - open.length;
   const again = (i: DecidedItem, text: string) => i.state === "reopened" ? `This needs attention again: ${text}` : text;

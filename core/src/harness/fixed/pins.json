@@ -3,8 +3,8 @@
   "procedures": {
     "answer-from-what-was-read": {
       "file": "core/skills/answer-from-what-was-read.md",
-      "file_sha256": "d2613def03eae9178bf01c61261c171d226429b8500b2322a93bb49d8616a211",
-      "system_sha256": "ab4442b550676b8694d1c35d36c7fb60ba1348aa4fbc6ce71207bcd277a51048"
+      "file_sha256": "6f9f8ddcbba8a002a4bb309de56114a541b5cb2519b554a0383f6f3288845637",
+      "system_sha256": "0ebafa8d72747035e16af1ea58ea4fdd815384643a8310f456dbb3f756d31cf4"
     },
     "follow-up-owners": {
       "file": "core/skills/follow-up-owners.md",
@@ -36,6 +36,6 @@
     "file": "core/src/harness/fixed/policy-local.txt",
     "file_sha256": "0353e5852c9fd1a4fb27dc6147bbc8d1fb0b0bae8f60e3780f75c719b4a74862",
     "procedure": "answer-from-what-was-read",
-    "system_sha256": "82724acfbbbb97dcfa51f5a7c172b3445a19a80f3d0dc61fef06cf882fa45a42"
+    "system_sha256": "fc293bf1307fd03467ea457000737aedee8daf26dec25fa6df0048b538701859"
   }
 }

@@ -34,6 +34,7 @@ import { isTimeZone, localDate, localDay } from "../../../core/src/church-time.j
 import type { NoticedItem, RunnerView, WriteUp } from "./responsibility-runner.js";
 import type { KeyValueStore } from "./proactive.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
+import { roleWithService, serviceOfTeam, type TeamServices } from "../../../core/src/sunday-brief.js";
 import { eyeLine, keepTitle, pageRef } from "./day-phrases.js";
 
 export type GroupId = "attention" | "review" | "progress";
@@ -314,36 +315,43 @@ export function progressEmptyText(regular: RegularCheck | null | undefined, exam
 export interface DecisionLine { key: string; text: string; people: boolean; count?: number }
 /** At most this many decisions are named on Today; the rest are counted, "and 2 more on Sunday". */
 export const DECISIONS_NAMED = 5;
-type Decided = { finding: { key: string; kind: string; tone: string; position?: { name: string; interval: { starts_at: string } | null }; remaining?: number;
+type Decided = { finding: { key: string; kind: string; tone: string; position?: { name: string; team_id?: string; interval: { starts_at: string } | null }; remaining?: number;
   people?: { suggestions: readonly unknown[]; conflicts: readonly unknown[] }; check?: string | undefined } ; state: string };
 const more = (n: number) => n === 1 ? "1 more person needed" : `${n} more people needed`;
 /**
  * The Sunday decisions Today names, in the Sunday page's order: role, how many still needed, when, and how many on the
  * team are clear for that time. Counts and role names only: never a person's name, never ranked or scored. Rooms and
  * follow-ups that need a decision are named by what they are. `named` is at most DECISIONS_NAMED; `more` the rest.
+ * `services`: with more than one service watched, each team's service, so every role is said with it ("Greeter (Youth
+ * Night)"), and a role with no time of its own isn't given every service's day words ("your services").
  */
-export function decisionLines(items: readonly Decided[], ops: { rooms: number; followUps: number }, zone: string, d: DayWords = SUNDAY_WORDS): { named: DecisionLine[]; more: number } {
+export function decisionLines(items: readonly Decided[], ops: { rooms: number; followUps: number }, zone: string, d: DayWords = SUNDAY_WORDS,
+  services?: TeamServices): { named: DecisionLine[]; more: number } {
   const z = zoneOr(zone);
   const at = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: z });
   const lines: DecisionLine[] = items.filter(i => i.state !== "resolved" && i.finding.tone === "decision").map(({ finding: f }) => {
-    const role = f.position?.name ?? "A role";
-    const when = f.position?.interval ? at(f.position.interval.starts_at) : d.thisOne;
+    const service = serviceOfTeam(f.position?.team_id, services);
+    const role = roleWithService(f.position?.name ?? "A role", service);
+    // A role said with its own service and no time of its own: that service, never every service's day words.
+    const when = f.position?.interval ? at(f.position.interval.starts_at) : service ?? d.thisOne;
+    // ", Sun 9:30 AM", or nothing for a role said with its own service and no time of its own.
+    const tail = f.position?.interval || !service ? `, ${when}` : "";
     switch (f.kind) {
       case "needs-people": {
         // A system that ties no team to its roles (Breeze) lists no one: the line says nothing about a team.
-        if (!f.people) return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}, ${when}.`, people: false };
+        if (!f.people) return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}${tail}.`, people: false };
         const clear = f.people.suggestions.length;
         const team = clear === 0 ? "no one else on the team is clear" : clear === 1 ? "1 on the team is clear" : `${clear} on the team are clear`;
-        return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}, ${when}. ${team.charAt(0).toUpperCase()}${team.slice(1)} for that time.`,
+        return { key: f.key, text: `${role}: ${more(f.remaining ?? 1)}${tail}. ${team.charAt(0).toUpperCase()}${team.slice(1)}${tail ? " for that time" : ""}.`,
           people: clear + (f.people?.conflicts.length ?? 0) > 0 };
       }
-      case "too-few-confirmed": return { key: f.key, text: `${role}: fewer confirmed people than your rule asks, ${when}.`, people: false };
+      case "too-few-confirmed": return { key: f.key, text: `${role}: fewer confirmed people than your rule asks${tail}.`, people: false };
       // As Planning Center People shows it (core kids-rules.ts `check`), never whose (review P, L7).
       case "background-check": return { key: f.key, people: false, text: f.check === "none-current" ? `${role}: someone scheduled for ${when} has no current background check on file.`
         : f.check === "expires-before-sunday" ? `${role}: a background check on file expires before ${when}.`
           : `${role}: a background check is missing or expires before ${when}.` };
-      case "lead-missing": return { key: f.key, text: `${role}: no one is scheduled to lead, ${when}.`, people: false };
-      default: return { key: f.key, text: `${role}: needs a decision, ${when}.`, people: false };
+      case "lead-missing": return { key: f.key, text: `${role}: no one is scheduled to lead${tail}.`, people: false };
+      default: return { key: f.key, text: `${role}: needs a decision${tail}.`, people: false };
     }
   });
   // Rooms and follow-ups are named together, each line standing for as many decisions as it counts.

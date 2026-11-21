@@ -2,7 +2,7 @@
 // everything still open for the Sunday on screen, in one place, with what wasn't checked and when it
 // was read. Built only from the brief, the person's decisions and the rooms / follow-ups check the
 // Sunday page shows; names resolve on this Mac only. Read-only: decisions happen on the Sunday page.
-import { blockoutRoles, blockoutTime, rosterSummary, shownUncertainties, sundayShownCount, unnumberedRoster, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutRoles, blockoutTime, rosterSummary, shownUncertainties, sundayShownCount, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../core/src/harness/responsibilities.js";
@@ -13,6 +13,7 @@ import { keptLines } from "./responsibility-words.js";
 import type { NoticedItem } from "./responsibility-runner.js";
 import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
 import { dayName, DayName, OPEN_SERVICES, pageRef } from "./day-phrases.js";
+import { useTeamServices } from "./team-labels.js";
 
 type Names = Readonly<Record<string, string>>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -21,18 +22,24 @@ const people = (n: number) => n === 1 ? "one more person" : `${n} more people`;
 /** The brief's display title by the service's real day: "Ready for Wednesday", "Ready for this weekend" (spec §5.2). */
 export const readyTitle = (d: DayWords) => `Ready for ${dayName(d)}`;
 
-/** One line per open finding, in the Sunday page's words. A kind without its own line reads its first fact. */
-export function sundayReadyLine(f: Finding, names: Names, d: DayWords = SUNDAY_WORDS): string {
+/**
+ * One line per open finding, in the Sunday page's words. A kind without its own line reads its first fact. `services`:
+ * with more than one service watched, each team's service, so every role is said with it ("Greeter (Youth Night)").
+ */
+export function sundayReadyLine(found: Finding, names: Names, d: DayWords = SUNDAY_WORDS, services?: TeamServices): string {
+  const f = withServices(found, services);
   const pos = f.position?.name ?? "A role";
   switch (f.kind) {
     case "needs-people": return `${pos} still needs ${people(f.remaining ?? 1)}.`;
     case "pending": return `${nameOf(names, f.person_id)} hasn't accepted ${pos} yet. ${f.notification === "sent" ? "The request was sent."
       : f.notification === undefined && f.source ? `${f.source} doesn't say whether the request was sent.` : `${f.source ?? "Planning Center"} shows the request hasn't been sent.`}`;
     case "streak": return `${nameOf(names, f.person_id)} is scheduled ${f.sundays} weeks in a row. Your Church rules suggest a check-in.`;
-    case "lead-missing": return `No one is scheduled to lead ${pos} ${d.thisOne}.`;
+    // Said with its own service, the role needs no day words (every service's, "your services").
+    case "lead-missing": return `No one is scheduled to lead ${pos}${serviceOfTeam(f.position?.team_id, services) ? "" : ` ${d.thisOne}`}.`;
     case "lead-unverified": return `The scheduled lead for ${pos} couldn't be confirmed.`;
     // The kids rules read as on the Sunday page: which team, which time, and (on this Mac only) who.
-    case "too-few-confirmed": return fewConfirmedTitle(f);
+    // In the service's own day words (it said "this Sunday" for every service), or none once said with its own service.
+    case "too-few-confirmed": return fewConfirmedTitle(f, d, Boolean(serviceOfTeam(f.position?.team_id, services)));
     case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
     case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} at ${blockoutTime(f) ? "that time" : "those times"}. ${f.source ?? "Planning Center"} still counts them.`;
     case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
@@ -45,6 +52,7 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   brief: SundayBrief | null; decisions?: readonly SundayDecision[]; operations?: SundayOperations | null; names: Names; onSunday: () => void;
 }) {
   const d = useDay();
+  const services = useTeamServices();
   if (!brief) return <div className="sunday-ready panel-sunken">
     <p className="bold">{readyTitle(d)}</p>
     <p className="small">{DayName(d)} hasn't been checked yet, so this brief isn't here. Check it on {pageRef()}.</p>
@@ -78,8 +86,8 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
     : <p className="small">{counts.decisions ? `${counts.decisions === 1 ? "One thing needs" : `${counts.decisions} things need`} a decision` : "Nothing needs a decision"}
       {counts.looks ? `, and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}.
       {counts.resolved ? ` You resolved ${counts.resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>}
-    {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names, d)))}</>}
-    {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names, d)))}</>}
+    {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names, d, services)))}</>}
+    {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names, d, services)))}</>}
     {others.length > 0 && <><p className="small bold">Rooms, follow-ups and group meetings</p>{list(others)}</>}
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
     <p className="small">{brief.mode === "recording" ? "From the saved copy of a check made" : `Read from ${brief.source ?? "Planning Center"}`} {time(brief.checked_at ?? brief.completed_at)}.</p>

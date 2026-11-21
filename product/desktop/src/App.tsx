@@ -1399,7 +1399,7 @@ export function App() {
     // Words only (a plan card's "isn't connected yet"): held through a sign-in, as Today's regular check (review item 4); a
     // job started meanwhile says its first check waits for the sign-in, since none runs until then.
     organization: org, granted, modelReady, connected: shownReadiness === "ready", signingIn, zone: scheduleZone, now: () => new Date().toISOString(), sunday: chosenSunday,
-    existing: watch.items, pausedAll: watch.paused_all, church: inUse?.name ?? null,
+    existing: watch.items, pausedAll: watch.paused_all, church: inUse?.name ?? null, several: !offPc && !fictional && also.length > 0,
   };
   const planActions: PlanActions = {
     start: plan => runner.create(plan), edit: (id, plan) => runner.edit(id, plan),
@@ -1693,7 +1693,7 @@ export function App() {
           onPause={() => systemProactive.pause()} onResume={() => systemProactive.resume()} />}
         {page === "automatic" && !onSystem && !onGenesis && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId} church={inUse?.name ?? null}
           readiness={readiness} shownReadiness={shownReadiness} busy={busy} now={now} churchTimeZone={churchZone}
-          onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={setPrefs}
+          onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={setPrefs} several={servicesShown}
           responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} names={changeNames} />} />}
         {page === "activity" && <ActivityPage capture={capture} notGranted={!offPc && (operationsAsked.get() || operationsReads.on === true) && Boolean(status?.scopes) && !operationsGranted(status)}
           tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} found={triggers.found} source={triggers.source} parts={triggers.parts} ollama={ollamaDone}

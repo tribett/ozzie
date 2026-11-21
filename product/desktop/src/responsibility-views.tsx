@@ -54,6 +54,8 @@ export interface PlanContext {
   macZone?: string;
   /** What Ozzie already keeps an eye on: one of each kind at a time. */
   existing?: readonly Responsibility[];
+  /** More than one service is watched (owner decision 2026-11-19): a line about "the service Ozzie watches" says each. */
+  several?: boolean;
   /** "Pause everything" is on. */
   pausedAll?: boolean;
 }
@@ -73,7 +75,7 @@ export const asPlan = (r: Responsibility, context: PlanContext): Plan => ({
 function endsEarly(plan: Plan, context: PlanContext): string | null {
   const chosen = context.sunday;
   if (plan.template !== "keep-sunday-covered" || plan.lifetime.kind !== "until" || !chosen || plan.lifetime.until >= chosen) return null;
-  return `This ends before ${dateText(chosen)}, the day of the service Ozzie watches. Change it if you meant to keep going until then.`;
+  return `This ends before ${dateText(chosen)}, the day of ${context.several ? "one of the services" : "the service"} Ozzie watches. Change it if you meant to keep going until then.`;
 }
 export interface PlanActions {
   start: (plan: Plan) => Promise<unknown>;
@@ -155,7 +157,7 @@ export function PlanEditor({ plan, context, onDone, onCancel, doneLabel = "Use t
 export function PlanRows({ plan, context }: { plan: Plan; context: PlanContext }) {
   const d = useDay();
   return <div className="sp">
-    <div className="sp-row sp-2"><span className="sp-h">What Ozzie will watch</span><span>{watchesText(plan.template, d)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">What Ozzie will watch</span><span>{watchesText(plan.template, d, context.several)}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">Accounts</span><span>{accountsText(plan.template, context.church)}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">When it checks</span><span>{scheduleText(plan, at(plan, context), d)}{zoneNote(plan.zone, context)} {ONLY_WHILE}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">When it tells you</span><span>{reportText(plan)}</span></div>
@@ -349,7 +351,7 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
             : context.signingIn ? "Once the Planning Center sign-in in your browser is done."
               : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Checks used</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} in the last 24 hours.</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{watchesText(r.template, d)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{watchesText(r.template, d, context.several)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">When</span><span>{scheduleText(plan, at(plan, context), d)}{zoneNote(plan.zone, context)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template, r.schedule.weekdays)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>

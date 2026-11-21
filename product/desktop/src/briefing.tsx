@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { buildSpokenBriefing, type BriefingInput } from "../../../core/src/spoken-briefing.js";
 import { useDay } from "./day-words.js";
+import { useTeamServices } from "./team-labels.js";
 
 /** Native, on this Mac only: macOS speech with a fixed voice. The script never goes to an AI model. */
 export const briefingVoice = {
@@ -36,9 +37,12 @@ export function BriefingPanel({ input, names, attentionTimeZone, timeZone = loca
   const run = useRef(0);
   // The watched service's real day, for the lines said before a check has read it ("Wednesday hasn't been checked yet").
   const day = useDay();
+  // With more than one service watched, each role is said with its service (team-labels.ts); undefined with one.
+  const teamServices = useTeamServices();
   const briefing = useMemo(() => buildSpokenBriefing(input, {
     timeZone, checkedTimeZone: localZone(), includeNames: withNames, names, day, ...(attentionTimeZone ? { attentionTimeZone } : {}),
-  }), [input, names, withNames, timeZone, attentionTimeZone, day]);
+    ...(teamServices ? { teamServices } : {}),
+  }), [input, names, withNames, timeZone, attentionTimeZone, day, teamServices]);
   const stop = () => {
     run.current++;
     setState("ready");

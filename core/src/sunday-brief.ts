@@ -173,6 +173,29 @@ export const blockoutRoles = (f: Pick<Finding, "serving" | "position">): string 
 /** How Planning Center still counts the person on those roles: "confirmed for Greeter and pending for Usher". */
 export const blockoutCounted = (f: Pick<Finding, "serving" | "position">): string =>
   andList([...new Set((f.serving ?? []).map(s => `${s.status} for ${s.name}`))]) || `scheduled for ${blockoutRoles(f)}`;
+/**
+ * Each team's service by its own name, while more than one service is watched (desktop services-merge.ts teamServices);
+ * undefined with one service. Local only, like every name a check read.
+ */
+export type TeamServices = Readonly<Record<string, string>>;
+/** A role with its service, as Ask's answers restore it ("Greeter (Youth Night)"); the role alone when no service is known. */
+export const roleWithService = (role: string, service: string | null | undefined): string => service?.trim() ? `${role} (${service.trim()})` : role;
+/** A team's service, while more than one service is watched and that service's name is known. */
+export const serviceOfTeam = (team: string | undefined, services: TeamServices | undefined): string | null =>
+  team !== undefined && services && Object.hasOwn(services, team) ? services[team]?.trim() || null : null;
+/**
+ * A finding as lines that speak of every service at once say it (Today, the briefings): each role it names with its
+ * team's service, while more than one service is watched. The very same finding with one service, or none known.
+ */
+export function withServices(f: Finding, services: TeamServices | undefined): Finding {
+  if (!services) return f;
+  const named = (name: string, team: string) => roleWithService(name, serviceOfTeam(team, services));
+  return {
+    ...f,
+    ...(f.position ? { position: { ...f.position, name: named(f.position.name, f.position.team_id) } } : {}),
+    ...(f.serving ? { serving: f.serving.map(s => ({ ...s, name: named(s.name, s.team_id) })) } : {}),
+  };
+}
 /** The one serving time a blockout finding is about, or null when it names more than one. */
 export const blockoutTime = (f: Pick<Finding, "serving" | "position">): ServingInterval | null => {
   const times = [...new Map((f.serving ?? []).map(s => [JSON.stringify(s.interval), s.interval])).values()];

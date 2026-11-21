@@ -488,6 +488,24 @@ export class HarnessTools {
     }, "needs");
   }
 
+  /**
+   * With more than one service watched (HarnessData `serviceOfTeam`), the role's findings by their own labels, in the
+   * brief's order, when a role named in two services stands for both (a question naming "Greeter" gets the name's label):
+   * each team's label restores with its service on this Mac ("Greeter (Youth Night)"), so the answer says which service
+   * each count and person is for. Null otherwise: always with one service, whose answers read as before, and whenever two
+   * of the teams are one service's or a team's service isn't known (they would restore to the same words), so those keep
+   * the one label with everyone listed once. Only labels this session issues and the brief's own findings: nothing about a
+   * service is in any result.
+   */
+  #byTeam(findings: readonly Finding[]): [string, Finding[]][] | null {
+    const services = this.#data.serviceOfTeam;
+    if (!services || findings.length < 2) return null;
+    const groups = new Map<string, Finding[]>();
+    for (const f of findings) { const label = this.#role(f); groups.set(label, [...(groups.get(label) ?? []), f]); }
+    const named = [...groups.values()].map(own => { const team = own[0]!.position?.team_id; return team !== undefined && Object.hasOwn(services, team) ? services[team] : undefined; });
+    return groups.size > 1 && named.every(Boolean) && new Set(named).size === named.length ? [...groups] : null;
+  }
+
   /** The asked-for role is echoed under `asked_for`, which never counts as evidence (verify.ts, review B-S1). */
   #whoCouldHelp(role: string): Result {
     const { zone, brief } = this.#services();
@@ -508,9 +526,14 @@ export class HarnessTools {
       return this.#servicesResult({ asked_for: { role }, times: findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
         people_listed: NO_TEAM, people: [] }, "people");
     }
+    // Several services, each with this role: each team's times and people under its own label, one team after another, so
+    // a list cut for length (fit) leaves out the last team's people first.
+    const teams = this.#byTeam(findings);
     return this.#servicesResult({
-      asked_for: { role }, times: findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
-      people: this.#people(findings).map(p => ({ role, ...p })),
+      asked_for: { role },
+      times: teams ? teams.flatMap(([label, own]) => own.map(f => ({ role: label, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })))
+        : findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
+      people: teams ? teams.flatMap(([label, own]) => this.#people(own).map(p => ({ role: label, ...p }))) : this.#people(findings).map(p => ({ role, ...p })),
       order: "in no particular order, not ranked", willingness: "not recorded; no overlap found doesn't mean free or willing, only the person can say",
     }, "people");
   }
@@ -701,11 +724,16 @@ export class HarnessTools {
     const start = localIso(finding.position?.interval?.starts_at, zone);
     // When: the service time, else the plan's own church-local date, else nothing; never a fixed "this Sunday", since the
     // service may be on any day (onboarding spec §5, decision 18). The vocabulary has no words for "the next service".
-    const date = brief.plan.date && isIsoTime(brief.plan.date) ? brief.plan.date : null;
+    // With more than one service watched the brief's plan is the first service's (desktop services-merge.ts), so its date
+    // isn't said for a role with no time of its own: it may be another service's.
+    const date = brief.plan.date && isIsoTime(brief.plan.date) && !this.#data.serviceOfTeam ? brief.plan.date : null;
+    // With more than one service watched, the role by its own team's label, which restores with its service on this Mac
+    // ("Greeter (Youth Night)"), even when the AI asked by a label that stands for every service's role of that name.
+    const said = this.#data.serviceOfTeam ? this.#role(finding) : role;
     // Ozzie's own wording (as draft-request.ts), in labels and an ISO time; restored to the first name, the time in words and the sender on this Mac.
     const draft = [
       `Hi ${person},`,
-      `We still need someone for ${role}${start ? ` at ${start}` : date ? ` on ${date}` : ""}. Would you be able to help?`,
+      `We still need someone for ${said}${start ? ` at ${start}` : date ? ` on ${date}` : ""}. Would you be able to help?`,
       "It's completely fine to say no. Just let me know either way so we can plan.",
       `Thank you,\n${YOUR_NAME}`,
     ].join("\n\n");

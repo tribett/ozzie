@@ -60,6 +60,49 @@ describe("who could help, as one line about the list (review K)", () => {
     // A copy cut to fit what the AI may read: the count is the check's, not the copy's.
     expect(said(envelope(38, 7))).toEqual(["On the team for [Role 1], the check listed 45 people."]);
   });
+
+  // With more than one service watched, a role in two services is given one label per team (tools.ts #byTeam), each
+  // restored with its service on this Mac. Placeholder form here: the labels are all a sentence ever holds.
+  const TWO: DayWords = { kind: "spread", weekday: null, day: "your services", Day: "Your services", page: "Services", question: "Are your services covered?", date: null, thisOne: "your services" };
+  const twoTeams = (cut = 0): ToolEnvelope => ({
+    tool: "sunday.who_could_help", source: "Planning Center Services", check_time: FRESH, completeness: cut ? "partial" : "complete",
+    payload: {
+      fact: "f1", asked_for: { role: "[Role 1]" },
+      times: [{ fact: "f2", role: "[Role 2]", time: span(SUN, "09:30", "10:30"), remaining: 1 }, { fact: "f3", role: "[Role 3]", time: "not known", remaining: 2 }],
+      people: [{ fact: "f4", role: "[Role 2]", person: "[Person 2]", status: "no overlap found" }, { fact: "f5", role: "[Role 2]", person: "[Person 1]", status: "left out", reasons: ["confirmed elsewhere at this time"] },
+        { fact: "f6", role: "[Role 3]", person: "[Person 3]", status: "no overlap found" }],
+      ...(cut ? { left_out_for_length: cut } : {}),
+    },
+  });
+  const all = () => facts("f6", "f5", "f4", "f3", "f2", "f1");
+
+  it("says each service's team one after the other, its own count first, whatever order the AI chose (rehearsal of 0.5.2)", () => {
+    expect(composeAnswer(all(), [twoTeams()], TWO).paragraphs).toEqual([
+      "On the team for [Role 2], the check listed 2 people.",
+      "[Role 2] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count.",
+      "[Person 1] was left out for [Role 2]: confirmed elsewhere at this time.",
+      "[Person 2] has no overlap found for [Role 2].",
+      "On the team for [Role 3], the check listed 1 person.",
+      "[Role 3] still needs 2 more people, by Planning Center's count. Ozzie can't tie this role to one service time.",
+      "[Person 3] has no overlap found for [Role 3].",
+      NOT_FREE, NOT_RANKED,
+    ]);
+  });
+
+  it("says one count for every team when people were left out for length: which team they were on isn't known", () => {
+    expect(composeAnswer(all(), [twoTeams(4)], TWO).paragraphs.slice(0, 3)).toEqual([
+      "On the teams for [Role 2] and [Role 3], the check listed 7 people, counting anyone on more than one of these teams once for each team.",
+      "[Role 2] at 2026-11-22T09:30-05:00 still needs 1 more person, by Planning Center's count.",
+      "[Person 1] was left out for [Role 2]: confirmed elsewhere at this time.",
+    ]);
+  });
+
+  it("with one service, a role at no readable time reads as before, with no word about when", () => {
+    const one: ToolEnvelope = { ...twoTeams(), payload: { fact: "f1", asked_for: { role: "[Role 1]" }, times: [{ fact: "f2", role: "[Role 1]", time: "not known", remaining: 2 }], people: [] } };
+    for (const day of [null, sundayWords]) {
+      expect(composeAnswer(facts("f1", "f2"), [one], day).paragraphs).toEqual(["On the team for [Role 1], the check listed 0 people.", "[Role 1] still needs 2 more people, by Planning Center's count."]);
+    }
+  });
 });
 
 describe("the four suggested questions, answered from facts the model chose", () => {

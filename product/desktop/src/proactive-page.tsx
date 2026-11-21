@@ -119,7 +119,7 @@ function Entry({ entry, names, d }: { entry: HistoryEntry; names: Names; d: DayW
  * asleep" are said outside any fold. Every sentence names the service by its real day (the day words, spec §5).
  */
 export function ProactivePage({ view, names, organization, planId, readiness, shownReadiness = readiness, busy, now, churchTimeZone = null, church = null, onCheckNow, onPause,
-  onResume, onPrefs, responsibilities = null, note = null, notReady = null }: {
+  onResume, onPrefs, responsibilities = null, note = null, notReady = null, several = false }: {
   view: ProactiveView; names: Names; organization: string; planId: string; readiness: Readiness; busy: boolean; now: string;
   /**
    * What the page says about readiness: while a sign-in for a church already connected is in the browser, what was true
@@ -141,6 +141,8 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
   note?: string | null;
   /** Why checks don't run yet, when the three readiness words don't say it (a church system's zone or first run). */
   notReady?: string | null;
+  /** More than one service is watched (owner decision 2026-11-19): each is read on every check. */
+  several?: boolean;
 }) {
   const { prefs, schedule } = view;
   const d = useDay();
@@ -199,10 +201,10 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
       <div className="sp">
         <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{lastLine}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Next check</span><span>{nextLine}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">What it does</span><span>Reads open roles, who is scheduled and service times for the service Ozzie watches, then compares them with the last check.</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">What it does</span><span>Reads open roles, who is scheduled and service times for {several ? "each service" : "the service"} Ozzie watches, then compares them with the last check.</span></div>
         <div className="sp-row sp-2"><span className="sp-h">What it can do</span><span>{promise("readsShort", "A")} It never sends messages.</span></div>
         <div className="sp-row sp-2"><span className="sp-h">How often</span><span>{howOften}</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Telling you</span><span>When something gets worse, a private notice on this Mac: “{noticeLine(noticeDayOf(d))}” It never includes names or details. Quiet hours {clock(prefs.quietStart)} to {clock(prefs.quietEnd)}: notices wait until they end{prefs.urgentDuringQuiet ? ", except urgent ones" : ""}.</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Telling you</span><span>When something gets worse, a private notice on this Mac{several ? ", such as" : ":"} “{noticeLine(noticeDayOf(d))}” It never includes names or details. Quiet hours {clock(prefs.quietStart)} to {clock(prefs.quietEnd)}: notices wait until they end{prefs.urgentDuringQuiet ? ", except urgent ones" : ""}.</span></div>
       </div>
       <div className="find-next">
         <button type="button" className="btn btn-primary" disabled={running || readiness === "not-configured"} onClick={onCheckNow}>

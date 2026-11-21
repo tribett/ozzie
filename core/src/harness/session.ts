@@ -9,6 +9,7 @@
 // people and statuses are never merged (review 2026-11-14 B-S2); a question naming the position
 // still gets the name's own label, which stands for every team's position of that name.
 import { AskSession, type AskedQuestion } from "../ask.js";
+import { roleWithService } from "../sunday-brief.js";
 
 export type LabelKind = "person" | "role" | "room" | "workflow" | "step" | "event";
 export type LabelTarget =
@@ -149,10 +150,7 @@ export function restoreLabels(text: string, session: HarnessSession, sources: Re
       const name = sources.names[t.id]?.trim();
       return name ? (sources.firstNames ? name.split(/\s+/u)[0]! : name) : GENERIC.person;
     }
-    if (t.kind === "role") {
-      const service = sources.roleService?.(t.name, t.team)?.trim();
-      return service ? `${t.name} (${service})` : t.name;
-    }
+    if (t.kind === "role") return roleWithService(t.name, sources.roleService?.(t.name, t.team));
     const restored = t.kind === "event" ? sources.events?.[t.id] : place(t.kind, t.id);
     return restored?.trim() || GENERIC[t.kind];
   });

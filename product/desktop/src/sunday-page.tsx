@@ -688,10 +688,13 @@ export function showNote(note: HTMLElement, pane: HTMLElement | null, still = re
   if (by) pane.scrollBy({ top: by, behavior: still ? "auto" : "smooth" });
   note.focus({ preventScroll: true });
 }
-/** "Only 1 confirmed person in Nursery at 9:30 AM." Services has no age: people, never "adults". */
-export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS): string {
-  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? `at ${clock(f.position!.interval.starts_at)}` : d.thisOne;
-  return c === 0 ? `No confirmed people in ${f.position!.name} ${at}.` : `Only ${count(c, "confirmed person", "confirmed people")} in ${f.position!.name} ${at}.`;
+/**
+ * "Only 1 confirmed person in Nursery at 9:30 AM." Services has no age: people, never "adults". `dayless`: the team is
+ * already said with its own service (several services watched), so a time it doesn't have isn't every service's day words.
+ */
+export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS, dayless = false): string {
+  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? ` at ${clock(f.position!.interval.starts_at)}` : dayless ? "" : ` ${d.thisOne}`;
+  return c === 0 ? `No confirmed people in ${f.position!.name}${at}.` : `Only ${count(c, "confirmed person", "confirmed people")} in ${f.position!.name}${at}.`;
 }
 /** Pending is never confirmed, and an unsent request is never called asked. */
 export function fewConfirmedBody(f: Finding): string {

@@ -5,7 +5,8 @@ import { isTimeZone } from "../../../core/src/church-time.js";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { evaluateAttentionImport, type AttentionFinding, type Message, type CalendarEvent } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
-import { rosterNeedsYou, rosterSummary, sundayShownCount, unnumberedRoster, type Roster, type RosterRole, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { roleWithService, rosterNeedsYou, rosterSummary, serviceOfTeam, sundayShownCount, unnumberedRoster, type Roster, type RosterRole, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { useTeamServices } from "./team-labels.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { Icon } from "./icons.js";
@@ -234,20 +235,23 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
 
   // A church system that doesn't share how many people each role needs (Breeze): who is on each role is what is known.
   const roster = unnumberedRoster(brief);
+  // With more than one service watched, each role is said with its service (team-labels.ts); undefined with one.
+  const teamServices = useTeamServices();
   // The same count as the Sunday page's headline and the sidebar: Services, rooms and follow-ups that need a decision.
   const sunday: TodaySunday | null = useMemo(() => brief && decided ? {
     plan_id: brief.plan.id, checked_at: brief.completed_at, decisions: sundayShownCount(decided, operations).decisions,
-    answers: [...new Set(decided.items.filter(i => i.state !== "resolved" && i.finding.notification === "sent").flatMap(i => i.finding.position ? [i.finding.position.name] : []))],
+    answers: [...new Set(decided.items.filter(i => i.state !== "resolved" && i.finding.notification === "sent")
+      .flatMap(i => i.finding.position ? [roleWithService(i.finding.position.name, serviceOfTeam(i.finding.position.team_id, teamServices))] : []))],
     ...(roster ? { unknownNeed: { needsYou: rosterNeedsYou(roster).length > 0 } } : {}),
-  } : null, [brief, decided, operations, roster]);
+  } : null, [brief, decided, operations, roster, teamServices]);
   // Each decision named on the Sunday card (audit item 17), in the Sunday page's order, and Worth a look counted apart.
   const named = useMemo(() => {
     if (!decided) return null;
     const ops = operations && !operations.stale ? operations.result?.findings ?? [] : [];
     const lines = decisionLines(decided.items, { rooms: ops.filter(f => f.kind === "room-overlap" && f.certainty === "confirmed").length, followUps: ops.filter(f => f.kind !== "room-overlap").length },
-      brief?.time_zone ?? zone, words);
+      brief?.time_zone ?? zone, words, teamServices);
     return { ...lines, looks: sundayShownCount(decided, operations).looks };
-  }, [decided, operations, brief?.time_zone, zone, words]);
+  }, [decided, operations, brief?.time_zone, zone, words, teamServices]);
   const toCard = onSundayCard ?? (() => onSunday());
   const items = useMemo(() => todayItems({
     now, sunday, watch: watch?.view ?? null, firstSeen, regular, notConnected: Boolean(notConnected) && !example, noService: Boolean(serviceLess) && !notConnected,

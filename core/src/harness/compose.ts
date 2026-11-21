@@ -98,6 +98,14 @@ const needs = (row: Row) => {
   const n = num(row["remaining"]);
   return n === null ? "still needs people; Planning Center's count couldn't be read" : `still needs ${n} more ${n === 1 ? "person" : "people"}, by Planning Center's count`;
 };
+/**
+ * With more than one service watched, a role that still needs people at no time Ozzie could read says so, so its count
+ * never reads as a second count for a role at a time said beside it (rehearsal of 0.5.2). The check couldn't place it at
+ * one time: none is tied to it, several are, or one couldn't be read; in each, Ozzie can't tie it to one. Unchanged with
+ * one service.
+ */
+const untimed = (row: Row, day: Day) => several(day) && at(row["time"]) === "" ? " Ozzie can't tie this role to one service time." : "";
+const needsLine = (row: Row, said: SaidDay, day: Day) => `${str(row["role"]) ?? "A role"}${at(row["time"], said)} ${needs(row)}.${untimed(row, day)}`;
 const decided = (row: Row, day: Day) => {
   const d = str(row["decision"]);
   if (!d) return "";
@@ -119,6 +127,9 @@ const worth = (n: unknown, what: string) => typeof n === "number" && n > 0 ? ` W
 // on Wednesday or Saturday night. `null`: composeAnswer's callers that don't pass the day words.
 type Day = DayWords | null;
 const oneDay = (d: Day) => d?.kind === "weekday" || d?.kind === "weekend";
+/** More than one service watched: the day words of a spread with no date (desktop services-merge.ts MANY_SERVICES). A
+ *  single plan over several days always has its dates. */
+const several = (d: Day) => d?.kind === "spread" && !d.date;
 /** After a verb: "serving this Wednesday", "reached that this weekend"; "at this service" otherwise. */
 const atService = (d: Day) => d && oneDay(d) ? d.thisOne : "at this service";
 /** After "needed" or a team: "this Wednesday", "this weekend"; "for these services", "for your service", "for this service" otherwise. */
@@ -132,7 +143,7 @@ const NOT_NEEDED = "not needed this Sunday";
  *  words of a spread with no date: desktop services-merge.ts MANY_SERVICES): "your services", and no date, so each item
  *  below says its own service's date. */
 const overviewWhen = (p: Row, day: Day) => {
-  if (day && day.kind === "spread" && !day.date) return day.thisOne;
+  if (day && several(day)) return day.thisOne;
   const date = str(p["sunday"]), planDay = date && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? longDate(date) : null;
   return day?.date ?? (planDay && !planDay.startsWith("Invalid") ? planDay : "this service");
 };
@@ -149,10 +160,10 @@ const overviewCounts = (d: number, w: number) => {
 };
 
 /** A finding in the overview or the open roles, by its kind. */
-function finding(row: Row, said: SaidDay = NO_DAY): string | null {
+function finding(row: Row, said: SaidDay = NO_DAY, day: Day = null): string | null {
   const role = str(row["role"]) ?? "A role", person = str(row["person"]) ?? "Someone";
   switch (row["kind"]) {
-    case "needs people": return `${role}${at(row["time"], said)} ${needs(row)}.`;
+    case "needs people": return needsLine(row, said, day);
     case "no scheduled lead": return `${role}${at(row["time"], said)} has no scheduled lead, and your Church rules ask for one.`;
     case "lead couldn't be confirmed": return `${role}${at(row["time"], said)} has a scheduled lead, but their answer or serving time couldn't be confirmed.`;
     case "pending": return `${person} is pending for ${role}${at(row["time"], said)}. ${request(row["request"])} Pending is not the same as asked.`;
@@ -202,7 +213,7 @@ const DECIDE = "Needs a decision", LOOK = "Worth a look";
 /** One of the overview's rows in the Sunday page's tone: "Resolved by you" once the leader decided it, as the overview no longer counts it. */
 const toneOfRow = (row: Row) => settled(row) ? RESOLVED : row["tone"] === "needs a decision" ? DECIDE : LOOK;
 /** One of the overview's rows without its tone, which the answer says once for its group (composeAnswer). */
-const overviewRow = (row: Row, day: Day, said: SaidDay = NO_DAY) => { const text = finding(row, said); return text ? `${text}${decided(row, day)}` : null; };
+const overviewRow = (row: Row, day: Day, said: SaidDay = NO_DAY) => { const text = finding(row, said, day); return text ? `${text}${decided(row, day)}` : null; };
 
 /** The church systems other than Planning Center a Services tool's source may name (tools.ts HarnessData `source`). */
 const OTHER_SYSTEMS: ReadonlySet<string> = new Set(Object.values(SYSTEMS).map(s => s.name));
@@ -230,16 +241,18 @@ function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY, system: string |
       return text ? `${toneOfRow(row)}: ${text}` : null;
     }
     case "sunday.open_needs needs": {
-      if (row["kind"] !== "needs people") { const text = finding(row, said); return text ? `${text}${notAccepted(row)}${leaders(row)}${decided(row, day)}` : null; }
+      if (row["kind"] !== "needs people") { const text = finding(row, said, day); return text ? `${text}${notAccepted(row)}${leaders(row)}${decided(row, day)}` : null; }
       const confirmed = labels(row["confirmed"]);
       const p = (row["people_listed"] ?? {}) as Row;
       const counts = [[p["no_overlap_found"], "with no overlap found"], [p["possible_conflict"], "with a possible conflict"],
         [p["needs_confirmation"], "whose availability needs confirmation"], [p["left_out"], "left out"]]
         .flatMap(([n, what]) => typeof n === "number" && n > 0 ? [`${n} ${what as string}`] : []);
       const none = row["people_listed"] === NO_TEAM ? ` ${noTeam(role, system)}` : "";
-      return `${finding(row, said)}${confirmed.length ? ` Already confirmed: ${list(confirmed)}.` : ""}${counts.length ? ` On the team: ${list(counts)}.` : ""}${none}${leaders(row)}${decided(row, day)}`;
+      return `${finding(row, said, day)}${confirmed.length ? ` Already confirmed: ${list(confirmed)}.` : ""}${counts.length ? ` On the team: ${list(counts)}.` : ""}${none}${leaders(row)}${decided(row, day)}`;
     }
-    case "sunday.who_could_help times": return `${role}${at(row["time"], said)} ${needs(row)}.`;
+    case "sunday.who_could_help times": return needsLine(row, said, day);
+    // One team's share of the tool's summary, when the role is in more than one service (byTeam).
+    case `sunday.who_could_help ${TEAM}`: return `On the team for ${role}, the check listed ${plural(rowsOf({ payload } as ToolEnvelope, "people").filter(p => p["role"] === row["role"]).length, "person", "people")}.`;
     case "sunday.who_could_help people":
       switch (row["status"]) {
         case "no overlap found": return `${person} has no overlap found for ${role}.${differs(row)}`;
@@ -309,6 +322,11 @@ function summary(tool: string, p: Row, day: Day): string | null {
       // Everyone the check listed, those left out of a copy cut to fit included. No order is named: the app's card shows
       // them alphabetically and Ask in person-id order, each saying so beside the people it shows (review K).
       const n = (Array.isArray(p["people"]) ? p["people"].length : 0) + (num(p["left_out_for_length"]) ?? 0);
+      // The role in more than one service, with people left out for length: which team they were on isn't known, so the
+      // count is said once for every team (otherwise each team's own count is said with its lines, byTeam). The rows are
+      // each team's, so someone on two of them is two rows: said so, never a count of people that may be too high.
+      const teams = teamsIn(p);
+      if (teams.length > 1) return `On the teams for ${list(teams)}, the check listed ${plural(n, "person", "people")}, counting anyone on more than one of these teams once for each team.`;
       return `On the team for ${role}, the check listed ${plural(n, "person", "people")}.`;
     }
     case "sunday.pending_requests": {
@@ -393,6 +411,41 @@ function ordered(facts: readonly Fact[]): Fact[] {
     (labelNumber(a.row["person"]) || 0) - (labelNumber(b.row["person"]) || 0) || a.id - b.id);
 }
 
+/** The list name of one team's share of who could help's summary (byTeam); never a list any tool gives. */
+const TEAM = "team";
+/**
+ * The role labels a who-could-help result is about, in its order: one, or with more than one service watched one per
+ * team when the role is in more than one service (tools.ts #byTeam), each restored with its own service on this Mac.
+ */
+function teamsIn(p: Row): string[] {
+  const rows = [...(Array.isArray(p["times"]) ? p["times"] as Row[] : []), ...(Array.isArray(p["people"]) ? p["people"] as Row[] : [])];
+  return [...new Set(rows.flatMap(r => str(r["role"]) ?? []))];
+}
+/**
+ * A who-could-help result about more than one team (one role in more than one service watched), said one team at a time:
+ * that team's share of the summary ("On the team for Greeter (Youth Night), the check listed 3 people."), its times, then
+ * its people, so every line about one service sits together. A summary with people left out for length stays one sentence
+ * for every team, first (summary). Every other fact, and a result about one team, keeps Ozzie's order.
+ */
+function byTeam(chosen: readonly Fact[]): Fact[] {
+  const out: Fact[] = [], done = new Set<number>();
+  for (const f of chosen) {
+    const teams = f.tool === "sunday.who_could_help" ? teamsIn(f.payload) : [];
+    if (teams.length < 2) { out.push(f); continue; }
+    if (done.has(f.envelope)) continue;
+    done.add(f.envelope);
+    const mine = chosen.filter(g => g.envelope === f.envelope), summary = mine.find(g => g.list === null);
+    const shared = summary && (num(summary.payload["left_out_for_length"]) ?? 0) > 0;
+    if (summary && shared) out.push(summary);
+    for (const team of teams) {
+      if (summary && !shared) out.push({ ...summary, list: TEAM, row: { role: team } });
+      out.push(...mine.filter(g => g.list === "times" && g.row["role"] === team), ...mine.filter(g => g.list === "people" && g.row["role"] === team));
+    }
+    out.push(...mine.filter(g => g.list !== null && !teams.includes(str(g.row["role"]) ?? "")));
+  }
+  return out;
+}
+
 const isLead = (f: Fact) => f.tool === "sunday.overview" && f.list === null;
 /**
  * The one date the overview's sentence names ("For Sunday, November 22, …"), so a time on it below can be said by its clock
@@ -438,8 +491,8 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
   const picked = facts.flatMap(id => all.get(id) ?? []);
   // A room or follow-up chosen both from the overview and from its own tool is said once, in its own tool's fuller words.
   const ownRows = new Set(picked.filter(f => f.tool !== "sunday.overview" && f.list !== null).flatMap(keysOf));
-  const chosen = ordered(picked.filter(f => !(f.tool === "sunday.overview" && f.list === "findings"
-    && (f.row["kind"] === OVERVIEW_ROOM || f.row["kind"] === OVERVIEW_FOLLOW_UP) && keysOf(f).some(k => ownRows.has(k)))));
+  const chosen = byTeam(ordered(picked.filter(f => !(f.tool === "sunday.overview" && f.list === "findings"
+    && (f.row["kind"] === OVERVIEW_ROOM || f.row["kind"] === OVERVIEW_FOLLOW_UP) && keysOf(f).some(k => ownRows.has(k))))));
   // Each fact's sentence as it was always written (`key`, with every date and each overview row's own tone), which decides
   // what is said once; what is shown can leave out what the answer already said.
   const rendered = chosen.flatMap(f => {
@@ -448,8 +501,18 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
     return key ? [{ f, key }] : [];
   });
   // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
-  // shown once, in the longer sentence's place.
-  const kept = rendered.filter((r, i) => !rendered.some((o, j) => j !== i && (o.key === r.key ? j < i : o.key.startsWith(`${r.key} `))));
+  // shown once, in the longer sentence's place. One team's time and count when the role is in more than one service
+  // (byTeam) keeps its place among that team's lines instead, said in the open roles' fuller words, so every line about
+  // one service still sits together.
+  const fuller = new Map<number, number>();
+  rendered.forEach((r, i) => {
+    if (r.f.tool !== "sunday.who_could_help" || r.f.list !== "times" || teamsIn(r.f.payload).length < 2) return;
+    const j = rendered.findIndex((o, k) => k !== i && o.f.tool === "sunday.open_needs" && o.key.startsWith(`${r.key} `));
+    if (j >= 0 && ![...fuller.values()].includes(j)) fuller.set(i, j);
+  });
+  const moved = new Set(fuller.values());
+  const kept = rendered.flatMap((r, i) => fuller.has(i) ? [rendered[fuller.get(i)!]!] : moved.has(i) ? []
+    : rendered.some((o, j) => j !== i && (o.key === r.key ? j < i : o.key.startsWith(`${r.key} `))) ? [] : [r]);
   // The overview's own sentence, as shown: the date it names isn't said again by a time on it after it.
   const leads = new Map(kept.filter(r => isLead(r.f)).map(r => [r.f.envelope, r.f.payload]));
   const from = kept.findIndex(r => isLead(r.f)), onDay = saidBy([...leads.values()], day);
