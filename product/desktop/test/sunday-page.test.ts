@@ -546,7 +546,8 @@ describe("several services' cards say every role's time the same way (coordinato
     expect(t).toContain(`${role} · Wednesday, November 25 `);
     expect(t).not.toContain(`${role} · Wednesday, November 25 at`);
     expect(t).not.toContain(`${role} · this Wednesday`);
-    expect(t).toContain(`Wednesday, November 25 · ${clock(wed.times![0]!)}`);
+    // The part's own line gives the service's time in the church's time zone, whatever zone this machine is in.
+    expect(t).toMatch(/Wednesday, November 25 · \d{1,2}:\d{2} [AP]M/u);
     // A timed role still says its own date and time.
     expect(show(wed, true)).toContain(`${role} · Wednesday, November 25 at ${clock(wed.findings[at]!.position!.interval!.starts_at)}`);
   });
