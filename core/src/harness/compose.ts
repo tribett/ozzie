@@ -128,8 +128,11 @@ const dayName = (d: DayWords) => d.kind === "weekday" ? d.day : d.thisOne;
 /** The tools' fixed value for a "not needed" decision (vocabulary.json, pinned with native and ozzie.church); said here in the service's own words. */
 const NOT_NEEDED = "not needed this Sunday";
 /** The overview's service, as its sentence names it: the day words' date ("Wednesday, November 25"; both dates of a
- *  weekend), else the plan's church-local date with its own weekday, else neutral words. */
+ *  weekend), else the plan's church-local date with its own weekday, else neutral words. Several services at once (day
+ *  words of a spread with no date: desktop services-merge.ts MANY_SERVICES): "your services", and no date, so each item
+ *  below says its own service's date. */
 const overviewWhen = (p: Row, day: Day) => {
+  if (day && day.kind === "spread" && !day.date) return day.thisOne;
   const date = str(p["sunday"]), planDay = date && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? longDate(date) : null;
   return day?.date ?? (planDay && !planDay.startsWith("Invalid") ? planDay : "this service");
 };

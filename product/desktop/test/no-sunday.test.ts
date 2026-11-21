@@ -214,7 +214,7 @@ describe("no page calls a Wednesday service Sunday (onboarding spec §5.1)", () 
       status: null, settings, onSettings: () => {}, onStatus: () => {}, oneClick: true, prefs: DEFAULT_PREFS, onAutomatic: () => {}, onSetup: () => {}, onCheckSetup: () => {},
       autostart: { get: async () => false, set: async () => false }, recordingCount: 2, onDeleteRecordings: () => {}, nameStore: { get: () => "", set: () => {} },
     }));
-    expect(html).toContain("Which service Ozzie watches");
+    expect(html).toContain("Which services Ozzie watches");
     expect(html).toContain("Ozzie keeps an eye on your services");
     expect(html).toContain("Check my setup");
     expect(html).toContain("Walk through setup again");

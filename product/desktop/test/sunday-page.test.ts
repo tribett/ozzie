@@ -467,3 +467,32 @@ describe("one service with two service times: each time is its own section (owne
   });
 });
 
+
+describe("several services' cards say every role's time the same way (coordinator's live read of 0.5.0)", () => {
+  const wed = buildSundayBrief(wednesdayCapture(), rules, wednesdayCapture().completed_at);
+  // One of Youth Night's roles with no serving time of its own, as the live test church's was.
+  const at = wed.findings.findIndex(f => f.position?.interval);
+  const untimed: SundayBrief = { ...wed, findings: wed.findings.map((f, i) => i === at ? { ...f, position: { ...f.position!, interval: null } } : f) };
+  const role = wed.findings[at]!.position!.name;
+  const show = (b: SundayBrief, part: boolean) => text(renderToStaticMarkup(React.createElement(DayProvider, { value: wednesdayWords() }, React.createElement(SundayPage, {
+    brief: b, names: wednesdayCapture().names, busy: false, problem: "", sender: "Pat", connected: true, hasRecording: false, configured: true,
+    canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+    ...(part ? { part: { name: "Youth Night", waiting: null, opsWith: "Sunday Morning" } } : {}),
+  }))));
+  const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+  it("beside another service, a role with no time of its own says its service's date and its one service time", () => {
+    expect(wed.times).toHaveLength(1);
+    const t = show(untimed, true);
+    expect(t).toContain(`${role} · Wednesday, November 25 at ${clock(wed.times![0]!)}`);
+    expect(t).not.toContain(`${role} · this Wednesday`);
+    // A timed role reads the same way: the full date and the time.
+    expect(show(wed, true)).toContain(`${role} · Wednesday, November 25 at ${clock(wed.findings[at]!.position!.interval!.starts_at)}`);
+  });
+
+  it("with more than one service time it says the date alone, and one service's own page keeps its day's words", () => {
+    expect(show({ ...untimed, times: [...wed.times!, "2026-11-25T16:30:00Z"] }, true)).toContain(`${role} · Wednesday, November 25 `);
+    expect(show({ ...untimed, times: [...wed.times!, "2026-11-25T16:30:00Z"] }, true)).not.toContain(`${role} · Wednesday, November 25 at`);
+    expect(show(untimed, false)).toContain(`${role} · this Wednesday`);
+  });
+});

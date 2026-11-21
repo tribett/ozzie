@@ -56,9 +56,10 @@ export const NEEDS_AI = {
 export const CHOICE = {
   eyebrow: "One more choice (optional)",
   title: "How should Ozzie use AI?",
-  body: (day: string) => `Everything you just saw works without AI. AI can also reword a note, answer your questions about ${day}, and look at who could help with a role. Choose one, or leave it for now.`,
+  // Questions about "your services", as Ask says them (owner decision 2026-11-19), whatever day they are on.
+  body: (services = "your services") => `Everything you just saw works without AI. AI can also reword a note, answer your questions about ${services}, and look at who could help with a role. Choose one, or leave it for now.`,
   /** In Settings there is no "just saw": the same offer, said of Ozzie as a whole. */
-  bodySettings: (day: string) => `Everything else in Ozzie works without AI. AI can reword a note, answer your questions about ${day}, and look at who could help with a role.`,
+  bodySettings: (services = "your services") => `Everything else in Ozzie works without AI. AI can reword a note, answer your questions about ${services}, and look at who could help with a role.`,
   ozzie: "Ozzie's AI",
   /** Card 1's cost line from the server's offer: never a hard-coded price. */
   ozzieCost: (price: string, answers: string) => `Ready to use, nothing to set up. ${price} for ${lowerFirst(answers).replace(/ a month$/u, "")}. Cancel any time.`,

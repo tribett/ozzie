@@ -176,6 +176,32 @@ export interface ResultView {
   counts: { decisions: number; looks: number };
   /** Up to three decisions as Today names them (today-groups.ts `decisionLines`). */
   lines: readonly { key: string; text: string }[];
+  /** The other services watched, when there are any (Planning Center only): what the result says of them (othersLine). */
+  others?: readonly OtherResult[];
+  /** What needs a decision across every service watched: the one count the sidebar, Today and the Services page show. */
+  total?: number;
+}
+
+/** Another service watched: its name, its date, and how many things need a decision there (null: not read yet). */
+export interface OtherResult { name: string | null; when: string | null; decisions: number | null }
+
+const and = (xs: readonly string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+/**
+ * The result is the first service's (signing in again on a Mac that watches several): this says so, and what the other
+ * services hold, in the one count the sidebar and Today show (coordinator's live read of 0.5.0). Null with one service.
+ */
+export function othersLine(others: readonly OtherResult[], first: number, total: number): string | null {
+  if (!others.length) return null;
+  const of = (o: OtherResult) => `${o.name ?? "another service"}${o.when ? ` on ${o.when}` : ""}`;
+  const more = others.filter(o => (o.decisions ?? 0) > 0), clear = others.filter(o => o.decisions === 0), unread = others.filter(o => o.decisions === null);
+  const counted = more.map((o, i) => i === 0 && !first ? `${o.decisions} ${o.decisions === 1 ? "thing needs" : "things need"} a decision for ${of(o)}`
+    : `${o.decisions}${first ? " more" : ""} for ${of(o)}`);
+  return [
+    more.length ? `${first ? `And ${and(counted)}` : and(counted)}, so your services have ${total} ${total === 1 ? "thing" : "things"} to decide in all.` : "",
+    clear.length ? `Nothing needs a decision for ${and(clear.map(of))}.` : "",
+    unread.length ? `Ozzie also watches ${and(unread.map(o => o.name ?? "another service"))}, read with the next check.` : "",
+    `You'll see every service on ${pageRef()}.`,
+  ].filter(Boolean).join(" ");
 }
 type Phase =
   | { at: "loading" }
@@ -403,6 +429,7 @@ function Result({ view, day, serviceName, intervalMinutes, aiOffered, onNext }: 
         {people.scheduled > 0 && <p className="fr-note">{people.scheduled === 1 ? "1 person" : `${people.scheduled} people`} scheduled. {people.yes} said yes{people.waiting ? `, ${people.waiting} ${people.waiting === 1 ? "hasn't" : "haven't"} answered yet` : ""}.</p>}
         <p className="fr-small">{source}</p>
       </>}
+    {view.others?.length ? <p className="fr-note">{othersLine(view.others, counts.decisions, view.total ?? counts.decisions)}</p> : null}
     {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef()}.</p>}
     {partial && <p className="fr-note">Part of {day.day} couldn't be checked, so this isn't a full picture.</p>}
     <p className="fr-note">{eyeLine()} at least {hours(intervalMinutes)} while it's open, and moves on to the next {serviceName || "service"} plan by itself after this one.</p>

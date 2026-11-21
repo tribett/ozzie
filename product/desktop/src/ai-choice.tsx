@@ -4,7 +4,6 @@
 // Settings", "Back to Today"), on the first screen and after a working route. Nothing is chosen for the person, and Ozzie's
 // AI is offered only when the server's offer is open.
 import { useEffect, useMemo, useState } from "react";
-import { useDay } from "./day-words.js";
 import { SERVICES_PAGE } from "../../../core/src/service-day.js";
 import { AI, CHOICE } from "./ai-words.js";
 import { AiPlaceContext, InUseTag, Problem, Quiet, Screen, SentSheet, useAiPlace, type AiPlace, type InUse } from "./ai-parts.js";
@@ -109,7 +108,6 @@ function ChooseScreen({ offer, inUse, held, refused, onOzzie, onOwn, onNone, non
   /** Settings mode's quiet way back: "Back to Today" over a page, "Back" in Settings' own AI section. */
   backLabel: string;
 }) {
-  const day = useDay();
   const [sent, setSent] = useState(false);
   const settings = useAiPlace().mode === "settings";
   const open = offer?.open && offer.price_text && offer.answers_text ? CHOICE.ozzieCost(offer.price_text, offer.answers_text) : null;
@@ -117,7 +115,7 @@ function ChooseScreen({ offer, inUse, held, refused, onOzzie, onOwn, onNone, non
   const ozzie = held === true || refused || (held === false && open !== null);
   const ozzieLine = held === null ? CHOICE.ozzieLooking : held ? CHOICE.ozzieHeld : refused ? CHOICE.ozzieReconnect : open ?? shut;
   return <Screen eyebrow={settings ? undefined : CHOICE.eyebrow} title={CHOICE.title}>
-    <p className="ai-body">{settings ? CHOICE.bodySettings(day.day) : CHOICE.body(day.day)}</p>
+    <p className="ai-body">{settings ? CHOICE.bodySettings() : CHOICE.body()}</p>
     <ul className="ai-cards">
       <li><button type="button" className="ai-card" aria-disabled={ozzie ? undefined : true} onClick={() => { if (ozzie) onOzzie(); }}>
         <span className="ai-card-t">{CHOICE.ozzie}{inUse === "managed" && <InUseTag />}</span><span className="ai-card-d">{ozzieLine}</span>

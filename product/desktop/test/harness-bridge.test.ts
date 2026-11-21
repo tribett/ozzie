@@ -2,7 +2,7 @@
 // stalls never breaking a task, HarnessData from app state, Sunday checks as ledger tasks, and Ask
 // Ozzie end to end through the real harness with scripted models. Fictional fixed data; no native calls.
 import { readFileSync } from "node:fs";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { REFUSALS } from "../../../core/src/ask.js";
 import { backgroundInToolResult, backgroundWording } from "../../../core/src/harness/background-wording.js";
@@ -27,6 +27,9 @@ import { applyDecisions } from "../../../core/src/sunday-decisions.js";
 import { sundayCount } from "../src/today-groups.js";
 import { crowded } from "../../../core/test/harness/fixtures.js";
 import { answer, BACKGROUND_IN_REQUEST, calls, draftTurns, everyRequest, fakeNative as fakeLedger, fictionalData, greeterTurns, payloadOf, row, RULES, scripted, taskIds as ids, type Turn } from "./harness-fakes.js";
+// The fixtures are a check made on 2026-11-20; the harness reads the clock, so pin it there (or the check reads as too old once that day has passed).
+beforeAll(() => { vi.setSystemTime("2026-11-20T15:05:00Z"); });
+afterAll(() => { vi.useRealTimers(); });
 
 const skills = await bundledSkills();
 const status = (over: Partial<ConnectionStatus> = {}): ConnectionStatus =>

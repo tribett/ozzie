@@ -222,6 +222,12 @@ export interface RunnerContext {
    * covered's report counts what the page shows. Absent: none.
    */
   decisionsFor?: (capture: SundayCapture) => readonly SundayDecision[];
+  /**
+   * What the other services Ozzie watches show on the Services page now, counted as it counts them (their latest checks,
+   * read in the same round as this run's check, after the leader's decisions): Keep services covered and the morning
+   * briefing say the count across every service (owner decision 2026-11-19). Absent or null: one service.
+   */
+  alsoShown?: () => { decisions: number; looks: number } | null;
 }
 export interface RunnerHooks {
   context(): RunnerContext;
@@ -780,7 +786,10 @@ export function createRunner(deps: RunnerDeps): Runner {
       try { capture = await guard(check(trigger)); }
       catch (error) { if (error === CANCELLED) throw error; return await fail(checkFailure(error)); }
       const now = deps.now();
-      const found = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? []);
+      const own = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? []);
+      // Keep services covered and the morning briefing count every service watched, as the Services page does.
+      const more = r.template === "keep-sunday-covered" || r.template === "morning-briefing" ? ctx.alsoShown?.() ?? null : null;
+      const found = more ? { ...own, decisions: own.decisions + more.decisions, looks: own.looks + more.looks } : own;
       // What changed since this responsibility last looked at the same Sunday.
       let changes: SundayChange[] = [];
       let memory = stateOf(r.id).memory;

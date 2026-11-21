@@ -15,7 +15,7 @@ import { zoneLabel } from "./proactive-page.js";
 
 type Bridge = Pick<typeof defaultBridge, "verify" | "forget" | "choices" | "check" | "connect" | "saved">;
 const clock = (ms: number) => formatAt(ms, { hour: "numeric", minute: "2-digit" }) ?? "just now";
-const NAMES: Readonly<Record<MainSystem, string>> = { "planning-center": "Planning Center", b1: "B1 Church", breeze: "Breeze" };
+const NAMES: Readonly<Record<MainSystem, string>> = { "planning-center": "Planning Center", b1: "B1 Church", breeze: "Breeze", genesis: "Genesis" };
 /** What a church on another system doesn't get yet, said once where it would look. */
 export const ONLY_PLANNING_CENTER = (name: string) =>
   `Siri and Shortcuts, the copy for other AI apps, jobs such as the morning briefing, and rooms and follow-ups work with Planning Center only for now. Ozzie can't do these with ${name} yet.`;
@@ -24,6 +24,8 @@ export const ONLY_PLANNING_CENTER = (name: string) =>
 export function switchForgets(from: MainSystem, church: string | null, cards = 0): string {
   const open = cards > 0 ? ` ${cards === 1 ? "The visitor card you have open is" : `The ${cards} visitor cards you have open are`} discarded too.` : "";
   if (from === "planning-center") return `Switching signs Ozzie out of Planning Center on this Mac. Nothing changes in Planning Center, and your Church rules stay here. Its saved checks stay on this Mac until you delete them in Settings. Switching back asks you to allow Ozzie in Planning Center again.${open}`;
+  // Genesis stays as Also read Genesis beside the system switched to: its key and church are kept (review of e9cbd97d, M3).
+  if (from === "genesis") return `Genesis stays connected: Ozzie reads it beside the system you switch to, under Also read Genesis in Settings, and its key stays in this Mac's Keychain. Nothing changes in Genesis.${open}`;
   const name = NAMES[from];
   return `Switching forgets ${church ?? "your church"} in ${name} on this Mac: the key in this Mac's Keychain, the church, the service Ozzie watches and its saved checks. Nothing changes in ${name}.${open}`;
 }
@@ -148,7 +150,7 @@ export function OtherSystems({ state, onSwitch, genesis, cards = 0 }: {
       {/* Nothing chosen yet (a fresh Mac, round 5): the choice is made above, never "Planning Center now". */}
       {state.main === null ? <p className="find-body">Ozzie reads one church system at a time for your services. Choose yours under What your church uses, above.</p>
         : <p className="find-body">Ozzie reads one church system at a time for your services: {NAMES[from]} now.</p>}
-      {!to && state.main !== null && <div className="row form-actions">{(["planning-center", "b1", "breeze"] as const).filter(s => s !== from).map(s =>
+      {!to && state.main !== null && <div className="row form-actions">{(["planning-center", "b1", "breeze", "genesis"] as const).filter(s => s !== from).map(s =>
         <button key={s} type="button" className="btn btn-quiet" onClick={() => setTo(s)}>Switch to {NAMES[s]}</button>)}</div>}
       {to && <div className="decide" role="group" aria-labelledby="switch-q">
         <p id="switch-q" className="find-body"><strong>Switch to {NAMES[to]}?</strong> {switchForgets(from, state.connection?.church_name ?? null, cards)}</p>

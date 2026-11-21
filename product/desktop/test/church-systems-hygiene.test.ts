@@ -85,6 +85,16 @@ describe("Check my setup for a church on B1 Church", () => {
       .toBe("Waiting for the next Sunday Gathering event");
   });
 
+  it("on Genesis: its own row, no service to choose, and the report names Genesis (review of e9cbd97d, M5)", () => {
+    const genesis: SetupKnown = { connection: signedOut, watched: null, ai: null, system: { name: "Genesis", church: "Cedar Hollow Fellowship", connected: true, id: "genesis" } };
+    const rows = setupRows(facts, genesis, { zone: "America/Chicago" });
+    expect(rows[0]).toMatchObject({ label: "Genesis", verdict: "Connected to Cedar Hollow Fellowship" });
+    expect(rows.find(r => r.id === "service")).toMatchObject({ ok: true, fix: null, verdict: "None: Genesis doesn't share volunteer schedules, so there's no service to watch" });
+    const report = reportFor(facts, genesis, rows, Date.parse("2026-11-20T15:00:00Z"));
+    expect(report).toContain("church-system: genesis\n");
+    expect(report).not.toContain("Cedar Hollow");
+  });
+
   it("reports B1 Church's connection as its own, and Planning Center as what is known of it, never as connected in its place", () => {
     const rows = setupRows(facts, known, { zone: "America/Chicago" });
     const report = reportFor(facts, known, rows, Date.parse("2026-11-20T15:00:00Z"));

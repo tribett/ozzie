@@ -3,8 +3,8 @@
 [![Checks](https://github.com/tribett/ozzie/actions/workflows/ci.yml/badge.svg)](https://github.com/tribett/ozzie/actions/workflows/ci.yml)
 
 Ozzie by FlockConnect is a desktop app for church staff and ministry leaders.
-It reads your church's Planning Center, B1 Church or Breeze account, checks
-the coming Sunday against rules you set, and lays out what needs a decision: a serving role
+It reads your church's Planning Center, B1 Church, Breeze or Genesis account,
+checks your services against rules you set, and lays out what needs a decision: a serving role
 nobody has said yes to and, with Planning Center, a room booked twice or a follow-up with
 no one assigned.
 It can draft a note for you to send yourself. People decide, and people go.
@@ -52,11 +52,21 @@ invented people). No church data is shown.
   (`core/church-systems/`), and says plainly what it can't see there (Breeze
   has no blockout dates and doesn't say how many people a role needs, so Ozzie
   shows who is on each role instead of calling the service covered; none of
-  them shares background checks). Genesis can
-  be read beside any of them for groups, events and forms only. Checks on a
-  schedule, private notices, saved checks and Ask work with them as with
-  Planning Center; jobs, Siri and Shortcuts, the copy for other AI apps and the
-  extras below work with Planning Center only for now.
+  them shares background checks). Checks on a schedule, private notices, saved
+  checks and Ask work with them as with Planning Center; jobs, Siri and
+  Shortcuts, the copy for other AI apps and the extras below work with Planning
+  Center only for now.
+- **Or reads Genesis, and only reads, with no coverage check.** Genesis shares
+  no volunteer schedules, so Ozzie can't check whether a service is covered
+  there and never says it is. A church on Genesis gives Ozzie a key with Read
+  for Groups, Events and Forms only (no People: Ozzie reads no one's name from
+  Genesis) and tells it the church's time zone, since Genesis gives event times
+  without one. Ozzie then shows the events of the next four weeks, attendance
+  for events that have ended, the groups, and how many times each form was
+  filled in, says on Today when a form has been filled in again, reads Genesis
+  when it opens and on the person's interval, and answers Ask on the Mac from
+  what it read, with no AI. Genesis can also be read beside any of the other
+  systems, for the same groups, events and forms.
 - **People forms, Check-Ins and signups, if you turn them on.** Each is its
   own choice under Settings › Forms, check-ins and signups. For the People
   forms you choose to watch, Ozzie reads how many new submissions there are,

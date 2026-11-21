@@ -481,7 +481,7 @@ describe("S6: how should Ozzie use AI?", () => {
     const text = seen();
     expect(text).toContain("One more choice (optional)");
     expect(text).toContain("How should Ozzie use AI?");
-    expect(text).toContain("Everything you just saw works without AI. AI can also reword a note, answer your questions about Sunday, and look at who could help with a role.");
+    expect(text).toContain("Everything you just saw works without AI. AI can also reword a note, answer your questions about your services, and look at who could help with a role.");
     const cards = buttons().filter(b => /ai-card/u.test(b.getAttribute?.("class") ?? ""));
     expect(cards.map(c => c.textContent)).toEqual([
       "Ozzie's AIReady to use, nothing to set up. $19 a month for about 400 answers. Cancel any time.",
@@ -1760,7 +1760,7 @@ describe("S10: Ozzie's AI", () => {
   it("with the service's day not known yet, its way on reads as a sentence: Next: open Services (walk-through, 2026-11-18)", async () => {
     const s = await mount(base({ managed_connect: PAID, set_model_route: ROUTE }), "first-run", UNKNOWN_WORDS);
     // The choice's own words with no day known: "your questions about your service".
-    expect(seen()).toContain("answer your questions about your service, and look at who could help with a role.");
+    expect(seen()).toContain("answer your questions about your services, and look at who could help with a role.");
     await press("Ozzie's AI");
     await press("Pay $19 a month in my browser");
     expect(button("Next: open Your service")).toBeNull();

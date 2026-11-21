@@ -52,7 +52,7 @@ export interface SetupKnown {
    * A church on B1 Church or Breeze: its own connection, in place of Planning Center's row (native's setup check reads
    * Planning Center only). `connected`: a key was checked and kept on this Mac.
    */
-  system?: { name: string; church: string | null; connected: boolean; id?: "b1" | "breeze" } | null | undefined;
+  system?: { name: string; church: string | null; connected: boolean; id?: "b1" | "breeze" | "genesis" } | null | undefined;
 }
 /** What one round of checking found. `check` is null when native's setup_check isn't built or didn't answer. */
 export interface CheckFacts { check: SetupCheck | null; notices: NoticePermission; startOn: boolean | null }
@@ -133,7 +133,12 @@ export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: strin
   const service: ServiceCode = !k.system && c && known(c.service) && !(c.service === "none" && k.watched) ? c.service : fallbackService;
   const date = opts.date ?? k.watched?.date ?? null;
   const name = k.watched?.service ?? null;
-  rows.push({
+  // Genesis shares no volunteer schedules: there is no service to watch, and nothing to fix (review of e9cbd97d, M5).
+  if (k.system?.id === "genesis") rows.push({
+    id: "service", label: "The service Ozzie watches", code: "none", ok: true, fix: null,
+    verdict: "None: Genesis doesn't share volunteer schedules, so there's no service to watch",
+  });
+  else rows.push({
     id: "service", label: "The service Ozzie watches", code: service, ok: service === "watching",
     verdict: service === "watching" ? [date, name, k.watched?.follows ? "moves on by itself" : null].filter(Boolean).join(" · ") || "Watching a service"
       : service === "passed" ? `${date ? `${date} has passed` : "That service has passed"}${k.watched?.follows ? " · Ozzie moves on to the next one by itself" : ""}`

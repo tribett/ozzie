@@ -75,3 +75,33 @@ export function fictionalBreeze(): SystemCapture {
     labels: { church: "Juniper Street Church (example)", service: "Sunday Worship", "position:9627": "Teacher", "position:9628": "Usher" },
   };
 }
+
+/**
+ * Maple Crossing Church on Genesis (round 5): groups, events with how many attended, forms with how many times each was
+ * filled in. Genesis shares no volunteer schedules, so there is no service, role or person here; no one's name either.
+ * Its zone is the one the leader would confirm in Ozzie (Genesis gives none).
+ */
+export function fictionalGenesis(): SystemCapture {
+  return {
+    version: 1, system: "genesis",
+    church: { id: "ORG-maple", time_zone: "America/Denver" },
+    started_at: "2026-11-20T14:59:58Z", completed_at: "2026-11-20T15:00:04Z",
+    reads: reads(["genesis.me", "genesis.groups", "genesis.events", "genesis.forms", "genesis.form_submissions"]),
+    service: null, busy: null, on_service: [], positions: [], assignments: [], team_members: [], blockouts: null,
+    // As Genesis shares them (live 2026-11-19): no member count for a group, and 0 attended for an event still to come.
+    groups: [{ id: "GG-tuesday", members: null }, { id: "GG-youth", members: null }, { id: "GG-prayer", members: null }],
+    events: [
+      { id: "GE-nov19", starts_at: "2026-11-19T18:30:00-07:00", ends_at: "2026-11-19T20:00:00-07:00", attendance: 34 },
+      { id: "GE-nov22", starts_at: "2026-11-22T09:00:00-07:00", ends_at: "2026-11-22T10:30:00-07:00", attendance: 0 },
+      { id: "GE-nov26", starts_at: "2026-11-26T18:30:00-07:00", ends_at: "2026-11-26T20:00:00-07:00", attendance: 0 },
+      { id: "GE-nov29", starts_at: "2026-11-29T09:00:00-07:00", ends_at: "2026-11-29T10:30:00-07:00", attendance: 0 },
+    ],
+    forms: [{ id: "GF-prayer", submissions: 7 }, { id: "GF-serve", submissions: 3 }],
+    names: {},
+    labels: {
+      church: "Maple Crossing Church (example)", "group:GG-tuesday": "Tuesday Group", "group:GG-youth": "Youth", "group:GG-prayer": "Prayer Team",
+      "event:GE-nov19": "Midweek Prayer", "event:GE-nov22": "Sunday Service", "event:GE-nov26": "Midweek Prayer", "event:GE-nov29": "Sunday Service",
+      "form:GF-prayer": "Prayer Card", "form:GF-serve": "Serve Sign-up",
+    },
+  };
+}

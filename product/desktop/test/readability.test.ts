@@ -141,7 +141,7 @@ describe("Settings is findable (audit item 27)", () => {
     const nav = /<nav class="settings-index" aria-labelledby="settings-index-title"><h2 id="settings-index-title" class="eyebrow">On this page<\/h2><ul>(.*?)<\/ul><\/nav>/u.exec(html);
     expect(nav).not.toBeNull();
     const links = [...nav![1]!.matchAll(/<a href="#([^"]+)">.*?<\/svg>([^<]+)<\/a>/gu)].map(m => [m[1]!, m[2]!.replaceAll("&amp;", "&")] as const);
-    expect(links.map(([, label]) => label)).toEqual(["Planning Center and which service Ozzie watches", "Your name on notes", "AI help", "What Ozzie runs and notices",
+    expect(links.map(([, label]) => label)).toEqual(["Planning Center and which services Ozzie watches", "Your name on notes", "AI help", "What Ozzie runs and notices",
       "Calendars", "Church lists", "Other AI apps, Spotlight and Shortcuts", "Saved checks", "Check my setup"]);
     // Each link's target is a heading on the page, after the index, in the same order as the links.
     const at = links.map(([id]) => html.search(new RegExp(`<h[23] id="${id}"`, "u")));

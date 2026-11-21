@@ -49,8 +49,9 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
 }
 
 /** What Church rules mean for a church on another system, in one plain paragraph. */
-export const SYSTEM_RULES = (w: SystemWords) =>
-  `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
+export const SYSTEM_RULES = (w: SystemWords) => w.system === "genesis"
+  ? "With Genesis, Ozzie checks no service: Genesis doesn't share volunteer schedules. It shows the events coming up, how many attended the ones that have ended, your groups, and how many times each form was filled in. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from Genesis."
+  : `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
 
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
 export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null }: {

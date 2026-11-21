@@ -359,7 +359,7 @@ export function namesBeside(check: ShownCheck | null, inUse: string | null, exam
  * changed or `discarded` goes up (Disconnect, after its question). Names beside the cards come only from a check of the
  * church the cards belong to while it is in use (`namesBeside`). It reads no setting and no ID typed in Settings.
  */
-export function KeptCards({ check, example, inUse, disconnected, signInAgain = false, discarded = 0, onScreen = true, onOpenCards, review }: {
+export function KeptCards({ check, example, inUse, disconnected, signInAgain = false, discarded = 0, onScreen = true, onOpenCards, review, noNames = null }: {
   /** The check on screen, if any. */
   check: ShownCheck | null;
   /** Whether the fictional example is on. */
@@ -375,6 +375,8 @@ export function KeptCards({ check, example, inUse, disconnected, signInAgain = f
   onScreen?: boolean;
   onOpenCards?: ((count: number) => void) | undefined;
   review?: GivenReview | undefined;
+  /** The church's system gives no names (Genesis): said in place of any promise of matches (review of 4c3d32ac, M-f). */
+  noNames?: string | null;
 }) {
   const [open, setOpen] = useState(0);
   const [at, setAt] = useState<CardsAt>(() => ({ church: inUse, epoch: 0 }));
@@ -382,7 +384,7 @@ export function KeptCards({ check, example, inUse, disconnected, signInAgain = f
   const next = cardsAt(at, inUse, open > 0);
   if (next !== at) setAt(next);
   const told = useCallback((n: number) => { setOpen(n); onOpenCards?.(n); }, [onOpenCards]);
-  const beside = namesBeside(check, next.church === inUse ? inUse : null, example, disconnected, signInAgain);
+  const beside = noNames && !example ? { names: {}, why: noNames } : namesBeside(check, next.church === inUse ? inUse : null, example, disconnected, signInAgain);
   return <CardsPage people={beside.names} noMatches={beside.why} workspace={`cards-${next.epoch}-${discarded}`} onScreen={onScreen} onOpenCards={told} review={review} />;
 }
 export function CardsPage({ people, noMatches = null, workspace, onScreen = true, onOpenCards, review }: {

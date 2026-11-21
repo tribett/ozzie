@@ -31,10 +31,11 @@ export const CHOOSE = {
     { id: "planning-center", name: "Planning Center", line: "Who's scheduled, who said yes, who could help, and more of Planning Center if you want it." },
     { id: "b1", name: "B1 Church", line: "Who's scheduled, who said yes, and who on each team could help." },
     { id: "breeze", name: "Breeze", line: "Who's scheduled and who said yes. Breeze doesn't say who could help." },
+    // Round 5 (owner decision 2026-11-19): a church that uses only Genesis can use Ozzie too, honestly.
+    { id: "genesis", name: "Genesis", line: "Groups, events with attendance, and forms. Genesis doesn't share volunteer schedules, so Ozzie can't check whether a service is covered." },
   ] as const,
-  genesis: "Use Genesis? Ozzie can't check a service from Genesis, but once your church is set up it can also read Genesis groups, events and forms, from Settings.",
   example: FIRST_RUN.example,
-  exampleIs: "The example church uses Planning Center. B1 Church and Breeze each show their own example church on their next screen.",
+  exampleIs: "The example church uses Planning Center. B1 Church, Breeze and Genesis each show their own example church on their next screen.",
   free: FIRST_RUN.free,
 } as const;
 
@@ -48,7 +49,6 @@ export function ChooseSystem({ onChoose, onExample }: { onChoose: (system: MainS
       <button type="button" className="fr-service" onClick={() => onChoose(s.id)}>
         <span className="fr-service-t">{s.name}</span><span className="fr-service-d">{s.line}</span>
       </button></li>)}</ul>
-    <p className="fr-small">{CHOOSE.genesis}</p>
     <div className="fr-actions"><button type="button" className="fr-link" onClick={onExample}>{CHOOSE.example}</button></div>
     {/* Which system the example shows (round 5); each other system's next screen offers its own. */}
     <p className="fr-small">{CHOOSE.exampleIs}</p>

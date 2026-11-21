@@ -151,15 +151,16 @@ describe("every key check's outcome in its own words", () => {
 });
 
 describe("What does your church use? (decision 21)", () => {
-  it("asks first, with Planning Center first, then B1 Church and Breeze, and Genesis said as also read only", () => {
+  it("asks first: Planning Center, B1 Church, Breeze, then Genesis, said plainly as no service check (round 5)", () => {
     const t = text(renderToStaticMarkup(React.createElement(ChooseSystem, { onChoose: none, onExample: none })));
     expect(t).toContain(CHOOSE.title);
     expect(t.indexOf("Planning Center")).toBeLessThan(t.indexOf("B1 Church"));
     expect(t.indexOf("B1 Church")).toBeLessThan(t.indexOf("Breeze"));
-    expect(t).toContain("Ozzie can't check a service from Genesis");
+    expect(t.indexOf("Breeze")).toBeLessThan(t.indexOf("Genesis"));
+    expect(t).toContain("Groups, events with attendance, and forms. Genesis doesn't share volunteer schedules, so Ozzie can't check whether a service is covered.");
     expect(t).toContain("See an example church first");
-    // Exactly these three, in this order: no other system is offered.
-    expect(CHOOSE.systems.map(s => s.id)).toEqual(["planning-center", "b1", "breeze"]);
+    // Exactly these four, in this order: no other system is offered.
+    expect(CHOOSE.systems.map(s => s.id)).toEqual(["planning-center", "b1", "breeze", "genesis"]);
   });
 
   it("choosing one says which", async () => {

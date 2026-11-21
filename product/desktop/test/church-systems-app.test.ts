@@ -6,6 +6,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 import { b1Capture, breezeCapture, breezeUntimedCapture } from "../../../core/test/church-systems/fixtures.js";
+import { fictionalGenesis } from "../../../core/src/church-systems/fictional.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 
@@ -41,7 +42,10 @@ vi.mock("@tauri-apps/api/core", () => ({
         if (native.keyGone) return { outcome: "key-refused", capture: null };
         // B1 Church's own zone is back-filled; the confirmed zone (an argument) is what the check is placed in.
         const zone = typeof args.zone === "string" ? args.zone : null;
-        return { outcome: "ok", capture: native.capture || JSON.stringify(b1Capture({ church: { id: "CHU0000cedar", time_zone: zone ?? "America/Chicago" } })) };
+        // Genesis's events are placed in the zone the person gave (native genesis.rs), as its capture says.
+        const given = native.capture ? JSON.parse(native.capture) as { system: string; church: { time_zone: string | null } } : null;
+        if (given?.system === "genesis" && zone) given.church.time_zone = zone;
+        return { outcome: "ok", capture: given ? JSON.stringify(given) : JSON.stringify(b1Capture({ church: { id: "CHU0000cedar", time_zone: zone ?? "America/Chicago" } })) };
       }
       case "church_system_verify": return { outcome: "works", church: { id: "CHU0000cedar", name: "Cedar Hollow Fellowship" } };
       case "church_system_forget": return null;
@@ -72,6 +76,9 @@ const buttonStarting = (text: string) => all(dom.root as unknown as { childNodes
 type Props = Record<string, { onClick?: (e: unknown) => void; onChange?: (e: unknown) => void }>;
 const propsOf = (el: unknown) => { const o = el as Props; return o[Object.keys(o).find(k => k.startsWith("__reactProps$"))!]; };
 const byId = (id: string) => all(dom.root as unknown as { childNodes: unknown[] }).find(n => (n as { getAttribute?: (a: string) => string | null }).getAttribute?.("id") === id);
+/** A second Planning Center service a Mac watched before it switched systems, and anything that would show it. */
+const WATCHED_TOO = { serviceTypeId: "8002", planId: "9002", name: "Saturday Vigil", sort_date: "2026-11-21T18:00:00Z", times: [], zone: "America/Chicago", past: [] };
+const SEVERAL_SERVICES = /Saturday Vigil|Watch another service|Which services Ozzie watches|across \d+ services|Your services have|in your services/u;
 const byIdIn = (root: unknown, id: string) => all(root as { childNodes: unknown[] }).some(n => (n as { getAttribute?: (a: string) => string | null }).getAttribute?.("id") === id);
 
 /**
@@ -162,7 +169,7 @@ describe("a fresh Mac that hasn't chosen what its church uses (round 5)", () => 
     for (const page of ["Today", "Services", "Keeping watch", "What happened", "Visitor cards"]) {
       await app.go(page);
       // Planning Center is named only among the choices ("Ozzie reads Planning Center, B1 Church or Breeze").
-      expect(misnamed(dom.seen().replace(/Ozzie reads Planning Center, B1 Church or Breeze/gu, "")), page).toEqual([]);
+      expect(misnamed(dom.seen().replace(/Ozzie reads Planning Center, B1 Church, Breeze or Genesis/gu, "")), page).toEqual([]);
     }
     await app.go("Today");
     expect(dom.seen()).toContain("Choose what your church uses to see your service");
@@ -170,8 +177,146 @@ describe("a fresh Mac that hasn't chosen what its church uses (round 5)", () => 
     await app.press("Choose what your church uses");
     await app.waitFor("What does your church use?");
     await app.go("Settings");
-    expect(dom.seen()).toContain("No church system connected yet. Ozzie reads Planning Center, B1 Church or Breeze");
+    expect(dom.seen()).toContain("No church system connected yet. Ozzie reads Planning Center, B1 Church, Breeze or Genesis");
     expect(dom.seen()).not.toContain("Planning Center now.");
+  }, 60_000);
+});
+
+describe("a church that uses only Genesis (round 5)", () => {
+  it("chooses Genesis, connects with its key, gives its time zone, and sees what Genesis shares, never a covered service", async () => {
+    native.capture = JSON.stringify(fictionalGenesis());
+    const app = await launch();
+    await app.waitFor("What does your church use?");
+    await app.press("Genesis");
+    expect(dom.seen()).toContain("Connect Genesis");
+    expect(dom.seen()).toContain("tick Read for Groups, Events and Forms only");
+    await app.press("Paste my key");
+    expect(native.calls.filter(([c]) => c === "church_system_connect").map(([, a]) => a)).toEqual([{ system: "genesis", address: null, how: "paste" }]);
+    await app.waitFor("Which time zone does your church meet in?");
+    await app.press("Use ");
+    await app.waitFor("3 events in the next four weeks, 2 forms, 3 groups.");
+    expect(dom.seen()).toContain("Genesis doesn't share volunteer schedules, so Ozzie can't check whether a service is covered.");
+    expect(dom.seen()).not.toContain("Planning Center not connected");
+    await app.press("Next: choose how Ozzie uses AI");
+    await app.go("Today");
+    await app.waitFor("From Genesis: 3 events in the next four weeks, 2 forms, 3 groups.");
+    expect(dom.seen()).not.toMatch(/Nothing on [^.]* needs a decision|hasn't been checked yet/u);
+    expect(dom.seen()).toContain("Genesis: Cedar Hollow Fellowship");
+    // Review of e9cbd97d, H1: a connected Genesis church is never asked to connect, and its own reads are what runs.
+    expect(dom.seen()).not.toContain("Not connected yet");
+    expect(dom.seen()).not.toContain("Nothing runs yet");
+    expect(dom.seen()).toContain("Ozzie reads Genesis on its own");
+    expect(dom.seen()).toContain("Checks Genesis at least every hour while Ozzie is open, and when it opens.");
+    // M6: first run's read is the one recorded; finishing doesn't read again.
+    expect(native.calls.filter(([c]) => c === "church_system_check")).toHaveLength(1);
+    expect(JSON.parse(kept.get("ozzie.church-system.v1")!).genesis.result_seen).toBe(true);
+    // The Services page, as every church's (owner decision 2026-11-19): Genesis's events, never a coverage question.
+    await app.go("Services");
+    expect(dom.seen()).toContain("Coming up in Genesis");
+    expect(dom.seen()).toContain("What Genesis shares");
+    expect(dom.seen()).toContain("Live read from Genesis");
+    expect(dom.seen()).toContain("Prayer Card: 7 entries");
+    expect(dom.seen()).not.toMatch(/Are your services covered\?|Your service\b|Sunday page/u);
+    // Ask answers here from what was read: nothing goes to an AI, and who is serving is plainly not shared.
+    await app.press("Ask Ozzie");
+    // M1: no "nothing checked" or "needs AI" over answers made here, and Genesis's own questions are offered.
+    expect(dom.seen()).not.toContain("Nothing has been checked yet");
+    expect(dom.seen()).not.toContain("Ask Ozzie needs AI");
+    expect(dom.seen()).toContain("How many times was each form filled in?");
+    expect(dom.seen()).toContain("Questions about what Genesis shares");
+    const { act } = await import("react");
+    const ask = async (q: string) => {
+      await app.type("ask-input", q);
+      const form = all(dom.root as unknown as { childNodes: unknown[] }).find(n => (n as { tagName?: string }).tagName === "FORM" && byIdIn(n, "ask-input"));
+      await act(async () => { (propsOf(form) as unknown as { onSubmit: (e: unknown) => void }).onSubmit({ preventDefault() {} }); });
+      await app.settle();
+    };
+    await ask("What events are coming up?");
+    // The fixture's times carry Denver's offset; native places them in the zone given, so only the event and day are checked.
+    expect(dom.seen()).toMatch(/Sunday Service, Sun, Nov 22, \d{1,2}:00 [AP]M\./u);
+    await ask("Who is serving on Sunday?");
+    expect(dom.seen()).toContain("Genesis doesn't share volunteer schedules, so Ozzie can't check whether a service is covered.");
+    // Review of 4c3d32ac, H: a visitor card asked about by count is Genesis's form, never the cards page.
+    await ask("How many times was the visitor card filled in?");
+    expect(dom.seen()).toContain("Prayer Card: filled in 7 times.");
+    expect(dom.seen()).not.toContain("Visitor cards are read on this Mac, on the Visitor cards page");
+    expect(native.calls.map(([c]) => c)).not.toContain("agent_step");
+    await app.go("What happened");
+    expect(dom.seen()).toContain("Every read in the latest check");
+    // M6: first run's read went through the recorder (What happened's ledger), once.
+    expect(native.calls.filter(([c, a]) => c === "ledger_admit" && (a as { kind?: string }).kind === "check")).toHaveLength(1);
+    await app.go("Settings");
+    expect(dom.seen()).toContain("Connected to Cedar Hollow Fellowship in Genesis.");
+    expect(dom.seen()).not.toContain("Also read Genesis");
+    // M3: switching away keeps Genesis as Also read Genesis, and says so.
+    await app.press("Switch to Breeze");
+    expect(dom.seen()).toContain("Genesis stays connected: Ozzie reads it beside the system you switch to, under Also read Genesis in Settings");
+    await app.press("Keep Genesis");
+  }, 90_000);
+
+  it("after a switch from Planning Center, nothing of Planning Center's check shows or runs on Genesis (review of e9cbd97d, H2, M4)", async () => {
+    kept.set("ozzie.church-system.v1", JSON.stringify({ main: "genesis", connection: null,
+      genesis: { system: "genesis", church_id: "CHU0000cedar", church_name: "Cedar Hollow Fellowship", zone: "America/Denver", result_seen: true } }));
+    kept.set("ozzie.settings.v1", JSON.stringify({ clientId: "", organization: "1001", serviceTypeId: "8001", planId: "9001" }));
+    native.pcSaved = withFictionalOperations(nov22Capture());
+    // Planning Center still signed in on this Mac: its scheduled checks must not run, nor its check show.
+    native.pcStatus = { state: "connected", organization: "1001", checked_at_ms: Date.parse("2026-11-20T15:00:00Z"), source: "", problem: null };
+    native.capture = JSON.stringify(fictionalGenesis());
+    // A second Planning Center service watched before the switch: nothing of it reaches Genesis (review of the Services merge).
+    kept.set("ozzie.also-watched.v1", JSON.stringify({ organization: "1001", services: [WATCHED_TOO] }));
+    const app = await launch();
+    await app.waitFor("From Genesis: 3 events in the next four weeks, 2 forms, 3 groups.");
+    const t = dom.seen();
+    expect(t).not.toMatch(/things? to decide|See who could help|Greeter|Planning Center check/u);
+    expect(t).not.toMatch(SEVERAL_SERVICES);
+    await app.go("Services");
+    expect(dom.seen()).not.toMatch(SEVERAL_SERVICES);
+    const { act } = await import("react");
+    for (let i = 0; i < 8; i++) await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    await app.settle();
+    expect(native.calls.map(([c]) => c)).not.toContain("check_sunday");
+    expect(native.calls.map(([c]) => c)).not.toContain("load_sunday_recording");
+    // Review of 4c3d32ac, M-c: Check my setup asks native about no Planning Center service on Genesis.
+    await app.go("Settings");
+    expect(dom.seen()).not.toMatch(SEVERAL_SERVICES);
+    await app.press("Check my setup");
+    await app.settle();
+    const setupChecks = native.calls.filter(([c]) => c === "setup_check").map(([, a]) => a as Record<string, unknown>);
+    expect(setupChecks.length).toBeGreaterThan(0);
+    for (const a of setupChecks) { expect(a.serviceTypeId).toBeUndefined(); expect(a.planId).toBeUndefined(); }
+    // M4: disconnecting Genesis leaves nothing of its last read on Today.
+    await app.go("Settings");
+    await app.press("Disconnect Genesis and forget its key");
+    await app.go("Today");
+    await app.settle();
+    expect(dom.seen()).not.toContain("From Genesis: 3 events");
+    expect(dom.seen()).toContain("Connect Genesis");
+  }, 90_000);
+
+  it("switching back to Genesis reads it once, recorded once (review of 4c3d32ac, M-d)", async () => {
+    kept.set("ozzie.church-system.v1", JSON.stringify({ main: "breeze", connection: null,
+      genesis: { system: "genesis", church_id: "CHU0000cedar", church_name: "Cedar Hollow Fellowship", zone: "America/Denver", result_seen: true } }));
+    native.capture = JSON.stringify(fictionalGenesis());
+    const app = await launch();
+    await app.waitFor("Connect Breeze");
+    await app.go("Settings");
+    await app.press("Switch to Genesis");
+    await app.press("Switch to Genesis");
+    await app.waitFor("3 events in the next four weeks, 2 forms, 3 groups.");
+    await app.settle();
+    expect(native.calls.filter(([c]) => c === "church_system_check")).toHaveLength(1);
+    expect(native.calls.filter(([c, a]) => c === "ledger_admit" && (a as { kind?: string }).kind === "check")).toHaveLength(1);
+  }, 90_000);
+
+  it("shows its own fictional example church from the connect screen", async () => {
+    const app = await launch();
+    await app.waitFor("What does your church use?");
+    await app.press("Genesis");
+    await app.press("See an example church first");
+    await app.waitFor("Example church, not real.");
+    expect(dom.seen()).toContain("What Genesis shares");
+    expect(dom.seen()).toContain("Prayer Card was filled in 2 more times since the last check (7 in all).");
+    expect(native.calls.map(([c]) => c)).not.toContain("church_system_check");
   }, 60_000);
 });
 
@@ -291,6 +436,8 @@ describe("a Mac set up on B1 Church, opened again", () => {
     seed("b1");
     kept.set("ozzie.settings.v1", JSON.stringify({ clientId: "", organization: "1001", serviceTypeId: "8001", planId: "9001" }));
     native.pcStatus = { state: "connected", organization: "1001", checked_at_ms: Date.parse("2026-11-20T15:00:00Z"), source: "", problem: null };
+    // A second Planning Center service watched before the switch: B1 Church stays one service (review of the Services merge).
+    kept.set("ozzie.also-watched.v1", JSON.stringify({ organization: "1001", services: [WATCHED_TOO] }));
     const app = await launch();
     await app.go("Services");
     await app.waitFor("Also read from B1 Church");
@@ -300,6 +447,10 @@ describe("a Mac set up on B1 Church, opened again", () => {
     await app.settle();
     expect(native.calls.map(([c]) => c)).not.toContain("check_sunday");
     expect(misnamed(dom.seen())).toEqual([]);
+    // B1 Church's own count, on the page and the sidebar; nothing of the other service anywhere.
+    expect(dom.seen()).toContain("3 things to decide");
+    expect(dom.seen()).not.toMatch(SEVERAL_SERVICES);
+    for (const page of ["Today", "Settings"]) { await app.go(page); expect(dom.seen()).not.toMatch(SEVERAL_SERVICES); }
   }, 60_000);
 
   it("moves on only to the next one of the same service; with none listed yet, it waits and says so", async () => {

@@ -2,7 +2,7 @@
 // read:" above something it couldn't do, led with a caveat about numbers, and closed by offering who on a team could
 // help. On a church system that ties no team to its roles, roster questions are answered on this Mac from who is on
 // each role, every suggestion leads to such an answer, and the closing line offers only what works there.
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 import { suggestedQuestions } from "../../../core/src/ask.js";
 import { buildSystemBrief } from "../../../core/src/church-systems/brief.js";
@@ -19,6 +19,9 @@ import { CAN_DO_INSTEAD } from "../src/harness-words.js";
 import { answer, calls, fakeNative, payloadOf } from "./harness-fakes.js";
 
 const skills = await bundledSkills();
+// The fixtures are a check made at NOW; the harness reads the clock, so pin it there (or a later run calls the check too old).
+beforeAll(() => { vi.setSystemTime(NOW); });
+afterAll(() => { vi.useRealTimers(); });
 const dataFor = (capture: SystemCapture): HarnessData => {
   const built = buildSystemBrief(capture, { confirmedZone: capture.church.time_zone }, NOW);
   if (!built.ok) throw new Error(built.reason);

@@ -492,6 +492,23 @@ describe("What happened folds quiet checks in a row", () => {
     expect(foldQuiet(pair.map(t => t.row), () => true)).toHaveLength(1);
   });
 
+  it("with several services watched, each service's quiet checks fold together, apart from the other's (owner decision 2026-11-19)", () => {
+    // One round reads Sunday Morning (1500), then Youth Night (1700): newest first, they interleave.
+    const round = [quiet(local(20, 14, 1)), quiet(local(20, 14)), quiet(local(20, 13, 1)), quiet(local(20, 13)), quiet(local(20, 12, 1)), quiet(local(20, 12))];
+    const serviceOf = (r: TaskRow) => round.findIndex(t => t.row === r) % 2 === 0 ? "1700" : "1500";
+    const folded = foldQuiet(round.map(t => t.row), () => true, () => undefined, serviceOf);
+    expect(folded.map(line => line.map(serviceOf))).toEqual([["1700", "1700", "1700"], ["1500", "1500", "1500"]]);
+    // One service: the run is one fold, as before.
+    expect(foldQuiet(round.map(t => t.row), () => true, () => undefined, () => "1500")).toEqual([round.map(t => t.row)]);
+    // The fold's own line names its service when more than one is watched.
+    const html = renderToStaticMarkup(React.createElement(RecentWork, {
+      tasks: round.map(t => t.row), trigger: id => round.find(t => t.row.task_id === id)?.start, found: id => round.find(t => t.row.task_id === id)?.found,
+      service: id => serviceOf(round.find(t => t.row.task_id === id)!.row), serviceNames: { 1500: "Sunday Morning", 1700: "Youth Night" }, now: new Date(local(20, 15)),
+    }));
+    expect(html).toContain("Checked Youth Night in Planning Center 3 times on its own");
+    expect(html).toContain("Checked Sunday Morning in Planning Center 3 times on its own");
+  });
+
   it("checks kept before this change, with no finding beside them, show exactly as they did", () => {
     const older = [14, 13, 12, 11].map(h => ({ row: checkRow(nextId(), local(20, h)), start: "automatic" as const }));
     expect(lines(render(older))).toEqual(older.map(t => own(t)));

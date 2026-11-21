@@ -1173,6 +1173,26 @@ async fn delete_sunday_recordings(
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
 }
+/// Removes this organization's saved recordings of the given plans only: a service the leader
+/// stopped watching, with every plan of it Ozzie watched (watched-services.ts). Never automatic;
+/// at most 32 plans, each a numeric id, or nothing is deleted.
+#[tauri::command]
+async fn delete_sunday_plan_recordings(
+    app: tauri::AppHandle,
+    organization: String,
+    plan_ids: Vec<String>,
+) -> Result<(), ConsumerError> {
+    if plan_ids.len() > 32 {
+        return Err(recording_io(std::io::ErrorKind::InvalidInput.into()));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        sunday_check::delete_plan_recordings(&recordings(&app)?, &organization, &plan_ids)
+            .map(|_| ())
+            .map_err(recording_io)
+    })
+    .await
+    .map_err(|_| ConsumerError::NativeUnavailable)?
+}
 /// Model route settings and the usage ledger live in this Mac's app data directory.
 fn model_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, ModelError> {
     app.path()
@@ -1782,6 +1802,7 @@ fn main() {
             list_sunday_recordings,
             load_sunday_recording,
             delete_sunday_recordings,
+            delete_sunday_plan_recordings,
             dev_defaults,
             dev_log,
             model_status,

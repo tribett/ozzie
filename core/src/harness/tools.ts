@@ -59,6 +59,12 @@ export interface HarnessData {
    * is the system's own. Absent: Planning Center.
    */
   source?: string;
+  /**
+   * With more than one service watched (owner decision 2026-11-19, desktop services-merge.ts): each team's service, by
+   * its own Planning Center name, so an answer written on this Mac says which service a role is in. Local only: no tool
+   * reads it, and nothing in it is ever sent. Absent with one service.
+   */
+  serviceOfTeam?: Readonly<Record<string, string>>;
 }
 export interface HarnessToolsOptions { now?: () => string }
 

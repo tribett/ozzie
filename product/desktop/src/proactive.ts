@@ -14,6 +14,7 @@ import { changeFindingKind, feedbackOf, foundOf, rightAwayChanges, routeChanges,
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { thisMacOnly, type NoticeOptions } from "./phone-notice.js";
+import { withFormsOn } from "../../../core/src/church-reads/rules.js";
 import { noticeDayOf } from "./day-phrases.js";
 import type { NoticeDay } from "./onboarding-bridge.js";
 import type { CheckFound } from "./harness-words.js";
@@ -116,7 +117,7 @@ export interface SystemWatch { connection: SystemConnection; read: () => Promise
 /** A system check that brought no capture, by native's closed outcome word. */
 export class SystemReadFailure extends Error {
   /** `church`: the church read, when known, so a failure is never said of another church connected since. */
-  constructor(readonly system: SystemConnection["system"], readonly outcome: string, readonly church: string | null = null) { super(outcome); }
+  constructor(readonly system: SystemConnection["system"] | "genesis", readonly outcome: string, readonly church: string | null = null) { super(outcome); }
 }
 export interface ProactiveContext {
   settings: Settings; rules: SundayRules; status: ConnectionStatus | null;
@@ -128,7 +129,15 @@ export interface ProactiveContext {
    * native says as "Service coverage".
    */
   noticeDay?: NoticeDay;
+  /**
+   * The other services Ozzie watches (watched-services.ts, owner decision 2026-11-19), Planning Center only: each is read
+   * in the same round, one after another, after the one Settings names, and compared with its own last check. Absent or
+   * empty: one service, exactly as before.
+   */
+  also?: readonly AlsoPlan[];
 }
+/** One more watched service's plan, as a round reads it. */
+export interface AlsoPlan { serviceTypeId: string; planId: string }
 export interface ProactiveHooks<C = SundayCapture> {
   context: () => ProactiveContext;
   onStatus: (s: ConnectionStatus) => void;
@@ -142,6 +151,12 @@ export interface ProactiveHooks<C = SundayCapture> {
    * failed, was paused or decided nothing), so one change brings at most one notice.
    */
   onChanges?: (changes: SundayChange[], about: { plan_id: string; notice: boolean }) => Promise<boolean> | void;
+  /** A check of one of the other services watched (ProactiveContext `also`), in the same round. */
+  onAlsoCapture?: (capture: C, trigger: RunTrigger) => void;
+  /** A check of one of them that brought nothing: its own page part says so; the round goes on with the rest. */
+  onAlsoFailure?: (planId: string, error: unknown, trigger: RunTrigger) => void;
+  /** A check of one of them that ended after it stopped being watched: its saved copy is deleted, nothing else is kept. */
+  onAlsoDropped?: (capture: C) => void;
 }
 /**
  * What a finished check is compared by: the church and service it is of, its name-free record (sunday-changes.ts), the
@@ -234,6 +249,11 @@ export interface ProactiveController<C = SundayCapture> {
    * Sundays stay, name-free, as they do for Planning Center.
    */
   letGo(): void;
+  /**
+   * A service no longer watched (watched-services.ts removeService): what was kept of its plans' checks here (their
+   * name-free records and what changed in them) is forgotten. Its saved checks on disk are App's to delete.
+   */
+  forgetPlans(planIds: readonly string[]): void;
   markSeen(): void;
   view(): ProactiveView;
   subscribe(listener: () => void): () => void;
@@ -251,7 +271,8 @@ export const SYSTEM_KEYS: ProactiveKeys = {
 const KEYS_PC = KEYS;
 const TICK_MS = 10_000;
 const HISTORY_LIMIT = 20;
-const SUNDAYS_KEPT = 6;
+/** Each watched service's newest checks (up to four services, watched-services.ts MAX_WATCHED). */
+const SUNDAYS_KEPT = 12;
 
 function read<T>(store: KeyValueStore, key: string): T | null {
   try { const raw = store.get(key); return raw ? JSON.parse(raw) as T : null; } catch { return null; }
@@ -323,7 +344,7 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
   let schedule = validSchedule(loaded) ? loaded : newSchedule();
   let history = read<{ version: 1; entries: HistoryEntry[] }>(deps.store, KEYS.history)?.entries ?? [];
   // A record of another shape is dropped; the next check for that Sunday becomes a fresh baseline.
-  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]>; prints?: Record<string, string> }>(deps.store, KEYS.memory);
+  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]>; prints?: Record<string, string>; round?: unknown }>(deps.store, KEYS.memory);
   let sundays = Object.fromEntries(Object.entries(remembered?.sundays ?? {})
     .filter(([, m]) => m?.latest?.version === 2 && m?.known?.version === 2));
   /** The finding keys (ids only) the newest check of each Sunday showed, so a kind told right away is told when it is new. */
@@ -332,6 +353,20 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
   /** The print (shownPrint) of what the newest check of each Sunday showed, so a check can say it found nothing new. */
   let printBy: Record<string, string> = Object.fromEntries(Object.entries(remembered?.prints ?? {})
     .filter(([k, p]) => Object.hasOwn(sundays, k) && typeof p === "string"));
+  /**
+   * The services (owner:plan) the last round read, one check of each watched service: a check can find "nothing new" only
+   * when its service was read in the round before (with one service, the check right before was of it, as always).
+   * Unknown (a Mac that kept none): the newest check kept, as before.
+   */
+  let lastRound: string[] = Array.isArray(remembered?.round) ? remembered.round.filter((k): k is string => typeof k === "string" && Object.hasOwn(sundays, k)) : [];
+  /** This round so far, and whether its one notice already went: one round of checks sends at most one coverage notice. */
+  let thisRound: string[] = [];
+  let roundSent: { macOnly: boolean } | null = null;
+  /** The real day of each plan a check read lately, for a held notice about one of the other services. */
+  const dayByPlan = new Map<string, NoticeDay>();
+  /** How many checks of each other service failed in a row: only the first is put in the history. */
+  const alsoFailures = new Map<string, number>();
+  const saveMemory = () => deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy, prints: printBy, round: lastRound }));
   let seenAt = read<string>(deps.store, KEYS.seen);
   /** While "Pause everything" is on: whether this check was paused on its own, to restore when it's lifted. */
   let beforeEverything = read<{ paused: boolean }>(deps.store, KEYS.everything);
@@ -371,8 +406,8 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
    * `macOnly`: only background checks brought it, so "A notice on your phone" leaves it on this Mac. The notice names the
    * watched service's day by a closed code, never text.
    */
-  const deliver = async (macOnly: boolean): Promise<"sent" | "unavailable"> => {
-    const day = hooks?.context().noticeDay ?? checkedDay;
+  const deliver = async (macOnly: boolean, about?: NoticeDay): Promise<"sent" | "unavailable"> => {
+    const day = about ?? hooks?.context().noticeDay ?? checkedDay;
     const options: NoticeOptions = { ...(macOnly ? { localOnly: true as const } : {}), ...(day ? { day } : {}) };
     try { await (Object.keys(options).length ? deps.notify(options) : deps.notify()); return "sent"; } catch { return "unavailable"; }
   };
@@ -382,18 +417,24 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
    * (harness-words.ts CheckFound), or null when that isn't known: not a live read, the first check of this Sunday, the
    * check right before it of another service, or nothing kept from the check before to compare what it showed with.
    */
-  async function afterCapture(capture: C, trigger: RunTrigger, ctx: ProactiveContext, now: string): Promise<CheckFound | null> {
-    const digest = digestOf(capture, ctx, now);
-    if (!digest) return null;
+  async function afterCapture(capture: C, trigger: RunTrigger, ctx: ProactiveContext, now: string, also = false): Promise<CheckFound | null> {
+    const read = digestOf(capture, ctx, now);
+    if (!read) return null;
+    // One of the other services watched: its Services findings only. Rooms, follow-ups and group meetings are the first
+    // service's (the Services page shows them there), so they are never compared or told twice.
+    const digest = also ? { ...read, ops: null } : read;
     const { record, brief, ops } = digest;
     const rules = ctx.rules;
     const key = keyOf(digest.owner, digest.plan_id);
     const prior = sundays[key] ?? null;
-    const follows = newestOf(sundays) === key;
+    const follows = lastRound.length ? lastRound.includes(key) : newestOf(sundays) === key;
+    thisRound.push(key);
     const { changes, memory } = compareSundayCheck(prior, record, { now, urgentWithinHours: prefs.urgentWithinHours });
     // Every finding this check shows, kids teams, rooms and follow-ups included, with what the last check of this Sunday showed.
     const entries = feedbackOf(rules);
-    checkedDay = noticeDayOf(brief.day);
+    const day = noticeDayOf(brief.day);
+    if (!also) checkedDay = day;
+    dayByPlan.set(digest.plan_id, day);
     const shown = foundOf(brief, ops), print = shownPrint(brief, ops);
     const before = prior ? foundBy[key] ?? null : null;
     const printBefore = prior ? printBy[key] ?? null : null;
@@ -401,7 +442,7 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
       .sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at)).slice(0, SUNDAYS_KEPT));
     foundBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, shown.map(f => f.key)]] : foundBy[k] ? [[k, foundBy[k]]] : []));
     printBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, print]] : printBy[k] ? [[k, printBy[k]]] : []));
-    deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy, prints: printBy }));
+    saveMemory();
     const about = { trigger, plan_id: digest.plan_id, plan_dates: record.plan_dates };
     if (!prior) { add({ at: now, kind: "first-check", ...about, notice: "none" }); return null; }
     // The person's Church rules on notices: kinds kept for the briefing, kinds told right away (a kind the Sunday
@@ -424,21 +465,32 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
     const own = routed.notify.some(c => c.kind === "finding-new");
     const sunday = listed.filter(c => c.kind !== "finding-new");
     let handed: Promise<boolean> | void = undefined;
-    if (trigger !== "manual" && !own && sunday.length) {
+    // Keep services covered runs over the first service's check: the other services' changes bring their own notice.
+    if (!also && trigger !== "manual" && !own && sunday.length) {
       try { handed = hooks?.onChanges?.(sunday, { plan_id: digest.plan_id, notice: found.worse }); } catch { /* the check itself finished */ }
     }
     let notice: HistoryEntry["notice"] = "none";
     if (found.worse && trigger === "manual") notice = "in-app";
     else if (found.worse && handed) { notice = "handed"; void afterHandoff(now, handed, found); }
-    else if (found.worse) notice = await decide(found, now);
+    else if (found.worse) notice = await decide(found, now, also ? day : undefined);
     else if (routed.briefing.length && trigger !== "manual") notice = "briefing";
     add({ at: now, kind: "changes", ...about, changes: listed, notice });
     return outcome;
   }
-  /** Send the notice now, or hold it for quiet hours (unless the person let urgent ones through). */
-  async function decide(found: { worse: boolean; urgent: boolean; macOnly: boolean }, now: string): Promise<NonNullable<HistoryEntry["notice"]>> {
+  /**
+   * Send the notice now, or hold it for quiet hours (unless the person let urgent ones through). `day`: the day of one of
+   * the other services, when it is about one. A round of checks sends one notice: a second service with something worse in
+   * the same round is told by the notice already sent (unless that one stayed on this Mac and this one may go further).
+   */
+  async function decide(found: { worse: boolean; urgent: boolean; macOnly: boolean }, now: string, day?: NoticeDay, oncePerRound = true): Promise<NonNullable<HistoryEntry["notice"]>> {
     const decision = noticeDecision(found, { quiet: quiet(), urgentDuringQuiet: prefs.urgentDuringQuiet }, now, deps.timeZone());
-    if (decision === "send") return deliver(found.macOnly);
+    // A late hand-off's notice (afterHandoff) belongs to its own round, not the one under way now.
+    if (decision === "send" && oncePerRound && roundSent && (!roundSent.macOnly || found.macOnly)) return "sent";
+    if (decision === "send") {
+      const sent = await deliver(found.macOnly, day);
+      if (sent === "sent") roundSent = { macOnly: found.macOnly };
+      return sent;
+    }
     if (decision === "hold") { schedule = holdNotice(schedule, now, found.urgent); return "held"; }
     return "none";
   }
@@ -451,26 +503,65 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
   async function afterHandoff(at: string, handed: Promise<boolean>, found: { worse: boolean; urgent: boolean; macOnly: boolean }) {
     const decided = await handed.catch(() => false);
     const outcome: NonNullable<HistoryEntry["notice"]> = decided ? "responsibility" : schedule.paused ? "none"
-      : seenAt && seenAt >= at ? "in-app" : await decide(found, deps.now());
+      : seenAt && seenAt >= at ? "in-app" : await decide(found, deps.now(), undefined, false);
     history = history.map(e => e.at === at && e.kind === "changes" && e.notice === "handed" ? { ...e, notice: outcome } : e);
     emit();
+  }
+
+  /**
+   * One of the other services watched, read after the first in the same round (owner decision 2026-11-19), only while it
+   * is still watched, with the connection as the round left it. Its own saved checks, comparison and notice; a failure
+   * is its own, put in the history once in a row, and never stops the round or counts against the schedule.
+   */
+  async function alsoCheck(plan: AlsoPlan, ctx: ProactiveContext, status: ConnectionStatus | null, trigger: RunTrigger, source?: "manual" | "automatic") {
+    if (!hooks?.context().also?.some(p => p.planId === plan.planId && p.serviceTypeId === plan.serviceTypeId)) return;
+    // People forms are church-wide and read with the first service: another service's check doesn't read them again.
+    const its: ProactiveContext = { ...ctx, status, settings: { ...ctx.settings, serviceTypeId: plan.serviceTypeId, planId: plan.planId }, rules: withFormsOn(ctx.rules, false) };
+    const ledger: { task?: string } = {};
+    try {
+      const capture = await deps.check(its, s => hooks?.onStatus(s), trigger, source, id => { ledger.task = id; });
+      alsoFailures.delete(plan.planId);
+      // Stopped watching while it was read: nothing of it is kept here, and App deletes the copy native just saved.
+      if (!hooks?.context().also?.some(p => p.planId === plan.planId && p.serviceTypeId === plan.serviceTypeId)) {
+        try { hooks?.onAlsoDropped?.(capture); } catch { /* App's own deletion, best effort */ }
+        return;
+      }
+      let found: CheckFound | null = null;
+      try { found = await afterCapture(capture, trigger, { ...its, ...pick(hooks?.context()) }, deps.now(), true); } catch { /* comparing is best effort */ }
+      if (found && ledger.task) try { deps.found?.(ledger.task, found); } catch { /* What happened then shows the check on its own */ }
+      hooks?.onAlsoCapture?.(capture, trigger);
+    } catch (error) {
+      const failures = (alsoFailures.get(plan.planId) ?? 0) + 1;
+      alsoFailures.set(plan.planId, failures);
+      if (failures === 1) add({ at: deps.now(), kind: "failed", trigger, plan_id: plan.planId, problem: deps.problem(error) });
+      try { hooks?.onAlsoFailure?.(plan.planId, error, trigger); } catch { /* the page's own words only */ }
+    }
   }
 
   function run(trigger: RunTrigger, source?: "manual" | "automatic"): Promise<C> {
     const ctx = hooks!.context();
     const work = (async () => {
+      thisRound = [];
+      roundSent = null;
       try {
         // The check's task in the ledger, so what it found is kept beside it for What happened.
         const ledger: { task?: string } = {};
-        const capture = await deps.check(ctx, s => hooks?.onStatus(s), trigger, source, id => { ledger.task = id; });
+        // The connection as this round leaves it, so the other services' checks don't sign in again.
+        let status = ctx.status;
+        const capture = await deps.check(ctx, s => { status = s; hooks?.onStatus(s); }, trigger, source, id => { ledger.task = id; });
         const now = deps.now();
         let found: CheckFound | null = null;
         // Compared with what this Mac knows of the church watched when it ends: a church let go meanwhile (a switch, a
         // disconnect) gives no digest, so nothing of it is kept or told.
         try { found = await afterCapture(capture, trigger, { ...ctx, ...pick(hooks?.context()) }, now); } catch { /* the check itself finished; comparing is best effort */ }
         if (found && ledger.task) try { deps.found?.(ledger.task, found); } catch { /* What happened then shows the check on its own */ }
-        schedule = finishRun(schedule, scheduleSettings(), now, { ok: true });
+        const others = ctx.also ?? [];
+        if (!others.length) schedule = finishRun(schedule, scheduleSettings(), now, { ok: true });
         hooks?.onCapture(capture, trigger);
+        // Then each other service watched, one after another: native paces every read to Planning Center's rate limit.
+        for (const plan of others) await alsoCheck(plan, ctx, status, trigger, source);
+        // With other services the round ends after the last of them, so nothing (Resume, the timer) starts another on top.
+        if (others.length) schedule = finishRun(schedule, scheduleSettings(), deps.now(), { ok: true });
         return capture;
       } catch (error) {
         const problem = deps.problem(error);
@@ -486,6 +577,8 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
         try { hooks?.onFailure?.(error, trigger); } catch { /* the page's own words only */ }
         throw error;
       } finally {
+        // What this round read is what the next one is compared with ("nothing new" needs the round before).
+        if (thisRound.length) { lastRound = [...new Set(thisRound)]; saveMemory(); }
         inflight = null;
         emit();
       }
@@ -512,6 +605,18 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
     return routeChanges(holding, feedbackOf(ctx?.rules ?? {})).notify;
   };
 
+  /**
+   * The day a held notice names: the first service's own (App's) when every entry is about it; one other service's day
+   * when they are all about that one; "service" when they span services on different days.
+   */
+  function heldDay(entries: readonly HistoryEntry[], ctx: ProactiveContext): NoticeDay | undefined {
+    const plans = new Set(entries.map(e => e.plan_id ?? ctx.settings.planId));
+    // Only another service watched changes the day (a church system's own service ids are never Settings' plan).
+    if (![...plans].some(p => ctx.also?.some(a => a.planId === p))) return undefined;
+    const days = new Set([...plans].map(p => p === ctx.settings.planId ? ctx.noticeDay ?? checkedDay ?? "service" : dayByPlan.get(p) ?? "service"));
+    return days.size === 1 ? [...days][0]! : "service";
+  }
+
   async function tick() {
     if (!hooks) return;
     const now = deps.now();
@@ -526,7 +631,7 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
       // One notice for whatever is still so; a held entry that no longer is says no notice was needed.
       const still = new Map(history.filter(e => e.notice === "held").map(e => [e, stillNotifying(e)] as const).filter(([, c]) => c.length > 0));
       const relevant = new Set(still.keys());
-      const outcome = relevant.size ? await deliver(macOnlyFor([...still.values()].flat())) : null;
+      const outcome = relevant.size ? await deliver(macOnlyFor([...still.values()].flat()), heldDay([...relevant], ctx)) : null;
       history = history.map(e => e.notice !== "held" ? e : { ...e, notice: !relevant.has(e) ? "none" : outcome === "sent" ? "sent-later" : "unavailable" });
     }
     emit();
@@ -591,6 +696,19 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
       schedule = rescheduleFor(schedule, scheduleSettings(), deps.now());
       emit();
     },
+    forgetPlans(planIds) {
+      const gone = new Set(planIds);
+      if (!gone.size) return;
+      const kept = (k: string) => !gone.has(sundays[k]?.latest.plan_id ?? k.slice(k.indexOf(":") + 1));
+      sundays = Object.fromEntries(Object.entries(sundays).filter(([k]) => kept(k)));
+      foundBy = Object.fromEntries(Object.entries(foundBy).filter(([k]) => kept(k)));
+      printBy = Object.fromEntries(Object.entries(printBy).filter(([k]) => kept(k)));
+      lastRound = lastRound.filter(k => Object.hasOwn(sundays, k));
+      history = history.filter(e => !e.plan_id || !gone.has(e.plan_id));
+      for (const p of gone) { dayByPlan.delete(p); alsoFailures.delete(p); }
+      saveMemory();
+      emit();
+    },
     letGo() {
       checkedDay = null;
       // What changed and how the last check went were that church's: Keeping watch starts afresh for the next one.
@@ -625,7 +743,7 @@ export function desktopProactive(): ProactiveController {
     timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     // Every check, automatic or manual, is a "check" task in the task ledger. No model is involved.
     check: (ctx, onStatus, trigger, source, onTask) =>
-      desktopRecorder().check(() => verifiedSundayCheck(ctx, onStatus), source ?? (trigger === "manual" ? "manual" : "automatic"), onTask),
+      desktopRecorder().check(() => verifiedSundayCheck(ctx, onStatus), source ?? (trigger === "manual" ? "manual" : "automatic"), onTask, ctx.settings.serviceTypeId),
     // What each check found, beside its task for What happened (closed words; harness-words.ts CheckFound).
     found: (taskId, found) => desktopRecorder().checked(taskId, found),
     notify: notifySundayAttention,

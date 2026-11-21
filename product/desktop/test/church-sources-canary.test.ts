@@ -308,7 +308,7 @@ describe("App passes list state only to the Church lists page and the box beside
       // link's read is a request to the internet, made only when the leader opens one of those pages.
       /^ {2}useEffect\(\(\) => \{ if \(\(page === "sunday" \|\| page === "lists"\) && visible\) void churchSources\.readIfOld\(\); \}, \[page, visible, churchSources\]\);$/u,
       // The box's Open (a section of notes, or the whole list) opens Church lists there.
-      /^ {10}beside=\{card => <ChurchOwnWords state=\{sourcesState\} card=\{card\} onOpen=\{target => \{ churchSources\.focus\(target\); setPage\("lists"\); \}\} \/>\} \/>\}$/u,
+      /^ {10}beside=\{card => <ChurchOwnWords state=\{sourcesState\} card=\{card\} onOpen=\{target => \{ churchSources\.focus\(target\); setPage\("lists"\); \}\} \/>\} \/>\)\}$/u,
       /^ {8}\{page === "lists" && <ChurchListsPage sources=\{churchSources\} positions=\{positions\} \/>\}$/u,
     ];
     const uses = code("../src/App.tsx").filter(l => /churchSources|sourcesState|ChurchOwnWords|ChurchListsPage|church-sources|church-lists-page|church-own-words/u.test(l));

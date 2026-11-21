@@ -132,7 +132,7 @@ describe("App and Today pass calendar state only where it is shown", () => {
       /^ {2}useEffect\(\(\) => \{ if \(page === "today" && visible\) void calendars\.readIfOld\(\); \}, \[page, visible, calendars, now\]\);$/u,
       /^ {2}const fictionalImport = !calendarsConnected\(calendarState\);$/u,
       // Never under the fictional example's band (audit item 2): the example is the whole of Today while it's on.
-      /^ {10}calendar=\{!fictional && calendarsConnected\(calendarState\) \? \{ reads: calendarState\.reads, reading: calendarState\.reading, onSettings: \(\) => setPage\("connection"\) \} : null\} \/>\}$/u,
+      /^ {10}calendar=\{!fictional && calendarsConnected\(calendarState\) \? \{ reads: calendarState\.reads, reading: calendarState\.reading, onSettings: \(\) => setPage\("connection"\) \} : null\} \/><\/DayProvider>\}$/u,
       /calendars=\{<CalendarSettings calendars=\{calendars\} \/>\}/u,
       /^import \{ calendarsConnected, createCalendars, useCalendarState \} from "\.\/calendars\.js";$/u,
     ];

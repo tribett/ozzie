@@ -25,7 +25,7 @@ import type { CalendarRead } from "../../../core/src/calendar/events.js";
 import { CalendarGroup } from "./calendar-today.js";
 import { AskedNote, CHECK_CONNECTION, CHECKING_LINE, STUCK_LINE, type AskedLine } from "./sunday-page.js";
 import { useDay, type DayWords } from "./day-words.js";
-import { DayName, dayName, eyeLine, OPEN_SERVICES, SERVICES } from "./day-phrases.js";
+import { DayName, dayName, eyeLine, OPEN_SERVICES, pageRef, SERVICES } from "./day-phrases.js";
 import { SERVICES_PAGE } from "../../../core/src/service-day.js";
 import { promise } from "./promises.js";
 import { systemWords, useSystemWords, type SystemWords } from "./church-system.js";
@@ -98,7 +98,7 @@ const yourService = (d: DayWords) => d.kind === "weekday" ? `your ${d.day}` : d.
 export const connectTitle = (d: DayWords, system = "Planning Center") => `Connect ${system} to see ${yourService(d)}`;
 /** Its body: what connecting is, then the promise (promises.ts, never retyped). Another system connects with its own key. */
 export const connectBody = (w?: SystemWords) => w?.unchosen
-  ? "Nothing on this page is about your church yet. Ozzie reads Planning Center, B1 Church or Breeze, and only reads: it never changes anything there."
+  ? "Nothing on this page is about your church yet. Ozzie reads Planning Center, B1 Church, Breeze or Genesis, and only reads: it never changes anything there."
   : w && w.system !== "planning-center"
   ? `Nothing on this page is about your church yet. Connecting takes a key from your church's ${w.name}, and Ozzie only reads it: it never changes anything in ${w.name}.`
   : `Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and ${promise("connectAnd")}`;
@@ -116,18 +116,20 @@ function needsYouLine(r: RosterRole, names: Readonly<Record<string, string>>): s
   ].filter(Boolean);
   return `${r.name}: ${parts.join("; ")}.`;
 }
-function itemTitle(item: TodayItem, now: string, d: DayWords, w: SystemWords = systemWords(null), roster: Roster | null = null): string {
+function itemTitle(item: TodayItem, now: string, d: DayWords, w: SystemWords = systemWords(null), roster: Roster | null = null, many = false): string {
   const s = item.subject;
   switch (s.type) {
     case "roster": return roster ? `On ${dayName(d)}, ${lowerFirst(rosterSummary(roster))}` : d.question;
     case "email": return s.finding.title;
     // Any kind of finding that needs a decision counts here, so the words don't assume positions.
-    case "sunday": return `${DayName(d)} has ${sundayCountText(s.decisions)}.`;
+    // More than one service watched (owner decision 2026-11-19): the count is across them all, so no one day is named.
+    case "sunday": return many ? `Your services have ${sundayCountText(s.decisions)}.` : `${DayName(d)} has ${sundayCountText(s.decisions)}.`;
     case "sunday-unchecked": return d.question;
-    case "connect": return w.unchosen ? `Choose what your church uses to see ${yourService(d)}` : connectTitle(d, w.name);
+    case "connect": return w.unchosen ? `Choose what your church uses to see ${yourService(d)}` : w.system === "genesis" ? "Connect Genesis to see what it shares" : connectTitle(d, w.name);
     case "noticed": return noticedTitle(s.item, now, d);
     case "watching": return jobTitle(s.responsibility);
-    case "regular": return eyeLine();
+    // Genesis has no service to keep an eye on: its own reads are what runs (review of e9cbd97d, H1).
+    case "regular": return w.system === "genesis" ? "Ozzie reads Genesis on its own" : eyeLine();
     case "answers": return `Waiting for an answer in ${w.name}`;
   }
 }
@@ -143,8 +145,15 @@ export const START_BODY = "Ozzie can only check Planning Center while it is runn
 
 export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions = NO_DECISIONS, operations = null, watch = null, now: nowProp, zone: zoneProp, store = browserStore,
   feedback = null, example = false, church = null, calendar = null, regular = null, notConnected = null, asked = NO_ASKED, onSundayCard,
-  startQuestion = null, finish = null, moment = null, waiting = null, checking = false, stuck = null }: {
+  startQuestion = null, finish = null, moment = null, waiting = null, checking = false, stuck = null, services = 1, serviceLess = null }: {
+  /**
+   * A church whose system shares no volunteer schedules (Genesis, round 5): no service card, no unchecked service and no
+   * spoken briefing of one; this shows what the system does share in their place.
+   */
+  serviceLess?: ReactNode;
   brief: SundayBrief | null; onSunday: () => void; names?: Record<string, string> | undefined; sundayDecisions?: readonly SundayDecision[];
+  /** How many services Ozzie watches (owner decision 2026-11-19): with more than one, `brief` holds them all and no one day is named. */
+  services?: number;
   /** Rooms, follow-ups and group meetings for the same check, so the briefing says what the Sunday page says. */
   operations?: SundayOperations | null;
   /** Keeping watch and what it noticed; null where it isn't available. */
@@ -241,9 +250,9 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   }, [decided, operations, brief?.time_zone, zone, words]);
   const toCard = onSundayCard ?? (() => onSunday());
   const items = useMemo(() => todayItems({
-    now, sunday, watch: watch?.view ?? null, firstSeen, regular, notConnected: Boolean(notConnected) && !example,
+    now, sunday, watch: watch?.view ?? null, firstSeen, regular, notConnected: Boolean(notConnected) && !example, noService: Boolean(serviceLess) && !notConnected,
     attention: example && report.ok ? { findings: report.findings, messages: report.sources.filter(isMessage), evaluated_at: report.evaluated_at, zone: tz } : null,
-  }), [now, sunday, watch?.view, firstSeen, report, example, regular, notConnected]);
+  }), [now, sunday, watch?.view, firstSeen, report, example, regular, notConnected, Boolean(serviceLess)]);
   const grouped = groupToday(items, setAside, now);
 
   // Ages for items without a time of their own start when they are first on Today on this Mac.
@@ -298,15 +307,15 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />Needs a decision</span>
             {s.noticed?.overnight && <span className="badge b-muted"><Icon name="clock" small />Overnight</span>}
             <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
-          <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
+          <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, null, services > 1)}</h3>
           {/* Keep Sunday covered's write-up of its run leads the card, or says quietly why there is none (audit item 6). */}
           {s.noticed && <WriteUpBlock item={s.noticed} writeup={s.writeup} names={names} now={now} />}
           {named && named.named.length > 0 && <ul className="list today-decisions">{named.named.map((l, i) => <li key={l.key}>
             <span id={`${titleId}-d${i}`}>{l.text}</span>
             <button type="button" className="btn btn-quiet btn-sm" aria-describedby={`${titleId}-d${i}`} onClick={() => toCard(l.key)}>{l.people ? "See who could help" : `Open in ${SERVICES_PAGE}`}</button>
           </li>)}</ul>}
-          {named && named.more > 0 && <p className="small">And {named.more} more on {dayName(words)}.</p>}
-          {named && named.looks > 0 && <p className="small today-looks">Also {named.looks === 1 ? "1 thing" : `${named.looks} things`} worth a look on {dayName(words)}.</p>}
+          {named && named.more > 0 && <p className="small">And {named.more} more on {services > 1 ? pageRef() : dayName(words)}.</p>}
+          {named && named.looks > 0 && <p className="small today-looks">Also {named.looks === 1 ? "1 thing" : `${named.looks} things`} worth a look on {services > 1 ? pageRef() : dayName(words)}.</p>}
           {s.noticed && <p className="find-body">Ozzie noticed this at {whenText(s.noticed.at, now)} while keeping an eye on {SERVICES}.</p>}
           {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
           {notes > 0 && <p className="today-notes"><span className="badge b-ok"><Icon name="check" small />Notes ready</span><span>{notesReadyText(notes)}</span></p>}
@@ -319,7 +328,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
       case "roster": return roster && <article key={item.id} className="find" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
           <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, roster)}</h3>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, roster, services > 1)}</h3>
         <ul className="list today-decisions">{rosterNeedsYou(roster).map(r => <li key={r.position_id}><span>{needsYouLine(r, names)}</span></li>)}</ul>
         <p className="find-body">{brief?.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether {words.thisOne} is covered.</p>
         <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
@@ -338,7 +347,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
       </article>;
       case "connect": return notConnected && <article key={item.id} className="find today-connect" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-muted"><Icon name="link" small />Not connected yet</span><span className="find-where">{w.name}</span></div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, null, services > 1)}</h3>
         <p className="find-body">{connectBody(w)}</p>
         <div className="find-next">
           <button type="button" className="btn btn-primary btn-sm" aria-describedby={titleId} onClick={notConnected.onConnect}>{w.connect}</button>
@@ -369,7 +378,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         return <article key={item.id} className="find today-watch" aria-labelledby={titleId}>
           <div className="find-top"><span className={`badge ${s.check.paused ? "b-muted" : "b-ok"}`}><Icon name="repeat" small />{s.check.paused ? "Paused" : "Always on"}</span>
             <span className="find-where">{w.services}</span></div>
-          <h3 id={titleId} className="find-title">{eyeLine()}</h3>
+          <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
           <p className="find-body">{regularLine(s.check, now, zone, w.name)}</p>
           {missed && <ul className="list resp-problems"><li><Icon name="clock" small />{missed}</li></ul>}
         </article>;
@@ -377,7 +386,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
       case "answers": return <article key={item.id} className="find" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for an answer</span>
           <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w)}</h3>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, null, services > 1)}</h3>
         <p className="find-body">{w.name} shows a request was sent for {list(s.positions)} and hasn't been accepted yet.</p>
         <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
       </article>;
@@ -399,7 +408,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   // what is known, and that Ozzie can't say whether it is covered. The card above says it when someone needs a look.
   const sundayCalm = brief && sunday && sunday.decisions === 0 && !sunday.unknownNeed?.needsYou && <><p className="today-calm"><Icon name="sun" small />
     <span>{roster ? `On ${dayName(words)}, ${lowerFirst(rosterSummary(roster))} ${brief.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether ${words.thisOne} is covered.`
-      : `Nothing on ${dayName(words)} needs a decision.`}</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>{OPEN_SERVICES}</button></p>
+      : services > 1 ? "Nothing in your services needs a decision." : `Nothing on ${dayName(words)} needs a decision.`}</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>{OPEN_SERVICES}</button></p>
     {/* With no Sunday card, what the leader said they'd send is said here instead. */}
     {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}</>;
   const progressMore = watch && <div className="today-more">
@@ -410,6 +419,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     <p className="eyebrow">{day(now, zone)} · {clock(now, zone)}</p>
     <h1 className="h1">What needs you today</h1>
     <p className="lede">{ledeText(grouped, Boolean(sunday?.unknownNeed))}</p>
+    {serviceLess}
     {/* A saved check on screen says so, with its real time; while the launch's check is under way, a quiet line says that. */}
     {(checking || stuck || brief?.mode === "recording") && <p className="small today-checking">
       {brief?.mode === "recording" && <span>{savedLine(brief.completed_at)} </span>}
@@ -437,13 +447,13 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     {church}
     {calendar && <CalendarGroup reads={calendar.reads} now={now} zone={zone} reading={calendar.reading} onSettings={calendar.onSettings} />}
 
-    {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now, words, w)} onBack={bringBack} />}
+    {grouped.setAside.length > 0 && <SetAsideList entries={grouped.setAside} now={now} zone={zone} title={i => itemTitle(i, now, words, w, null, services > 1)} onBack={bringBack} />}
 
     {/* After the work, so the work comes first; the written script stays folded until asked for. Nothing to brief before
         Planning Center is connected. */}
     {/* The service's times on the church's own clock, as the cards above say them (round 3: they differed when the
         church's zone isn't this Mac's). */}
-    {spoken && !(notConnected && !example && !brief) && <BriefingPanel input={spoken} names={names} attentionTimeZone={tz}
+    {spoken && !serviceLess && !(notConnected && !example && !brief) && <BriefingPanel input={spoken} names={names} attentionTimeZone={tz}
       {...(brief?.time_zone && isTimeZone(brief.time_zone) ? { timeZone: brief.time_zone } : {})} />}
 
     {example && injected.length > 0 && <section className="find guarded" aria-labelledby="today-ignored">

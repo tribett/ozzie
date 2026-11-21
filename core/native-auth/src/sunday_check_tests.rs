@@ -1205,6 +1205,57 @@ fn another_organizations_recordings_are_never_listed_or_loaded() {
 }
 
 #[test]
+fn deleting_one_services_plans_keeps_the_other_plans_and_organizations() {
+    let root = TempDir::new("plans");
+    let dir = root.0.join("recordings");
+    let ours = captured_at(1_794_571_260_000);
+    let mut other_plan = captured_at(1_794_571_320_000);
+    other_plan.plan_id = format!("{}1", ours.plan_id);
+    let mut theirs = captured_at(1_794_571_380_000);
+    theirs.organization = "999".into();
+    for read in theirs
+        .reads
+        .iter_mut()
+        .filter(|r| r.collection == "organization")
+    {
+        read.body.as_mut().unwrap()["data"]["id"] = json!("999");
+    }
+    save_recording(&dir, &ours).unwrap();
+    save_recording(&dir, &other_plan).unwrap();
+    save_recording(&dir, &theirs).unwrap();
+    assert_eq!(
+        delete_plan_recordings(&dir, "1001", std::slice::from_ref(&ours.plan_id)).unwrap(),
+        1
+    );
+    let left: Vec<_> = list_recordings(&dir, "1001")
+        .unwrap()
+        .into_iter()
+        .map(|r| r.plan_id)
+        .collect();
+    assert_eq!(left, [other_plan.plan_id.clone()]);
+    assert_eq!(list_recordings(&dir, "999").unwrap().len(), 1);
+    // Nothing is deleted on anything that isn't an id.
+    for (org, plans) in [
+        ("1001", vec![]),
+        ("1001", vec![format!("{}/..", other_plan.plan_id)]),
+        ("x", vec![other_plan.plan_id.clone()]),
+        ("1001", vec![other_plan.plan_id.clone(), "".to_string()]),
+    ] {
+        assert!(delete_plan_recordings(&dir, org, &plans).is_err());
+    }
+    assert_eq!(list_recordings(&dir, "1001").unwrap().len(), 1);
+    assert_eq!(
+        delete_plan_recordings(
+            &root.0.join("absent"),
+            "1001",
+            std::slice::from_ref(&other_plan.plan_id)
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn only_the_five_newest_recordings_per_organization_and_plan_are_kept() {
     let root = TempDir::new("keep");
     let dir = root.0.join("recordings");

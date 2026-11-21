@@ -1064,7 +1064,9 @@ export function restoreAnswer(answer: CheckedAnswer, sender: string): AskAnswer 
  *  that tool's draft, never one the AI writes). */
 export function suggestedQuestions(brief: SundayBrief | null): string[] {
   if (!brief) return [];
-  const thisOne = (brief.day ?? SUNDAY_WORDS).thisOne;
+  const day = brief.day ?? SUNDAY_WORDS;
+  // One day or weekend as it is said ("this Sunday"); services spread over days with "for" ("for your services").
+  const thisOne = day.kind === "spread" ? `for ${day.thisOne}` : day.thisOne;
   const role = (f: Finding) => f.position?.name.replace(/\s+/gu, " ").trim() ?? "";
   // A church system that ties no team to its roles (Breeze) lists no one who could cover: neither question is offered.
   const open = brief.findings.find(f => f.kind === "needs-people" && role(f) && !(brief.source && !f.people));
@@ -1090,7 +1092,7 @@ export function suggestedQuestions(brief: SundayBrief | null): string[] {
     ...(brief.findings.some(f => f.tone === "decision") ? [`What still needs a decision ${thisOne}?`] : []),
     ...(flagged ? [`Why is ${role(flagged)} flagged?`] : []),
     ...(open ? [`Draft a note to someone who could cover ${role(open)}`] : []),
-    ...(brief.findings.length === 0 ? [`What did you check for ${thisOne}?`] : []),
+    ...(brief.findings.length === 0 ? [`What did you check for ${day.thisOne}?`] : []),
   ];
   return out.slice(0, 4);
 }

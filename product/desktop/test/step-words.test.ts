@@ -2,7 +2,7 @@
 // native record's own shape (each step written as reserved, "1", then finished, "1 stop"); a step says what really
 // happened (checking again, a draft); and how a task started and ended is kept in closed words only. Fictional data and
 // scripted models; nothing native runs.
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { ModelStep } from "../../../core/src/harness/contract.js";
@@ -13,6 +13,9 @@ import { askOzzie, buildHarnessData, createAppHarness, keptWriteup, LedgerRecord
 import { taskAccount, type TaskRow } from "../src/harness-words.js";
 import { answerAccount } from "../src/ask-panel.js";
 import { calls, draftTurns, facts, fictionalData, greeterTurns, payloadOf, RULES, scripted } from "./harness-fakes.js";
+// The fixtures are a check made on 2026-11-20; the harness reads the clock, so pin it there (or the check reads as too old once that day has passed).
+beforeAll(() => { vi.setSystemTime("2026-11-20T15:05:00Z"); });
+afterAll(() => { vi.useRealTimers(); });
 
 const skills = await bundledSkills();
 

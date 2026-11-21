@@ -1658,6 +1658,40 @@ pub fn delete_recordings(dir: &Path, organization: &str) -> io::Result<usize> {
     Ok(removed)
 }
 
+/// Deletes one organization's recordings of the given plans only (a service no longer watched, with
+/// the plans Ozzie watched of it), and their unfinished `.partial` files; the organization's other
+/// plans keep theirs. Every plan must be a numeric id: anything else deletes nothing.
+pub fn delete_plan_recordings(
+    dir: &Path,
+    organization: &str,
+    plans: &[String],
+) -> io::Result<usize> {
+    if !numeric_id(organization) || plans.is_empty() || plans.iter().any(|p| !numeric_id(p)) {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        result => result?,
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Ok(file) = entry.file_name().into_string() else {
+            continue;
+        };
+        let bare = file
+            .strip_prefix('.')
+            .and_then(|f| f.strip_suffix(".partial"))
+            .unwrap_or(&file);
+        if recording_name(bare)
+            .is_some_and(|n| n.organization == organization && plans.iter().any(|p| p == n.plan))
+        {
+            std::fs::remove_file(entry.path())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 /// The Sunday check, setup's picker and filling in To on a note (contact.rs) share one Planning
 /// Center connection, so they take turns: one reader at a time, the whole time it uses the
 /// connection. A second check, or a second note, is refused at once rather than queued. A check

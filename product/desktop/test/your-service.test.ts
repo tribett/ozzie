@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
-import { decideService, NOT_PLANNED, progressLines, scheduledCounts, timesText, YourService, type ResultView } from "../src/your-service.js";
+import { decideService, NOT_PLANNED, othersLine, progressLines, scheduledCounts, timesText, YourService, type ResultView } from "../src/your-service.js";
 import { parsePick } from "../src/onboarding-bridge.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { Settings } from "../src/sunday-source.js";
@@ -188,5 +188,36 @@ describe("the first read's progress", () => {
       { attributes: { status: "C" }, relationships: { person: { data: { id: "502" } } } },
     ] } }] } as unknown as SundayCapture;
     expect(scheduledCounts(capture)).toEqual({ scheduled: 2, yes: 2, waiting: 0 });
+  });
+});
+
+describe("the first result with other services watched (signing in again; coordinator's live read of 0.5.0)", () => {
+  it("says the result is the first service's, what the others hold, and the one count the sidebar and Today show", () => {
+    const youth = { name: "Youth Night", when: "Wednesday, November 25" };
+    expect(othersLine([], 3, 3)).toBeNull();
+    expect(othersLine([{ ...youth, decisions: 1 }], 3, 4))
+      .toBe("And 1 more for Youth Night on Wednesday, November 25, so your services have 4 things to decide in all. You'll see every service on the Services page.");
+    expect(othersLine([{ ...youth, decisions: 2 }], 0, 2))
+      .toBe("2 things need a decision for Youth Night on Wednesday, November 25, so your services have 2 things to decide in all. You'll see every service on the Services page.");
+    expect(othersLine([{ ...youth, decisions: 0 }], 3, 3))
+      .toBe("Nothing needs a decision for Youth Night on Wednesday, November 25. You'll see every service on the Services page.");
+    expect(othersLine([{ ...youth, decisions: null }], 3, 3))
+      .toBe("Ozzie also watches Youth Night, read with the next check. You'll see every service on the Services page.");
+  });
+
+  it("shows that line under the first service's answer", async () => {
+    const { nov22Capture } = await import("../../../core/src/fictional-sunday.js");
+    const { buildSundayBrief } = await import("../../../core/src/sunday-brief.js");
+    const capture = nov22Capture();
+    const result: ResultView = {
+      brief: buildSundayBrief(capture, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, capture.completed_at, true), capture,
+      counts: { decisions: 3, looks: 1 }, lines: [], others: [{ name: "Youth Night", when: "Wednesday, November 25", decisions: 1 }], total: 4,
+    };
+    const s = await mount({ pick_service: pickReply(SUNDAY_MORNING) },
+      { settings: { clientId: "", organization: "1001", serviceTypeId: "1500", planId: capture.plan_id }, read: () => Promise.resolve(capture), result });
+    await s.act(async () => { await tick(); await tick(); });
+    expect(s.seen()).toContain("3 things need a decision for Sunday, November 22.");
+    expect(s.seen()).toContain("And 1 more for Youth Night on Wednesday, November 25, so your services have 4 things to decide in all.");
+    await s.unmount();
   });
 });

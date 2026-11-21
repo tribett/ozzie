@@ -87,6 +87,12 @@ export interface RestoreSources {
   firstNames?: boolean;
   /** The church's own zone, for showing ISO times in plain words. */
   timeZone?: string | null;
+  /**
+   * With more than one service watched (owner decision 2026-11-19): the service a role is in, by the role's name and,
+   * when its label names one, its team; null when that isn't one service. Its name is said after the role ("Greeter
+   * (Youth Night)"). Local only: service names never reach a model.
+   */
+  roleService?: (name: string, team?: string) => string | null;
 }
 const GENERIC: Record<LabelKind, string> = {
   person: "a team member", role: "a role", room: "a room", workflow: "a follow-up workflow", step: "a follow-up step", event: "an event",
@@ -143,7 +149,10 @@ export function restoreLabels(text: string, session: HarnessSession, sources: Re
       const name = sources.names[t.id]?.trim();
       return name ? (sources.firstNames ? name.split(/\s+/u)[0]! : name) : GENERIC.person;
     }
-    if (t.kind === "role") return t.name;
+    if (t.kind === "role") {
+      const service = sources.roleService?.(t.name, t.team)?.trim();
+      return service ? `${t.name} (${service})` : t.name;
+    }
     const restored = t.kind === "event" ? sources.events?.[t.id] : place(t.kind, t.id);
     return restored?.trim() || GENERIC[t.kind];
   });

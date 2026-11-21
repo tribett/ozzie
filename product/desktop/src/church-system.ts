@@ -13,10 +13,10 @@ import { isKnownZone, SYSTEM_IDS, SYSTEMS, untimed, type SystemId } from "../../
 import { isDateOnly } from "../../../core/src/read-result.js";
 
 /** The church's main system: the one its services, roles and volunteers live in. */
-export type MainSystem = "planning-center" | "b1" | "breeze";
+export type MainSystem = "planning-center" | "b1" | "breeze" | "genesis";
 /** A main system other than Planning Center. */
 export type OtherSystem = Extract<SystemId, "b1" | "breeze">;
-export const MAIN_SYSTEMS: readonly MainSystem[] = ["planning-center", "b1", "breeze"];
+export const MAIN_SYSTEMS: readonly MainSystem[] = ["planning-center", "b1", "breeze", "genesis"];
 export const isOtherSystem = (s: unknown): s is OtherSystem => s === "b1" || s === "breeze";
 
 /** A B1 Church or Breeze connection as this Mac keeps it: ids, the church's name and the plan watched. Never a key. */
@@ -37,8 +37,11 @@ export interface SystemConnection {
   /** A result of the watched service has been on screen (first run is done once it has). */
   result_seen: boolean;
 }
-/** Genesis, read beside the main system: groups, events and forms only (design §8). */
-export interface AlsoRead { system: "genesis"; church_id: string; church_name: string | null; zone: string | null }
+/**
+ * Genesis: read beside the main system (design §8), or as the main system itself (round 5: a church that uses only
+ * Genesis): groups, events and forms only. `result_seen`: as the main system, its first result has been on screen.
+ */
+export interface AlsoRead { system: "genesis"; church_id: string; church_name: string | null; zone: string | null; result_seen?: boolean }
 export interface ChurchSystemState {
   /** null: not chosen yet on this Mac (the first run asks). */
   main: MainSystem | null;
@@ -71,7 +74,7 @@ export function readChurchSystem(raw: string | null): ChurchSystemState {
     const g = r.genesis as Record<string, unknown> | null | undefined;
     const genesis: AlsoRead | null = g && typeof g === "object" && g.system === "genesis" && id(g.church_id) ? {
       system: "genesis", church_id: g.church_id as string, church_name: text(g.church_name, 200),
-      zone: zoneOf(g.zone),
+      zone: zoneOf(g.zone), ...(g.result_seen === true ? { result_seen: true } : {}),
     } : null;
     // A connection belongs to the main system it was made for; another main system's is never used.
     return { main, connection: connection && connection.system === main ? connection : null, genesis };
@@ -302,7 +305,7 @@ const PLANNING_CENTER: SystemWords = Object.freeze({
   noTeam: null,
   remaining: (n: number) => `Planning Center still shows ${n === 1 ? "1 remaining request" : `${n} remaining requests`}; Ozzie hasn't changed anything there.`,
 });
-const other = (system: OtherSystem): SystemWords => {
+const other = (system: SystemId): SystemWords => {
   const name = SYSTEMS[system].name;
   return Object.freeze({
     system, name, services: name,
@@ -317,6 +320,7 @@ const other = (system: OtherSystem): SystemWords => {
     reads: system === "b1"
       ? ["The plan and the times B1 Church marks as the service", "Its roles and how many people each needs", "Who is scheduled and how each answered",
         "Each role's team", "Those people's blockouts", "Other plans they're on that day", "Their names, kept on this Mac"]
+      : system === "genesis" ? ["Groups", "Events from yesterday through the next four weeks, with how many attended the ones that have ended", "Forms and how many times each was filled in"]
       // Breeze leaves the number wanted empty on live roles (breeze.rs): said only where it gives one (release review).
       : ["The event and its time", "Its roles, and how many people each needs where Breeze gives a number", "Who is scheduled and how each answered", "Their names, kept on this Mac"],
     howEnd: `Why I flagged this lists the rule and the facts. Nothing in ${name} changed.`,
@@ -324,7 +328,9 @@ const other = (system: OtherSystem): SystemWords => {
     remaining: (n: number) => `By ${name}'s numbers, ${n === 1 ? "1 more person is" : `${n} more people are`} still needed; Ozzie hasn't changed anything there.`,
   });
 };
-const WORDS: Readonly<Record<MainSystem, SystemWords>> = Object.freeze({ "planning-center": PLANNING_CENTER, b1: other("b1"), breeze: other("breeze") });
+const WORDS: Readonly<Record<MainSystem, SystemWords>> = Object.freeze({ "planning-center": PLANNING_CENTER, b1: other("b1"), breeze: other("breeze"),
+  // Genesis as the main system (round 5): no service check, saved checks or jobs; its own checks run while Ozzie is open.
+  genesis: Object.freeze({ ...other("genesis"), savedChecks: false }) });
 /**
  * The words before a church has chosen what it uses (a fresh Mac, round 5): neutral, never "Planning Center not
  * connected", and the way on is "Choose what your church uses". Planning Center's structure otherwise (it was every
@@ -398,10 +404,10 @@ export const CONNECT: Readonly<Record<SystemId, ConnectWords>> = Object.freeze({
     everything: cannotSee("breeze"), steps: howToConnect("breeze"),
   },
   genesis: {
-    title: "Also read Genesis", keyName: "Genesis API key", addressLabel: null, addressPlaceholder: null, addressHelp: null,
+    title: "Connect Genesis", keyName: "Genesis API key", addressLabel: null, addressPlaceholder: null, addressHelp: null,
     reads: "Your church's groups, its events from yesterday through the next four weeks with how many attended, and its forms with how many times each was filled in. No one's name.",
     cantSee: [
-      "Ozzie can't check whether your service is covered from Genesis: it doesn't share volunteer schedules.",
+      "Ozzie can't check whether your services are covered from Genesis: it doesn't share volunteer schedules.",
       "Ozzie doesn't read background checks from Genesis.",
     ],
     everything: cannotSee("genesis"), steps: howToConnect("genesis"),

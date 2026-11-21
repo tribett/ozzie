@@ -124,7 +124,7 @@ export function FinishSettingUp({ facts, onStartWithMac, onChooseService, onKids
   const body = (item: FinishItemId) => {
     switch (item) {
       case "start": return <>
-        <p className="finish-body">{`Ozzie can only keep an eye on ${SERVICES} while it's running.`}</p>
+        <p className="finish-body">{w.system === "genesis" ? "Ozzie can only read Genesis on its own while it's running." : `Ozzie can only keep an eye on ${SERVICES} while it's running.`}</p>
         <div className="finish-acts">
           <button type="button" className="btn btn-primary" onClick={() => onStartWithMac(true)}>Yes, start Ozzie with this Mac</button>
           <button type="button" className="btn btn-secondary" onClick={() => onStartWithMac(false)}>No, I'll open it myself</button>

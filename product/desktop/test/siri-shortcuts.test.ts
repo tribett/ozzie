@@ -4,7 +4,7 @@
 // Fictional data and paths only.
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 import { ConnectionPage, SavedRecordings } from "../src/connection-page.js";
@@ -19,6 +19,9 @@ import { parseSharedCheck, sharedCheckText } from "../../../core/mcp/snapshot.js
 import { shortcutsAnswer } from "../../../core/mcp/shortcuts.js";
 import { FRESH, harnessData } from "../../../core/test/harness/fixtures.js";
 import type { ToolEnvelope } from "../../../core/src/harness/contract.js";
+// The fixtures are a check made on 2026-11-20; the harness reads the clock, so pin it there (or the check reads as too old once that day has passed).
+beforeAll(() => { vi.setSystemTime("2026-11-20T15:05:00Z"); });
+afterAll(() => { vi.useRealTimers(); });
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replaceAll("&#x27;", "'").replaceAll("&quot;", "\"").replaceAll("&gt;", ">").replace(/\s+/g, " ");
 const ORG = "1001";

@@ -67,7 +67,8 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   const unchecked = [...brief.not_checked, ...(operations?.not_checked ?? [])];
   const list = (lines: string[]) => <ul className="list">{lines.map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>;
   return <section className="sunday-ready" aria-label={readyTitle(d)}>
-    <p className="bold">{readyTitle(d)}{brief.plan.dates ? ` · ${brief.plan.dates}` : ""}</p>
+    {/* Several services at once (services-merge.ts MANY_SERVICES): no one plan's date is said for all of them. */}
+    <p className="bold">{readyTitle(d)}{brief.plan.dates && !(brief.day?.kind === "spread" && brief.day.date === null) ? ` · ${brief.plan.dates}` : ""}</p>
     {brief.mode === "fictional" && <p className="small">Fictional example. No church data is shown.</p>}
     {/* Never "nothing needs a decision" where the system shares no number needed (Breeze, round 5). */}
     {unnumberedRoster(brief) && !counts.decisions ? <p className="small">{rosterSummary(unnumberedRoster(brief)!)} {brief.source ?? "The church system"} doesn't share how many people each role needs, so Ozzie can't say whether {d.thisOne} is covered.

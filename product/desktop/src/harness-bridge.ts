@@ -197,6 +197,8 @@ export interface AppSnapshot {
   fictionalImport?: boolean;
   /** A church on B1 Church or Breeze: the system named as the source of every Services fact (HarnessData `source`). */
   source?: string;
+  /** Several services watched: each team's service by its own name, for answers written on this Mac (HarnessData `serviceOfTeam`). */
+  serviceOfTeam?: Readonly<Record<string, string>> | undefined;
 }
 export const modeOf = (capture: SundayCapture | null, fictional: boolean): HarnessData["mode"] =>
   fictional ? "fictional" : capture?.kind === "recording" ? "recording" : "live";
@@ -225,6 +227,7 @@ export function buildHarnessData(s: AppSnapshot, refresh?: HarnessData["refresh"
     connected,
     ...(connected && refresh ? { refresh } : {}),
     ...(s.source ? { source: s.source } : {}),
+    ...(s.serviceOfTeam ? { serviceOfTeam: s.serviceOfTeam } : {}),
   };
 }
 
@@ -473,8 +476,12 @@ export class LedgerRecorder {
    * up by the ledger; its own result or error is returned unchanged. `onTask` is told its task id first, so
    * what the check found can be kept beside it (proactive.ts).
    */
-  check(work: () => Promise<SundayCapture>, trigger: CheckTrigger = "automatic", onTask?: (taskId: string) => void): Promise<SundayCapture> {
-    return this.#checkTask(work, "planning_center.refresh", checkFailure, trigger, onTask);
+  check(work: () => Promise<SundayCapture>, trigger: CheckTrigger = "automatic", onTask?: (taskId: string) => void, serviceTypeId?: string): Promise<SundayCapture> {
+    return this.#checkTask(work, "planning_center.refresh", checkFailure, trigger, id => {
+      // Which service it read, so What happened folds each service's quiet checks apart (several services watched).
+      if (serviceTypeId) try { this.#triggers?.setService?.(id, serviceTypeId); } catch { /* per-device convenience only */ }
+      onTask?.(id);
+    });
   }
   /**
    * One check of a church on B1 Church or Breeze, as a "check" task the same way. The ledger names no tool for its read
@@ -596,6 +603,9 @@ export interface TriggerStore {
   /** The parts such a check didn't read in full (reads.ts closed words), when there were any. */
   parts?(id: string): CapturePart[] | undefined;
   setParts?(id: string, parts: readonly CapturePart[]): void;
+  /** The Planning Center service type a check read (an id only), so What happened folds each service's quiet checks apart. */
+  service?(id: string): string | undefined;
+  setService?(id: string, serviceTypeId: string): void;
 }
 const TRIGGERS_KEY = "ozzie.ledger.checks.v1";
 const TRIGGERS_KEPT = 200;
@@ -608,6 +618,8 @@ const FOUND_LIST = "ozzie.ledger.found.v1";
 const SOURCE_LIST = "ozzie.ledger.systems.v1";
 /** The parts a church system's check didn't read in full, the same way (closed words only). */
 const PARTS_LIST = "ozzie.ledger.system-parts.v1";
+/** Which Planning Center service type each check read (ids only), under its own key for the same reason. */
+const SERVICE_LIST = "ozzie.ledger.services.v1";
 type Kept = [string, TaskStart | null, TaskEnd?];
 export function localTriggers(store: { getItem(k: string): string | null; setItem(k: string, v: string): void } | null = typeof localStorage === "undefined" ? null : localStorage):
   Required<TriggerStore> {
@@ -642,6 +654,11 @@ export function localTriggers(store: { getItem(k: string): string | null; setIte
       if (!kept.length) return;
       try { store?.setItem(PARTS_LIST, JSON.stringify([[id, kept], ...readParts().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ }
     },
+    service: id => readService().find(([k]) => k === id)?.[1],
+    setService: (id, serviceTypeId) => {
+      if (!/^[1-9]\d{0,31}$/u.test(serviceTypeId)) return;
+      try { store?.setItem(SERVICE_LIST, JSON.stringify([[id, serviceTypeId], ...readService().filter(([k]) => k !== id)].slice(0, TRIGGERS_KEPT))); } catch { /* per-device convenience only */ }
+    },
     source: id => readSource().find(([k]) => k === id)?.[1],
     setSource: (id, system) => {
       if (!(SYSTEM_IDS as readonly unknown[]).includes(system)) return;
@@ -653,6 +670,13 @@ export function localTriggers(store: { getItem(k: string): string | null; setIte
       const raw = JSON.parse(store?.getItem(PARTS_LIST) ?? "[]") as unknown;
       return Array.isArray(raw) ? raw.filter((e): e is [string, CapturePart[]] => Array.isArray(e) && e.length === 2 && typeof e[0] === "string"
         && Array.isArray(e[1]) && e[1].length > 0 && e[1].every(p => (CAPTURE_PARTS as readonly unknown[]).includes(p))) : [];
+    } catch { return []; }
+  }
+  function readService(): [string, string][] {
+    try {
+      const raw = JSON.parse(store?.getItem(SERVICE_LIST) ?? "[]") as unknown;
+      return Array.isArray(raw) ? raw.filter((e): e is [string, string] => Array.isArray(e) && e.length === 2 && typeof e[0] === "string"
+        && typeof e[1] === "string" && /^[1-9]\d{0,31}$/u.test(e[1])) : [];
     } catch { return []; }
   }
   function readSource(): [string, SystemId][] {

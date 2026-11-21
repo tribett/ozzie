@@ -522,6 +522,20 @@ describe("suggested questions", () => {
   });
 });
 
+describe("suggested questions with several services watched (coordinator's live read of 0.5.0)", () => {
+  // The day words the desktop gives Ask with more than one service (services-merge.ts MANY_SERVICES): no one day or date.
+  const several = { kind: "spread", weekday: null, day: "your services", Day: "Your services", page: "Services", question: "Are your services covered?",
+    date: null, thisOne: "your services" } as const;
+  it("ask about your services, and pass the boundary as asked; one service keeps its day", () => {
+    const brief = { ...fictional(), day: several };
+    const chips = suggestedQuestions(brief);
+    expect(chips).toContain("What still needs a decision for your services?");
+    expect(chips.join(" ")).not.toMatch(/Sunday|decision your services/u);
+    for (const chip of chips) expect(prepareAsk(new AskSession(), contextFor(new AskSession()), chip).ok, chip).toBe(true);
+    expect(suggestedQuestions(fictional())).toContain("What still needs a decision this Sunday?");
+  });
+});
+
 // Onboarding spec §5 (decision 18): Ask's fixed words name the watched service by its own day.
 describe("a Wednesday service in Ask's fixed words", () => {
   it("suggests questions about this Wednesday, and they pass the boundary as asked", () => {

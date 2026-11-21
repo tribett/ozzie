@@ -5,7 +5,6 @@
 // paying, and, while another way is in use and this Mac still holds its connection, how to disconnect it. Every word
 // comes from closed codes; native's label, a key or anything a company wrote is never shown.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { useDay } from "./day-words.js";
 import { Icon } from "./icons.js";
 import { AI, aiLine, CHOICE, LIMIT, localModel, MAC, monthDay, OLLAMA, OZZIE } from "./ai-words.js";
 import { AiPlaceContext, Ok, Problem, Quiet, Sheet, SentSheet, Status, type AiPlace } from "./ai-parts.js";
@@ -31,7 +30,6 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
   onAnswer?: ((how: "chosen" | "none") => void) | undefined;
 }) {
   const bridge = onboarding;
-  const day = useDay();
   const limitId = useId();
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [loaded, setLoaded] = useState<"loading" | "ok" | "failed">("loading");
@@ -142,7 +140,7 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
     {loaded === "failed" && <Problem text={AI.statusFailed} />}
     {loaded === "ok" && <AiLine status={status} onChange={fix} />}
     {route === "none" && <>
-      <p className="ai-body">{CHOICE.bodySettings(day.day)}</p>
+      <p className="ai-body">{CHOICE.bodySettings()}</p>
       {/* A key may stay on this Mac after No AI for now: it can be removed from here too, while one is kept. */}
       {!keyGone && kept !== 0 && <div className="ai-actions"><Quiet onClick={() => setRemoving(true)}>{many ? LIMIT.removeMany : LIMIT.remove}</Quiet></div>}
     </>}

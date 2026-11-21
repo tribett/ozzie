@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSundayCheck, verifySavedOnLaunch, type KeyValueStore, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
+import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSundayCheck, verifySavedOnLaunch, type KeyValueStore, type ProactiveContext, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
 import { sundayProblem, type Settings } from "../src/sunday-source.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import { nov22Capture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
@@ -641,6 +641,150 @@ describe("native boundaries", () => {
     expect(await verifySavedOnLaunch(settings, status("waiting"), refresh)).toBeNull();
     expect(calls).toHaveLength(1);
     expect(await verifySavedOnLaunch(settings, null, async () => { throw "invalid-token"; })).toBeNull();
+  });
+});
+
+describe("several services watched: one round reads each (owner decision 2026-11-19)", () => {
+  const MAIN = "92902197", YOUTH = "93000001";
+  /** The first service (the fictional Sunday) and a second service type whose plan is the fictional Wednesday. */
+  function many(start: string) {
+    let now = start, task = 0;
+    const changes: Record<string, ((c: SundayCapture) => void) | undefined> = {};
+    const fails = new Set<string>();
+    let hold: Promise<void> | null = null;
+    const check = vi.fn(async (ctx: ProactiveContext, _onStatus: unknown, _trigger: unknown, _source: unknown, onTask?: (id: string) => void) => {
+      const plan = ctx.settings.planId;
+      onTask?.(`task-${++task}`);
+      if (plan !== MAIN && hold) await hold;
+      if (fails.has(plan)) throw "provider-failure";
+      const base = plan === MAIN ? nov22Capture : () => ({ ...wednesdayCapture(), service_type_id: "2200", plan_id: plan });
+      return captureAt(now, changes[plan], base);
+    });
+    const notify = vi.fn(async () => {});
+    const found = vi.fn();
+    const store = memoryStore();
+    const deps: ProactiveDeps = { store, now: () => now, timeZone: () => ZONE, check, notify, found, problem: sundayProblem, timers: { setInterval: () => 0, clearInterval: () => {} } };
+    const context: ProactiveContext = { settings, rules, status: status("connected"), also: [{ serviceTypeId: "2200", planId: YOUTH }] };
+    const hooks: ProactiveHooks = { context: () => context, onStatus: () => {}, onCapture: vi.fn(), onAlsoCapture: vi.fn(), onAlsoFailure: vi.fn(), onChanges: vi.fn(), onAlsoDropped: vi.fn() };
+    const p = createProactive(deps);
+    return { p, check, notify, found, hooks, context, store, changes, fails, set: (iso: string) => { now = iso; }, launch: async () => { p.start(hooks); await p.tick(); },
+      /** Holds the other services' reads until the returned function is called. */
+      holdOthers: () => { let release!: () => void; hold = new Promise(r => { release = r; }); return () => { hold = null; release(); }; } };
+  }
+  const plansRead = (h: ReturnType<typeof many>) => h.check.mock.calls.map(c => (c[0] as ProactiveContext).settings.planId);
+
+  it("reads the first service, then the other, each compared with its own last check, and hands each to its own place", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    await h.launch();
+    expect(plansRead(h)).toEqual([MAIN, YOUTH]);
+    expect(h.p.view().history.map(e => [e.kind, e.plan_id])).toEqual([["first-check", YOUTH], ["first-check", MAIN]]);
+    expect(h.hooks.onCapture).toHaveBeenCalledTimes(1);
+    expect(h.hooks.onCapture).toHaveBeenLastCalledWith(expect.objectContaining({ plan_id: MAIN }), "launch");
+    expect(h.hooks.onAlsoCapture).toHaveBeenCalledWith(expect.objectContaining({ plan_id: YOUTH }), "launch");
+    expect(Object.keys(h.p.view().latest).sort()).toEqual([`1001:${MAIN}`, `1001:${YOUTH}`]);
+    // Check now reads both too, and its answer is the first service's check once both are read.
+    const c = await h.p.checkNow();
+    expect(c.plan_id).toBe(MAIN);
+    expect(plansRead(h)).toEqual([MAIN, YOUTH, MAIN, YOUTH]);
+  });
+
+  it("finds nothing new in each service on its own, though the other is read between them", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    await h.launch();
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    // Round two: both quiet (before, only the service read last could ever be "nothing new").
+    expect(h.found.mock.calls.slice(-2)).toEqual([["task-3", "nothing-new"], ["task-4", "nothing-new"]]);
+  });
+
+  it("one round sends one notice, named for the first service's day; Keep services covered is handed only the first service's changes", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    await h.launch();
+    h.changes[MAIN] = decline; h.changes[YOUTH] = decline;
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledWith({ day: "sunday" });
+    expect(h.p.view().history.slice(0, 2).map(e => [e.plan_id, e.notice])).toEqual([[YOUTH, "sent"], [MAIN, "sent"]]);
+    expect(h.hooks.onChanges).toHaveBeenCalledTimes(1);
+    expect((h.hooks.onChanges as ReturnType<typeof vi.fn>).mock.calls[0]![1]).toMatchObject({ plan_id: MAIN });
+  });
+
+  it("a change only in the other service brings its notice with that service's own day, never handed to a job", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    await h.launch();
+    h.changes[YOUTH] = decline;
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledWith({ day: "wednesday" });
+    expect(h.hooks.onChanges).not.toHaveBeenCalled();
+    for (const name of names) expect(h.store.dump()).not.toContain(name);
+  });
+
+  it("a failed check of the other service is its own: the round finishes, the schedule isn't charged, the history says it once", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    h.fails.add(YOUTH);
+    await h.launch();
+    expect(h.p.view().schedule.last_run).toMatchObject({ outcome: "ok" });
+    expect(h.p.view().schedule.failures).toBe(0);
+    expect(h.hooks.onAlsoFailure).toHaveBeenCalledWith(YOUTH, "provider-failure", "launch");
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.p.view().history.filter(e => e.kind === "failed").map(e => e.plan_id)).toEqual([YOUTH]);
+  });
+
+  it("a service no longer watched isn't read, and what was kept of it is forgotten", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    await h.launch();
+    h.context.also = [];
+    h.p.forgetPlans([YOUTH]);
+    expect(Object.keys(h.p.view().latest)).toEqual([`1001:${MAIN}`]);
+    expect(h.p.view().history.map(e => e.plan_id)).toEqual([MAIN]);
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(plansRead(h)).toEqual([MAIN, YOUTH, MAIN]);
+  });
+
+  it("Pause and Resume while the other service is read never starts a second round on top of it (review M1)", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    const release = h.holdOthers();
+    h.p.start(h.hooks);
+    const launch = h.p.tick();
+    await vi.waitFor(() => expect(plansRead(h)).toEqual([MAIN, YOUTH]));
+    // Resume ticks at once; a tick waits for the round under way, so it isn't awaited here.
+    h.p.pause(); h.p.resume();
+    void h.p.tick();
+    await new Promise(r => setTimeout(r, 20));
+    expect(plansRead(h)).toEqual([MAIN, YOUTH]);
+    release();
+    await launch;
+    await new Promise(r => setTimeout(r, 20));
+    expect(plansRead(h)).toEqual([MAIN, YOUTH]);
+    expect(h.p.view().history.filter(e => e.kind === "failed")).toEqual([]);
+    expect(h.p.view().schedule.last_run).toMatchObject({ outcome: "ok" });
+  });
+
+  it("a service no longer watched when its read ends keeps nothing, and App is told to delete the copy just saved (review M2)", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    const release = h.holdOthers();
+    h.p.start(h.hooks);
+    const launch = h.p.tick();
+    await vi.waitFor(() => expect(plansRead(h)).toEqual([MAIN, YOUTH]));
+    h.context.also = [];
+    release();
+    await launch;
+    expect(h.hooks.onAlsoDropped).toHaveBeenCalledWith(expect.objectContaining({ plan_id: YOUTH }));
+    expect(h.hooks.onAlsoCapture).not.toHaveBeenCalled();
+    expect(Object.keys(h.p.view().latest)).toEqual([`1001:${MAIN}`]);
+  });
+
+  it("with no other service, a round is the one check it always was", async () => {
+    const h = many("2026-11-20T15:00:00Z");
+    delete h.context.also;
+    await h.launch();
+    expect(plansRead(h)).toEqual([MAIN]);
+    expect(h.hooks.onAlsoCapture).not.toHaveBeenCalled();
   });
 });
 

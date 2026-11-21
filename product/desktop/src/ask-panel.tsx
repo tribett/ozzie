@@ -48,6 +48,18 @@ export function helpFor(w: SystemWords): { intro: string; can: readonly string[]
   if (w.system === "planning-center" && !w.unchosen) return HELP;
   // Nothing chosen yet (a fresh Mac): Planning Center's list, never "from what it reads in Planning Center" (release review L5).
   if (w.unchosen) return { ...HELP, intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first) };
+  // Genesis shares no volunteer schedules (round 5): what Ozzie answers from it, all on this Mac.
+  if (w.system === "genesis") return {
+    intro: "Here is what Ozzie can do for you, from what it reads in Genesis:", never: w.say(HELP.never), first: w.say(HELP.first),
+    try: "You could ask “What events are coming up?” or “How many times was each form filled in?”.",
+    can: [
+      "Show the events of the next four weeks, and how many attended the ones just past.",
+      "Show how many times each form was filled in, and say when one is filled in again.",
+      "Show your groups.",
+      "Genesis doesn't share volunteer schedules, so Ozzie can't check whether a service is covered or who is serving.",
+      HELP.can[5]!,
+    ],
+  };
   return {
     intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first),
     // Where no team is tied to roles (Breeze), what works there instead of who could help (round 5).
@@ -270,7 +282,7 @@ export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: str
   const help = helpFor(w);
   switch (turn.state) {
     case "plan": return plans ? <div className="body"><PlanTurn parsed={turn.parsed} context={plans.context} actions={plans.actions} /></div> : null;
-    case "cards": return <div className="body"><p>{CARDS_POINTER}</p>
+    case "cards": return <div className="body"><p>{w.say(CARDS_POINTER)}</p>
       {page !== "cards" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => onOpen("cards")}><Icon name="user" small />Open Visitor cards</button></div>}</div>;
     case "help": return <div className="body stack-tight">
       <p>{help.intro}</p>
@@ -302,6 +314,16 @@ export function AskPanel(props: {
   initialTurns?: Turn[];
   /** Taking something on ("Keep an eye on Sunday"): needs no AI model and nothing checked yet. */
   plans?: PlanHooks;
+  /**
+   * A church whose system shares no volunteer schedules (Genesis, round 5): every question is answered on this Mac from
+   * what Ozzie read, with no AI model and nothing sent (genesis-church.tsx `genesisAnswer`).
+   */
+  answerHere?: (typed: string) => AskTurn;
+  /**
+   * With `answerHere`: whether anything has been read to answer from, and the questions to offer then. What can you do?,
+   * the suggestions and the nothing-read line follow it, never Planning Center's check (review of e9cbd97d, M1).
+   */
+  here?: { checked: boolean; chips: readonly string[] } | undefined;
   /** Speaking a question on this Mac. Production: the native listener. */
   voice?: Voice;
   /**
@@ -394,9 +416,15 @@ export function AskPanel(props: {
       setShownId(id);
       setTurns(all => [...all, { id, question, ...turn }]);
     };
+    // Answered here from what was read (Genesis): what to take on and "What can you do?" keep their own answers. A card
+    // asked about by count ("How many times was the visitor card filled in?") is a Genesis form, not the cards page.
+    const countOfCards = route.kind === "cards" && /\b(?:how many|filled|entries|submissions|times|count)\b/iu.test(question);
+    if (props.answerHere && (route.kind === "start" || route.kind === "no-model" || route.kind === "loading" || route.kind === "ask" || countOfCards)) {
+      return local(props.answerHere(question));
+    }
     switch (route.kind) {
       case "jobs-not-here": return local({ state: "refused", text: props.jobsNotHere!.text });
-      case "help": return local({ state: "help", checked: Boolean(brief) });
+      case "help": return local({ state: "help", checked: props.here ? props.here.checked : Boolean(brief) });
       case "cards": return local({ state: "cards" });
       case "plan": return local({ state: "plan", parsed: route.parsed });
       case "start": return local({ state: "start" });
@@ -417,7 +445,8 @@ export function AskPanel(props: {
     finally { if (running.current === controller) running.current = null; setBusy(false); }
   };
 
-  const chips = !canType || busy || listening !== "no" ? [] : ready ? suggestedQuestions(brief) : [HELP_CHIP];
+  const chips = !canType || busy || listening !== "no" ? [] : props.here ? (props.here.checked ? [...props.here.chips] : [HELP_CHIP])
+    : ready ? suggestedQuestions(brief) : [HELP_CHIP];
   const off = voiceOff(voiceStatus);
   const answered = turns.length > 0;
   // What speaking does, or why it's off: under the question box until there is an answer, then folded with the other
@@ -427,7 +456,8 @@ export function AskPanel(props: {
     : voiceNote ?? (answered ? null : voiceAbout);
   const notes = <>
     <p className="small">{ASK_INTRO}</p>
-    <p className="small ask-note"><Icon name="lock" small />{words.say(ASK_NOTE)}</p>
+    {/* Genesis (round 5): answered here from what was read; nothing is asked of an AI. */}
+    <p className="small ask-note"><Icon name="lock" small />{props.answerHere ? "Ozzie answers Genesis questions on this Mac from what it read. Nothing is sent to an AI." : words.say(ASK_NOTE)}</p>
     {answered && voiceAbout && <p className="small">{voiceAbout}</p>}
   </>;
   return <ChooseAiContext.Provider value={closeThenChoose}><aside id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
@@ -438,19 +468,22 @@ export function AskPanel(props: {
     {/* Named with what it's for (spec §6): "Ask Ozzie", and under it, quieter, "Questions about your services", each kept on
         one line (owner's read of 0.3.2: "Ask Ozzie (questions about Sunday)" wrapped into two columns at 380 px). */}
     <div className="convo-head"><AskIcon /><div className="ask-head"><span className="ask-head-title">Ask Ozzie</span>
-      <span className="ask-head-scope">Questions about {SERVICES}</span></div><span className="spacer" />
+      <span className="ask-head-scope">Questions about {props.answerHere ? "what Genesis shares" : SERVICES}</span></div><span className="spacer" />
       <button type="button" className="ibtn" aria-label="Close Ask Ozzie" onClick={props.onClose}><Icon name="x" /></button></div>
     <div className="ask-scroll">
       {!answered && !props.notHere && notes}
       {/* No button to the page already on screen. */}
       {props.notHere && <div className="panel-info"><Icon name="info" /><p>{props.notHere}</p></div>}
-      {!brief && !props.notHere && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
+      {props.here && !props.here.checked && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
+        <p>Nothing has been read from Genesis yet. Check Genesis on {pageRef()}, or ask what Ozzie can do.</p>
+        {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>{OPEN_SERVICES}</button></div>}</div></div>}
+      {!brief && !props.notHere && !props.answerHere && <div className="panel-info"><Icon name="info" /><div className="stack-tight">
         <p>{words.say(props.connection === "checking" ? `Nothing has been checked yet. Ozzie is checking Planning Center now. You can also open the fictional example on ${pageRef()}, or ask what Ozzie can do.`
           : props.connection === "unchecked" ? `Nothing has been checked yet, and Ozzie couldn't check Planning Center just now. You can open the fictional example on ${pageRef()}, or ask what Ozzie can do.`
           : props.connection === "connected" ? `Nothing has been checked yet. Check Planning Center on ${pageRef()}. You can also open the fictional example there, or ask what Ozzie can do.`
           : `Nothing has been checked yet. Connect Planning Center in Settings, or check Planning Center on ${pageRef()}. You can also open the fictional example there, or ask what Ozzie can do.`)}</p>
         {props.page !== "sunday" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => props.onOpen("sunday")}>{OPEN_SERVICES}</button></div>}</div></div>}
-      {!modelReady && !props.notHere && <NeedsModel />}
+      {!modelReady && !props.notHere && !props.answerHere && <NeedsModel />}
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
       {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />A saved copy of a check from {time(brief.completed_at)}. Not a current check.</p>}
       {brief && !answered && <BasedOn text={basedOnBrief(brief)} />}

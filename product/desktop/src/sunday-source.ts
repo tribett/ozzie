@@ -32,6 +32,8 @@ export const sundaySource = {
   recordings: (organization: string) => invoke<RecordingSummary[]>("list_sunday_recordings", { organization }),
   loadRecording: (organization: string, pathId: string) => invoke<SundayCapture>("load_sunday_recording", { organization, pathId }),
   deleteRecordings: (organization: string) => invoke<void>("delete_sunday_recordings", { organization }),
+  /** One service's saved checks only (a service no longer watched): the plans of it Ozzie watched, at most 32. */
+  deletePlanRecordings: (organization: string, planIds: readonly string[]) => invoke<void>("delete_sunday_plan_recordings", { organization, planIds: planIds.slice(0, 32) }),
   /** Debug builds only: non-secret IDs from the developer's local settings; release builds return empty strings. */
   devDefaults: () => invoke<{ clientId: string; organization: string; serviceTypeId: string; planId: string; autopilot: boolean; autopilotOperations?: boolean; autopilotOneClick?: boolean; kidsTeams?: string;
     autopilotCheckIns?: boolean; autopilotRegistrations?: boolean; forms?: string }>("dev_defaults"),

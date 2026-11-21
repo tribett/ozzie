@@ -1,5 +1,5 @@
 import { timesText, titleOnlyDate } from "../../../core/src/service-day.js";
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { blockoutCounted, blockoutRoles, blockoutTime, byServiceTime, findingTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
@@ -90,7 +90,14 @@ export function addresseeFor(person: string | undefined, names: Names, people: P
 const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 /** When a card's time is: its service time, or the watched service by its real day ("this Wednesday") when it has none. */
-const when = (i: ServingInterval | null, d: DayWords) => i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} at ${clock(i.starts_at)}` : d.thisOne;
+/**
+ * With several services on one page, a role with no serving time of its own is said by its service's date, and by its one
+ * service time when the plan has just one, as a timed role is ("Wednesday, November 25 at 7:00 PM"), never "this Wednesday"
+ * beside another service's full date (coordinator's live read of 0.5.0). Null: the day's own words, as one service's page.
+ */
+const UntimedWhen = createContext<string | null>(null);
+const when = (i: ServingInterval | null, d: DayWords, untimed: string | null = null) =>
+  i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} at ${clock(i.starts_at)}` : untimed ?? d.thisOne;
 const plainReasons: [RegExp, string][] = [
   [/^Recorded team membership.*/, "On this team in Planning Center. No blockout or other schedule overlaps this time."],
   [/^Possible conflict: source records an unanswered sent request\./, "Has an unanswered request for another role at this time."],
@@ -163,6 +170,19 @@ export function useSundayDecisions(capture: Pick<SundayCapture, "organization" |
   const [decisions, setDecisions] = useState<SundayDecision[]>([]);
   useEffect(() => { setDecisions(key ? loadDecisions(localStore(), key) : []); }, [key]);
   return [decisions, next => { setDecisions(next); if (key) saveDecisions(localStore(), key, next); }];
+}
+/**
+ * The leader's decisions for each of several checks at once (the other services watched, owner decision 2026-11-19), by
+ * their storage keys (decisionsStorageKey), kept on this Mac as useSundayDecisions keeps one.
+ */
+export function useDecisionsMap(keys: readonly string[]): [Readonly<Record<string, SundayDecision[]>>, (key: string, next: SundayDecision[]) => void] {
+  const joined = keys.join("\n");
+  const load = () => { const store = localStore(); return Object.fromEntries(keys.map(k => [k, store ? loadDecisions(store, k) : []])); };
+  const [held, setHeld] = useState<{ joined: string; map: Record<string, SundayDecision[]> }>(() => ({ joined, map: load() }));
+  // Read at once when the checks change, so a count never shows a resolved item for a moment.
+  const map = useMemo(() => held.joined === joined ? held.map : load(), [held, joined]);
+  useEffect(() => { if (held.joined !== joined) setHeld({ joined, map }); }, [joined]);
+  return [map, (key, next) => { setHeld({ joined, map: { ...map, [key]: next } }); const store = localStore(); if (store) saveDecisions(store, key, next); }];
 }
 function localStore(): Storage | null {
   try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; }
@@ -703,7 +723,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   beside?: Beside | undefined;
 }) {
   const { finding } = item;
-  const d = useDay();
+  const d = useDay(), untimed = useContext(UntimedWhen);
   const w = useSystemWords();
   const CHOICE_TEXT = choiceText(d, w.name);
   const target = briefTarget(finding, occurrence.id, occurrence.label);
@@ -748,7 +768,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   const tag = item.state === "reopened"
     ? <span className="badge b-attn"><Icon name="flag" small />This needs attention again</span>
     : <span className={`badge ${decision ? "b-attn" : "b-look"}`}><Icon name={decision ? "flag" : "eye"} small />{decision ? "Needs a decision" : "Worth a look"}</span>;
-  const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval, d)}</span> : null;
+  const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval, d, untimed)}</span> : null;
   let title: string, body: string | null = null;
   switch (finding.kind) {
     case "needs-people":
@@ -872,12 +892,12 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
 
 function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedAt: string | null; onUndo: () => void }) {
   const d = item.decision!, f = item.finding;
-  const words = useDay();
+  const words = useDay(), untimed = useContext(UntimedWhen);
   const w = useSystemWords();
   const CHOICE_TEXT = choiceText(words, w.name);
   return <article className="find is-resolved">
     <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — {words.thisOne} only</span>
-      {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words)}</span>}</div>
+      {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words, untimed)}</span>}</div>
     <h3 className="find-title">{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
     <p className="find-quote">“{d.reason}”</p>
     <p className="find-body">You decided this {time(d.decided_at)}. {f.kind === "needs-people" ? w.remaining(f.remaining ?? 0) : w.say("Planning Center still shows no confirmed lead; Ozzie hasn't changed anything there.")}</p>
@@ -890,10 +910,10 @@ function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedA
 
 function HistoryCard({ entry, onRemove }: { entry: DecisionHistory; onRemove: () => void }) {
   const d = entry.decision;
-  const words = useDay();
+  const words = useDay(), untimed = useContext(UntimedWhen);
   const w = useSystemWords();
   const CHOICE_TEXT = choiceText(words, w.name);
-  const where = <span className="find-where">{d.subject.name} · {when(d.subject.interval, words)}</span>;
+  const where = <span className="find-where">{d.subject.name} · {when(d.subject.interval, words, untimed)}</span>;
   if (entry.status === "source-confirmed") return <article className="find is-resolved">
     <div className="find-top"><span className="badge b-ok"><Icon name="check" small />Confirmed in {w.name}</span>{where}</div>
     <h3 className="find-title">{d.kind === "lead-missing" ? `${w.name} now shows a confirmed lead for ${d.subject.name}.` : `${d.subject.name} is now filled in ${w.name}.`}</h3>
@@ -967,7 +987,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
   feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const { labels, result } = operations;
-  const words = useDay();
+  const words = useDay(), untimed = useContext(UntimedWhen);
   if (operations.stale) return <section className="stack" aria-label="Rooms and follow-ups">
     <h2 className="h3">Rooms and follow-ups</h2>
     <article className="find is-look">
@@ -994,7 +1014,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     ];
     return <article className={`find${confirmed ? "" : " is-look"}`} key={f.finding_id}>
       <div className="find-top"><span className={`badge ${confirmed ? "b-attn" : "b-look"}`}><Icon name={confirmed ? "flag" : "eye"} small />{f.label}</span>
-        <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap, words)}</span></div>
+        <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap, words, untimed)}</span></div>
       <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap)}.</h3>
       {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original)}) and {label(b.booking_id, "another booking")} ({span(b.original)}) overlap
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
@@ -1031,7 +1051,7 @@ function GroupMeetingCard({ item, names, defaultOpen = false, feedback = null, o
   item: GroupMeeting; names: Names; defaultOpen?: boolean; feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const words = useDay();
+  const words = useDay(), untimed = useContext(UntimedWhen);
   const roles = [...new Set(item.serving.map(s => s.position ?? "their role"))].join(", ");
   const serving = [...new Set(item.serving.map(s => `${s.status} for ${s.position ?? "a role"}`))].join(" and ");
   const why = [
@@ -1041,7 +1061,7 @@ function GroupMeetingCard({ item, names, defaultOpen = false, feedback = null, o
   ];
   return <article className="find is-look">
     <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
-      {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval, words)}</span>}</div>
+      {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval, words, untimed)}</span>}</div>
     <h3 className="find-title">{nameOf(names, item.person_id)} has a group meeting at the same time.</h3>
     <p className="find-body">Their group meets {item.meetings.map(span).join(" and ")}, while they're {serving}.</p>
     <FeedbackChoices target={groupTarget(item, occurrence)} feedback={feedback} />
@@ -1084,6 +1104,63 @@ export function Refused({ onSettings }: { onSettings?: (() => void) | undefined 
     </div>
   </div>;
 }
+
+/**
+ * What a page's check is and what can be done with it: the live read, saved copy or fictional example with its reads and
+ * check time, Check now and the last saved check, the line about connecting or checking, and why a check failed. Said once:
+ * on the one-service page under its question, and with several services (services-page.tsx) once above them all.
+ */
+export function PageControls(props: Pick<Parameters<typeof SundayPage>[0], "brief" | "busy" | "connected" | "configured" | "hasRecording" | "onCheck" | "onRecording"
+  | "onExample" | "onLaterExample" | "checking" | "stuck" | "adding" | "onSetUp" | "onSettings" | "problem" | "refused">) {
+  const { brief } = props;
+  const w = useSystemWords();
+  const stamp = useMemo(() => brief ? time(brief.checked_at ?? brief.completed_at) : null, [brief]);
+  return <>
+    {/* Always says what this is: a live read, the saved copy of a check, or the fictional example. */}
+    {brief && <p className="checkline evidence"><Icon name="check" small />{brief.mode === "fictional" ? "Fictional example data" : brief.mode === "recording" ? w.savedCopy : w.liveRead} · {brief.sources.reads} reads · {stamp}{brief.sources.failed.length ? ` · ${brief.sources.failed.length} didn't complete` : ""}</p>}
+    <div className="row" role="group" aria-label="What this page shows: a live check, the last saved check or the fictional example">
+      <button type="button" className="btn btn-primary" disabled={props.busy || !props.connected || !props.configured} onClick={props.onCheck}>
+        {props.busy ? <><Icon name="spinner" small spin />{w.checking}</> : w.checkNow}</button>
+      {props.hasRecording && <button type="button" className="btn btn-secondary" disabled={props.busy} onClick={props.onRecording}>Show the last saved check</button>}
+      {!brief && <button type="button" className="btn btn-quiet" onClick={props.onExample}>See a fictional example</button>}
+      {brief?.mode === "fictional" && props.onLaterExample && <button type="button" className="btn btn-quiet" onClick={props.onLaterExample}>See a later fictional check</button>}
+    </div>
+    {/* The example's band already offers "Set up my church", so the page points there rather than to Settings (review L6). */}
+    {brief?.mode === "fictional" && props.onSetUp ? <p className="small row"><span>{SET_UP_LINE}</span></p>
+      : props.checking ? <p className="small" role="status" aria-live="polite">{CHECKING_LINE}</p>
+      : props.stuck ? <p className="small row"><span role="status" aria-live="polite">{STUCK_LINE}</span>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={props.stuck}>{CHECK_CONNECTION}</button></p>
+      : props.adding ? null
+      : (!props.connected || !props.configured) && <p className="small row">
+        <span>{!props.connected ? w.unchosen ? "Choose what your church uses to check your own service. Ozzie only reads it."
+          : w.system === "planning-center" ? `Connect Planning Center to check your own service. ${promise("connectAnd")}` : `Connect ${w.name} to check your own service. Ozzie only reads it.` : "Choose which service Ozzie watches."}</span>
+        {(props.onSetUp ?? props.onSettings) && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSetUp ?? props.onSettings}>
+          {props.onSetUp ? !props.connected ? w.connect : "Choose a service" : "Open Settings"}</button>}</p>}
+    {props.problem && !props.refused && <p role="alert" className="problem">{props.problem}</p>}
+    {props.problem === CHECK_REFUSED && !props.refused && <CopyForAdministrator />}
+    {props.problem && props.refused && <Refused onSettings={props.onSettings} />}
+  </>;
+}
+
+/** One service's part of the Services page when several are watched (owner decision 2026-11-19). */
+export interface ServicePartHead {
+  /** The service's own Planning Center name; null when it has none ("Your service"). Display text, this Mac only. */
+  name: string | null;
+  /** No next plan of it yet (move-on.ts waitingText), said under its name. */
+  waiting?: string | null;
+  /**
+   * Another service than the first: its rooms and group meetings aren't checked (only the first service's are), and the
+   * church's follow-ups are shown with the first one; What I didn't check says so, with that one's name.
+   */
+  opsWith?: string | null;
+}
+/** A service Planning Center gives no name. */
+export const SERVICE_UNNAMED = "Your service";
+/**
+ * What I didn't check, for another service than the first: its rooms and its people's group meetings aren't checked, and
+ * the church's follow-ups (church-wide) are shown with the first service.
+ */
+export const opsWithLine = (first: string) => `Room bookings and group meetings aren't checked for this service. Follow-ups without an owner are shown with ${first}.`;
 
 export function SundayPage(props: {
   brief: SundayBrief | null; names: Names; busy: boolean; problem: string; sender: string;
@@ -1144,6 +1221,12 @@ export function SundayPage(props: {
    * yet" (system-pages.tsx `refusalLine`). Planning Center never passes one.
    */
   uncheckedLine?: string | null | undefined;
+  /**
+   * One of several services watched (owner decision 2026-11-19), shown as a part of the Services page (services-page.tsx):
+   * headed by the service's own name under its date and times, with the page's question, count and buttons said once
+   * above all the parts. Absent: the whole page, as for one service.
+   */
+  part?: ServicePartHead | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
   const d = useDay();
@@ -1160,7 +1243,6 @@ export function SundayPage(props: {
   const dateText = brief?.day?.date ?? brief?.plan.dates ?? d.date ?? DayName(d);
   const timeText = brief ? timesText(brief.times ?? [], brief.time_zone) : null;
   const setAside = [...(brief?.hidden ?? []).map(h => h.entry), ...(props.operations?.hidden ?? []).map(h => h.entry)];
-  const stamp = useMemo(() => brief ? time(brief.checked_at ?? brief.completed_at) : null, [brief]);
   const view = useMemo(() => brief ? applyDecisions(brief, decisions) : null, [brief, decisions]);
   // Everything the page shows, counted as items: Services, rooms, follow-ups and group meetings (the sidebar and Today use the same count).
   const counts = view ? sundayShownCount(view, props.operations) : { decisions: 0, looks: 0, resolved: 0 };
@@ -1195,11 +1277,16 @@ export function SundayPage(props: {
     onDecide={onDecide} whoCouldHelp={props.whoCouldHelp} asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter}
     planId={brief.plan.id} titleRef={titleRef(i.finding.key)} pane={props.pane} feedback={controls} occurrence={occurrence} beside={props.beside}
     people={brief.mode === "fictional" ? null : props.people} />;
-  return <div className="col">
+  const part = props.part;
+  const partId = useId();
+  const Root = part ? "section" : "div";
+  const untimed = part && d.date ? `${d.date}${brief?.times?.length === 1 ? ` at ${clock(brief.times[0]!)}` : ""}` : null;
+  return <UntimedWhen.Provider value={untimed}><Root className={part ? "stack service-part" : "col"} {...(part ? { "aria-labelledby": partId } : {})}>
     {/* The plan's own title from Planning Center, after its date as the plan picker shows it (click-through, 2026-11-19:
         added to the lede, it read as a sentence of its own). In its own case, and wrapped whole when long. */}
     <p className="eyebrow">{dateText}{timeText && ` · ${timeText}`}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
-    <h1 className="h1">{d.question}</h1>
+    {part ? <h2 id={partId} className="h2">{part.name ?? SERVICE_UNNAMED}</h2> : <h1 className="h1">{d.question}</h1>}
+    {part?.waiting && <p className="small" role="status">{part.waiting}</p>}
     {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />Saved copy of the check from {time(brief.completed_at)}. This is not a current check.</p>}
     {/* The fictional example's band is across the top of every page (App.tsx ExampleBand); the line below still says it. */}
     {brief && <p className="lede">
@@ -1216,32 +1303,15 @@ export function SundayPage(props: {
     </p>}
     {brief && roster && <p className="small">{source} doesn't share how many people each role needs, so Ozzie can't say whether {d.thisOne} is covered.</p>}
     {!brief && (props.uncheckedLine ? <p className="lede" role="status">{props.uncheckedLine}</p>
+      : part ? <p className="lede">{part.name ?? SERVICE_UNNAMED} hasn't been checked yet. Ozzie reads it with your other services.</p>
       : <p className="lede">{DayName(d)} hasn't been checked yet. Check {w.name} now, or look around the fictional example first.</p>)}
-    {/* Always says what this is: a live read, the saved copy of a check, or the fictional example. */}
-    {brief && <p className="checkline evidence"><Icon name="check" small />{brief.mode === "fictional" ? "Fictional example data" : brief.mode === "recording" ? w.savedCopy : w.liveRead} · {brief.sources.reads} reads · {stamp}{brief.sources.failed.length ? ` · ${brief.sources.failed.length} didn't complete` : ""}</p>}
-    <div className="row" role="group" aria-label="What this page shows: a live check, the last saved check or the fictional example">
-      <button type="button" className="btn btn-primary" disabled={props.busy || !props.connected || !props.configured} onClick={props.onCheck}>
-        {props.busy ? <><Icon name="spinner" small spin />{w.checking}</> : w.checkNow}</button>
-      {props.hasRecording && <button type="button" className="btn btn-secondary" disabled={props.busy} onClick={props.onRecording}>Show the last saved check</button>}
-      {!brief && <button type="button" className="btn btn-quiet" onClick={props.onExample}>See a fictional example</button>}
-      {brief?.mode === "fictional" && props.onLaterExample && <button type="button" className="btn btn-quiet" onClick={props.onLaterExample}>See a later fictional check</button>}
-    </div>
-    {/* The example's band already offers "Set up my church", so the page points there rather than to Settings (review L6). */}
-    {brief?.mode === "fictional" && props.onSetUp ? <p className="small row"><span>{SET_UP_LINE}</span></p>
-      : props.checking ? <p className="small" role="status" aria-live="polite">{CHECKING_LINE}</p>
-      : props.stuck ? <p className="small row"><span role="status" aria-live="polite">{STUCK_LINE}</span>
-        <button type="button" className="btn btn-quiet btn-sm" onClick={props.stuck}>{CHECK_CONNECTION}</button></p>
-      : props.adding ? null
-      : (!props.connected || !props.configured) && <p className="small row">
-        <span>{!props.connected ? w.unchosen ? "Choose what your church uses to check your own service. Ozzie only reads it."
-          : w.system === "planning-center" ? `Connect Planning Center to check your own service. ${promise("connectAnd")}` : `Connect ${w.name} to check your own service. Ozzie only reads it.` : "Choose which service Ozzie watches."}</span>
-        {(props.onSetUp ?? props.onSettings) && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSetUp ?? props.onSettings}>
-          {props.onSetUp ? !props.connected ? w.connect : "Choose a service" : "Open Settings"}</button>}</p>}
-    {props.problem && !props.refused && <p role="alert" className="problem">{props.problem}</p>}
-    {props.problem === CHECK_REFUSED && !props.refused && <CopyForAdministrator />}
-    {props.problem && props.refused && <Refused onSettings={props.onSettings} />}
-    {brief && <section className="stack" aria-labelledby="sunday-open-title">
-      <h2 id="sunday-open-title" className="sr-only">Open for {d.thisOne}</h2>
+    {!part ? <PageControls {...props} /> : <>
+      {props.problem && !props.refused && <p role="alert" className="problem">{props.problem}</p>}
+      {props.problem === CHECK_REFUSED && !props.refused && <CopyForAdministrator />}
+      {props.problem && props.refused && <Refused onSettings={props.onSettings} />}
+    </>}
+    {brief && <section className="stack" aria-labelledby={part ? `${partId}-open` : "sunday-open-title"}>
+      <h2 id={part ? `${partId}-open` : "sunday-open-title"} className="sr-only">Open for {part?.name ?? d.thisOne}</h2>
       {notice}
       {(groups ? lead : open).map(card)}
       {!groups && props.worthALook}
@@ -1250,8 +1320,8 @@ export function SundayPage(props: {
         : "No open needs, pending requests or Church-rule check-ins in what was read."}</p>}
       {brief.findings.length > 0 && open.length === 0 && <p className="lede">Everything left is something you resolved yourself, below.</p>}
     </section>}
-    {brief && groups?.map((g, n) => <section key={g.at ?? "none"} className="stack service-time" aria-labelledby={`service-time-${n}`}>
-      <h2 id={`service-time-${n}`} className="h3">{g.at ? `${g.label} service` : g.label}</h2>
+    {brief && groups?.map((g, n) => <section key={g.at ?? "none"} className="stack service-time" aria-labelledby={`${part ? partId : ""}service-time-${n}`}>
+      <h2 id={`${part ? partId : ""}service-time-${n}`} className="h3">{g.at ? `${g.label} service` : g.label}</h2>
       {g.items.length ? g.items.map(card) : <p className="small">Nothing open for this service time in what was read.</p>}
     </section>)}
     {brief && groups && props.worthALook && <section className="stack" aria-label="Also worth a look">{props.worthALook}</section>}
@@ -1270,11 +1340,11 @@ export function SundayPage(props: {
     {brief && <SetAside entries={setAside} feedback={controls} />}
     {brief && <section className="notchecked" aria-label="What I didn't check">
       <h2 className="h3">What I didn't check</h2>
-      <ul className="list">{[...brief.not_checked, ...(props.operations ? props.operations.not_checked : w.extras || brief.mode === "fictional" ? operationsNotChecked(null) : [])].map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul>
+      <ul className="list">{[...brief.not_checked, ...(part?.opsWith ? [opsWithLine(part.opsWith)] : props.operations ? props.operations.not_checked : w.extras || brief.mode === "fictional" ? operationsNotChecked(null) : [])].map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul>
       {/* A church system's rarer limits: true, folded, so the list above holds what a pastor acts on (round 5). */}
       {(brief.not_checked_more?.length ?? 0) > 0 && <details className="listen-more"><summary><Icon name="chev" small />More that Ozzie can't see in {source}</summary>
         <ul className="list">{brief.not_checked_more!.map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul></details>}
     </section>}
     {brief && props.last}
-  </div>;
+  </Root></UntimedWhen.Provider>;
 }

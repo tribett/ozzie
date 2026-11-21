@@ -21,7 +21,7 @@ export interface RowCodes {
   /** Only when the phone row is shown. */
   phone?: PhoneCode | null | undefined;
   /** A church on B1 Church or Breeze: which, and whether its key was checked and kept on this Mac. */
-  church_system?: { system: "b1" | "breeze"; connection: "connected" | "not-connected" } | null | undefined;
+  church_system?: { system: "b1" | "breeze" | "genesis"; connection: "connected" | "not-connected" } | null | undefined;
 }
 export interface ReportInput {
   app?: { version?: string | null | undefined; macos?: string | null | undefined; chip?: string | null | undefined; memory_gb?: number | null | undefined } | null | undefined;
@@ -51,7 +51,7 @@ const ROWS = {
   notices: ["allowed", "denied", "not-asked", "unknown"],
   "start-with-mac": ["on", "off", "unknown"],
   phone: ["on", "off"],
-  "church-system": ["b1", "breeze"],
+  "church-system": ["b1", "breeze", "genesis"],
   "church-system-connection": ["connected", "not-connected"],
   "ai-route": ["managed", "own", "local", "none"],
   "ai-company": ["openai", "anthropic", "gemini", "other", "none"],

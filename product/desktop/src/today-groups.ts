@@ -104,6 +104,8 @@ export interface TodayInput {
   regular?: RegularCheck | null;
   /** Planning Center isn't connected (and the example isn't on): Today asks for it in place of the unchecked Sunday. */
   notConnected?: boolean;
+  /** The church's system shares no volunteer schedules (Genesis): there is no service to check, so none is asked for. */
+  noService?: boolean;
   /** The fictional email and calendar import, shown at its own clock. */
   attention: { findings: readonly AttentionFinding[]; messages: readonly Message[]; evaluated_at: string; zone: string } | null;
   /** null: Sunday hasn't been checked (in this run of the app). */
@@ -178,9 +180,10 @@ export function todayItems(input: TodayInput): TodayItem[] {
       items.push({ id: `email:${safeId(finding.id)}`, state: "needs-decision", since: received ?? finding.imported_at, clock: { now: evaluated_at, zone }, subject: { type: "email", finding } });
     }
   }
-  if (!input.sunday) items.push(input.notConnected ? { id: "connect:planning-center", state: "needs-you", since: null, subject: { type: "connect" } }
-    : { id: "sunday-unchecked", state: "needs-you", since: null, subject: { type: "sunday-unchecked" } });
-  else if (input.sunday.decisions > 0) {
+  if (!input.sunday) {
+    if (input.notConnected) items.push({ id: "connect:planning-center", state: "needs-you", since: null, subject: { type: "connect" } });
+    else if (!input.noService) items.push({ id: "sunday-unchecked", state: "needs-you", since: null, subject: { type: "sunday-unchecked" } });
+  } else if (input.sunday.decisions > 0) {
     const id = `sunday:${input.sunday.plan_id}`;
     const writeup = foldedIntoSunday ? view?.writeups[foldedIntoSunday.id] ?? null : null;
     items.push({ id, state: "needs-decision", since: seen(id), subject: { type: "sunday", decisions: input.sunday.decisions, noticed: foldedIntoSunday, writeup } });
@@ -295,8 +298,12 @@ export function regularMissedText(c: RegularCheck, now: string, zone: string): s
  * watched service's real day (`d`, onboarding spec §5); the fictional example is a Sunday.
  */
 export function progressEmptyText(regular: RegularCheck | null | undefined, example: boolean,
-  system: { name: string; jobs: boolean } = { name: "Planning Center", jobs: true }): string {
+  system: { name: string; jobs: boolean; system?: string } = { name: "Planning Center", jobs: true }): string {
   if (example) return "Nothing runs in the fictional example.";
+  // Genesis has no service to choose: its reads start once it is connected and has been read once (review of 4c3d32ac).
+  if (system.system === "genesis" && regular && !regular.ready) {
+    return `Nothing runs yet. Ozzie reads Genesis on its own once it is connected and has read it once; ${keepTitle()} and other jobs work with Planning Center only for now.`;
+  }
   // A church on B1 Church or Breeze: jobs work with Planning Center only for now, so none is offered as starting here.
   const jobs = system.jobs ? `${keepTitle()} and other jobs start when you set them up` : `${keepTitle()} and other jobs work with Planning Center only for now`;
   if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine()} once ${system.name} is connected and a service is chosen; ${jobs}.`;

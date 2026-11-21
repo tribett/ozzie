@@ -648,10 +648,10 @@ describe("drafted notes and your name", () => {
     expect(settings).toContain("Your name on notes");
     // Near the top of Settings (audit item 18): second, right after Planning Center and which Sunday, in the order a
     // leader meets them (audit item 27), and in the index at the very top.
-    const sections = settings.slice(settings.indexOf("Planning Center and which service Ozzie watches Reads only."));
+    const sections = settings.slice(settings.indexOf("Planning Center and which services Ozzie watches Reads only."));
     expect(sections.indexOf("Your name on notes")).toBeGreaterThan(0);
     expect(sections.indexOf("Your name on notes")).toBeLessThan(sections.indexOf("AI help"));
-    expect(settings.indexOf("On this page Planning Center and which service Ozzie watches Your name on notes")).toBeGreaterThan(-1);
+    expect(settings.indexOf("On this page Planning Center and which services Ozzie watches Your name on notes")).toBeGreaterThan(-1);
   });
 });
 

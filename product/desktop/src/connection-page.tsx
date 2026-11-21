@@ -108,7 +108,7 @@ export function YourNameField({ store = yourName, optional = false }: { store?: 
 export const OPEN_AT_SETTLE_MS = [100, 300, 700, 1_500] as const;
 
 export const SETTINGS_SECTIONS = [
-  { id: "pco-title", label: "Planning Center and which service Ozzie watches" },
+  { id: "pco-title", label: "Planning Center and which services Ozzie watches" },
   { id: "systems-title", label: "Other church systems" },
   { id: "your-name-title", label: "Your name on notes" },
   { id: "ai-title", label: "AI help" },
@@ -134,12 +134,14 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
  * and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and Check my setup, in
  * that order.
  */
-export function ConnectionPage({ system, others, status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
+export function ConnectionPage({ system, others, watched, status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   /** A church on B1 Church or Breeze: its own section (system-settings.tsx), in place of Planning Center's. */
   system?: ReactNode;
   /** Every church's way to the other church systems: switching, and Genesis read beside (system-settings.tsx). */
   others?: ReactNode;
+  /** The other services Ozzie watches, and "Watch another service" (watch-another.tsx), under the first one's picker. */
+  watched?: ReactNode;
   /**
    * The church's last confirmed connection while a sign-in for that church is under way, or after one ended with it back
    * in use (App): Settings keep saying it is connected and keep its plans (review item 7). Null otherwise.
@@ -258,7 +260,7 @@ export function ConnectionPage({ system, others, status, kept = null, settings, 
 
     {system ? <div className="settings-slot" tabIndex={-1} role="group" aria-labelledby="pco-title" ref={at("pco-title")}>{system}</div>
     : <section className="settings-sec" aria-labelledby="pco-title">
-      <h2 id="pco-title" className="h3" tabIndex={-1} ref={at("pco-title")}>Planning Center and which service Ozzie watches</h2>
+      <h2 id="pco-title" className="h3" tabIndex={-1} ref={at("pco-title")}>Planning Center and which services Ozzie watches</h2>
       <div className="banner"><Icon name="lock" small /><div className="stack-tight">
         <span><strong>{promise("readsShort")}</strong> {CONNECTION_WORDING} {promise("still")} The connection is kept safely on this Mac.</span>
         <details className="listen-more">
@@ -271,9 +273,10 @@ export function ConnectionPage({ system, others, status, kept = null, settings, 
         <ConnectForm status={status} kept={kept} settings={settings} onSettings={onSettings} control={control} cards={cards} onDiscardCards={onDiscardCards} />
       </section>
       <section className="find" aria-labelledby="sunday-title">
-        <h3 id="sunday-title" className="settings-t">Which service Ozzie watches</h3>
+        <h3 id="sunday-title" className="settings-t">Which services Ozzie watches</h3>
         {/* The same picker as guided setup: upcoming plans once connected, with typing the plan by hand folded below. */}
         <SundayPicker connected={status?.state === "connected" || Boolean(kept)} waiting={pending} settings={settings} onSettings={onSettings} />
+        {watched}
       </section>
       <section className="find" aria-labelledby="operations-title">
         <h3 id="operations-title" className="settings-t">Rooms, follow-ups and group events</h3>
@@ -313,7 +316,10 @@ export function ConnectionPage({ system, others, status, kept = null, settings, 
         <h3 id="auto-title" className="settings-t">Keeping watch</h3>
         {/* Named as everywhere else (spec §6): Ozzie keeps an eye on your services, and the job beside it. */}
         <p className="find-body">{!w.checksOnItsOwn ? `Ozzie reads ${SERVICES} from ${w.name} when Ozzie starts, and when you press ${w.checkNow}. Checking on a schedule, and its notices, work with Planning Center only for now.`
-          : prefs ? `${eyeLine()}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}` : `${eyeLine()} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
+          // Genesis has no services to check: what runs is Ozzie's own read of it.
+          : prefs ? `${w.system === "genesis" ? "Ozzie reads Genesis on its own" : eyeLine()}: ${scheduleLine(prefs).replace(/^./u, c => c.toLowerCase())} Quiet hours ${quietLine(prefs)}`
+          : w.system === "genesis" ? "Ozzie reads Genesis on its own while it is open on this Mac, and says on Today when a form has been filled in again."
+          : `${eyeLine()} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
         {w.jobs ? <p className="small">{keepTitle()} and other jobs are set up in Keeping watch.</p>
           : <p className="small">{w.notHere(`${keepTitle()} and the morning briefing`, true)}</p>}
         {onAutomatic && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onAutomatic}>Change these in Keeping watch</button></div>}

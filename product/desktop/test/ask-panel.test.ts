@@ -196,7 +196,8 @@ describe("Ask Ozzie panel", () => {
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
     expect(app).toMatch(/\{askShown && <button type="button" ref=\{askEntry\} className="btn btn-secondary ask-entry" aria-expanded=\{askOpen\} aria-controls="ask-panel"/u);
     // On B1 Church or Breeze, a result of its own check (decision 21).
-    expect(app).toContain("const resultSeen = onSystem ? Boolean(sys.connection?.result_seen) || Boolean(sys.built) : recordings.length > 0 || Boolean(ofWatched);");
+    // Genesis's own first result counts as seen (review of e9cbd97d, M6).
+    expect(app).toContain("const resultSeen = onSystem ? Boolean(sys.connection?.result_seen) || Boolean(sys.built)\n    : onGenesis ? Boolean(sys.state.genesis?.result_seen) || Boolean(genesis.capture) : recordings.length > 0 || Boolean(ofWatched);");
     // A church that leaves setup without a result can still reach Ask (re-check Low).
     expect(app).toContain('const askShown = resultSeen || setup === null;');
     // Never docked open by a wide window: it opens only on the leader's click, and stays as they left it.

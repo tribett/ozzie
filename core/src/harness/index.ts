@@ -201,9 +201,16 @@ export class Harness {
    */
   keep(text: string): string { return this.#restore(text, keptNames(this.tools.data.capture?.names ?? {})); }
   #restore(text: string, names: Readonly<Record<string, string>>, options: { sender?: string; firstNames?: boolean } = {}): string {
-    const { capture, operations, attention, brief } = this.tools.data;
+    const { capture, operations, attention, brief, serviceOfTeam } = this.tools.data;
     const events = Object.fromEntries((attention?.sources ?? []).flatMap(s => "title" in s ? [[s.id, s.title]] : []));
+    // Several services watched: a role is said with its service, by its team, or by its name when only one service has it.
+    const roleService = serviceOfTeam ? (name: string, team?: string): string | null => {
+      if (team !== undefined) return Object.hasOwn(serviceOfTeam, team) ? serviceOfTeam[team]! : null;
+      const services = new Set((brief?.positions ?? []).filter(p => p.name.trim() === name && Object.hasOwn(serviceOfTeam, p.team_id)).map(p => serviceOfTeam[p.team_id]!));
+      return services.size === 1 ? [...services][0]! : null;
+    } : undefined;
     return restoreLabels(text, this.session, {
+      ...(roleService ? { roleService } : {}),
       names, places: { ...(capture?.labels ?? {}), ...(operations?.labels ?? {}) }, events,
       ...(capture ? { organization: capture.organization } : {}), timeZone: brief?.time_zone ?? null,
       ...(options.sender !== undefined ? { sender: options.sender } : {}), ...(options.firstNames ? { firstNames: true } : {}),

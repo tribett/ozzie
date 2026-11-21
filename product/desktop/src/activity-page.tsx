@@ -64,10 +64,18 @@ export function byDay(tasks: readonly TaskRow[], now: Date): { day: string; task
  * (`quiet`: harness-words.ts `quietCheck`), which share one line that opens to each of them. Any other task between them
  * ends the run; nothing is left out.
  */
-export function foldQuiet(tasks: readonly TaskRow[], quiet: (row: TaskRow) => boolean, sourceOf: (row: TaskRow) => string | undefined = () => undefined): TaskRow[][] {
+export function foldQuiet(tasks: readonly TaskRow[], quiet: (row: TaskRow) => boolean, sourceOf: (row: TaskRow) => string | undefined = () => undefined,
+  serviceOf: (row: TaskRow) => string | undefined = () => undefined): TaskRow[][] {
   const lines: TaskRow[][] = [];
   let run: TaskRow[] = [];
-  const close = () => { lines.push(...(run.length > 1 ? [run] : run.map(r => [r]))); run = []; };
+  // With several services watched, one round reads each in turn: each service's quiet checks in the run fold together,
+  // in the order each service first appears (owner decision 2026-11-19). One service: the run is one fold, as before.
+  const close = () => {
+    const by = new Map<string, TaskRow[]>();
+    for (const r of run) { const k = serviceOf(r) ?? ""; by.set(k, [...(by.get(k) ?? []), r]); }
+    for (const rows of by.values()) lines.push(...(rows.length > 1 ? [rows] : rows.map(r => [r])));
+    run = [];
+  };
   for (const row of tasks) {
     // A run is of one system's checks: a check of another system ends it.
     if (quiet(row) && run.length && sourceOf(run[0]!) !== sourceOf(row)) close();
@@ -103,7 +111,11 @@ export function TaskAccount({ account }: { account: Account }) {
  * RECENT_SHOWN lines show; "Show earlier work" lists the rest. Name-free: the list holds no question, answer or source text.
  */
 export function RecentWork({ tasks, procedures = null, trigger = () => undefined, end = () => undefined, found = () => undefined, source = () => undefined,
-  parts = () => undefined, now }: {
+  parts = () => undefined, service = () => undefined, serviceNames = {}, now }: {
+  /** The Planning Center service type a check read, when this Mac kept it. */
+  service?: (taskId: string) => string | undefined;
+  /** With more than one service watched, each one's own name by its service type: a fold of its checks says it. */
+  serviceNames?: Readonly<Record<string, string>>;
   /** undefined while loading; null when the list isn't available. */
   tasks: TaskRow[] | null | undefined;
   procedures?: ReadonlyMap<string, Skill> | null;
@@ -131,7 +143,14 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   const sourceOf = (row: TaskRow) => { const id = row.kind === "check" ? source(row.task_id) : undefined; return id ? SYSTEMS[id].name : undefined; };
   const quiet = (row: TaskRow) => quietCheck(row, kept.get(row.task_id)?.start, found(row.task_id), sourceOf(row));
   // A run never crosses a day: each day's tasks are folded on their own.
-  const days = byDay(sorted, now ?? new Date()).map(d => ({ day: d.day, lines: foldQuiet(d.tasks, quiet, sourceOf) }));
+  const serviceOf = (row: TaskRow) => row.kind === "check" && !sourceOf(row) ? service(row.task_id) : undefined;
+  const days = byDay(sorted, now ?? new Date()).map(d => ({ day: d.day, lines: foldQuiet(d.tasks, quiet, sourceOf, serviceOf) }));
+  const several = Object.keys(serviceNames).length > 1;
+  /** "Youth Night in Planning Center", when more than one service is watched and the fold's service is known by name. */
+  const foldSource = (row: TaskRow) => {
+    const id = serviceOf(row), name = several && id && Object.hasOwn(serviceNames, id) ? serviceNames[id] : undefined;
+    return name ? `${name} in ${sourceOf(row) ?? "Planning Center"}` : sourceOf(row);
+  };
   const total = days.reduce((n, d) => n + d.lines.length, 0);
   const earlier = total - RECENT_SHOWN;
   let room = all ? total : RECENT_SHOWN;
@@ -152,7 +171,7 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   // Quiet checks in a row: one line, opening to each check exactly as it shows on its own.
   const fold = (rows: TaskRow[]) => <li key={foldKey(rows)}>
     <details className="recent-task recent-fold">
-      <summary><Icon name="chev" small /><span>{quietChecksLine(rows, sourceOf(rows[0]!))}</span></summary>
+      <summary><Icon name="chev" small /><span>{quietChecksLine(rows, foldSource(rows[0]!))}</span></summary>
       <ol className="log recent">{rows.map(item)}</ol>
     </details>
   </li>;
@@ -169,7 +188,9 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
 }
 
 /** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */
-export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, now, ollama = null, system = null }: {
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, service, serviceNames, now, ollama = null, system = null }: {
+  /** Each check's Planning Center service type, and each watched service's name by it (several services watched). */
+  service?: (taskId: string) => string | undefined; serviceNames?: Readonly<Record<string, string>>;
   capture: SundayCapture | null; notGranted?: boolean;
   /** A church on B1 Church or Breeze: the reads of its latest check, in place of Planning Center's. */
   system?: { name: string; check: { started_at: string; system?: SystemId; reads: readonly { read: string; checked_at: string; outcome: string }[] } | null } | null;
@@ -187,7 +208,8 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
     <p className="lede">{system ? systemPromise("reads", system.name) : w.unchosen ? w.say(promise("reads")) : promise("reads")} {promise("sends")}</p>
     <section className="stack" aria-labelledby="recent-title">
       <h2 id="recent-title" className="h3">Recent work</h2>
-      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(found ? { found } : {})} {...(source ? { source } : {})} {...(parts ? { parts } : {})} {...(now ? { now } : {})} />
+      <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(found ? { found } : {})} {...(source ? { source } : {})} {...(parts ? { parts } : {})} {...(now ? { now } : {})}
+        {...(service ? { service } : {})} {...(serviceNames ? { serviceNames } : {})} />
     </section>
     {ollama && ollama.length > 0 && <section className="stack" aria-labelledby="ollama-title">
       <h2 id="ollama-title" className="h3">{OLLAMA.historyTitle}</h2>
