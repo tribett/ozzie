@@ -311,8 +311,12 @@ const worse = (e: HistoryEntry) => e.kind === "missed" || e.kind === "failed" ||
 const sameKeys = (a: readonly string[], b: readonly string[]) => { const before = new Set(a), now = new Set(b); return before.size === now.size && [...now].every(k => before.has(k)); };
 /** Two checks' name-free facts (each role, lead and who is scheduled and how), apart from when each finished. */
 const sameFacts = (a: SundayCheckRecord, b: SundayCheckRecord) => JSON.stringify({ ...a, completed_at: "" }) === JSON.stringify({ ...b, completed_at: "" });
-/** When things were read, and the row-order ids and "Why I flagged this" lines that carry it: left out of a check's print. */
-const READ_TIMES: ReadonlySet<string> = new Set(["id", "why", "source", "checked_at", "check_time", "valid_until", "evaluated_at", "stale"]);
+/**
+ * When things were read, and the row-order ids and "Why I flagged this" lines that carry it: left out of a check's print.
+ * So are a role's plain reasons under its card's title (`role_facts`), which repeat Why I flagged this in the system's
+ * order: the print is as it was before they were shown (polish 2026-11-21).
+ */
+const READ_TIMES: ReadonlySet<string> = new Set(["id", "why", "source", "checked_at", "check_time", "valid_until", "evaluated_at", "stale", "role_facts"]);
 /**
  * What a check shows, as a short hash (cyrb53): the service page's findings and, while current, its rooms, follow-ups and
  * group meetings, without when anything was read. Two checks that show the same have the same print. Ids and fixed words

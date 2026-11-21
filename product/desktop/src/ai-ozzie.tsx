@@ -4,6 +4,7 @@
 // the server's offer, and when the offer is closed there is nothing to buy. Escape never cancels a payment.
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
+import { useSystemWords } from "./church-system.js";
 import { useDay } from "./day-words.js";
 import { AI, CHOICE, OZZIE, ozzieState, paidSaid } from "./ai-words.js";
 import { Ok, Problem, Quiet, Screen, Sheet, Status, useAiPlace } from "./ai-parts.js";
@@ -73,6 +74,8 @@ export function OzzieScreen({ offer, reconnect = false, held = false, heldAccoun
   offer: Offer | null; reconnect?: boolean; held?: boolean | null; heldAccount?: unknown; inUse?: boolean; onBack: () => void; onLater: () => void;
   onAnother: () => void; onModel: (configured: boolean) => void; onDone: () => void; done: string;
 }) {
+  // The church's own system where AI help names Planning Center as where names come from; neutral before one is chosen.
+  const say = useSystemWords().say;
   const { bridge, mode } = useAiPlace();
   const day = useDay();
   const [phase, setPhase] = useState<Phase>("explain");
@@ -282,7 +285,7 @@ export function OzzieScreen({ offer, reconnect = false, held = false, heldAccoun
     {holding && <Status text={switching ? OZZIE.switching : ""} />}
     {priced && open && <>
       <div className="ai-price"><p className="ai-price-t">{OZZIE.plan(open.price)}</p><p className="ai-price-d">{OZZIE.answers(open.answers)}</p></div>
-      <ul className="ai-checks">{OZZIE.checks.map(c => <li key={c}><Icon name="check" small /><span>{c}</span></li>)}</ul>
+      <ul className="ai-checks">{OZZIE.checks.map(c => <li key={c}><Icon name="check" small /><span>{say(c)}</span></li>)}</ul>
       <div className="ai-head"><p className="ai-small">{OZZIE.small}</p><Quiet onClick={terms}>{OZZIE.terms}</Quiet></div>
     </>}
     {priced && !open && <p className="ai-body">{offer === null ? CHOICE.ozzieLooking : offer.reason === "unreachable" ? OZZIE.unreachable : OZZIE.closed}</p>}

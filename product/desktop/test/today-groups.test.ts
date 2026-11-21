@@ -494,7 +494,7 @@ describe("the fictional example never looks real (audit item 2)", () => {
     expect(app).toContain("{!showSetup && fictional && <ExampleBand onLeave={leaveExample} onSetUp={() => { leaveExample(); openSetup(); }} />}");
     expect(app).toContain("example={fictional}");
     // True on every page it sits over, including the ones that show the leader's own rules, lists, settings and cards (review P, L9).
-    expect(app).toContain('export const EXAMPLE_BAND = { title: "Example church, not real.", body: "The Sunday, teams, people and email shown are made up. Your own Church rules, lists, settings and visitor cards are real.",\n  setUp: "Set up my church", leave: "Leave the example" } as const;');
+    expect(app).toContain('export const EXAMPLE_BAND = { title: "Example church, not real.", body: "The service, teams, people and email shown are made up. Your own Church rules, lists, settings and visitor cards are real.",\n  setUp: "Set up my church", leave: "Leave the example" } as const;');
     expect(app).not.toContain("Nothing in it is from your church.");
     const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.oz \.example-band p \{[^}]*font-size: 17px/u);

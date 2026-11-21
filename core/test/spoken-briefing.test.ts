@@ -279,6 +279,11 @@ describe("a Wednesday service, by its own day", () => {
     const partial: SundayBrief = { ...brief, findings: [{ id: "worth-a-look:scope", key: "w", kind: "worth-a-look", tone: "look", why: [] }] };
     expect(buildSpokenBriefing({ attention: null, sunday: partial }, { timeZone: tz }).text)
       .toContain("Part of this Wednesday couldn't be checked, so Ozzie won't call Wednesday covered.");
+    // Only a fact about a role (polish 2026-11-21): said as that, as the page and Today say it.
+    const roles: SundayBrief = { ...brief, findings: [{ ...partial.findings[0]!, role_facts: { roles: 1, reasons: ["Greeter isn't tied to a service time in Planning Center."] } }] };
+    const said = buildSpokenBriefing({ attention: null, sunday: roles }, { timeZone: tz }).text;
+    expect(said).toContain("One role couldn't be checked, so Ozzie won't call Wednesday covered.");
+    expect(said).not.toContain("Part of this Wednesday couldn't be checked");
   });
 });
 

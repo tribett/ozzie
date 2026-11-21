@@ -4,7 +4,7 @@
 // treated as Planning Center's position names are: shown here, and as [Role] in a note's placeholder text.
 // Every "Why I flagged this" line names the system the fact came from, never Planning Center.
 import { evaluateCoverage, type CandidateAssessment, type ServingInterval } from "../coverage.js";
-import { plainIssues } from "../coverage-words.js";
+import { plainIssues, roleFacts } from "../coverage-words.js";
 import { applyFeedback, briefTarget, feedbackOf, type FeedbackEntry } from "../finding-feedback.js";
 import { needKey, type Finding, type PositionStatus, type Roster, type SundayBrief } from "../sunday-brief.js";
 import { LIVE_CHECK_VALID_MS } from "../sunday-capture.js";
@@ -180,14 +180,23 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
   const byDesign = (i: (typeof result.issues)[number]) => noneNumbered &&
     i.code === "need-unverified" && i.position_id !== null && positionOf.get(i.position_id)?.needed === null;
   const scopeIssues = result.issues.filter(i => i.person_id === null && i.code !== "observation-unverified" && i.code !== "lead-unverified" && !byDesign(i));
+  // Only facts about roles as the system lists them, with every read complete, current and placed: said as roles (polish
+  // 2026-11-21), with the roles whose number the system didn't share named first, as Why I flagged this says it.
+  const someUnnumbered = unnumbered.length > 0 && !noneNumbered;
+  const facts = !failed.length && !stale && !unread.length && !mapped.waiting_for_zone ? roleFacts(scopeIssues, id => roleName(id), name) : null;
+  // Those roles' own "didn't say how many people" line says the same again, so in view it is left out (review of the polish,
+  // M1); the role still counts, and Why I flagged this keeps every line as before.
+  const unnumberedIds = new Set(unnumbered.map(p => p.id));
+  const roles = facts && someUnnumbered ? { roles: facts.roles, reasons: [numbersNotShared(capture.system, unnumbered.map(p => roleName(p.id))),
+    ...plainIssues(scopeIssues.filter(i => !(i.code === "need-unverified" && i.position_id !== null && unnumberedIds.has(i.position_id))), id => roleName(id), name)] } : facts;
   if (scopeIssues.length || failed.length || stale || mapped.waiting_for_zone) findings.push({
     id: "worth-a-look:scope", key: JSON.stringify(["worth-a-look"]), kind: "worth-a-look", tone: "look",
-    ...(unread.length ? { unread } : {}), ...(stale ? { stale } : {}),
+    ...(unread.length ? { unread } : {}), ...(stale ? { stale } : {}), ...(roles ? { role_facts: roles } : {}),
     why: [
       ...(mapped.waiting_for_zone ? [waitingForZone()] : []),
       ...(stale ? ["This check was read more than 30 minutes ago, so Ozzie doesn't treat it as current."] : []),
       ...(failed.length ? [`${plural(failed.length, `${name} read`)} didn't complete, so this check isn't a full picture.`] : []),
-      ...(unnumbered.length && !noneNumbered ? [numbersNotShared(capture.system, unnumbered.map(p => roleName(p.id)))] : []),
+      ...(someUnnumbered ? [numbersNotShared(capture.system, unnumbered.map(p => roleName(p.id)))] : []),
       ...plainIssues(scopeIssues, id => roleName(id), name),
     ],
   });

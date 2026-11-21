@@ -45,7 +45,7 @@ describe("Sunday page: rooms, follow-ups and group meetings from the example cap
     // Unread parts are named under What I didn't check, not repeated as a vague uncertainty.
     expect(t).not.toContain("Part of the room and follow-up check couldn't be read.");
     expect(t).not.toContain("Whether overlapping room bookings were already worked out in Planning Center");
-    expect(t).not.toContain("Groups events weren't part of this check.");
+    expect(t).not.toContain("Group events weren't part of this check.");
     expect(t).not.toContain("Room bookings and follow-ups weren't part of this check.");
     expect(t.replaceAll("not ranked", "")).not.toMatch(FORBIDDEN);
   });
@@ -63,7 +63,7 @@ describe("Sunday page: rooms, follow-ups and group meetings from the example cap
   it("a capture from before these reads existed keeps the earlier wording", () => {
     const t = sunday(nov22Capture());
     expect(t).toContain("Room bookings and follow-ups weren't part of this check.");
-    expect(t).toContain("Groups events weren't part of this check.");
+    expect(t).toContain("Group events weren't part of this check.");
   });
 });
 

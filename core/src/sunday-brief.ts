@@ -2,7 +2,7 @@
 // findings carry person ids; the desktop view resolves names locally at render time.
 import { evaluateCoverage, type CandidateAssessment, type CoverageResult, type PositionAssessment, type ServingInterval } from "./coverage.js";
 import { churchTimeZone, planDate, planStart } from "./church-time.js";
-import { plainIssues } from "./coverage-words.js";
+import { plainIssues, roleFacts } from "./coverage-words.js";
 import { applyFeedback, briefTarget, feedbackOf, type CorrectionEntry, type StopEntry } from "./finding-feedback.js";
 import { kidsFindings } from "./kids-rules.js";
 import { captureToCoverage, isChurchRead, isKidsRead, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
@@ -34,6 +34,13 @@ export interface Finding {
   leaders?: string[];
   /** Each part of Planning Center that wasn't fully read, in plain words (worth-a-look). */
   unread?: string[];
+  /**
+   * worth-a-look, when its only reasons are facts about roles as the system lists them (a role not tied to a service time,
+   * no number needed, an answer that can't be read) and no read failed, nothing is unread and the check is current: how
+   * many roles, and each plain reason (coverage-words.ts `roleFacts`). The page says "One role couldn't be checked."
+   * with the reason under it, never that a read failed.
+   */
+  role_facts?: { roles: number; reasons: string[] };
   /** The check is too old to treat as current (worth-a-look). */
   stale?: boolean;
   /** too-few-confirmed: the confirmed people the Church rules ask for at this service time (kids-rules.ts). */
@@ -384,13 +391,16 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
   findings.push(...kids.findings);
   const unread = unreadParts(services);
   const scopeIssues = result.issues.filter(i => i.person_id === null && i.code !== "observation-unverified" && i.code !== "lead-unverified");
+  const roleOf = (id: string) => mapped.positions.find(p => p.position_id === id)?.name ?? null;
+  // Only facts about roles as Planning Center lists them, with every read complete and current: said as roles, not a failed read.
+  const roles = !failed.length && !stale && !unread.length ? roleFacts(scopeIssues, roleOf, "Planning Center") : null;
   if (scopeIssues.length || failed.length || stale) findings.push({
     id: "worth-a-look:scope", key: JSON.stringify(["worth-a-look"]), kind: "worth-a-look", tone: "look",
-    ...(unread.length ? { unread } : {}), ...(stale ? { stale } : {}),
+    ...(unread.length ? { unread } : {}), ...(stale ? { stale } : {}), ...(roles ? { role_facts: roles } : {}),
     why: [
       ...(stale ? ["This check was read more than 30 minutes ago, so Ozzie doesn't treat it as current."] : []),
       ...(failed.length ? [`${plural(failed.length, "Planning Center read")} didn't complete, so this check isn't a full picture.`] : []),
-      ...plainIssues(scopeIssues, id => mapped.positions.find(p => p.position_id === id)?.name ?? null, "Planning Center"),
+      ...plainIssues(scopeIssues, roleOf, "Planning Center"),
     ],
   });
   // What the person said on earlier cards, applied to this check. A check that couldn't be completed always shows.
@@ -408,7 +418,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
     }),
     not_checked: [
       // A capture with Groups reads has its group meetings reported by the operations check.
-      ...(capture.reads.some(r => r.collection.startsWith("groups_")) ? [] : ["Groups events weren't part of this check."]),
+      ...(capture.reads.some(r => r.collection.startsWith("groups_")) ? [] : ["Group events weren't part of this check."]),
       ...unreadGroups(capture.reads),
       "Whether someone is willing to serve isn't something Planning Center records.",
       ...kids.not_checked,

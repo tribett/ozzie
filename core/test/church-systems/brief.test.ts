@@ -154,6 +154,19 @@ describe("buildSystemBrief: Breeze", () => {
       "B1 Church didn't share how many people Guitar needs, so Ozzie can't say whether it is full.");
   });
 
+  it("a role with no number is said as that role, its reason first, never as a read that failed (polish 2026-11-21, item 6)", () => {
+    const b1 = b1Capture({ positions: b1Capture().positions.map(p => p.id === "POS-guitar" ? { ...p, needed: null } : p) });
+    const look = brief(b1, confirmed(b1)).brief.findings.find(f => f.kind === "worth-a-look")!;
+    expect(look.role_facts?.roles).toBe(1);
+    // Said once in view: the role's own "didn't say how many" line would say the same again (review of the polish, M1).
+    expect(look.role_facts?.reasons).toEqual(["B1 Church didn't share how many people Guitar needs, so Ozzie can't say whether it is full."]);
+    // A read that didn't complete keeps the check's own words.
+    const failed = { ...b1, reads: b1.reads.map((r, i) => i === 1 ? { ...r, outcome: "timeout" as const } : r) };
+    const failedLook = brief(failed, confirmed(failed)).brief.findings.find(f => f.kind === "worth-a-look");
+    expect(failedLook?.why.some(w => w.includes("didn't complete"))).toBe(true);
+    expect(failedLook?.role_facts).toBeUndefined();
+  });
+
   it("someone on the service with no role is said beside the findings", () => {
     const capture = answered({ on_service: ["157803"], names: { "157801": "Juniper Fictional", "157802": "Linden Fictional", "157803": "Sorrel Fictional" } });
     expect(brief(capture).notices).toEqual(["1 person is listed on this service without a role."]);

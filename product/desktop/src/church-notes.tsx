@@ -27,6 +27,25 @@ import { Icon } from "./icons.js";
  * "Breeze" for a church on another system (App provides it). Only a name: nothing of the system is read here.
  */
 export const ListsSystemName = createContext("Planning Center");
+/**
+ * Each team's service by its own name while more than one service is watched (App provides services-merge.ts
+ * `teamServices`), so the lists' matching tells apart two services' teams with the same roles. Only names: nothing of the
+ * services is read here. Undefined with one service.
+ */
+export const ListsTeamServices = createContext<ReadonlyMap<string, string> | undefined>(undefined);
+/**
+ * A team as Church rules name it (as team-labels.ts does, kept here so the lists' code reaches nothing beyond its own
+ * modules): by its positions' names in the last check, "Greeter team", and, while more than one service is watched, its
+ * service, "Greeter team · Youth Night".
+ */
+export function teamNames(positions: readonly PositionLabel[], services?: ReadonlyMap<string, string>): Map<string, string> {
+  const names = new Map<string, string[]>();
+  for (const p of positions) names.set(p.team_id, [...new Set([...(names.get(p.team_id) ?? []), p.name])]);
+  return new Map([...names].map(([team, list]) => {
+    const service = services?.get(team);
+    return [team, service ? `${list.join(", ")} team · ${service}` : `${list.join(", ")} team`];
+  }));
+}
 /** One of this page's fixed sentences, naming the church's system where it names Planning Center. */
 export const sayFor = (text: string, system: string) => system === "Planning Center" ? text : text.replace(/Planning Center/gu, system);
 
@@ -148,12 +167,6 @@ export const NotesFound = memo(function NotesFound({ notes, query }: { notes: No
   </div>;
 });
 
-/** A team as Church rules name it, by its positions' names in the last check (as church-lists-page.tsx names one). */
-function teamNames(positions: readonly PositionLabel[]): Map<string, string> {
-  const names = new Map<string, string[]>();
-  for (const p of positions) names.set(p.team_id, [...new Set([...(names.get(p.team_id) ?? []), p.name])]);
-  return new Map([...names].map(([team, list]) => [team, `${list.join(", ")} team`]));
-}
 const KEEP = "keep";
 /** Whether a pointer means this section: its title and which occurrence of it (the first by default). */
 const means = (a: NoteAttachment, title: string, occurrence: number) => a.section === title && (a.occurrence ?? 1) === occurrence;
@@ -221,7 +234,9 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
   /** A section asked for, until it is laid out and moved to. */
   const [target, setTarget] = useState<number | null>(focused);
   const id = useId();
-  const teams = useMemo(() => teamNames(positions), [positions]);
+  // A team as Church rules name it: its service too, with more than one watched.
+  const services = useContext(ListsTeamServices);
+  const teams = useMemo(() => teamNames(positions, services), [positions, services]);
   useEffect(() => {
     if (focused === null) return;
     setQuery("");

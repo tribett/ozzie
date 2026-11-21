@@ -153,22 +153,27 @@ export const RECHECK_FAILED = "Ozzie couldn't read Planning Center again just no
 
 /** The confirmation's title, with the full name shown, the service and its day ("Sunday, Nov 29", as Planning Center dates the plan). */
 export const confirmTitle = (full: string, service: string | null, day: string) => `Add ${full} to ${planWords(service, day)}?`;
+// The confirmation in short (polish 2026-11-21, item 4): what Planning Center will do and what Ozzie does, the open place,
+// what was checked and that undo works until the request is sent, in view; how undo ends and the five minutes, in its fold.
 /** What Planning Center will do, and what Ozzie does: whether its automatic reminders reach the person isn't known. */
 export const confirmWaiting = (name: string) =>
-  `Planning Center will list ${name} as unconfirmed, with the request waiting. Ozzie doesn't send ${name} anything. Planning Center sends its request only when you press Send there.`;
-/** That adding them uses up the open place before anyone is asked, and taking them off gives it back. */
+  `Planning Center will list ${name} as unconfirmed, with the request not sent. Ozzie sends ${name} nothing; you press Send there.`;
+/** That adding them uses up the open place before anyone is asked. */
 export function confirmPlace(name: string, role: string, stillNeeded: number): string {
   if (stillNeeded < 1) return "";
-  return `${stillNeeded === 1 ? `Adding ${name} fills the one open place for ${role}` : `Adding ${name} fills one of the ${stillNeeded} open places for ${role}`}, even before ${name} is asked. Taking ${name} off again gives it back.`;
+  return `${stillNeeded === 1 ? `Adding ${name} fills the one open place for ${role}` : `Adding ${name} fills one of the ${stillNeeded} open places for ${role}`}, even before ${name} is asked.`;
 }
+/** Under the fold: taking them off gives the place back. */
+export const confirmPlaceBack = (name: string) => `Taking ${name} off again gives the place back.`;
 export const confirmChecked = (at: string, name: string) =>
   `Checked at ${at}: the role is still open; ${name} isn't on this plan, has no blockout or other plan then, is listed as active, and isn't listed as a child in Planning Center.`;
 /**
  * How long undo lasts: native code keeps the proof that it made the row in memory only, and forgets it on quit, a church
- * switch, Disconnect and turning changes off.
+ * switch, Disconnect and turning changes off. The first line is in view; what ends it is under the fold.
  */
-export const confirmUndo = (name: string) =>
-  `Until you send the request, you can take ${name} off again here while Ozzie stays open. Quitting Ozzie, switching churches, disconnecting or turning off “Adding people in Planning Center” in Settings ends that; then take ${name} off in Planning Center.`;
+export const confirmUndo = (name: string) => `Until you send the request, you can take ${name} off again here while Ozzie stays open.`;
+export const confirmUndoEnds = (name: string) =>
+  `You can't take ${name} off here after you quit Ozzie, switch churches, disconnect or turn off “Adding people in Planning Center” in Settings; then take ${name} off in Planning Center.`;
 export const confirmUntil = (at: string, name: string) => `If you wait past ${at}, Ozzie will need to look at Planning Center again before adding ${name}.`;
 export const CONFIRM_EXPIRED = "This confirmation waited more than 5 minutes, so Ozzie won't use it. Nothing changed.";
 
@@ -330,14 +335,23 @@ export const undoWroteOut = (u: Undone): boolean => u.result !== "not-removed";
 
 export const SWITCH_TITLE = "Adding people in Planning Center";
 export const SWITCH_LABEL = "Let Ozzie add someone to an open role in Planning Center, one at a time, when you confirm each one";
+/**
+ * Settings' words for the switch (polish 2026-11-21: six paragraphs made scannable, nothing taken out). `lead` is the one
+ * sentence above the switch; `confirm` to `reminders` are the facts listed under it, always in view; `undo`, `church` and
+ * `people` are in its See how this works fold (People access is in view instead while the sign-in doesn't include it).
+ */
 export const switchBody = (church: string | null) => ({
-  what: "With this on, people in an open role's “who could help” list on the Services page get a button to add them to that role, on that service's plan in Planning Center, as unconfirmed, with the request waiting (not anyone with a possible conflict, or anyone left out). Ozzie sends them nothing. Planning Center sends its request only when you press Send there.",
-  // Owner to settle with a test inbox (write-back-live-answers.md); kept word for word until then.
-  reminders: "Ozzie hasn't confirmed whether Planning Center's automatic reminders, if your church uses them, reach someone added this way before the request is sent.",
-  confirm: "Each one needs your confirmation on screen first. Ozzie never adds or picks anyone on its own, on a schedule, or from an AI's answer. Planning Center shows you as the person who scheduled them. Until you send the request, you can take the person off again from the Services page while Ozzie stays open; quitting Ozzie, switching churches, disconnecting or turning this off ends that.",
+  lead: "With this on, you can add someone from an open role's “who could help” list on the Services page to that role, on that service's plan in Planning Center.",
+  confirm: "Each one needs your confirmation on screen first. Planning Center shows you as the person who scheduled them.",
+  waiting: "Planning Center lists them as unconfirmed, with the request waiting. Ozzie sends them nothing. Planning Center sends its request only when you press Send there.",
+  one: "One person at a time, and never anyone with a possible conflict, or anyone left out.",
+  never: "Ozzie never adds or picks anyone on its own, on a schedule, or from an AI's answer.",
   kids: "For a team your church marked as a kids team, Ozzie first shows the person's background check as Planning Center records it, and advises against adding anyone without a current one.",
   // Native code reads background checks for an add only on a team marked in Church rules (kids-rules-section.tsx).
   kidsWhere: "That advice covers only teams marked as kids teams in Church rules, under “Kids teams” (each team's “serves with kids” box). A team that isn't marked there gets no background-check advice.",
+  // Owner to settle with a test inbox (write-back-live-answers.md); kept word for word until then.
+  reminders: "Ozzie hasn't confirmed whether Planning Center's automatic reminders, if your church uses them, reach someone added this way before the request is sent.",
+  undo: "Until you send the request, you can take the person off again from the Services page while Ozzie stays open; quitting Ozzie, switching churches, disconnecting or turning this off ends that.",
   church: `This is for ${church ?? "the church Ozzie uses now"} only; another church has its own switch. It's off until you turn it on, and it turns off if you switch churches or disconnect. To turn it off, untick the box.`,
   people: "Ozzie also needs People access, to see whether Planning Center lists a person as a child or as inactive and, for kids teams, their background check. Turn it on under “Rooms, follow-ups and group events” below.",
 });

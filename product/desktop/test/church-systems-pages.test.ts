@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 import { installFakeDom } from "./fake-dom.js";
 import {
-  addressLabel, CONNECT, connectProblem, HOST_SENTENCE, keyGoesTo, readChurchSystem, readProblemText, SystemWordsContext, systemWords,
+  addressLabel, churchSystemStore, CONNECT, connectProblem, HOST_SENTENCE, keyGoesTo, readChurchSystem, readProblemText, SystemWordsContext, systemWords,
   type ChurchSystemState, type Connected, type SystemConnection,
 } from "../src/church-system.js";
 import { CHOOSE, ChooseSystem, choiceLine, clockWords, pickService, SystemConnect, SystemService, systemCounts, systemFirstRunAt, soonest, TimeZoneQuestion, type SystemResultView } from "../src/system-setup.js";
@@ -71,6 +71,18 @@ describe("what this Mac keeps about the church's system", () => {
     expect(readChurchSystem(JSON.stringify({ main: "b1", connection: { ...B1, church_id: "../x" } })).connection).toBeNull();
     expect(readChurchSystem(JSON.stringify({ main: "b1", connection: { ...B1, zone: "not a zone" } })).connection?.zone).toBeNull();
     expect(readChurchSystem(JSON.stringify({ main: "subsystem" })).main).toBeNull();
+  });
+
+  it("keeps \"Use a different system\" only while nothing is chosen, and only as true (polish 2026-11-21, item 7)", () => {
+    expect(readChurchSystem(JSON.stringify({ main: null, choosing: true }))).toEqual({ main: null, connection: null, genesis: null, choosing: true });
+    expect(readChurchSystem(JSON.stringify({ main: "b1", choosing: true }))).not.toHaveProperty("choosing");
+    expect(readChurchSystem(JSON.stringify({ main: null, choosing: "yes" }))).not.toHaveProperty("choosing");
+    const saved = new Map<string, string>();
+    const store = churchSystemStore({ getItem: k => saved.get(k) ?? null, setItem: (k, v) => { saved.set(k, v); } });
+    expect(store.set({ main: null, connection: null, genesis: null, choosing: true }).choosing).toBe(true);
+    // Choosing a system drops it from what is kept, not only from what is read.
+    store.set({ main: "breeze", connection: null, genesis: null, choosing: true });
+    expect(JSON.parse(saved.get("ozzie.church-system.v1")!)).not.toHaveProperty("choosing");
   });
 
   it("first run opens at connect, then the service, then never again", () => {

@@ -47,6 +47,12 @@ export interface ChurchSystemState {
   main: MainSystem | null;
   connection: SystemConnection | null;
   genesis: AlsoRead | null;
+  /**
+   * "Use a different system" was pressed and nothing is chosen yet: kept so a Mac that once used Planning Center (its
+   * settings still name the church) comes back to "What does your church use?" after a quit, never to Planning Center
+   * (polish 2026-11-21). Only while `main` is null; choosing a system drops it.
+   */
+  choosing?: true;
 }
 const KEY = "ozzie.church-system.v1";
 export const NO_SYSTEM: ChurchSystemState = Object.freeze({ main: null, connection: null, genesis: null });
@@ -77,7 +83,7 @@ export function readChurchSystem(raw: string | null): ChurchSystemState {
       zone: zoneOf(g.zone), ...(g.result_seen === true ? { result_seen: true } : {}),
     } : null;
     // A connection belongs to the main system it was made for; another main system's is never used.
-    return { main, connection: connection && connection.system === main ? connection : null, genesis };
+    return { main, connection: connection && connection.system === main ? connection : null, genesis, ...(main === null && r.choosing === true ? { choosing: true as const } : {}) };
   } catch { return { ...NO_SYSTEM }; }
 }
 type Store = Pick<Storage, "getItem" | "setItem">;
@@ -88,7 +94,9 @@ export function churchSystemStore(store: Store | null = browser()) {
   return {
     get,
     set(next: ChurchSystemState): ChurchSystemState {
-      try { store?.setItem(KEY, JSON.stringify(next)); } catch { /* per-device convenience only */ }
+      // `choosing` is kept only while nothing is chosen (undefined is left out of the JSON).
+      const kept = { ...next, choosing: next.main === null && next.choosing === true ? true : undefined };
+      try { store?.setItem(KEY, JSON.stringify(kept)); } catch { /* per-device convenience only */ }
       return get();
     },
   };

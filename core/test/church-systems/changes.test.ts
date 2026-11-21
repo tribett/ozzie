@@ -17,7 +17,7 @@ const record = (c: SystemCapture, now = NOW) => recordSystemCheck(c, built(c, no
 /** A record apart from when its check finished, as the schedule compares two (proactive.ts `sameFacts`). */
 const facts = (r: SundayCheckRecord) => JSON.stringify({ ...r, completed_at: "" });
 /** What a brief shows, apart from when anything was read (proactive.ts `shownPrint` leaves these out). */
-const READ_TIMES = new Set(["id", "why", "source", "checked_at", "check_time", "valid_until", "evaluated_at", "stale"]);
+const READ_TIMES = new Set(["id", "why", "source", "checked_at", "check_time", "valid_until", "evaluated_at", "stale", "role_facts"]);
 const shown = (c: SystemCapture, now = NOW) => JSON.stringify(steadyBrief(built(c, now)).findings, (k, v: unknown) => READ_TIMES.has(k) ? undefined : v);
 const reversed = <T>(list: readonly T[]) => [...list].reverse();
 

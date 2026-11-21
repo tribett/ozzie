@@ -28,7 +28,7 @@ import { NOT_OPENED, OPEN_PERSON, OPEN_PLAN, type PlanningCenterPage } from "./p
 import { activityLabel, TaskAccount } from "./activity-page.js";
 import { aiText, procedureTitle } from "./harness-words.js";
 import { ProcedureBody } from "./procedure-text.js";
-import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
+import { DayProvider, SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
 import { DayName, dayName } from "./day-phrases.js";
 import {
   LOOK_DRAFT, LOOK_FAILED, LOOK_NOT_COVERED, LOOK_NOT_LOOKED, LOOK_NOTE, LOOK_NOTHING, lookShortened, type AskTurn, type Look, type PeopleLabel,
@@ -57,6 +57,13 @@ export const CHECKING_LINE = "Checking Planning Center…";
 /** The launch's check of a saved sign-in had no answer after 20 seconds (review L6): said with "Check the connection". */
 export const STUCK_LINE = "Ozzie couldn't check Planning Center just now.";
 export const CHECK_CONNECTION = "Check the connection";
+/**
+ * A check whose only gap is facts about roles as the system lists them (core sunday-brief.ts `role_facts`): said as roles,
+ * never as a read that failed (polish 2026-11-21). "One role couldn't be checked", "2 roles couldn't be checked".
+ */
+export const rolesUnchecked = (roles: number) => roles === 1 ? "One role couldn't be checked" : `${roles} roles couldn't be checked`;
+/** That gap's facts on a brief, when that is its only gap; null otherwise. */
+export const roleFactsOf = (brief: Pick<SundayBrief, "findings"> | null | undefined) => brief?.findings.find(f => f.kind === "worth-a-look")?.role_facts ?? null;
 export const DRAFT_FOOTER = "Ozzie never sends messages. The AI sees stand-ins like [Volunteer A] instead of the names Ozzie reads from Planning Center.";
 
 /** Opens a Planning Center page by id (planning-center-pages.ts): App passes it for a real check, never the example. */
@@ -628,7 +635,8 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
   const [reason, setReason] = useState("");
   const [problem, setProblem] = useState("");
   const d = useDay();
-  const text = choiceText(d)[choice];
+  const w = useSystemWords();
+  const text = choiceText(d, w.name)[choice];
   return <form className="decide" onSubmit={e => {
     e.preventDefault();
     try { onSave(reason); } catch (error) { setProblem(error instanceof Error ? error.message : "That couldn't be saved."); }
@@ -636,7 +644,7 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
     <label className="field-l" htmlFor={id}>{text.question}</label>
     <input id={id} className="input" value={reason} maxLength={REASON_MAX} autoFocus placeholder={text.example}
       onChange={e => { setReason(e.target.value); setProblem(""); }} />
-    <p className="input-help">Kept on this Mac. It applies to {d.thisOne} only, and this comes back if Planning Center changes.</p>
+    <p className="input-help">Kept on this Mac. It applies to {d.thisOne} only, and this comes back if {w.name} changes.</p>
     {problem && <p role="alert" className="problem">{problem}</p>}
     <div className="find-next">
       <button type="submit" className="btn btn-primary btn-sm" disabled={!reason.trim()}>{text.save}</button>
@@ -646,7 +654,8 @@ export function DecisionForm({ choice, onSave, onCancel }: { choice: DecisionCho
 }
 
 function Earlier({ decision }: { decision: SundayDecision }) {
-  const text = choiceText(useDay());
+  // The church's own system ("covered outside Breeze"), as the card's buttons say it.
+  const text = choiceText(useDay(), useSystemWords().name);
   return <ul className="list earlier">
     {[...decision.earlier, decision].map(d => <li key={d.decided_at + d.reason}><Icon name="history" small />
       <span>Earlier, you said {text[d.choice].earlier} ({time(d.decided_at)}): “{d.reason}”</span></li>)}
@@ -842,6 +851,13 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       break;
     }
     default:
+      // Facts about roles as the system lists them (a role not tied to a service time): said as roles, each reason shown
+      // under the title; never "couldn't be checked" of a read that didn't fail, nor "Check again", which wouldn't help.
+      if (finding.role_facts) {
+        title = `${rolesUnchecked(finding.role_facts.roles)}.`;
+        body = `Ozzie won't call ${dayName(d)} covered until ${finding.role_facts.roles === 1 ? "that role" : "those roles"} can be checked.`;
+        break;
+      }
       title = finding.stale ? "This check is out of date." : `Part of ${d.thisOne} couldn't be checked.`;
       body = finding.stale ? `It was read ${checkedAt ? time(checkedAt) : "earlier"}, more than 30 minutes ago. Check ${w.name} again before relying on it.`
         // A church system's read that truly failed: which part is listed below, and what to do (round 4).
@@ -861,6 +877,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   return <article className={`find${finding.tone === "look" && item.state === "open" ? " is-look" : ""}${item.state === "reopened" ? " is-reopened" : ""}`}>
     <div className="find-top">{tag}{where}</div>
     <h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}</h3>
+    {finding.role_facts && <ul className="list role-facts">{finding.role_facts.reasons.map(r => <li key={r}><Icon name="question" small />{r}</li>)}</ul>}
     {body && <p className="find-body">{body}</p>}
     {item.state === "reopened" && item.decision && <div className="panel-warn reopen" role="note">
       <Icon name="history" />
@@ -1269,7 +1286,10 @@ export function SundayPage(props: {
   changes?: SundayChanges | null | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
-  const d = useDay();
+  // The check's own day: with several services watched each part's cards say their own service's day ("For this Wednesday
+  // only", "Not needed this Wednesday"), whatever day is around the page (polish 2026-11-21). A brief built by hand has none.
+  const around = useDay();
+  const d = brief?.day ?? around;
   const w = useSystemWords();
   // Never for the example, a saved check or another church system, whatever App passes.
   const changes = brief?.mode === "live" && w.system === "planning-center" && !brief.source ? props.changes ?? null : null;
@@ -1289,6 +1309,7 @@ export function SundayPage(props: {
   // Everything the page shows, counted as items: Services, rooms, follow-ups and group meetings (the sidebar and Today use the same count).
   const counts = view ? sundayShownCount(view, props.operations) : { decisions: 0, looks: 0, resolved: 0 };
   const incomplete = Boolean(brief && (brief.stale || brief.findings.some(f => f.kind === "worth-a-look")));
+  const roleFacts = roleFactsOf(brief);
   // A system that doesn't share how many people a role needs (Breeze): Ozzie can't call the service covered, so the page
   // says that once and shows who is on each role (round 4).
   const roster = brief?.roster && brief.roster.roles.length > 0 && brief.roster.roles.every(r => r.needed === null) ? brief.roster : null;
@@ -1323,7 +1344,7 @@ export function SundayPage(props: {
   const partId = useId();
   const Root = part ? "section" : "div";
   const untimed = part && d.date ? `${d.date}${brief?.times?.length === 1 ? ` at ${clock(brief.times[0]!)}` : ""}` : null;
-  return <UntimedWhen.Provider value={untimed}><Root className={part ? "stack service-part" : "col"} {...(part ? { "aria-labelledby": partId } : {})}>
+  return <DayProvider value={d}><UntimedWhen.Provider value={untimed}><Root className={part ? "stack service-part" : "col"} {...(part ? { "aria-labelledby": partId } : {})}>
     {/* The plan's own title from Planning Center, after its date as the plan picker shows it (click-through, 2026-11-19:
         added to the lede, it read as a sentence of its own). In its own case, and wrapped whole when long. */}
     <p className="eyebrow">{dateText}{timeText && ` · ${timeText}`}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
@@ -1332,7 +1353,7 @@ export function SundayPage(props: {
     {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />Saved copy of the check from {time(brief.completed_at)}. This is not a current check.</p>}
     {/* The fictional example's band is across the top of every page (App.tsx ExampleBand); the line below still says it. */}
     {brief && <p className="lede">
-      {brief.stale ? "This check is out of date, so it isn't a current picture. " : incomplete ? `Part of ${d.thisOne} couldn't be checked, so this isn't a full picture. ` : ""}
+      {brief.stale ? "This check is out of date, so it isn't a current picture. " : incomplete ? `${roleFacts ? rolesUnchecked(roleFacts.roles) : `Part of ${d.thisOne} couldn't be checked`}, so this isn't a full picture. ` : ""}
       {/* The facts first, the limit on a quieter line of its own below (round 5). */}
       {roster ? `${rosterSummary(roster)} ${
         counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `
@@ -1389,5 +1410,5 @@ export function SundayPage(props: {
         <ul className="list">{brief.not_checked_more!.map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul></details>}
     </section>}
     {brief && props.last}
-  </Root></UntimedWhen.Provider>;
+  </Root></UntimedWhen.Provider></DayProvider>;
 }

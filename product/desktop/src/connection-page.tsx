@@ -388,7 +388,8 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
     {(onCheckSetup || onSetup) && <section className="settings-sec" aria-labelledby="check-setup">
       <h2 id="check-setup" className="h3" tabIndex={-1} ref={at("check-setup")}>Check my setup</h2>
       <div className="find">
-        <p className="find-body">{CHECK_SETUP_BODY}</p>
+        {/* The church's own system; neutral before one is chosen (polish 2026-11-21). */}
+        <p className="find-body">{w.say(CHECK_SETUP_BODY)}</p>
         <div className="find-next">
           {onCheckSetup && <button type="button" className="btn btn-secondary btn-sm" onClick={onCheckSetup}>Check my setup</button>}
           {onSetup && <button type="button" className="btn btn-quiet btn-sm" onClick={onSetup}>Walk through setup again</button>}

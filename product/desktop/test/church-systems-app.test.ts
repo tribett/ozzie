@@ -181,6 +181,16 @@ describe("a fresh Mac that hasn't chosen what its church uses (round 5)", () => 
     await app.go("Settings");
     expect(dom.seen()).toContain("No church system connected yet. Ozzie reads Planning Center, B1 Church, Breeze or Genesis");
     expect(dom.seen()).not.toContain("Planning Center now.");
+    // AI help and Check my setup's line name no system yet (polish 2026-11-21, item 7).
+    expect(dom.seen()).toContain("Whichever you choose, the AI never sees the names Ozzie reads from your church's system.");
+    expect(dom.seen()).toContain("See at a glance whether your church's system, the service Ozzie watches, AI, notices and starting with this Mac are working");
+    expect(dom.seen()).not.toContain("names Ozzie reads from Planning Center");
+    expect(dom.seen()).not.toContain("whether Planning Center, the service Ozzie watches");
+    // Church rules' first lines too: the scheduled lead is typed as it appears in the church's own system.
+    await app.go("Church rules");
+    expect(dom.seen()).toContain("These are your church's choices. Changing one updates the Services page right away using what was already read. Nothing in your church's system changes.");
+    expect(dom.seen()).toContain("or type its name as it appears in your church's system. A team leader in your church's system isn't the same as someone scheduled to lead.");
+    expect(dom.seen()).not.toContain("as it appears in Planning Center");
   }, 60_000);
 });
 
@@ -407,6 +417,36 @@ describe("a Mac set up on B1 Church, opened again", () => {
     await app.waitFor("What does your church use?");
     expect(dom.seen()).toContain("No church system connected yet");
     expect(dom.seen()).not.toContain("Planning Center not connected");
+    // Quit before choosing, then open Ozzie again: still choosing, never back on Planning Center (polish 2026-11-21, item 7).
+    expect(JSON.parse(storage.getItem("ozzie.church-system.v1")!)).toMatchObject({ main: null, choosing: true });
+    await unmount?.(); unmount = null;
+    vi.resetModules();
+    // A saved Planning Center check from before the switch is never shown while it chooses (review of the polish, L2).
+    native.pcSaved = withFictionalOperations(nov22Capture());
+    native.calls = [];
+    const again = await launch();
+    await again.waitFor("What does your church use?");
+    expect(native.calls.map(([c]) => c)).not.toContain("load_sunday_recording");
+    expect(dom.seen()).not.toContain("Checking Planning Center");
+    expect(dom.seen()).toContain("No church system connected yet");
+    expect(dom.seen()).not.toContain("Planning Center not connected");
+    expect(dom.seen()).not.toContain("Connect Planning Center");
+    expect(JSON.parse(storage.getItem("ozzie.church-system.v1")!)).toMatchObject({ main: null, choosing: true });
+    // Choosing a system ends it.
+    await again.press("B1 Church");
+    expect(dom.seen()).toContain("Connect B1 Church");
+    const chosen = JSON.parse(storage.getItem("ozzie.church-system.v1")!) as Record<string, unknown>;
+    expect(chosen.main).toBe("b1");
+    expect(chosen).not.toHaveProperty("choosing");
+  }, 60_000);
+
+  it("a Mac on Planning Center that never pressed Use a different system still opens on Planning Center (polish 2026-11-21, item 7)", async () => {
+    kept.set("ozzie.settings.v1", JSON.stringify({ clientId: "", organization: "1001", serviceTypeId: "8001", planId: "9001" }));
+    native.pcStatus = { state: "disconnected", organization: "", checked_at_ms: null, source: "", problem: null };
+    await launch();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(JSON.parse(storage.getItem("ozzie.church-system.v1")!)).toMatchObject({ main: "planning-center" });
+    expect(dom.seen()).not.toContain("What does your church use?");
   }, 60_000);
 
   it("after a switch from Planning Center, nothing of a saved Planning Center check shows beside B1 Church's", async () => {

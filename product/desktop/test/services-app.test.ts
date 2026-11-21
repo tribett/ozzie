@@ -14,6 +14,8 @@ const ORG = "1001";
 const native = vi.hoisted(() => ({
   status: null as Record<string, unknown> | null, pick: null as unknown, calls: [] as [string, Record<string, unknown>][],
   recordings: [] as { organization: string; plan_id: string; completed_at: string; path_id: string }[],
+  /** Youth Night's teams with ids of their own, as Planning Center gives each service type its own teams (same roles). */
+  ownTeams: false,
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args: Record<string, unknown> = {}) => {
@@ -29,7 +31,8 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "check_sunday": {
         const plan = String(args.planId);
         // The first service is the fictional Sunday; Youth Night's plan is the fictional Wednesday, of its own service type.
-        const base = plan === "92902197" ? nov22Capture() : { ...wednesdayCapture(), service_type_id: String(args.serviceTypeId) };
+        const wednesday = native.ownTeams ? JSON.parse(JSON.stringify(wednesdayCapture()).replace(/"75933(5[024])"/gu, '"86044$1"')) as ReturnType<typeof wednesdayCapture> : wednesdayCapture();
+        const base = plan === "92902197" ? nov22Capture() : { ...wednesday, service_type_id: String(args.serviceTypeId) };
         const c = { ...base, plan_id: plan, completed_at: new Date().toISOString() };
         native.recordings.unshift({ organization: ORG, plan_id: plan, completed_at: c.completed_at, path_id: `sunday-${ORG}-${plan}-${Date.now()}.json` });
         return c;
@@ -69,7 +72,7 @@ const CONNECTED = { state: "connected", organization: ORG, checked_at_ms: Date.p
 
 let unmount: (() => Promise<void>) | null = null;
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-11-20T15:00:00Z")); native.status = null; native.pick = null;
-  native.calls = []; native.recordings = []; kept.clear(); });
+  native.calls = []; native.recordings = []; native.ownTeams = false; kept.clear(); });
 afterEach(async () => { await unmount?.(); unmount = null; vi.useRealTimers(); });
 
 type Mounted = { settle: (n?: number) => Promise<void>; act: (f: () => Promise<void>) => Promise<void> };
@@ -159,6 +162,11 @@ describe("watching more than one service (owner decision 2026-11-19)", () => {
     expect(heads).toEqual(["Sunday Morning", "Youth Night"]);
     expect(page.indexOf("Sunday Morning")).toBeLessThan(page.indexOf("Youth Night"));
     expect(page).toContain("Room bookings and group meetings aren't checked for this service. Follow-ups without an owner are shown with Sunday Morning.");
+    // Each service's cards say its own day under More choices (polish 2026-11-21, item 2).
+    const youth = page.slice(page.indexOf("Youth Night", page.indexOf("Sunday Morning") + 1));
+    expect(page.slice(0, page.indexOf("Youth Night", page.indexOf("Sunday Morning") + 1))).toContain("For this Sunday only:Covered outside Planning CenterNot needed this Sunday");
+    expect(youth).toContain("For this Wednesday only:Covered outside Planning CenterNot needed this Wednesday");
+    expect(youth).not.toContain("this Sunday");
     // What the check is and when it was read is said once, above both services, with the one Check button.
     expect(page.match(/Live read from Planning Center Services/gu)).toHaveLength(1);
     expect(page.indexOf("Live read from Planning Center Services")).toBeLessThan(page.indexOf("Sunday Morning"));
@@ -194,6 +202,36 @@ describe("watching more than one service (owner decision 2026-11-19)", () => {
     expect(t).toContain(`${single} things need a decision for Sunday, November 22.`);
     expect(t).toContain(`And ${both - single} more for Youth Night on Wednesday, November 25, so your services have ${both} things to decide in all.`);
     expect(t).toContain("You'll see every service on the Services page.");
+  }, 120_000);
+
+  it("Church rules and the kids question name each team's service, so two teams with the same roles are told apart (polish 2026-11-21, item 1)", async () => {
+    native.ownTeams = true;
+    const app = await oneService();
+    await go(app, "Church rules");
+    // One service: the teams as before, with no service named.
+    expect(dom.seen()).toContain("Greeter team");
+    expect(dom.seen()).not.toContain("Greeter team ·");
+    await go(app, "Services");
+    native.pick = pickReply(SUNDAY_MORNING, YOUTH_NIGHT);
+    await press(app, "Watch another service");
+    await waitFor(app, "Watch Youth Night");
+    await press(app, "Watch Youth Night");
+    await youthRead(app);
+    await go(app, "Church rules");
+    const rules = dom.seen();
+    // Scheduled leads and Kids teams: every team row says its service; none reads the same as another.
+    for (const label of ["Greeter team · Sunday Morning", "Greeter team · Youth Night", "Nursery team · Sunday Morning", "Nursery team · Youth Night"]) {
+      expect(rules, label).toContain(label);
+    }
+    const labels = nodes().filter(n => n.tagName === "LABEL").map(n => n.textContent).filter(t => / team(?: ·|$)/u.test(t));
+    expect(labels).toContain("Greeter team · Youth Night");
+    expect(labels).toContain("Greeter team · Youth Night serves with kids");
+    expect(labels).toContain("Greeter team · Sunday Morning serves with kids");
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.some(t => /^Greeter team(?: serves with kids)?$/u.test(t))).toBe(false);
+    // The kids question on the Services page says which service's Nursery it asks about.
+    await go(app, "Services");
+    expect(dom.seen()).toMatch(/Does Nursery \((?:Sunday Morning|Youth Night)\) serve with kids\?/u);
   }, 120_000);
 
   it("Stop watching says what it forgets, deletes only that service's saved checks, and the count goes back", async () => {

@@ -18,7 +18,7 @@ import { CELLS_CUT, GUESSED_LETTERS, readFrom, ROWS_CUT, SAME_NAME, SOURCE_PROBL
 import { plainLine } from "../../../core/src/sources/text.js";
 import { useChurchSources, type ChurchSources, type SourceRead } from "./church-sources.js";
 import { LINK_TITLE, LinkForm } from "./church-link-form.js";
-import { ListsSystemName, sayFor } from "./church-notes.js";
+import { ListsSystemName, ListsTeamServices, sayFor, teamNames } from "./church-notes.js";
 import { ChurchNotes } from "./church-notes.js";
 import { Icon } from "./icons.js";
 import "./church-lists.css";
@@ -84,12 +84,8 @@ const linkHost = (shown: string) => shown.endsWith("/•••") ? shown.slice(0
 /** Folded for find: case, accents and spacing ignored. */
 const fold = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim();
 
-/** A team as Church rules name it, by its positions' names in the last check (Ozzie doesn't read team names). */
-export function teamNames(positions: readonly PositionLabel[]): Map<string, string> {
-  const names = new Map<string, string[]>();
-  for (const p of positions) names.set(p.team_id, [...new Set([...(names.get(p.team_id) ?? []), p.name])]);
-  return new Map([...names].map(([team, list]) => [team, `${list.join(", ")} team`]));
-}
+/** A team as Church rules name it (church-notes.tsx): by its positions' names, and its service with more than one watched. */
+export { teamNames } from "./church-notes.js";
 /** What a match says, in words: the whole team, or one position on it. */
 export function matchText(match: SourceMatch, teams: ReadonlyMap<string, string>): string {
   const team = teams.get(match.team_id);
@@ -110,7 +106,8 @@ function MatchTable({ sheet, source, positions, onMatches }: {
 }) {
   const values = useMemo(() => columnValues(sheet, source.column ?? ""), [sheet, source.column]);
   const targets: MatchTarget[] = useMemo(() => positions.map(p => ({ team_id: p.team_id, name: p.name, position_id: p.position_id })), [positions]);
-  const teams = useMemo(() => teamNames(positions), [positions]);
+  const services = useContext(ListsTeamServices);
+  const teams = useMemo(() => teamNames(positions, services), [positions, services]);
   const suggestions = useMemo(() => new Map(suggestMatches(values, targets).map(s => [s.value, s])), [values, targets]);
   // The choices: each team in the last check, as a whole and by each of its positions' names.
   const choices = useMemo(() => [...teams].map(([team_id, name]) => ({

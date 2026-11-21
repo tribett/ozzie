@@ -6,6 +6,7 @@
 // comes from closed codes; native's label, a key or anything a company wrote is never shown.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./icons.js";
+import { useSystemWords } from "./church-system.js";
 import { AI, aiLine, CHOICE, LIMIT, localModel, MAC, monthDay, OLLAMA, OZZIE } from "./ai-words.js";
 import { AiPlaceContext, Ok, Problem, Quiet, Sheet, SentSheet, Status, type AiPlace } from "./ai-parts.js";
 import { AiFlow, type AiStep } from "./ai-choice.js";
@@ -29,6 +30,8 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
    */
   onAnswer?: ((how: "chosen" | "none") => void) | undefined;
 }) {
+  // The church's own system where AI help names Planning Center as where names come from; neutral before one is chosen.
+  const say = useSystemWords().say;
   const bridge = onboarding;
   const limitId = useId();
   const [status, setStatus] = useState<ModelStatus | null>(null);
@@ -194,7 +197,7 @@ export function AiSettings({ onChange, onAnswer, labelledBy, onCheckSetup }: {
     <Status text={keyStays ? LIMIT.noneOwn(many) : note} />
     {planLink && <div className="ai-actions"><button type="button" className="btn btn-secondary" onClick={seePlan}>{OZZIE.seePlan}</button></div>}
     {loaded !== "loading" && <div className="ai-head">
-      <p className="ai-small">{AI.namesLine}</p>
+      <p className="ai-small">{say(AI.namesLine)}</p>
       <Quiet onClick={() => setSent(true)}>{AI.seeSent}</Quiet>
     </div>}
     {sent && <SentSheet onClose={() => setSent(false)} />}

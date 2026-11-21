@@ -13,6 +13,7 @@ import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { FindingFeedback, useFeedback, type FeedbackControls, type FeedbackSource } from "./finding-feedback.js";
 import { granted, type ConnectionStatus } from "./connection.js";
 import { Icon } from "./icons.js";
+import { teamLabel, useTeamServices } from "./team-labels.js";
 
 type Names = Readonly<Record<string, string>>;
 const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -195,6 +196,8 @@ export function ChurchReadsRules({ rules, onChange, capture, status }: {
   const on = formsOn(rules), watched = watchedForms(rules);
   const listed = facts.forms?.listed ?? [];
   const teams = kidsTeams(rules);
+  // With more than one service watched, each kids team says its service, so two with the same roles are told apart.
+  const services = useTeamServices();
   const matches = roomMatches(rules);
   const rooms = facts.checkIns?.rooms ?? [];
   const events = facts.checkIns?.events ?? [];
@@ -237,7 +240,7 @@ export function ChurchReadsRules({ rules, onChange, capture, status }: {
       </div>}
       {facts.checkIns && !teams.length && <p className="small">Mark a kids team above to compare a Check-Ins room with it.</p>}
       {facts.checkIns && teams.map(t => <div key={t.team_id} className="row rule-row">
-        <label htmlFor={`checkins-room-${t.team_id}`}>{t.name ? `${t.name} team` : "A kids team"}</label>
+        <label htmlFor={`checkins-room-${t.team_id}`}>{t.name ? teamLabel(t.name, t.team_id, services) : "A kids team"}</label>
         <select id={`checkins-room-${t.team_id}`} className="input" value={roomFor(t.team_id)} onChange={e => setRoom(t.team_id, e.target.value)}>
           <option value="">Not matched</option>
           {rooms.map(r => <option key={r.location_id} value={r.location_id}>{r.name ?? "Unnamed room"}{events.length > 1 && r.event ? ` (${r.event})` : ""}</option>)}

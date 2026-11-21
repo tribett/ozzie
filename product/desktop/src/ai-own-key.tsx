@@ -4,6 +4,7 @@
 // verdict. This page shows the verdict's own sentence and nothing a company wrote.
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons.js";
+import { useSystemWords } from "./church-system.js";
 import { useDay } from "./day-words.js";
 import { AI, COMPANIES, COMPANY as COMPANY_WORDS, KEY, keySaid, OWN, type KeyStep } from "./ai-words.js";
 import { InUseTag, Ok, Problem, Quiet, Screen, SentSheet, Status, useAiPlace, type InUse } from "./ai-parts.js";
@@ -109,6 +110,8 @@ export function KeyScreen({ provider: first, onBack, onLater, onModel, onDone, d
   /** The company list, and AI on this Mac: the ways on when this company can't take the key (review F3). */
   onCompanies?: () => void; onMac?: () => void;
 }) {
+  // The church's own system where AI help names Planning Center as where names come from; neutral before one is chosen.
+  const say = useSystemWords().say;
   const { bridge } = useAiPlace();
   const day = useDay();
   const providers = useProviders();
@@ -227,7 +230,7 @@ export function KeyScreen({ provider: first, onBack, onLater, onModel, onDone, d
     {pageProblem && <Problem text={AI.browserFailed} calm />}
     {provider !== "other" && <p className="ai-body">{KEY.cost(provider, info?.typical_month ?? null)}</p>}
     <div className="ai-head">
-      <p className="ai-body">{KEY.sends(provider, day.day, info?.retention_line ?? null)}</p>
+      <p className="ai-body">{say(KEY.sends(provider, day.day, info?.retention_line ?? null))}</p>
       <Quiet onClick={() => setSent(true)}>{AI.seeSent}</Quiet>
     </div>
     {!works && <p className="ai-body">{viaClipboard ? KEY.askClipboard : KEY.askWindow}</p>}

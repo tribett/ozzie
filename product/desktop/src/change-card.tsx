@@ -11,7 +11,7 @@ import type { Finding } from "../../../core/src/sunday-brief.js";
 import { Icon } from "./icons.js";
 import { NOT_OPENED, OPEN_PLAN, type PlanningCenterPage } from "./planning-center-pages.js";
 import {
-  addButton, adding, backgroundFact, changes, CHECKING, CLOSE, CONFIRM_EXPIRED, confirmChecked, confirmPlace, confirmTitle, confirmUndo, confirmUntil,
+  addButton, adding, backgroundFact, changes, CHECKING, CLOSE, CONFIRM_EXPIRED, confirmChecked, confirmPlace, confirmPlaceBack, confirmTitle, confirmUndo, confirmUndoEnds, confirmUntil,
   confirmWaiting, despiteChoice, despiteHelp, dontAdd, firstName, HIDE, HISTORY_NONE, HISTORY_TITLE, HISTORY_WHO, historyLine, KIDS_MARKED, KIDS_NOT_ADVISED,
   kidsAdvice, LOOK_AGAIN, made, mayTryUndoAgain, NO_PEOPLE_YET, notKnown, outcomeSentence, PREPARE_FAILED, RECHECK_FAILED, RECHECKING, refusalOf,
   planWords, refusalSentence, selectFirst, sundayLabel, SWITCH_LABEL, SWITCH_TITLE, switchBody, switchOff, switchProblem, takeOff, takingOff,
@@ -387,7 +387,12 @@ export function ChangeCard({ open, control, zone, now = () => Date.now() }: { op
     {confirmPlace(name, p.position, p.still_needed) && <p>{confirmPlace(name, p.position, p.still_needed)}</p>}
     <p className="small change-checked"><Icon name="check" small /><span>{confirmChecked(checkedClock(p.checked_at), name)}</span></p>
     <p>{confirmUndo(name)}</p>
-    {!expired && <p className="small">{confirmUntil(checkedClock(p.expires_at), name)}</p>}
+    {/* The rest, in the app's own fold (polish 2026-11-21): what ends the undo, and how long this confirmation holds. */}
+    <details className="listen-more change-more"><summary><Icon name="chev" small />See how this works</summary>
+      {p.still_needed > 0 && <p className="small">{confirmPlaceBack(name)}</p>}
+      <p className="small">{confirmUndoEnds(name)}</p>
+      {!expired && <p className="small">{confirmUntil(checkedClock(p.expires_at), name)}</p>}
+    </details>
     {expired
       ? <div className="stack-tight"><p role="alert" className="change-expired">{CONFIRM_EXPIRED}</p>
         <div className="find-next change-actions">
@@ -468,18 +473,31 @@ export function ChangeResults({ slot }: { slot: ChangeSlot }) {
   </section>;
 }
 
-/** Settings: the switch for the church in use (App shows it only while Planning Center is connected and is the church's system). */
+/**
+ * Settings: the switch for the church in use (App shows it only while Planning Center is connected and is the church's
+ * system). One sentence, the switch, then what a leader needs to know before turning it on, always in view: each change
+ * needs their yes, unconfirmed with the request waiting, one person at a time, never on its own or from an AI, the kids
+ * teams advice and where it applies, and the reminders caveat. How undo ends, which church it's for and People access
+ * are under See how this works; People access stays in view while the sign-in doesn't include it.
+ */
 export function ChangesSwitch({ control, church, people }: { control: ChangesControl; church: string | null; people: boolean }) {
   const body = switchBody(church);
+  const needPeople = <p className="small">{body.people} {NO_PEOPLE_YET}</p>;
   return <section className="find changes-switch" aria-labelledby="changes-title">
     <h3 id="changes-title" className="settings-t">{SWITCH_TITLE}</h3>
     {/* Said while it's off (onboarding spec §0.2, form B builds): nothing changes in Planning Center until it's turned on. */}
     {control.status && !control.on && <p className="find-body">{switchOff(church)}</p>}
-    <p className="find-body">{body.what}</p>
+    <p className="find-body">{body.lead}</p>
     <label className="confirmation"><input type="checkbox" checked={control.on} disabled={control.working || !control.status}
       onChange={e => control.set(e.target.checked)} /><span>{SWITCH_LABEL}</span></label>
-    {[body.reminders, body.confirm, body.kids, body.kidsWhere, body.church].map(line => <p key={line} className="small">{line}</p>)}
-    <p className="small">{body.people}{people ? "" : ` ${NO_PEOPLE_YET}`}</p>
+    <ul className="list changes-facts">{[body.confirm, body.waiting, body.one, body.never, `${body.kids} ${body.kidsWhere}`, body.reminders]
+      .map(line => <li key={line}><Icon name="dot" small /><span>{line}</span></li>)}</ul>
+    {!people && needPeople}
+    <details className="listen-more changes-more"><summary><Icon name="chev" small />See how this works</summary>
+      <p className="small">{body.undo}</p>
+      <p className="small">{body.church}</p>
+      {people && <p className="small">{body.people}</p>}
+    </details>
     {control.problem && <p role="alert" className="problem">{control.problem}</p>}
   </section>;
 }

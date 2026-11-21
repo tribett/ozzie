@@ -233,9 +233,34 @@ describe("Worth a look and What I didn't check", () => {
     ]));
   });
 
-  it("rooms and follow-ups are left to the operations check; Groups events are named as unchecked", () => {
+  it("a check whose only gap is a role not tied to a service time says it as that role, never as a failed read (polish 2026-11-21, item 6)", () => {
+    const untimed = () => {
+      const c = nov22Capture();
+      const members = c.reads.find(r => r.collection === "team_members")!.body!.data as { id: string; relationships: Record<string, { data: unknown }> }[];
+      members.find(m => m.id === "403")!.relationships.times = { data: [] };
+      return c;
+    };
+    const look = (c: ReturnType<typeof nov22Capture>, now = NOW) => buildSundayBrief(c, rules, now).findings.find(f => f.kind === "worth-a-look");
+    expect(look(untimed())?.role_facts).toEqual({ roles: 1, reasons: [
+      "Lyrics isn't tied to a service time in Planning Center, so Ozzie can't tell when it serves. Set the role's time in Planning Center to have it checked.",
+      "Ozzie couldn't tell from Planning Center who said yes for Lyrics, or when they serve.",
+    ] });
+    // A read that failed, or a check out of date, is never said as roles alone.
+    const failed = untimed();
+    failed.reads = failed.reads.map(r => r.collection === "person_blockouts" ? { ...r, outcome: "timeout" as const } : r);
+    expect(look(failed)?.unread?.length).toBeGreaterThan(0);
+    expect(look(failed)?.role_facts).toBeUndefined();
+    expect(look(untimed(), "2026-11-20T16:30:00Z")?.stale).toBe(true);
+    expect(look(untimed(), "2026-11-20T16:30:00Z")?.role_facts).toBeUndefined();
+    // Every read complete and no role in question: no such note at all.
+    expect(look(nov22Capture())).toBeUndefined();
+  });
+
+  it("rooms and follow-ups are left to the operations check; group events are named as unchecked", () => {
     const text = buildSundayBrief(nov22Capture(), rules, NOW).not_checked.join(" ");
-    expect(text).toContain("Groups events weren't part of this check.");
+    expect(text).toContain("Group events weren't part of this check.");
+    // Polish 2026-11-21: "Groups events" was a typo on What I didn't check.
+    expect(text).not.toContain("Groups events");
     expect(text).not.toContain("rooms");
   });
 });

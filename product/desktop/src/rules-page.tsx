@@ -6,6 +6,7 @@ import type { Skill } from "../../../core/src/harness/contract.js";
 import { Icon } from "./icons.js";
 import { churchList } from "./connection.js";
 import { KidsTeamsRules } from "./kids-rules-section.js";
+import { teamLabel, useTeamServices } from "./team-labels.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import { FromYourCards, useFeedback } from "./finding-feedback.js";
 import { useDay } from "./day-words.js";
@@ -78,6 +79,9 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   const roomRule = (id: string) => roomRules(rules).find(r => r.room_id === id);
   const setRoom = (id: string, next: { setup_minutes: number } | null) => onChange(withRoomRule(rules, id, next));
   const teams = [...new Map(positions.map(p => [p.team_id, positions.filter(x => x.team_id === p.team_id).map(x => x.name)])).entries()];
+  // With more than one service watched, each team says its service ("Greeter team · Youth Night"): two services' teams
+  // with the same roles are told apart (polish 2026-11-21).
+  const services = useTeamServices();
   // What the person typed, untrimmed, so a space between words survives; the rule itself is stored trimmed.
   const [typed, setTyped] = useState<Record<string, string>>({});
   const leadFor = (team: string) => rules.sundayLeads.find(l => l.team_id === team)?.lead_position ?? "";
@@ -114,11 +118,12 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     </section>
     <section className="find">
       <h2 className="h3">{d.kind === "weekday" ? `${d.day} leads` : "Scheduled leads"}</h2>
-      <p className="find-body">If a team should always have a scheduled lead on {dayName(d)}, choose the lead's position from the team's positions, or type its name as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.</p>
+      {/* Neutral before a church has said what it uses (polish 2026-11-21); Planning Center's own words once it has. */}
+      <p className="find-body">{w.say(`If a team should always have a scheduled lead on ${dayName(d)}, choose the lead's position from the team's positions, or type its name as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.`)}</p>
       {teams.length === 0 && <p className="small">Check {SERVICES} first to see their teams.</p>}
       {teams.map(([team, positionNames]) => <div className="rule-team" key={team}>
         <div className="row rule-row">
-          <label htmlFor={`lead-${team}`}>{positionNames.join(", ")} team</label>
+          <label htmlFor={`lead-${team}`}>{teamLabel(positionNames.join(", "), team, services)}</label>
           {/* The team's position names from the last check, offered as choices; typing another name still works. */}
           <input id={`lead-${team}`} list={`lead-options-${team}`} autoComplete="off" value={typed[team] ?? leadFor(team)} placeholder="No scheduled lead required"
             onChange={e => setLead(team, e.target.value)} />
@@ -127,7 +132,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
         {leaderText(team) && <p className="small rule-note">{leaderText(team)}</p>}
       </div>)}
     </section>
-    <KidsTeamsRules rules={rules} onChange={onChange} teams={teams} words={d} />
+    <KidsTeamsRules rules={rules} onChange={onChange} teams={teams} words={d} services={services} />
     {church}
     <section className="find rule-rooms">
       <h2 className="h3">Rooms</h2>

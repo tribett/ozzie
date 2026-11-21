@@ -8,7 +8,7 @@ import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-de
 import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../core/src/harness/responsibilities.js";
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { Icon } from "./icons.js";
-import { backgroundTitle, fewConfirmedTitle } from "./sunday-page.js";
+import { backgroundTitle, fewConfirmedTitle, rolesUnchecked } from "./sunday-page.js";
 import { keptLines } from "./responsibility-words.js";
 import type { NoticedItem } from "./responsibility-runner.js";
 import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
@@ -35,7 +35,8 @@ export function sundayReadyLine(f: Finding, names: Names, d: DayWords = SUNDAY_W
     case "too-few-confirmed": return fewConfirmedTitle(f);
     case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
     case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} at ${blockoutTime(f) ? "that time" : "those times"}. ${f.source ?? "Planning Center"} still counts them.`;
-    case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.` : `Part of ${d.thisOne} couldn't be checked, so it isn't a full picture.`;
+    case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
+      : f.role_facts ? `${rolesUnchecked(f.role_facts.roles)}, so it isn't a full picture.` : `Part of ${d.thisOne} couldn't be checked, so it isn't a full picture.`;
     default: return f.why[0] ?? "Something else is worth a look.";
   }
 }

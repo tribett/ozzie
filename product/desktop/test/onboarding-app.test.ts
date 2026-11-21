@@ -24,7 +24,9 @@ describe("App's onboarding wiring", () => {
     // a church already connected is in the browser (review item 7; both in read-more-app.test.ts).
     // A church on B1 Church, Breeze or Genesis opens at its own first unmet fact (decision 21; Genesis, round 5).
     expect(app).toContain('const setupAt = setup === "auto" || fictional || addingAccess || reconnecting ? null : setupFor();');
-    expect(app).toContain("const setupFor = (): FirstRunScreen | null => onSystem ? systemSetup : onGenesis ? genesisSetup : firstRunScreen(facts);");
+    // A Mac that pressed "Use a different system" and quit before choosing opens at the choice (polish 2026-11-21, item 7).
+    expect(app).toContain("const setupFor = (): FirstRunScreen | null => onSystem ? systemSetup : onGenesis ? genesisSetup\n"
+      + "    : sys.state.main === null && sys.state.choosing && !isConnected(status) ? \"first\" : firstRunScreen(facts);");
     expect(app).toMatch(/\{askShown && <div className="small side-ai"><AiLine /u);
     expect(app).toMatch(/\{askShown && <button type="button" ref=\{askEntry\}/u);
     expect(app).toContain("const askShown = resultSeen || setup === null;");

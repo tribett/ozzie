@@ -143,6 +143,8 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
     }
     default:
       return f.stale || stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
+        // Only facts about roles as the system lists them (sunday-brief.ts role_facts): said as roles, as the page says it.
+        : f.role_facts ? `${f.role_facts.roles === 1 ? "One role" : `${f.role_facts.roles} roles`} couldn't be checked, so Ozzie won't call ${ctx.name} covered.`
         : `Part of ${ctx.d.thisOne} couldn't be checked, so Ozzie won't call ${ctx.name} covered.`;
   }
 }

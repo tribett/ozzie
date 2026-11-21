@@ -3,10 +3,12 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { DecisionForm, DraftBox, LeaderNote, OperationsSection, SundayPage } from "../src/sunday-page.js";
-import { DayProvider } from "../src/day-words.js";
+import { DayProvider, SUNDAY_WORDS } from "../src/day-words.js";
+import { SystemWordsContext, systemWords } from "../src/church-system.js";
 import { wednesdayCapture, wednesdayWords, WEDNESDAY_TITLE } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { twoTimes } from "../../../core/test/fixtures/service-days/two-times.js";
 import { RulesPage } from "../src/rules-page.js";
+import { sundayReadyLine } from "../src/sunday-ready.js";
 import { buildSundayBrief, teamLeaders, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
 import { nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
@@ -101,6 +103,61 @@ describe("Sunday page", () => {
     expect(t).toMatch(/More choices For this Sunday only: Covered outside Planning Center Not needed this Sunday/u);
   });
 
+  it("each service's cards say that service's own day, whatever day is around the page (polish 2026-11-21, item 2)", () => {
+    // Several services watched: a Wednesday service's part shown where the Sunday words are around it.
+    const wed = buildSundayBrief(wednesdayCapture(), rules, AT);
+    for (const part of [undefined, { name: "Youth Night", waiting: null }]) {
+      const t = text(renderToStaticMarkup(React.createElement(DayProvider, { value: SUNDAY_WORDS }, React.createElement(SundayPage, {
+        brief: wed, names: wednesdayCapture().names, busy: false, problem: "", sender: "Pat", connected: false, hasRecording: false, configured: false,
+        canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+        ...(part ? { part } : {}),
+      }))));
+      expect(t).toMatch(/More choices For this Wednesday only: Covered outside Planning Center Not needed this Wednesday/u);
+      expect(t).not.toContain("this Sunday");
+    }
+  });
+
+  it("a church on another system: the decision's words and its earlier answer name that system, never Planning Center", () => {
+    const covered = decide(brief().findings.find(f => f.kind === "needs-people" && f.position!.name === "Nursery")!, "covered-outside", "A parent is covering", AT);
+    const t = text(renderToStaticMarkup(React.createElement(SystemWordsContext.Provider, { value: systemWords("breeze") },
+      React.createElement(SundayPage, {
+        brief: brief(nov22LaterCapture()), names: nov22Capture().names, busy: false, problem: "", sender: "Pat", connected: false, hasRecording: false, configured: false,
+        canReword: false, decisions: [covered], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
+      }))));
+    expect(t).toContain("Earlier, you said covered outside Breeze");
+    expect(t).toContain("Covered outside Breeze");
+    expect(t).not.toContain("covered outside Planning Center");
+    const form = text(renderToStaticMarkup(React.createElement(SystemWordsContext.Provider, { value: systemWords("b1") },
+      React.createElement(DecisionForm, { choice: "covered-outside", onSave: () => undefined, onCancel: () => undefined }))));
+    expect(form).toContain("Kept on this Mac. It applies to this Sunday only, and this comes back if B1 Church changes.");
+    expect(text(renderToStaticMarkup(React.createElement(DecisionForm, { choice: "not-needed", onSave: () => undefined, onCancel: () => undefined }))))
+      .toContain("and this comes back if Planning Center changes.");
+  });
+
+  it("a role not tied to a service time: the card says which role couldn't be checked, with the reason in view (polish 2026-11-21, item 6)", () => {
+    const c = nov22Capture();
+    const members = c.reads.find(r => r.collection === "team_members")!.body!.data as { id: string; relationships: Record<string, { data: unknown }> }[];
+    members.find(m => m.id === "403")!.relationships.times = { data: [] };
+    const b = brief(c);
+    const html = page(b);
+    const t = text(html);
+    const reason = "Lyrics isn't tied to a service time in Planning Center, so Ozzie can't tell when it serves. Set the role's time in Planning Center to have it checked.";
+    // Title, then the plain reasons (not only under Why I flagged this), then what Ozzie won't call covered.
+    expect(t).toContain(`One role couldn't be checked. ${reason} Ozzie couldn't tell from Planning Center who said yes for Lyrics, or when they serve. Ozzie won't call Sunday covered until that role can be checked.`);
+    expect(html).toMatch(/<h3 class="find-title"[^>]*>One role couldn(?:&#x27;|')t be checked\.<\/h3><ul class="list role-facts"><li>/u);
+    expect(t).toContain("One role couldn't be checked, so this isn't a full picture.");
+    // Nothing implies a read failed, or that checking again would help.
+    expect(t).not.toContain("Part of this Sunday couldn't be checked");
+    expect(t).not.toContain("until every part is read");
+    expect(sundayReadyLine(b.findings.find(f => f.kind === "worth-a-look")!, {})).toBe("One role couldn't be checked, so it isn't a full picture.");
+    // A read that truly failed keeps its own words.
+    c.reads = c.reads.map(r => r.collection === "person_blockouts" ? { ...r, outcome: "timeout" as const } : r);
+    const failed = text(page(brief(c)));
+    expect(failed).toContain("Part of this Sunday couldn't be checked. Ozzie won't call Sunday covered until every part is read.");
+    expect(failed).toContain("Part of this Sunday couldn't be checked, so this isn't a full picture.");
+    expect(failed).not.toContain("One role couldn't be checked");
+  });
+
   it("uses no forbidden wording anywhere on the page", () => {
     // "not ranked" is the one allowed use: it says the list is unranked.
     for (const html of [page(brief(nov22LaterCapture()), [nurseryDecision()], fictionalOperations()), page(brief(), [nurseryDecision()]), page(brief(nov22Capture(), leadRules))])
@@ -193,7 +250,7 @@ describe("Sunday page", () => {
     expect(text(page(brief()))).toContain("Room bookings and follow-ups weren't part of this check.");
     const t = text(page(brief(), [], fictionalOperations()));
     expect(t).not.toContain("Room bookings and follow-ups weren't part of this check.");
-    expect(t).toContain("Groups events weren't part of this check.");
+    expect(t).toContain("Group events weren't part of this check.");
   });
 });
 

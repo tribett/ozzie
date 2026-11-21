@@ -65,6 +65,9 @@ body { background: #FAF6EE; }
 .oz .earlier li span { overflow-wrap: anywhere; }
 .oz .unread { margin-top: 10px; }
 .oz .unread .ic { color: var(--look); }
+/* A check's only gap is facts about roles (sunday-page.tsx role_facts): each plain reason right under the card's title. */
+.oz .role-facts { margin-top: 6px; }
+.oz .role-facts .ic { color: var(--look); }
 .oz .decide { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--sunken); }
 .oz .decide .input-help { margin-bottom: 0; }
 .oz .find-quote { overflow-wrap: anywhere; }
@@ -566,5 +569,10 @@ body { background: #FAF6EE; }
 .oz .change-result .find-body { color: var(--ink); }
 .oz .changes-switch .confirmation { font-weight: 600 !important; }
 .oz .changes-switch > p.small { margin-top: 6px; color: var(--ink-2); }
+/* What a leader needs before turning it on, as a short list under the switch; the rest in its fold (polish 2026-11-21). */
+.oz .changes-switch .changes-facts { margin-top: 8px; }
+.oz .changes-switch .changes-more { margin-top: 8px; }
+.oz .changes-switch .changes-more > p.small { margin-top: 6px; color: var(--ink-2); }
+.oz .change-card .change-more > p.small { margin-top: 4px; color: var(--ink-2); }
 .oz .change-part { white-space: nowrap; }
 .oz .change-recheck { margin-top: 12px; }

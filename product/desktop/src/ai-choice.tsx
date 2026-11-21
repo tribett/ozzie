@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SERVICES_PAGE } from "../../../core/src/service-day.js";
 import { AI, CHOICE } from "./ai-words.js";
+import { useSystemWords } from "./church-system.js";
 import { AiPlaceContext, InUseTag, Problem, Quiet, Screen, SentSheet, useAiPlace, type AiPlace, type InUse } from "./ai-parts.js";
 import { CompaniesScreen, KeyScreen, OwnScreen } from "./ai-own-key.js";
 import { ThisMacScreen } from "./ai-this-mac.js";
@@ -108,6 +109,8 @@ function ChooseScreen({ offer, inUse, held, refused, onOzzie, onOwn, onNone, non
   /** Settings mode's quiet way back: "Back to Today" over a page, "Back" in Settings' own AI section. */
   backLabel: string;
 }) {
+  // The church's own system where AI help names Planning Center as where names come from; neutral before one is chosen.
+  const say = useSystemWords().say;
   const [sent, setSent] = useState(false);
   const settings = useAiPlace().mode === "settings";
   const open = offer?.open && offer.price_text && offer.answers_text ? CHOICE.ozzieCost(offer.price_text, offer.answers_text) : null;
@@ -129,7 +132,7 @@ function ChooseScreen({ offer, inUse, held, refused, onOzzie, onOwn, onNone, non
     </ul>
     {noneFailed && <Problem text={CHOICE.noneFailed} />}
     <div className="ai-head">
-      <p className="ai-body">{AI.namesLine}</p>
+      <p className="ai-body">{say(AI.namesLine)}</p>
       <Quiet onClick={() => setSent(true)}>{AI.seeSent}</Quiet>
     </div>
     {!settings && <p className="ai-small">{CHOICE.small}</p>}

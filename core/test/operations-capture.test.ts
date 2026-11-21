@@ -119,9 +119,9 @@ describe("rooms, follow-ups and group meetings from the capture", () => {
       expect(brief.sources).toEqual(plain.sources);
       expect(brief.findings.map(f => f.key)).toEqual(plain.findings.map(f => f.key));
       expect(brief.status).toBe(plain.status);
-      expect(brief.not_checked).not.toContain("Groups events weren't part of this check.");
+      expect(brief.not_checked).not.toContain("Group events weren't part of this check.");
     }
-    expect(buildSundayBrief(nov22Capture(), none, CHECKED, true).not_checked).toContain("Groups events weren't part of this check.");
+    expect(buildSundayBrief(nov22Capture(), none, CHECKED, true).not_checked).toContain("Group events weren't part of this check.");
   });
 
   it.each([

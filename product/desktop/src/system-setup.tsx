@@ -18,6 +18,7 @@ import {
 import { FIRST_RUN, Sheet, StepHead, useTitleFocus } from "./first-run-screens.js";
 import { Icon } from "./icons.js";
 import { eyeLine, pageRef } from "./day-phrases.js";
+import { roleFactsOf, rolesUnchecked } from "./sunday-page.js";
 import { promise, systemPromise } from "./promises.js";
 import { browserStore, loadPrefs } from "./proactive.js";
 import { zoneLabel } from "./proactive-page.js";
@@ -423,7 +424,8 @@ function SystemResult({ view, day, system, aiOffered, onNext }: { view: SystemRe
       </>}
     {view.notices.map(n => <p key={n} className="fr-note">{n}</p>)}
     {counts.looks > 0 && <p className="fr-note">Also {counts.looks === 1 ? "1 thing" : `${counts.looks} things`} worth a look. You'll see {counts.looks === 1 ? "it" : "them"} on {pageRef()}.</p>}
-    {partial && <p className="fr-note">Part of {day.day} couldn't be checked, so this isn't a full picture.</p>}
+    {/* Only facts about roles as the system lists them: said as roles, as the service's page says it (polish 2026-11-21). */}
+    {partial && <p className="fr-note">{roleFactsOf(brief) ? rolesUnchecked(roleFactsOf(brief)!.roles) : `Part of ${day.day} couldn't be checked`}, so this isn't a full picture.</p>}
     {/* As Planning Center's first result says it (your-service.tsx), with the person's own schedule (proactive.ts loadPrefs). */}
     <p className="fr-note">{eyeLine()} at least {every(loadPrefs(browserStore).intervalMinutes)} while it's open, and moves on to the next {system === "b1" ? "plan" : "event"} by itself after this one. To read it now, press {words.checkNow} on {pageRef()}.</p>
     <div className="fr-actions"><button type="button" className="btn btn-primary fr-primary" onClick={() => onNext(aiOffered ? "sunday" : "ai")}>{aiOffered ? `Open ${day.page}` : "Next: choose how Ozzie uses AI"}</button></div>

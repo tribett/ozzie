@@ -18,7 +18,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { installFakeDom } from "./fake-dom.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
 import {
-  ACTIVITY_LEDE_ON, addButton, BACKGROUND_CHECKS, backgroundFact, CHECKING, changes, CONFIRM_EXPIRED, confirmChecked, confirmPlace, confirmTitle, confirmUndo, confirmUntil,
+  ACTIVITY_LEDE_ON, addButton, BACKGROUND_CHECKS, backgroundFact, CHECKING, changes, CONFIRM_EXPIRED, confirmChecked, confirmPlace, confirmPlaceBack, confirmTitle, confirmUndo,
+  confirmUndoEnds, confirmUntil,
   confirmWaiting, despiteChoice, despiteHelp, dontAdd, HISTORY_WHO, historyLine, KIDS_MARKED, KIDS_NOT_ADVISED, kidsAdvice, NO_PEOPLE_YET, notKnown,
   outcomeSentence, PREPARE_FAILED, quitUndo, RECHECK_FAILED, RECHECKING, refusalOf, REFUSALS, refusalSentence, selectFirst, SETTINGS_BANNER_ON, SIDEBAR_ON,
   SWITCH_LABEL, SWITCH_TITLE, switchBody, switchOff, takeOff, UNDO_TOO_MANY, undoNotKnown, undoSentence, yesAdd,
@@ -185,10 +186,14 @@ describe("every sentence is true for its cause", () => {
   });
 
   it("the confirmation's own words: Ozzie sends nothing, the place fills before anyone is asked, how long undo lasts", () => {
-    expect(confirmWaiting("Riley")).toBe("Planning Center will list Riley as unconfirmed, with the request waiting. Ozzie doesn't send Riley anything. Planning Center sends its request only when you press Send there.");
-    expect(confirmPlace("Riley", "Greeter", 1)).toBe("Adding Riley fills the one open place for Greeter, even before Riley is asked. Taking Riley off again gives it back.");
-    expect(confirmPlace("Riley", "Greeter", 3)).toBe("Adding Riley fills one of the 3 open places for Greeter, even before Riley is asked. Taking Riley off again gives it back.");
-    expect(confirmUndo("Riley")).toBe("Until you send the request, you can take Riley off again here while Ozzie stays open. Quitting Ozzie, switching churches, disconnecting or turning off “Adding people in Planning Center” in Settings ends that; then take Riley off in Planning Center.");
+    // Polish 2026-11-21 (item 4): one short sentence each in view; what ends the undo, the place given back and the five
+    // minutes under the card's fold.
+    expect(confirmWaiting("Riley")).toBe("Planning Center will list Riley as unconfirmed, with the request not sent. Ozzie sends Riley nothing; you press Send there.");
+    expect(confirmPlace("Riley", "Greeter", 1)).toBe("Adding Riley fills the one open place for Greeter, even before Riley is asked.");
+    expect(confirmPlace("Riley", "Greeter", 3)).toBe("Adding Riley fills one of the 3 open places for Greeter, even before Riley is asked.");
+    expect(confirmPlaceBack("Riley")).toBe("Taking Riley off again gives the place back.");
+    expect(confirmUndo("Riley")).toBe("Until you send the request, you can take Riley off again here while Ozzie stays open.");
+    expect(confirmUndoEnds("Riley")).toBe("You can't take Riley off here after you quit Ozzie, switch churches, disconnect or turn off “Adding people in Planning Center” in Settings; then take Riley off in Planning Center.");
     expect(confirmUntil("10:57 AM", "Riley")).toBe("If you wait past 10:57 AM, Ozzie will need to look at Planning Center again before adding Riley.");
   });
 
@@ -231,10 +236,14 @@ describe("every sentence is true for its cause", () => {
     expect(SWITCH_LABEL).toBe("Let Ozzie add someone to an open role in Planning Center, one at a time, when you confirm each one");
     const b = switchBody("First Church");
     expect(b.reminders).toBe("Ozzie hasn't confirmed whether Planning Center's automatic reminders, if your church uses them, reach someone added this way before the request is sent.");
-    expect(b.what).toContain("Ozzie sends them nothing. Planning Center sends its request only when you press Send there.");
-    expect(b.what).toContain("(not anyone with a possible conflict, or anyone left out)");
-    expect(b.confirm).toContain("Planning Center shows you as the person who scheduled them.");
-    expect(b.confirm).toContain("Ozzie never adds or picks anyone on its own, on a schedule, or from an AI's answer.");
+    // Polish 2026-11-21 (item 3): the one long "what" paragraph and the long "confirm" paragraph are now one sentence each
+    // (lead, confirm, waiting, one, never, undo), every promise kept word for word where it was a sentence of its own.
+    expect(b.lead).toBe("With this on, you can add someone from an open role's “who could help” list on the Services page to that role, on that service's plan in Planning Center.");
+    expect(b.waiting).toBe("Planning Center lists them as unconfirmed, with the request waiting. Ozzie sends them nothing. Planning Center sends its request only when you press Send there.");
+    expect(b.one).toBe("One person at a time, and never anyone with a possible conflict, or anyone left out.");
+    expect(b.confirm).toBe("Each one needs your confirmation on screen first. Planning Center shows you as the person who scheduled them.");
+    expect(b.never).toBe("Ozzie never adds or picks anyone on its own, on a schedule, or from an AI's answer.");
+    expect(b.undo).toBe("Until you send the request, you can take the person off again from the Services page while Ozzie stays open; quitting Ozzie, switching churches, disconnecting or turning this off ends that.");
     expect(b.kids).toBe("For a team your church marked as a kids team, Ozzie first shows the person's background check as Planning Center records it, and advises against adding anyone without a current one.");
     expect(b.church).toBe("This is for First Church only; another church has its own switch. It's off until you turn it on, and it turns off if you switch churches or disconnect. To turn it off, untick the box.");
     expect(b.people).toBe("Ozzie also needs People access, to see whether Planning Center lists a person as a child or as inactive and, for kids teams, their background check. Turn it on under “Rooms, follow-ups and group events” below.");
@@ -248,6 +257,38 @@ describe("every sentence is true for its cause", () => {
     // A church on another system hears its own never-line: Ozzie only reads there (ask-panel.tsx helpFor).
     expect(neverElsewhere("Breeze")).toBe("Ozzie never sends messages, never changes anything in Breeze, and never writes prayers, sermons or scripture. People decide and people go.");
     expect(source("product/desktop/src/connection-page.tsx")).toContain("Ozzie only reads Calendar, People and Groups, and has no way to change anything in them.");
+  });
+});
+
+describe("Settings: the switch reads at a glance, and nothing that must be seen is folded away (polish 2026-11-21, item 3)", () => {
+  const html = (people: boolean, c = control()) => renderToStaticMarkup(React.createElement(ChangesSwitch, { control: c, church: "First Church", people }));
+  const parts = (h: string) => { const at = h.indexOf("<details"); expect(at, "the fold").toBeGreaterThan(-1); return { shown: text(h.slice(0, at)), folded: text(h.slice(at)), fold: h.slice(at) }; };
+  it("a one-sentence lead, the switch, then each fact a leader needs before turning it on, all in view", () => {
+    const b = switchBody("First Church");
+    const { shown } = parts(html(true));
+    const order = [b.lead, SWITCH_LABEL, b.confirm, b.waiting, b.one, b.never, `${b.kids} ${b.kidsWhere}`, b.reminders].map(s => shown.indexOf(s));
+    expect(order.every(i => i >= 0), JSON.stringify(order)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    // While it's off, that nothing changes is said first.
+    expect(text(html(true, control({ on: false, status: { organization: "1001", on: false } })))).toMatch(/^ ?Adding people in Planning Center Adding people is off for First Church, so Ozzie only reads its Planning Center\. With this on/u);
+  });
+  it("how undo ends, which church it's for and People access are in the app's own closed fold, with the chevron", () => {
+    const b = switchBody("First Church");
+    const { shown, folded, fold } = parts(html(true));
+    expect(fold).toMatch(/^<details class="listen-more changes-more"><summary><svg class="ic ic-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"><\/path><\/svg>See how this works<\/summary>/u);
+    for (const line of [b.undo, b.church, b.people]) { expect(folded).toContain(line); expect(shown).not.toContain(line); }
+    // Without People access no one can be added: that stays in view, said once, and the fold doesn't repeat it.
+    const without = parts(html(false));
+    expect(without.shown).toContain(`${b.people} ${NO_PEOPLE_YET}`);
+    expect(without.folded).not.toContain(b.people);
+    // Every sentence Settings said before is still said.
+    const all = text(html(true));
+    for (const sentence of ["Ozzie sends them nothing.", "Planning Center sends its request only when you press Send there.", "Each one needs your confirmation on screen first.",
+      "Ozzie never adds or picks anyone on its own, on a schedule, or from an AI's answer.", "Planning Center shows you as the person who scheduled them.",
+      "unconfirmed, with the request waiting", "never anyone with a possible conflict, or anyone left out", b.kids, b.kidsWhere, b.reminders, b.church, b.people,
+      "Until you send the request, you can take the person off again from the Services page while Ozzie stays open; quitting Ozzie, switching churches, disconnecting or turning this off ends that."]) {
+      expect(all, sentence).toContain(sentence);
+    }
   });
 });
 
@@ -307,10 +348,23 @@ describe("the confirmation states the change in full", () => {
     expect(t).not.toMatch(/\bApprove\b/u);
     expect(t).not.toContain("background check");
     expect(t).not.toMatch(OVERPROMISE);
-    // The undo promise is body text, not small print; only the expiry line stays small.
+    // The undo promise is body text, not small print. Polish 2026-11-21 (item 4): the title, the role's line, what
+    // Planning Center does and Ozzie doesn't, the open place, what was checked, the undo and the buttons are in view; the
+    // place given back, what ends the undo and the five minutes are in the app's closed fold, before the buttons.
     const html = renderToStaticMarkup(React.createElement(ChangeCard, { open: { ask: greeterAsk, stage: "proposed", proposed: p, sentence: null }, control: control(), zone: "America/New_York" }));
-    expect(html).toContain(`<p>${confirmUndo("Riley").replaceAll("'", "&#x27;")}</p>`);
-    expect(html).toContain(`<p class="small">${confirmUntil(checkedClock(p.expires_at), "Riley")}</p>`);
+    expect(html).toContain(`<p>${confirmUndo("Riley")}</p>`);
+    const at = html.indexOf("<details"), end = html.indexOf("</details>");
+    expect(html.slice(at)).toMatch(/^<details class="listen-more change-more"><summary><svg class="ic ic-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"><\/path><\/svg>See how this works<\/summary>/u);
+    const shown = text(html.slice(0, at) + html.slice(end)), folded = text(html.slice(at, end));
+    for (const line of [confirmTitle("Riley Thornbury", "Sunday Morning", "Sunday, Nov 22"), "Greeter · Sunday Morning · Sunday, Nov 22 · 9:30 AM · 1 still needed", confirmWaiting("Riley"),
+      confirmPlace("Riley", "Greeter", 1), confirmChecked(AT, "Riley"), confirmUndo("Riley"), yesAdd("Riley", false), dontAdd("Riley")]) expect(shown, line).toContain(line);
+    for (const line of [confirmPlaceBack("Riley"), confirmUndoEnds("Riley"), confirmUntil(checkedClock(p.expires_at), "Riley")]) {
+      expect(folded, line).toContain(line);
+      expect(shown, line).not.toContain(line);
+    }
+    expect(html.indexOf(">Add Riley — I")).toBeGreaterThan(end);
+    // No open place to fill: nothing said about one, in view or folded.
+    expect(card({ ask: greeterAsk, stage: "proposed", proposed: proposal({ still_needed: 0 }), sentence: null })).not.toContain("place");
   });
   it("says so when it has waited more than five minutes, and offers a fresh look instead of the yes", () => {
     const t = card({ ask: greeterAsk, stage: "proposed", proposed: proposal({ expires_at: new Date(Date.now() - 1000).toISOString() }), sentence: null });

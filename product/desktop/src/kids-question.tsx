@@ -10,6 +10,8 @@ import type { SundayRules } from "../../../core/src/sunday-capture.js";
 import "./finish.css";
 
 export const kidsQuestionTitle = (team: string) => `Does ${team} serve with kids?`;
+/** The team as the question names it: with its service while more than one is watched ("Nursery (Youth Night)"). */
+export const kidsTeamName = (team: string, service: string | null) => service ? `${team} (${service})` : team;
 export const KIDS_BODY = "If it does, Ozzie can check that each service time has enough confirmed people on it, and, if you turn it on, that each person scheduled has a current background check on file.";
 export const KIDS_YES = "Yes, it serves with kids";
 
