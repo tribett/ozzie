@@ -16,11 +16,11 @@ notarized. Expect rough edges.
 These screens show the app's built-in fictional example (invented church,
 invented people). No church data is shown.
 
-![Sunday: what needs a decision, with who could help and why](docs/images/sunday-fictional.png)
+![Services: what needs a decision, with who could help and why](docs/images/services-fictional.png)
 
 ![Ask Ozzie answering from what it read; the AI saw placeholders, not names](docs/images/ask-fictional.png)
 
-![Today: a labeled fictional email and calendar import, with an instruction inside an email ignored on purpose](docs/images/today-fictional.png)
+![Today: what needs a decision, from a labeled fictional import and the services check](docs/images/today-fictional.png)
 
 ## What Ozzie does
 
