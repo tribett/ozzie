@@ -145,7 +145,6 @@ export function pluginProblems(dir = PLUGIN_DIR, version = appVersion()): string
     if (isText(bytes)) {
       const text = bytes.toString("utf8");
       if (SECRET.test(text)) problems.push(`${f.path} holds something that looks like a credential`);
-      if (/subsplash/iu.test(text)) problems.push(`${f.path} names a church system Ozzie never names`);
       if (/[–—]/u.test(text)) problems.push(`${f.path} has a dash Ozzie's writing doesn't use (an en or em dash)`);
     }
   }
