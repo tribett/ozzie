@@ -178,8 +178,17 @@ export const blockoutCounted = (f: Pick<Finding, "serving" | "position">): strin
  * undefined with one service. Local only, like every name a check read.
  */
 export type TeamServices = Readonly<Record<string, string>>;
-/** A role with its service, as Ask's answers restore it ("Greeter (Youth Night)"); the role alone when no service is known. */
-export const roleWithService = (role: string, service: string | null | undefined): string => service?.trim() ? `${role} (${service.trim()})` : role;
+/**
+ * A role with its service, as Ask's answers restore it ("Greeter (Youth Night)"); the role alone when no service is known.
+ * When the service's own name or the role's already holds brackets ("Youth Night (fictional)", "Youth (6–8) Night",
+ * "Greeter (9 AM)"), the service follows a dash instead, so no pair of brackets sits inside or beside another ("Greeter —
+ * Youth Night (fictional)"). Words on this Mac only: nothing here is sent.
+ */
+export const roleWithService = (role: string, service: string | null | undefined): string => {
+  const named = service?.trim();
+  if (!named) return role;
+  return /[()]/u.test(named) || /[()]/u.test(role) ? `${role} — ${named}` : `${role} (${named})`;
+};
 /** A team's service, while more than one service is watched and that service's name is known. */
 export const serviceOfTeam = (team: string | undefined, services: TeamServices | undefined): string | null =>
   team !== undefined && services && Object.hasOwn(services, team) ? services[team]?.trim() || null : null;

@@ -58,5 +58,7 @@ describe("a team's name says its service while more than one is watched", () => 
   it("the kids question names the team's service only while more than one is watched", () => {
     expect(kidsQuestionTitle(kidsTeamName("Nursery", "Youth Night"))).toBe("Does Nursery (Youth Night) serve with kids?");
     expect(kidsQuestionTitle(kidsTeamName("Nursery", null))).toBe("Does Nursery serve with kids?");
+    // A service whose own name ends in brackets follows a dash, as Ask's answers say it (polish 3).
+    expect(kidsQuestionTitle(kidsTeamName("Nursery", "Youth Night (fictional)"))).toBe("Does Nursery — Youth Night (fictional) serve with kids?");
   });
 });

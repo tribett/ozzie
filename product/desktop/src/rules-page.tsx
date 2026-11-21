@@ -9,7 +9,7 @@ import { KidsTeamsRules } from "./kids-rules-section.js";
 import { teamLabel, useTeamServices } from "./team-labels.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import { FromYourCards, useFeedback } from "./finding-feedback.js";
-import { useDay } from "./day-words.js";
+import { DayProvider, useDay, type DayWords } from "./day-words.js";
 import { useSystemWords, type SystemWords } from "./church-system.js";
 import { dayName, pageRef, procedurePurpose, SERVICES } from "./day-phrases.js";
 import { procedureTitle } from "./harness-words.js";
@@ -30,11 +30,14 @@ export const PROCEDURES_TITLE = "What the AI is asked to do";
  * purpose name the service's real day; the text stays word for word (procedure-text.tsx). Read-only; a procedure can't
  * widen what Ozzie may read, and none changes Planning Center.
  */
-export function HowOzzieChecks({ procedures, focus = null }: { procedures: readonly Skill[]; focus?: string | null }) {
+export function HowOzzieChecks({ procedures, focus = null, day }: { procedures: readonly Skill[]; focus?: string | null;
+  /** The day words the procedures run over: every service's at once while more than one is watched (App passes MANY_SERVICES). */
+  day?: DayWords | undefined }) {
   useEffect(() => {
     if (focus && typeof document !== "undefined") document.getElementById(`procedure-${focus}`)?.scrollIntoView?.({ block: "start" });
   }, [focus]);
-  const d = useDay();
+  const page = useDay();
+  const d = day ?? page;
   return <section className="find how-checks" aria-labelledby="how-checks-title">
     <h2 id="how-checks-title" className="h3">{PROCEDURES_TITLE}</h2>
     <p className="find-body">These are the steps the AI follows when Ozzie asks it for help: answering a question in Ask, writing up a job Ozzie keeps an eye on, and looking at who could help with a role. Ozzie's own checks of {SERVICES} don't use them. They can't be changed here, and none of them changes anything in Planning Center.</p>
@@ -43,7 +46,7 @@ export function HowOzzieChecks({ procedures, focus = null }: { procedures: reado
       <p className="small">{procedurePurpose(p.purpose, d)}</p>
       <details className="listen-more" open={focus === p.id}>
         <summary><Icon name="chev" small />See how this works</summary>
-        <ProcedureBody body={p.body} />
+        <DayProvider value={d}><ProcedureBody body={p.body} /></DayProvider>
       </details>
     </div>)}
   </section>;
@@ -55,7 +58,7 @@ export const SYSTEM_RULES = (w: SystemWords) => w.system === "genesis"
   : `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
 
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
-export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null }: {
+export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null, procedureDay }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
   /** Team leaders Planning Center lists, by team (null when that read didn't complete). Names resolve on this Mac. */
   leaders?: Record<string, string[] | null>; names?: Record<string, string>;
@@ -69,6 +72,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   keptElsewhere?: { organization: string; name?: string }[];
   /** People forms to watch and Check-Ins rooms matched to kids teams (church-reads-view.tsx). */
   church?: ReactNode;
+  /** The day words the AI's procedures run over, when not the page's: every service's while more than one is watched. */
+  procedureDay?: DayWords | undefined;
 }) {
   const d = useDay();
   const w = useSystemWords();
@@ -162,6 +167,6 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     {notice}
     <FromYourCards feedback={controls} />
     {/* The AI's procedures read Planning Center's checks only (Ask, jobs, who could help): not shown for another system. */}
-    {!other && procedures && procedures.length > 0 && <HowOzzieChecks procedures={procedures} focus={focus} />}
+    {!other && procedures && procedures.length > 0 && <HowOzzieChecks procedures={procedures} focus={focus} day={procedureDay} />}
   </div>;
 }

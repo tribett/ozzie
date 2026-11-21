@@ -7,6 +7,7 @@
 // Pure apart from the one `nextPlan` call it is handed. Dates are calendar dates (`YYYY-MM-DD`) in the church's zone.
 import { isTimeZone, localDate, planDate } from "../../../core/src/church-time.js";
 import { dayWords, longDate } from "../../../core/src/service-day.js";
+import { roleWithService } from "../../../core/src/sunday-brief.js";
 import type { PlanOption } from "./onboarding-bridge.js";
 
 /** The plan Ozzie watches, as Settings and the last check know it. */
@@ -51,7 +52,9 @@ const monthDay = (date: string) => new Date(`${date}T00:00:00Z`).toLocaleDateStr
 /** What happened records (spec §5.3): "Moved on to Wednesday, November 26 (Youth Night) because November 19 has passed." */
 export function movedText(next: Pick<PlanOption, "sort_date" | "times">, serviceName: string | null, passed: string, zone: string | null): string {
   const date = dayWords({ sort_date: next.sort_date, times: next.times }, zone).date ?? (planDate(next.sort_date) ? longDate(planDate(next.sort_date)!) : "the next plan");
-  return `Moved on to ${date}${serviceName ? ` (${serviceName})` : ""} because ${monthDay(passed)} has passed.`;
+  // The service after its date as a role is said with its service: in brackets, or after a dash when its own name already
+  // ends in brackets ("Youth Night (fictional)"), never a pair inside another.
+  return `Moved on to ${roleWithService(date, serviceName)} because ${monthDay(passed)} has passed.`;
 }
 /** Today, while no next plan exists (spec §5.3): "Ozzie is waiting for the next Youth Night plan in Planning Center." */
 export const waitingText = (serviceName: string | null): string =>

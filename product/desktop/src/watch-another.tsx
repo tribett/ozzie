@@ -20,9 +20,14 @@ const named = (name: string | null) => name ?? "Your service";
 /** "Wednesday, November 25", the day a plan is on, from what is known of it. */
 const planDay = (p: { sort_date: string | null; times: readonly string[] }, zone: string | null) => dayWords({ sort_date: p.sort_date, times: p.times }, zone).date;
 
-export function WatchedServices({ mainName, mainTypeId, also, connected, zone, pick, onAdd, onRemove }: {
+export function WatchedServices({ mainName, mainTypeId, also, connected, zone, pick, onAdd, onRemove, onMainName }: {
   /** The service first run chose (Settings' own), by its name when known. */
   mainName: string | null;
+  /**
+   * That service's name as the list of services just read it, when it wasn't known (a plan chosen in Settings' picker),
+   * with the service type it is the name of (the one watched when the list was asked for).
+   */
+  onMainName?: ((name: string, serviceTypeId: string) => void) | undefined;
   mainTypeId: string;
   also: readonly AlsoWatched[];
   /** Whether Planning Center is connected, so the list of services can be read. */
@@ -42,7 +47,12 @@ export function WatchedServices({ mainName, mainTypeId, also, connected, zone, p
   const full = also.length + 1 >= MAX_WATCHED;
   const open = () => {
     setChoosing(true); setChoices(null); setProblem(null);
-    pick().then(p => setChoices(p.services.filter(s => s.id !== mainTypeId && !also.some(a => a.serviceTypeId === s.id))
+    const typeAsked = mainTypeId;
+    pick().then(p => {
+      const main = p.services.find(s => s.id === typeAsked)?.name?.trim();
+      if (!mainName && main) onMainName?.(main, typeAsked);
+      return p;
+    }).then(p => setChoices(p.services.filter(s => s.id !== mainTypeId && !also.some(a => a.serviceTypeId === s.id))
       .map(s => ({ serviceTypeId: s.id, name: s.name, plan: s.next ? { id: s.next.id, sort_date: s.next.sort_date, times: s.next.times } : null }))),
     error => setProblem(choicesProblem(error)));
   };

@@ -418,7 +418,7 @@ describe("Ask before anything is connected, and what Ozzie can do (owner decisio
   it("marks an answer Ozzie wrote itself after the AI's listed more than 24 facts: never the AI's choice, never without the AI", () => {
     const answer: ShownAnswer = { body: "For Sunday, November 22, this check found 24 items that need a decision and 2 worth a look.\n\nOn the Sunday page, needing a decision:",
       draft: null, notCovered: false, basedOn: "Based on: fictional example data", gaps: [], procedure: null,
-      steps: ["Looked at the overview of the service — all of it"], aiSteps: 2, page: "sunday", composedHere: true };
+      steps: ["Looked at the overview of the last check — all of it"], aiSteps: 2, page: "sunday", composedHere: true };
     const html = text(renderToStaticMarkup(React.createElement(Answer, { answer, onOpen: () => {} })));
     // It covers the whole service, whatever the question named (review L6: "What still needs a decision about Riley?").
     expect(html).toContain("Ozzie wrote this answer itself from what it read, and it covers the whole service. The AI's answer listed more than 24 facts, more than Ozzie checks in one answer, so it isn't shown.");

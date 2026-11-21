@@ -95,5 +95,8 @@ describe("the words", () => {
     expect(movedText(nextWednesday, null, "2026-11-18", CHICAGO)).toBe("Moved on to Wednesday, November 25 because November 18 has passed.");
     // Without its times, the plan's own wall-clock date.
     expect(movedText({ sort_date: "2026-11-25T19:00:00Z", times: [] }, "Youth Night", "2026-11-18", null)).toBe("Moved on to Wednesday, November 25 (Youth Night) because November 18 has passed.");
+    // Never a pair of brackets inside another (polish 3).
+    expect(movedText({ sort_date: "2026-11-25T19:00:00Z", times: [] }, "Youth Night (fictional)", "2026-11-18", null))
+      .toBe("Moved on to Wednesday, November 25 — Youth Night (fictional) because November 18 has passed.");
   });
 });

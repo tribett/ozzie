@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasContactDetail } from "../../src/ask.js";
 import { bundledSkills } from "../../src/harness/bundled-skills.js";
 import type { Skill, ToolEnvelope } from "../../src/harness/contract.js";
@@ -18,9 +18,15 @@ import { NOT_SHARED } from "../../mcp/render.js";
 import { INSTRUCTIONS, MAX_BATCH, MAX_LINE, McpServer, PROTOCOL_VERSIONS, serveStream, TOOLS, type Response } from "../../mcp/server.js";
 import { checkedAtOf, ON_FILE, parseSharedCheck, SHARED_TOOLS, sharedCheckText, sharedEnvelopes, type SharedTask } from "../../mcp/snapshot.js";
 import { crowded, FIXTURES, FRESH, harnessData, sourceStrings } from "../harness/fixtures.js";
+import { createServer } from "../../mcp/embedded.js";
+import { LIVE_CHECK_VALID_MS } from "../../src/sunday-capture.js";
 
 const skills: ReadonlyMap<string, Skill> = await bundledSkills();
 const SHARED_AT = "2026-11-20T15:06:00Z";
+// The copy is read as soon as it was saved, on a clock that runs from then: the reader decides "out of date" from the
+// check time against this Mac's clock (render.ts completenessAt), so every test here pins it.
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true }); vi.setSystemTime(new Date(SHARED_AT)); });
+afterEach(() => { vi.useRealTimers(); });
 const COPY = "B4K7Q2X9M3T8";
 const TASKS: SharedTask[] = [
   { kind: "check", skill_id: "sunday-ready", state: "verified", created_at: "2026-11-20T15:00:00Z", updated_at: "2026-11-20T15:00:04Z", failure: null,
@@ -432,6 +438,81 @@ describe("read-only", () => {
       expect(src, f).not.toMatch(/\bfetch\(|node:(?:http|https|net|dgram|tls|child_process|worker_threads)|XMLHttpRequest|WebSocket/u);
       const imports = [...src.matchAll(/from "([^"]+)"/gu)].map(m => m[1]!);
       for (const i of imports) expect(i, `${f} imports ${i}`).toMatch(/^(?:\.\/|\.\.\/src\/|node:(?:fs|os|path)$)/u);
+    }
+  });
+});
+
+describe("a copy left behind is said to be out of date once its check is too old (coordinator's item, 2026-11-21)", () => {
+  /** The copy's own words for a check that is out of date (render.ts COMPLETENESS.stale). */
+  const OUT_OF_DATE = "This check is out of date, or it is a saved copy of a check. Treat it as a past check, not how things stand now.";
+  const at = (ms: number) => { vi.setSystemTime(new Date(ms)); };
+  const reading = (text: string) => { const server = serverOver(() => text); return TOOLS.map(t => textOf(call(server, t.name))).join("\n"); };
+  /** Each section's heading line, with whether the out-of-date line follows it. */
+  const marked = (out: string) => out.split("\n## ").slice(1).map(s => [s.split("\n")[0]!.replace(/ \(from .*$/u, ""), s.split("\n")[1] === OUT_OF_DATE] as const);
+
+  it("is current until Ozzie's own limit has passed, then every Planning Center section says so in the copy's own words, and nothing else changes", async () => {
+    const { envelopes, text } = await sharedFor(harnessData({ mode: "live" }));
+    expect(envelopes.every(e => e.completeness !== "stale")).toBe(true);
+    const newest = Math.max(...envelopes.map(e => Date.parse(e.check_time)));
+    const oldest = Math.min(...envelopes.map(e => Date.parse(e.check_time)));
+    at(newest);
+    const fresh = reading(text);
+    expect(fresh).not.toContain(OUT_OF_DATE);
+    // Exactly at the limit still current, as when Ozzie writes the copy (tools.ts #stale: strictly later).
+    at(oldest + LIVE_CHECK_VALID_MS);
+    expect(reading(text)).not.toContain(OUT_OF_DATE);
+    // Ozzie quit long ago; the copy was never written again.
+    at(newest + LIVE_CHECK_VALID_MS + 60_000);
+    const old = reading(text);
+    const sections = marked(old);
+    // Not the Church rules (settings on this Mac) or the procedures listed under them: no read of Planning Center.
+    const notChecks = new Set(["Church rules", "How Ozzie works through Sunday"]);
+    expect(sections.filter(([, out]) => out).map(([h]) => h)).toEqual(sections.filter(([h]) => !notChecks.has(h)).map(([h]) => h));
+    expect(sections.filter(([, out]) => out).length).toBe(8);
+    expect(sections.find(([h]) => h === "Church rules")).toEqual(["Church rules", false]);
+    // The line is the only difference: the same facts, labels, check times and copy id.
+    expect(old.split("\n").filter(l => l !== OUT_OF_DATE).join("\n")).toBe(fresh);
+  });
+
+  it("says the same sections are out of date as a copy Ozzie wrote after the limit would (one threshold, written or read)", async () => {
+    const data = harnessData({ mode: "live" });
+    const checked = Date.parse(data.brief!.checked_at!);
+    const late = new Date(checked + LIVE_CHECK_VALID_MS + 60_000).toISOString();
+    const writtenLate = await sharedEnvelopes(new HarnessTools(data, new HarnessSession(), { now: () => late }));
+    const { text } = await sharedFor(data);
+    at(Date.parse(late));
+    const readLate = marked(reading(text));
+    const stale = new Set(writtenLate.filter(e => e.completeness === "stale").map(e => e.tool));
+    expect(stale.size).toBeGreaterThan(0);
+    const heading: Record<string, string> = { "sunday.overview": "Overview", "sunday.open_needs": "Roles that still need people", "sunday.pending_requests": "Requests without an answer yet",
+      "sunday.rule_checkins": "Check-ins the Church rules suggest", "sunday.not_checked": "What this check couldn't cover", "rooms.conflicts": "Room bookings",
+      "followups.unowned": "Follow-ups without an owner", "groups.clashes": "Group meetings at serving times", "rules.current": "Church rules" };
+    for (const e of writtenLate) {
+      const shown = readLate.find(([h]) => h === heading[e.tool]);
+      if (shown) expect(shown[1], e.tool).toBe(e.completeness === "stale");
+    }
+  });
+
+  it("never says it of the fictional example (as Ozzie writes it), and still says it of a copy written out of date", async () => {
+    const fictional = await sharedFor(harnessData());
+    at(Date.parse("2026-12-25T12:00:00Z"));
+    expect(reading(fictional.text)).not.toContain(OUT_OF_DATE);
+    expect(reading(fictional.text)).toContain("This is fictional example data.");
+    const recording = await sharedFor(harnessData({ mode: "recording" }));
+    at(Date.parse(SHARED_AT));
+    expect(reading(recording.text)).toContain(OUT_OF_DATE);
+  });
+
+  it("the entry Ozzie's bundled helper runs says the same as the Node server, before and after the limit", async () => {
+    const { envelopes, text } = await sharedFor(harnessData({ mode: "live" }));
+    const newest = Math.max(...envelopes.map(e => Date.parse(e.check_time)));
+    const helper = createServer(() => text), node = serverOver(() => text);
+    for (const when of [newest, newest + LIVE_CHECK_VALID_MS + 60_000]) {
+      at(when);
+      for (const t of TOOLS) {
+        const line = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: t.name, arguments: {} } });
+        expect(JSON.parse(helper(line)!), t.name).toEqual(node.handle(JSON.parse(line)));
+      }
     }
   });
 });

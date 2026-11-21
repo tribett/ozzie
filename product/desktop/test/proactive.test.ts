@@ -114,6 +114,21 @@ describe("proactive Sunday checks while Ozzie is open", () => {
     expect(trigger()).toBe("manual");
   });
 
+  it("keeps who started a check outside the schedule, as the ledger does: a person unless the caller says automatic", async () => {
+    const h = harness("2026-11-20T15:00:00Z");
+    await h.launch();
+    await h.p.checkNow();
+    expect(h.p.view().schedule.last_run).toMatchObject({ trigger: "manual", by: "person", outcome: "ok" });
+    await h.p.checkNow("manual");
+    expect(h.p.view().schedule.last_run).toMatchObject({ trigger: "manual", by: "person" });
+    await h.p.checkNow("automatic");
+    expect(h.p.view().schedule.last_run).toMatchObject({ trigger: "manual", by: "ozzie" });
+    h.set("2026-11-20T16:00:00Z");
+    await h.p.tick();
+    expect(h.p.view().schedule.last_run).toMatchObject({ trigger: "scheduled" });
+    expect(h.p.view().schedule.last_run).not.toHaveProperty("by");
+  });
+
   it("holds the notice during quiet hours and sends it once after they end", async () => {
     // 02:30Z is 8:30 PM in Chicago; quiet hours start at 9:00 PM.
     const h = harness("2026-11-21T02:30:00Z");

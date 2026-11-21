@@ -126,6 +126,11 @@ function background(f: Finding, ctx: Ctx): string {
     default: return `${one} has no current background check on file.${f.tone === "look" ? " Your Planning Center login may not be able to see background checks." : ""}`;
   }
 }
+/**
+ * A decision's line after "For Sunday, ": the fixed words a kids team's line opens with in lower case ("for Sunday, one
+ * person on Nursery…", never "One person"); a line that opens with a role keeps the role's own name as it is.
+ */
+const afterFor = (text: string) => /^(?:One person on |No confirmed people |Only )/u.test(text) ? lower(text) : text;
 /** A Sunday item that needs a decision, by kind. */
 function decision(f: Finding, ctx: Ctx): string {
   return f.kind === "too-few-confirmed" ? fewConfirmed(f, ctx) : f.kind === "background-check" ? background(f, ctx) : needsPeople(f, ctx);
@@ -228,7 +233,7 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
     (f.uncertain ? looks : decisions).push(f.uncertain ? `Worth a look: ${text}` : text);
   }
   const sundayDecisions = open.filter(i => i.finding.tone === "decision")
-    .map((i, n) => again(i, `${n === 0 && i.state !== "reopened" ? `For ${ctx.name}, ` : ""}${decision(i.finding, ctx)}`));
+    .map((i, n) => again(i, n === 0 && i.state !== "reopened" ? `For ${ctx.name}, ${afterFor(decision(i.finding, ctx))}` : decision(i.finding, ctx)));
   decisions.push(...sundayDecisions);
   const operations = sunday ? operationsLines(input.operations, ctx.d) : { decisions: [], looks: [], counted: { decisions: 0, looks: 0 } };
   decisions.push(...operations.decisions);

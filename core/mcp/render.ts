@@ -6,6 +6,8 @@ import { composeFacts, NOT_FREE, NOT_RANKED, overviewRowSources } from "../src/h
 import { idsIn } from "../src/harness/fixed.js";
 import { showTimes } from "../src/harness/session.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../src/harness/contract.js";
+import { isoMillis } from "../src/harness/fixed.js";
+import { LIVE_CHECK_VALID_MS } from "../src/sunday-capture.js";
 import type { SharedCheck, SharedTask, SharedTool } from "./snapshot.js";
 
 /**
@@ -79,31 +81,56 @@ function sourcesOf(envelope: ToolEnvelope, all: readonly ToolEnvelope[]): string
   return [...times].map(([at, sources]) => `${named(sources)}, checked ${at}`).join("; ");
 }
 
-function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelope]): string {
+/** The Church rules' own source (tools.ts `#rules`): settings on this Mac, never a read of Planning Center. */
+const RULES_SOURCE = "Church rules on this Mac";
+/**
+ * How complete a result is said to be, decided again each time the copy is read. Ozzie marks a result out of date only
+ * when it writes the copy, and a copy left behind (Ozzie quit, or this Mac asleep) is never written again, so the reader
+ * says a live check's result is out of date once its own check time is older than the limit Ozzie writes with (tools.ts
+ * `#stale`, sunday-capture.ts LIVE_CHECK_VALID_MS), in the copy's own words. As when written: the fictional example
+ * (the overview's `mode`) is never out of date, a saved copy already is, and the Church rules on this Mac are no read
+ * of Planning Center. Nothing is added to the copy; `now` is this Mac's clock when the copy is read.
+ */
+function completenessAt(envelope: ToolEnvelope, all: readonly ToolEnvelope[], now: number): string {
+  const c = envelope.completeness;
+  if (c !== "complete" && c !== "partial") return c;
+  if (envelope.source === RULES_SOURCE) return c;
+  // Only a live check ages, as tools.ts #stale has it (the overview's `mode`; every copy of a check holds the overview).
+  const mode = (all.find(e => e.tool === "sunday.overview")?.payload as { mode?: unknown } | undefined)?.mode;
+  if (mode !== "live") return c;
+  const checked = isoMillis(envelope.check_time);
+  return checked !== null && now > checked + LIVE_CHECK_VALID_MS ? "stale" : c;
+}
+
+function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelope], now = Date.now()): string {
   const head = `${HEADINGS[envelope.tool as SharedTool] ?? "From the check"} (from ${sourcesOf(envelope, all)})`;
   // An overview cut to fit is said as that, never as reads that didn't complete unless some didn't (review item 6).
   const p = envelope.payload as { left_out_for_length?: unknown; reads_not_completed?: unknown };
   const left = envelope.tool === "sunday.overview" && typeof p.left_out_for_length === "number" ? p.left_out_for_length : 0;
   const cut = left > 0 ? `Worth a look: the list was too long to say in full, so ${left === 1 ? "1 finding was" : `${left} findings were`} left out of this copy.` : "";
-  const unread = envelope.completeness === "partial" && left > 0 && p.reads_not_completed === 0 ? "" : COMPLETENESS[envelope.completeness] ?? "";
+  const completeness = completenessAt(envelope, all, now);
+  const unread = completeness === "partial" && left > 0 && p.reads_not_completed === 0 ? "" : COMPLETENESS[completeness] ?? "";
   const note = [unread, cut].filter(Boolean).join("\n");
   const body = factsText(envelope);
   return [`## ${head}`, ...(note ? [note] : []), ...(body.length ? body : ["Nothing to report here."])].join("\n");
 }
 
-/** The sections for these tools from the shared check, in the given order; those it doesn't hold are left out. */
-export function checkText(check: SharedCheck | null, tools: readonly SharedTool[]): string {
+/**
+ * The sections for these tools from the shared check, in the given order; those it doesn't hold are left out. `now`: this
+ * Mac's clock as the copy is read (completenessAt).
+ */
+export function checkText(check: SharedCheck | null, tools: readonly SharedTool[], now = Date.now()): string {
   if (!check) return NOT_SHARED;
   const found = tools.flatMap(t => check.envelopes.filter(e => e.tool === t));
   // The facts' own check time, never when the copy was saved: a copy saved today can hold last week's check.
   const intro = `From Ozzie's last saved check, checked ${when(check.checked_at)} (copy ${check.copy_id}). ${aboutLabels(check.copy_id)} ${ONLY_DESCRIBES}`;
   if (!found.length) return `${intro}\n\nThe last saved check doesn't include this.`;
-  return [intro, ...found.map(e => section(e, check.envelopes))].join("\n\n");
+  return [intro, ...found.map(e => section(e, check.envelopes, now))].join("\n\n");
 }
 
 /** The Church rules in words, then the procedures Ozzie follows (their titles and purposes, as shown in Ozzie). */
-export function rulesText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>): string {
-  const rules = checkText(check, ["rules.current"]);
+export function rulesText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>, now = Date.now()): string {
+  const rules = checkText(check, ["rules.current"], now);
   const procedures = [...skills.values()].sort((a, b) => a.title.localeCompare(b.title)).map(s => `- ${s.title}: ${s.purpose}`);
   const how = ["## How Ozzie works through Sunday", "Ozzie follows these written procedures. Each one only reads what was checked; none of them sends anything or changes Planning Center.", ...procedures];
   return [rules, how.join("\n")].join("\n\n");

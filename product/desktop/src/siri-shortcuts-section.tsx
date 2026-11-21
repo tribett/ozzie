@@ -80,7 +80,7 @@ function ByHand({ found }: { found: string | null }) {
     <ol className="ask-steps">{ASK_STEPS.map(step => <li key={step}>{step}</li>)}</ol>
     <p className="small">Command:</p>
     <CopyLine text={askCommand(found)} label="Copy command" />
-    <p className="small">"{OPEN_NAME}" opens Ozzie to the page of the service it watches. This one doesn't need Allow Running Scripts.</p>
+    <p className="small">"{OPEN_NAME}" opens Ozzie on that page. This one doesn't need Allow Running Scripts.</p>
     <ol className="ask-steps">{OPEN_STEPS.map(step => <li key={step}>{step}</li>)}</ol>
     <p className="small">Link:</p>
     <CopyLine text={OPEN_LINK} label="Copy link" />

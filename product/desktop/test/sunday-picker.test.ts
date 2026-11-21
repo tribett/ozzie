@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { choicesProblem, sundaySource, type Choices, type PlanChoice, type ServiceTypeChoice } from "../src/sunday-source.js";
 import { planName, planWhen, serialReads, sundayChoices, SundayChoicesView, SundayPicker, typeAfterLoad, withPlan, type Loaded, type PickerSource } from "../src/sunday-picker.js";
 import { text } from "./harness-fakes.js";
+import { installFakeDom } from "./fake-dom.js";
 
 const NOW = "2026-11-20T15:00:00.000Z";
 const settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "", planId: "" };
@@ -59,6 +60,32 @@ describe("choosing a plan", () => {
   it("keeps only the two ids, as typing them did", () => {
     expect(withPlan({ ...settings, serviceTypeId: "1", planId: "2" }, "1500", "92902197"))
       .toEqual({ clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" });
+  });
+  it("hands App the picked plan's service by its own name, so the first service is named on screen (write-back review L1)", async () => {
+    const dom = installFakeDom();
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const picked: [string, string | null][] = [], saved: unknown[] = [];
+    const root = createRoot(dom.root as unknown as Element);
+    const draw = (typeId: string) => act(async () => { root.render(React.createElement(SundayChoicesView, {
+      connected: true, settings, onSettings: s => { saved.push(s); }, onService: (plan, name) => { picked.push([plan, name]); }, types: ready(types), typeId,
+      onType: () => {}, plans: ready(plans), onRetry: () => {}, now: NOW, handOpen: false, onHand: () => {} })); });
+    type Node = { tagName?: string; childNodes: Node[] };
+    const all = (n: Node): Node[] => [n, ...n.childNodes.flatMap(all)];
+    const props = (n: Node) => { const key = Object.keys(n).find(k => k.startsWith("__reactProps$")); return key ? (n as unknown as Record<string, { type?: string; onChange?: (e: unknown) => void }>)[key] : undefined; };
+    const choose = (at: number) => act(async () => {
+      const radio = all(dom.root as unknown as Node).filter(n => n.tagName === "INPUT" && props(n)?.type === "radio")[at]!;
+      props(radio)!.onChange!({ target: radio, currentTarget: radio });
+    });
+    await draw("1500");
+    await choose(1);
+    expect(saved).toEqual([{ ...settings, serviceTypeId: "1500", planId: "92902300" }]);
+    expect(picked).toEqual([["92902300", "Sunday Morning"]]);
+    // A service with no name in Planning Center is handed as none, never as the picker's "A service with no name".
+    await draw("1502");
+    await choose(0);
+    expect(picked.at(-1)).toEqual(["92902197", null]);
+    await act(async () => { root.unmount(); });
   });
   it("names each plan by its Sunday on Planning Center's own clock, and its title and series", () => {
     expect(planWhen(plans.items[0]!, NOW)).toBe("Sunday, November 29 · 9:00 AM");

@@ -14,7 +14,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import { DayProvider, dayWords, SUNDAY_WORDS, UNKNOWN_WORDS } from "../src/day-words.js";
-import { noticeDayOf, noticeLine, procedureNote, procedurePurpose } from "../src/day-phrases.js";
+import { EXACT_WORDS, noticeDayOf, noticeLine, procedureNote, procedurePurpose } from "../src/day-phrases.js";
+import { saysSunday } from "../src/procedure-text.js";
 import { TodayPage } from "../src/today-page.js";
 import { DecisionForm, Draft, LeaderNote, ReminderNote, SundayPage, WhoCouldHelpCard } from "../src/sunday-page.js";
 import { RulesPage } from "../src/rules-page.js";
@@ -517,6 +518,9 @@ const WED_NOTE = "These are the exact words the AI is given. Where they say Sund
 /** The page without the AI's exact instructions and the line above each: what's left must not say Sunday. */
 const withoutInstructions = (html: string) => skillFiles.reduce((s, f) => s.replaceAll(escapedHtml(f.body), ""), html).replaceAll(escapedHtml(WED_NOTE), "");
 const noted = (body: string) => `<p class="small">${escapedHtml(WED_NOTE)}</p><div class="procedure-body">${escapedHtml(body)}</div>`;
+/** A procedure's text as shown: with the line about what its "Sunday" means only when it says Sunday (polish 3). */
+const shownBody = (body: string) => saysSunday(body) ? noted(body) : `<p class="small">${EXACT_WORDS}</p><div class="procedure-body">${escapedHtml(body)}</div>`;
+const sayers = skillFiles.filter(f => saysSunday(f.body));
 
 describe("the AI's exact instructions on screen (decision 18, NM3)", () => {
   it("the line above them names the service's real day, and is there only when the service isn't on a Sunday", () => {
@@ -545,8 +549,12 @@ describe("the AI's exact instructions on screen (decision 18, NM3)", () => {
     const html = page(onWednesday);
     expect(html).toContain("<p class=\"bold\">Ready for Wednesday</p>");
     expect(html).not.toContain("<p class=\"bold\">Sunday ready</p>");
-    for (const f of skillFiles) expect(html, f.id).toContain(noted(f.body));
-    expect(html.split(escapedHtml(WED_NOTE))).toHaveLength(skillFiles.length + 1);
+    for (const f of skillFiles) expect(html, f.id).toContain(shownBody(f.body));
+    // Only above a text that says Sunday: Ask's own procedure and the follow-ups one don't (polish 3, item 1).
+    expect(sayers.length).toBeGreaterThan(0);
+    expect(sayers.length).toBeLessThan(skillFiles.length);
+    for (const f of skillFiles.filter(x => !saysSunday(x.body))) expect(html, f.id).not.toContain(noted(f.body));
+    expect(html.split(escapedHtml(WED_NOTE))).toHaveLength(sayers.length + 1);
     expect(sundays(withoutInstructions(html))).toEqual([]);
     // A Sunday church sees the titles as written and no line about Sunday.
     const sunday = page(renderToStaticMarkup);
@@ -562,7 +570,8 @@ describe("the AI's exact instructions on screen (decision 18, NM3)", () => {
     for (const answered of [turn.answer, { ...turn.answer, procedure: { title: ready.title, body: ready.body } }]) {
       const html = onWednesday(React.createElement(HowItWorks, { answer: answered }));
       const file = skillFiles.find(f => f.title === answered.procedure!.title)!;
-      expect(html).toContain(noted(file.body));
+      expect(html).toContain(shownBody(file.body));
+      expect(html.includes(escapedHtml(WED_NOTE))).toBe(saysSunday(file.body));
       expect(sundays(withoutInstructions(html))).toEqual([]);
     }
     expect(onWednesday(React.createElement(HowItWorks, { answer: { ...turn.answer, procedure: { title: ready.title, body: ready.body } } })))

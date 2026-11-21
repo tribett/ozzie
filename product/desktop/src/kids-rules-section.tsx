@@ -50,7 +50,7 @@ export function KidsTeamsRules({ rules, onChange, teams, services }: {
     {elsewhere.map(t => <div className="rule-team" key={t.team_id}>
       <div className="row rule-row">
         <span className="bold">{t.name ? teamLabel(t.name, t.team_id, services) : "A team marked earlier"}</span>
-        <span className="small">Not on the service checked last. {t.min_confirmed} confirmed at each time.</span>
+        <span className="small">Not in the last check. {t.min_confirmed} confirmed at each time.</span>
         <button type="button" className="btn btn-quiet btn-sm" onClick={() => onChange(withKidsTeam(rules, t.team_id, null))}>Unmark this team</button>
       </div>
     </div>)}

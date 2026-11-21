@@ -1,6 +1,7 @@
 // Choosing another plan in Settings (first run's own step is your-service.tsx): once Planning Center is connected, Ozzie lists the church's service
 // types and the chosen type's upcoming plans (read-only, native sunday_picker.rs), and the person
-// picks one. Only the two ids are kept, exactly as typing them did; "Enter the plan by hand" stays below.
+// picks one. Settings keep only the two ids, exactly as typing them did; the service's own name is handed to App
+// (`onService`) to name it on screen, as first run does. "Enter the plan by hand" stays below.
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { choicesProblem, PICKER_REFUSED, sundaySource, type Choices, type PlanChoice, type ServiceTypeChoice, type Settings } from "./sunday-source.js";
 import { CopyForAdministrator, SundayPlanFields } from "./planning-center-forms.js";
@@ -29,8 +30,10 @@ export const planName = (plan: Pick<PlanChoice, "title" | "series_title">) => [p
 const typeName = (t: ServiceTypeChoice) => t.name ?? "A service with no name";
 
 /** The picker's states, drawn without reading anything: what the person sees at each step. */
-export function SundayChoicesView({ connected, settings, onSettings, types, typeId, onType, plans, onRetry, now, handOpen, onHand }: {
+export function SundayChoicesView({ connected, settings, onSettings, onService, types, typeId, onType, plans, onRetry, now, handOpen, onHand }: {
   connected: boolean; settings: Settings; onSettings: (s: Settings) => void;
+  /** The picked plan's service by its Planning Center name (null when it has none), kept on this Mac to name it on screen. */
+  onService?: ((planId: string, name: string | null) => void) | undefined;
   types: Loaded<ServiceTypeChoice>; typeId: string; onType: (id: string) => void; plans: Loaded<PlanChoice>;
   onRetry: () => void; now: string; handOpen: boolean; onHand: (open: boolean) => void;
 }) {
@@ -40,7 +43,7 @@ export function SundayChoicesView({ connected, settings, onSettings, types, type
   const chosen = /^\d+$/u.test(settings.serviceTypeId) && /^\d+$/u.test(settings.planId);
   const chosenListed = shown.some(p => p.id === settings.planId) && typeId === settings.serviceTypeId;
   const problem = types.state === "problem" ? types.text : plans.state === "problem" ? plans.text : null;
-  const pick = (plan: PlanChoice) => onSettings(withPlan(settings, typeId, plan.id));
+  const pick = (plan: PlanChoice) => { onSettings(withPlan(settings, typeId, plan.id)); onService?.(plan.id, list.find(t => t.id === typeId)?.name ?? null); };
   return <div className="picker">
     {!connected && <p className="panel-info"><Icon name="info" small /><span>Connect Planning Center first. Then your upcoming plans are listed here to choose from.</span></p>}
     {types.state === "loading" && <p className="picker-status" role="status"><Icon name="spinner" small spin />Reading your services from Planning Center…</p>}
@@ -169,12 +172,13 @@ export function sundayChoices(source: PickerSource, typeId: string, connected: b
  * is in the browser or being checked, so it keeps what it shows and reads nothing until that ends (a read then would meet
  * the sign-in, not the church in use; review item 7).
  */
-export function SundayPicker({ connected, waiting = false, settings, onSettings, source = sundaySource }: {
+export function SundayPicker({ connected, waiting = false, settings, onSettings, onService, source = sundaySource }: {
   connected: boolean; waiting?: boolean; settings: Settings; onSettings: (s: Settings) => void; source?: PickerSource;
+  onService?: ((planId: string, name: string | null) => void) | undefined;
 }) {
   const [choices] = useState(() => sundayChoices(source, settings.serviceTypeId, connected));
   const view = useSyncExternalStore(choices.subscribe, choices.view, choices.view);
   useEffect(() => choices.follow(connected, waiting), [choices, connected, waiting]);
-  return <SundayChoicesView connected={connected} settings={settings} onSettings={onSettings} types={view.types} typeId={view.typeId}
+  return <SundayChoicesView connected={connected} settings={settings} onSettings={onSettings} onService={onService} types={view.types} typeId={view.typeId}
     onType={choices.chooseType} plans={view.plans} onRetry={choices.retry} now={new Date().toISOString()} handOpen={view.handOpen} onHand={choices.setHand} />;
 }

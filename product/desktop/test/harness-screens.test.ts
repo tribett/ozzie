@@ -82,7 +82,7 @@ describe("What happened: the task ledger in plain words", () => {
     // A question through the AI: two steps, three reads (one Ozzie doesn't allow is never named), checked, answered.
     expect(taskAccount(answered, { now })).toEqual({
       started: `You asked a question at ${clock}.`,
-      looked: ["Looked at the open roles for the service — all of it", "Looked at who is on the team for an open role — part of it couldn't be read",
+      looked: ["Looked at the open roles in the last check — all of it", "Looked at who is on the team for an open role — part of it couldn't be read",
         "Tried something Ozzie doesn't allow — not shared with Ozzie"],
       ai: "Ozzie asked the AI twice. The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything.",
       ended: "Answered.",
@@ -91,7 +91,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(taskAccount(answered, { now, end: "not-covered" }).ended).toBe("What Ozzie read didn't answer it, and the answer said so.");
     // A question answered on this Mac: no AI.
     expect(taskAccount(row({ kind: "ask", state: "verified", events: [ev(0, "admitted"), ev(1, "running"), ev(2, "tool", "sunday.overview complete"), ev(3, "verified")] }),
-      { now, start: "on-this-mac" })).toMatchObject({ looked: ["Looked at the overview of the service — all of it"], ai: "No AI was used: Ozzie answered this on this Mac from its last check." });
+      { now, start: "on-this-mac" })).toMatchObject({ looked: ["Looked at the overview of the last check — all of it"], ai: "No AI was used: Ozzie answered this on this Mac from its last check." });
     // The regular Sunday check, and one the leader started: Ozzie's own check, no AI.
     expect(taskAccount(automatic, { now, start: "automatic" })).toEqual({
       started: `Ozzie checked Planning Center on its own at ${t("2026-11-20T21:00:00Z")}.`, looked: ["Read the service from Planning Center — all of it"],
@@ -103,7 +103,7 @@ describe("What happened: the task ledger in plain words", () => {
       ev(4, "tool", "sunday.overview complete"), ev(5, "tool", "sunday.not_checked complete"), ev(6, "model", "2"), ev(7, "model", "2 stop"), ev(8, "verified")] });
     expect(taskAccount(job, { now, start: "job:keep-sunday-covered:scheduled" })).toEqual({
       started: `Keep services covered ran on schedule, at ${clock}.`,
-      looked: ["Looked at the overview of the service — all of it", "Looked at what the check couldn't read — all of it"],
+      looked: ["Looked at the overview of the last check — all of it", "Looked at what the check couldn't read — all of it"],
       ai: "Ozzie asked the AI twice. The AI answered with a list of facts, which Ozzie checked against what it had read before writing anything.",
       ended: "Finished. Ozzie wrote up the facts the AI chose, and the write-up is with this job.",
     });
@@ -127,7 +127,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(aiText("ask", undefined, 0, false)).toBe("Ozzie didn't reach the AI.");
     // 13 fixed sentences, each pinned to its tool (review H, M15), none a tool's own name.
     expect(TOOL_PHRASES).toEqual({
-      "sunday.overview": "Looked at the overview of the service", "sunday.open_needs": "Looked at the open roles for the service",
+      "sunday.overview": "Looked at the overview of the last check", "sunday.open_needs": "Looked at the open roles in the last check",
       "sunday.who_could_help": "Looked at who is on the team for an open role", "sunday.pending_requests": "Looked at requests still waiting for an answer",
       "sunday.rule_checkins": "Looked at the check-ins your Church rules suggest", "sunday.not_checked": "Looked at what the check couldn't read",
       "rooms.conflicts": "Looked at room bookings", "followups.unowned": "Looked at follow-ups without an owner", "groups.clashes": "Looked at group meetings on the service's day",
@@ -137,7 +137,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(Object.keys(TOOL_PHRASES)).toHaveLength(13);
     // An out-of-date check isn't called a saved copy (L3); checking again where it isn't offered never reads as done (L2).
     expect(taskAccount(row({ kind: "ask", state: "verified", events: [ev(0, "tool", "sunday.overview stale")] }), { now }).looked)
-      .toEqual(["Looked at the overview of the service — from a check that is too old to treat as current"]);
+      .toEqual(["Looked at the overview of the last check — from a check that is too old to treat as current"]);
     expect(taskAccount(row({ kind: "skill", state: "verified", events: [ev(0, "tool", "planning_center.refresh denied")] }), { now }).looked)
       .toEqual(["Didn't read Planning Center again: that isn't possible here"]);
     for (const [name, phrase] of Object.entries(TOOL_PHRASES)) { expect(phrase).not.toContain(name); expect(phrase).toMatch(/^[A-Z][a-z]/u); }
@@ -154,7 +154,7 @@ describe("What happened: the task ledger in plain words", () => {
     expect(t.indexOf("A question · Couldn't finish")).toBeLessThan(t.indexOf("Planning Center check, on its own"));
     expect(html.match(/<details class="recent-task">/g)).toHaveLength(3);
     expect(html).not.toMatch(/<details[^>]*open/);
-    expect(t).toContain("Looked at the open roles for the service — all of it");
+    expect(t).toContain("Looked at the open roles in the last check — all of it");
     expect(t).toContain("No AI was used: this was Ozzie's own check of Planning Center.");
     expect(t).toContain("The AI's answer didn't check out against what Ozzie read, so nothing was shown.");
     expect(t).toContain("Read the service's plan");

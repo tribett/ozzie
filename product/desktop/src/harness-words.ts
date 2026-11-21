@@ -11,14 +11,16 @@ import { dayPage, REFUSALS } from "../../../core/src/ask.js";
 import { alsoOnPage } from "../../../core/src/harness/compose.js";
 import { VOCABULARY } from "../../../core/src/harness/fixed.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
-import { dayName } from "./day-phrases.js";
+import { dayName, pageRef } from "./day-phrases.js";
+import { watchesSeveral } from "./services-merge.js";
 import { templateTitle } from "./responsibility-words.js";
 import { dailyLimitEnds, monthLimitText } from "./model.js";
 
-// The watched service may meet on any day (onboarding spec §5, decision 18). Fixed sentences here that are shared by
-// several screens, or that describe work recorded earlier (possibly about another week's service), say "the service" or
-// "your service's page"; those that describe one job take the day words (`templateTitle`).
-const SERVICE_PAGE = "your service's page";
+// The watched service may meet on any day (onboarding spec §5, decision 18), and more than one may be watched (owner
+// decision 2026-11-19). Fixed sentences here that are shared by several screens, or that describe work recorded earlier
+// (possibly about another week's service, or from before another service was watched), say neither the day nor how many
+// services: "the last check", "the Services page"; those that describe one job take the day words (`templateTitle`).
+const SERVICE_PAGE = pageRef();
 /** One task as the native ledger lists it (ledger.rs TaskRow). Name-free by construction. */
 export interface TaskEventRow { task_id: string; sequence: number; at: string; type: TaskEvent["type"]; detail: string }
 export interface TaskRow {
@@ -58,10 +60,14 @@ export function ledgerDetail(type: TaskEvent["type"], detail: string, outcome?: 
 
 // ---- Tools and statuses ------------------------------------------------------------------------
 
-/** What each of the 13 read-only tools is, as one plain sentence (audit item 7). Never the tool's own name. */
+/**
+ * What each of the 13 read-only tools is, as one plain sentence (audit item 7). Never the tool's own name. The overview and
+ * the open roles cover every service watched, and What happened shows these for answers given before another service was
+ * watched too, so they say "the last check", never "the service".
+ */
 export const TOOL_PHRASES: Readonly<Record<ToolName, string>> = Object.freeze({
-  "sunday.overview": "Looked at the overview of the service",
-  "sunday.open_needs": "Looked at the open roles for the service",
+  "sunday.overview": "Looked at the overview of the last check",
+  "sunday.open_needs": "Looked at the open roles in the last check",
   "sunday.who_could_help": "Looked at who is on the team for an open role",
   "sunday.pending_requests": "Looked at requests still waiting for an answer",
   "sunday.rule_checkins": "Looked at the check-ins your Church rules suggest",
@@ -147,6 +153,10 @@ const reasonFor = (kind: TaskRow["kind"], code: string | null | undefined, sourc
 
 /** When Ozzie can't tell, what it can do instead (owner decision "Useful help when work cannot be completed"). */
 export const CAN_DO_INSTEAD = "Ozzie can tell you what still needs a decision for the service it watches, who on a team could help with an open role, or prepare a note for you to copy. Ask “What can you do?” to see more.";
+/** The same while more than one service is watched (services-merge.ts MANY_SERVICES). */
+export const CAN_DO_INSTEAD_SERVICES = "Ozzie can tell you what still needs a decision for the services it watches, who on a team could help with an open role, or prepare a note for you to copy. Ask “What can you do?” to see more.";
+/** What Ozzie can do instead, for the check Ask read (`day`: its day words; several services' when more than one is watched). */
+export const canDoInstead = (day: DayWords | null | undefined): string => watchesSeveral(day) ? CAN_DO_INSTEAD_SERVICES : CAN_DO_INSTEAD;
 
 /** What the Ask panel says when a question couldn't be answered. "no-model" shows the set-up panel instead. */
 export const ASK_FAILURES = Object.freeze({
@@ -227,6 +237,15 @@ export const HELP = Object.freeze({
   try: "You could ask “What still needs a decision?”, or say “Keep an eye on the service”.",
   first: `To start, connect Planning Center in Settings, or open the fictional example on ${SERVICE_PAGE}.`,
 });
+/**
+ * HELP's lines about the watched service, while more than one is watched (Planning Center only). "Keep an eye on my
+ * services" is read as the same request as "Keep an eye on the service" (core responsibilities.ts parseRequest).
+ */
+export const HELP_SERVICES = Object.freeze({
+  check: "Check the services Ozzie watches: open roles, pending requests, kids team counts and background checks, and anything that needs a decision.",
+  keep: "Keep an eye on your services, room bookings, follow-ups and group meetings, and tell you when something changes.",
+  try: "You could ask “What still needs a decision?”, or say “Keep an eye on my services”.",
+});
 /** HELP's never-line for a church on another system (B1 Church, Breeze, Genesis), by its name: Ozzie only reads there. */
 export const neverElsewhere = (system: string) =>
   `Ozzie never sends messages, never changes anything in ${system}, and never writes prayers, sermons or scripture. People decide and people go.`;
@@ -252,7 +271,8 @@ export const ADDED_HOW = addedHow(SUNDAY_WORDS);
  * the whole service even when the question named one person or team ("What still needs a decision about Riley?"), so it
  * says so (review L6).
  */
-export const COMPOSED_NOTE = `Ozzie wrote this answer itself from what it read, and it covers the whole service. The AI's answer listed more than ${MAX_FACTS} facts, more than Ozzie checks in one answer, so it isn't shown.`;
+export const composedNote = (d: DayWords | null | undefined): string => `Ozzie wrote this answer itself from what it read, and it covers ${watchesSeveral(d) ? "every service it watches" : "the whole service"}. The AI's answer listed more than ${MAX_FACTS} facts, more than Ozzie checks in one answer, so it isn't shown.`;
+export const COMPOSED_NOTE = composedNote(SUNDAY_WORDS);
 /** "See how this works" for that answer, naming the service's own page. */
 export const composedHow = (d: DayWords) => "The names Ozzie read from Planning Center, and its roles and rooms, reached the AI only as labels such as [Person 1] and [Role 1]. " +
   `The AI's answer listed more than ${MAX_FACTS} facts, more than Ozzie checks in one answer, so Ozzie set it aside and wrote this answer itself on this Mac from the same check: its counts, then each open decision in the order ${dayPage(d)} shows them. ` +

@@ -59,7 +59,9 @@ describe("Church rules: kids teams beyond the last check, and at most ten (revie
     const rules = withKidsTeam(base, "7599999", 2, "Toddlers");
     const el = KidsTeamsRules({ rules, onChange: r => { latest = r; }, teams: [[TEAMS.nursery, ["Nursery"]]] });
     const t = text(renderToStaticMarkup(el));
-    expect(t).toContain("Toddlers team Not on the service checked last. 2 confirmed at each time. Unmark this team");
+    // Said without "the service": every service watched is in the last check (polish 3).
+    expect(t).toContain("Toddlers team Not in the last check. 2 confirmed at each time. Unmark this team");
+    expect(t).not.toContain("the service checked last");
     // Pressing it unmarks the team.
     const find = (node: React.ReactNode): React.ReactElement<{ onClick?: () => void; children?: React.ReactNode }> | null => {
       if (!React.isValidElement(node)) return Array.isArray(node) ? node.map(find).find(Boolean) ?? null : null;

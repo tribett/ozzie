@@ -9,6 +9,7 @@ import { ProactivePage } from "../src/proactive-page.js";
 import { sundayProblem, type Settings } from "../src/sunday-source.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
+import type { RunRecord } from "../../../core/src/schedule.js";
 import type { Readiness } from "../src/proactive.js";
 
 const settings: Settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" };
@@ -102,17 +103,35 @@ describe("Keeping watch", () => {
     for (const page of [at(60, true), at(60, false)]) expect(page).not.toMatch(/(?<!at least )\bevery hour\b/iu);
   });
 
-  it("says a check outside the schedule was outside the schedule, never that someone pressed Check now", async () => {
-    // Check now, Ozzie's own re-read while its window is on screen and a job's check all start as "manual"; the schedule can't tell them apart.
+  it("says who started a check outside the schedule, in plain words, and never names a button (polish 3, item 2)", async () => {
+    // Check now, a question in Ask and the first read after setup are a person's; Ozzie's own re-read while its window is
+    // on screen, a job's check and the read after the plan moves on are Ozzie's (proactive.ts checkNow, as the ledger says).
     const view = await viewAfterDecline();
-    const last = { ...view.schedule.last_run!, trigger: "manual" as const };
-    const page = text(render({ ...view, schedule: { ...view.schedule, last_run: last } }, {}));
-    expect(page).toMatch(/Last check [^.]+, outside the schedule\. Finished\./u);
-    expect(page).not.toMatch(/Last check [^.]+, Check now/u);
-    // Paused, a check someone asked for is still outside the schedule.
-    expect(text(render({ ...view, schedule: { ...view.schedule, paused: true, next_run_at: null, last_run: last } }, {}))).toMatch(/Last check [^.]+, outside the schedule\. Finished\./u);
-    // A check the schedule started still says so.
-    expect(text(render({ ...view, schedule: { ...view.schedule, last_run: { ...last, trigger: "scheduled" } } }, {}))).toMatch(/Last check [^.]+, on schedule\. Finished\./u);
+    const last: RunRecord = { ...view.schedule.last_run!, trigger: "manual" };
+    const shown = (run: RunRecord, paused = false) => text(render({ ...view, schedule: { ...view.schedule, last_run: run, ...(paused ? { paused: true, next_run_at: null } : {}) } }, {}));
+    expect(shown({ ...last, by: "person" })).toMatch(/Last check [^.]+, started by you\. Finished\./u);
+    // Paused, a check someone asked for is still theirs.
+    expect(shown({ ...last, by: "person" }, true)).toMatch(/Last check [^.]+, started by you\. Finished\./u);
+    expect(shown({ ...last, by: "ozzie" })).toMatch(/Last check [^.]+, an extra check by Ozzie\. Finished\./u);
+    // Paused, a job's check or the read after the plan moves on still runs: the words stay true (review of polish 3, L2).
+    const pausedOzzie = shown({ ...last, by: "ozzie" }, true);
+    expect(pausedOzzie).toMatch(/Last check [^.]+, an extra check by Ozzie\. Finished\./u);
+    expect(pausedOzzie).not.toMatch(/between scheduled checks|outside the schedule/u);
+    // A check kept before who started it was recorded says neither, paused or not.
+    expect(shown(last)).toMatch(/Last check [^.]+, an extra check\. Finished\./u);
+    expect(shown(last, true)).toMatch(/Last check [^.]+, an extra check\. Finished\./u);
+    for (const run of [last, { ...last, by: "person" }, { ...last, by: "ozzie" }] satisfies RunRecord[]) {
+      expect(shown(run)).not.toMatch(/outside the schedule|between scheduled checks|Check now\b[^.]*\. Finished/u);
+    }
+    // A check that couldn't finish says who started it the same way.
+    expect(shown({ ...last, by: "person", outcome: "failed", problem: "Planning Center didn't answer." })).toMatch(/Last check [^.]+, started by you\. Couldn't finish\./u);
+    // The schedule's own starts read as plain words after the time.
+    const why = (trigger: "scheduled" | "launch" | "retry" | "resume" | "catch-up") => shown({ ...last, trigger });
+    expect(why("scheduled")).toMatch(/Last check [^.]+, on schedule\. Finished\./u);
+    expect(why("launch")).toMatch(/Last check [^.]+, when Ozzie opened\. Finished\./u);
+    expect(why("retry")).toMatch(/Last check [^.]+, trying again after a problem\. Finished\./u);
+    expect(why("resume")).toMatch(/Last check [^.]+, after checks were turned back on\. Finished\./u);
+    expect(why("catch-up")).toMatch(/Last check [^.]+, catching up after a missed check\. Finished\./u);
   });
 
   it("lists what changed, and says only changes are listed once there is something to list", async () => {

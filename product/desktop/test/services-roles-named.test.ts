@@ -48,8 +48,13 @@ describe("a role with its service", () => {
   it("is said as Ask's answers say it, and alone with one service", () => {
     expect(roleWithService("Greeter", "Youth Night")).toBe("Greeter (Youth Night)");
     expect(roleWithService("Greeter", null)).toBe("Greeter");
+    // A service whose own name already ends in brackets follows a dash: never a pair of brackets inside another (polish 3).
+    expect(roleWithService("Greeter", "Youth Night (fictional)")).toBe("Greeter — Youth Night (fictional)");
+    expect(roleWithService("Greeter", " Youth Night (fictional) ")).toBe("Greeter — Youth Night (fictional)");
+    expect(roleWithService("Greeter (9 AM)", "Youth Night")).toBe("Greeter (9 AM) — Youth Night");
+    expect(roleWithService("Greeter", "Youth (6–8) Night")).toBe("Greeter — Youth (6–8) Night");
     const f = merged.brief.findings.at(-1)!;
-    expect(withServices(f, services).position!.name).toBe(`Greeter (${YOUTH})`);
+    expect(withServices(f, services).position!.name).toBe(`Greeter — ${YOUTH}`);
     expect(withServices(f, undefined)).toBe(f);
   });
 });
@@ -60,14 +65,14 @@ describe("Today's decisions name each role's service while more than one is watc
     expect(named.map(l => l.text)).toEqual([
       `Greeter (${WEEKEND}): 1 more person needed, Sun 9:30 AM. 1 on the team is clear for that time.`,
       `Nursery (${WEEKEND}): 1 more person needed, Sun 9:30 AM. No one else on the team is clear for that time.`,
-      `Greeter (${YOUTH}): 2 more people needed. No one else on the team is clear.`,
+      `Greeter — ${YOUTH}: 2 more people needed. No one else on the team is clear.`,
     ]);
   });
 
   it("a background check on a team with no time of its own runs out before its own service", () => {
     const check = { ...merged.brief.findings.at(-1)!, id: "bg", key: "bg", kind: "background-check" as const, tone: "decision" as const, check: "expires-before-sunday" as const };
     const { named } = decisionLines([{ finding: check, state: "open" }], { rooms: 0, followUps: 0 }, ZONE, merged.brief.day, services);
-    expect(named.map(l => l.text)).toEqual([`Greeter (${YOUTH}): a background check on file expires before ${YOUTH}.`]);
+    expect(named.map(l => l.text)).toEqual([`Greeter — ${YOUTH}: a background check on file expires before ${YOUTH}.`]);
   });
 
   it("with one service, exactly as before", () => {
@@ -83,13 +88,13 @@ describe("Thursday's brief names each role's service while more than one is watc
   it("each open role with its service", () => {
     const lines = decided.items.map(i => sundayReadyLine(i.finding, {}, merged.brief.day!, services));
     expect(lines).toContain(`Greeter (${WEEKEND}) still needs one more person.`);
-    expect(lines).toContain(`Greeter (${YOUTH}) still needs 2 more people.`);
+    expect(lines).toContain(`Greeter — ${YOUTH} still needs 2 more people.`);
     expect(lines).toContain(`Someone on the team hasn't accepted Lyrics (${WEEKEND}) yet. Planning Center shows the request hasn't been sent.`);
   });
 
   it("a kids team short of confirmed people at no time of its own: its service, never \"this Sunday\" for another day", () => {
     const few = { ...merged.brief.findings.at(-1)!, id: "few", key: "few", kind: "too-few-confirmed" as const, confirmed: [], needed: 2 };
-    expect(sundayReadyLine(few, {}, merged.brief.day!, services)).toBe(`No confirmed people in Greeter (${YOUTH}).`);
+    expect(sundayReadyLine(few, {}, merged.brief.day!, services)).toBe(`No confirmed people in Greeter — ${YOUTH}.`);
     // One service on a Wednesday: its own day words (it said "this Sunday" before), and a Sunday's unchanged.
     expect(sundayReadyLine(few, {}, { ...main.day!, kind: "weekday", weekday: 3, day: "Wednesday", thisOne: "this Wednesday" })).toBe("No confirmed people in Greeter this Wednesday.");
     expect(sundayReadyLine(few, {}, main.day!)).toBe("No confirmed people in Greeter this Sunday.");
@@ -110,7 +115,7 @@ describe("the spoken briefing names each role's service while more than one is w
     expect(spoken(merged.brief, { teamServices: services })).toEqual([
       `For your services, Greeter (${WEEKEND}) still needs one more person at the 9:30 AM service. One person on the team could help with no overlap found, and one with a possible conflict. One person's availability couldn't be checked.`,
       `Nursery (${WEEKEND}) still needs one more person at the 9:30 AM service. No one else on this team is clear for this time.`,
-      `Greeter (${YOUTH}) still needs 2 more people. No one else on this team is clear.`,
+      `Greeter — ${YOUTH} still needs 2 more people. No one else on this team is clear.`,
     ]);
   });
 
@@ -121,7 +126,8 @@ describe("the spoken briefing names each role's service while more than one is w
     const lines = buildSpokenBriefing({ attention: null, sunday: brief, decided: applyDecisions(brief, []) }, { timeZone: ZONE, teamServices: services })
       .sections.find(s => s.id === "decisions")!.sentences;
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`One person on Greeter (${YOUTH}) has a background check on file that expires before ${YOUTH}.`);
+    // After "For your services, " the fixed opening is in lower case (it read "For your services, One person…").
+    expect(lines[0]).toBe(`For your services, one person on Greeter — ${YOUTH} has a background check on file that expires before ${YOUTH}.`);
     expect(youthTeam.interval).toBeNull();
   });
 

@@ -1,0 +1,28 @@
+{
+  "name": "ozzie",
+  "displayName": "Ozzie",
+  "version": "0.5.4",
+  "description": "Ask Claude about Ozzie's last Planning Center check on your Mac: roles that still need people, requests without an answer, overlapping room bookings and your Church rules. Read-only, with labels like [Person 1] instead of names.",
+  "author": {
+    "name": "FlockConnect LLC",
+    "url": "https://ozzie.church"
+  },
+  "homepage": "https://ozzie.church",
+  "repository": "https://github.com/tribett/ozzie",
+  "license": "Apache-2.0",
+  "keywords": [
+    "church",
+    "planning-center",
+    "volunteers",
+    "sunday",
+    "mac"
+  ],
+  "icon": "./icon.png",
+  "documentationUrl": "https://github.com/tribett/ozzie/blob/main/product/claude-plugin/ozzie/README.md",
+  "supportUrl": "https://github.com/tribett/ozzie/issues",
+  "privacyPolicyUrl": "https://ozzie.church/privacy",
+  "termsOfServiceUrl": "https://ozzie.church/terms",
+  "network": {
+    "hosts": []
+  }
+}

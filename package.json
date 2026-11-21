@@ -18,6 +18,7 @@
     "build:mcp": "vite build --config core/mcp/vite.config.ts",
     "build:share": "vite build --config core/mcp/vite.share.config.ts",
     "build:shortcuts": "vite build --config core/mcp/vite.shortcuts.config.ts",
+    "build:claude-plugin": "node product/claude-plugin/build.ts",
     "test:native": "cargo +1.99.1 test --manifest-path core/native-auth/Cargo.toml --locked",
     "test:keychain": "cargo +1.99.1 test --manifest-path core/native-auth/Cargo.toml --locked --test keychain_canary -- --ignored"
   },

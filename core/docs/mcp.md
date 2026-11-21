@@ -175,6 +175,26 @@ Settings asks to move it first. If Ozzie moves, its setup text changes with it.
 Until Ozzie shares a check, and whenever sharing is off, every tool says only that nothing from Ozzie
 is shared right now; it doesn't urge anyone to turn sharing on.
 
+### Ozzie's plugin for Cowork and Claude Code
+
+Claude's directory lists plugins read from a public GitHub repository; it no longer lists `.mcpb` files. Ozzie's plugin
+is the folder `product/claude-plugin/ozzie`: guidance for Claude (`skills/ozzie-last-check/SKILL.md`), a README the
+directory shows as the listing, and an `.mcp.json` that starts `/Applications/Ozzie.app/Contents/MacOS/ozzie-share`
+with no arguments, the same helper as above. It holds no program and declares that it reaches no host.
+
+- Claude starts a plugin's local program only in Claude Code and in Cowork tasks that run on the Mac. Claude chat (on
+  the web, in the desktop app and on phones) loads the guidance and ignores the program, so in the Claude app for Mac
+  people use **Add Ozzie to Claude** instead. On the web and on phones Claude can't read Ozzie at all.
+- `pnpm build:claude-plugin` (`product/claude-plugin/build.ts`) checks the folder against the directory's written rules
+  and Ozzie's own, runs Claude Code's `claude plugin validate --strict` when Claude Code is installed, and zips the folder
+  for claude.ai's **Upload plugin**. `--sync-version` first sets its version to the app's.
+- `core/test/mcp/read-only.test.ts` pins the four reads as the only ones any AI app can ask for (a fifth fails until an
+  owner decision adds it) and follows every import from the server's entry points to show none reaches the desktop app,
+  the native crate, a process, a network call or anything that could change Planning Center; it also reads the fictional
+  check through both the Node server and the helper's entry with an email address and a phone number planted in a name.
+  `product/test/claude-plugin.test.ts` holds the folder to the checks, the app's version, the helper's path and the
+  server's own four reads, and answers the README's three example prompts from the fictional check.
+
 ### Or with Node, from a checkout
 
 The same server runs under Node.js 22 or later for development, or on a Mac without the app:

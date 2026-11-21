@@ -54,6 +54,22 @@ describe("scheduled Sunday checks", () => {
     expect(finishRun(manual, settings, at(31), ok)).toMatchObject({ next_run_at: at(91), last_run: { trigger: "manual" } });
   });
 
+  it("keeps who started a check outside the schedule through its finish, failure or interruption, and says nothing when not told", () => {
+    const s = afterFirstCheck();
+    for (const by of ["person", "ozzie"] as const) {
+      const manual = startManual(s, at(30), by).state;
+      expect(manual.running).toEqual({ trigger: "manual", started_at: at(30), by });
+      expect(finishRun(manual, settings, at(31), ok).last_run).toMatchObject({ trigger: "manual", by, outcome: "ok" });
+      expect(finishRun(manual, settings, at(31), failed).last_run).toMatchObject({ trigger: "manual", by, outcome: "failed" });
+      expect(launchSchedule(manual, settings, at(40)).interrupted).toMatchObject({ trigger: "manual", by, outcome: "interrupted" });
+    }
+    const unknown = startManual(s, at(30)).state;
+    expect(unknown.running).toEqual({ trigger: "manual", started_at: at(30) });
+    expect(finishRun(unknown, settings, at(31), ok).last_run).not.toHaveProperty("by");
+    // The schedule's own starts never say who.
+    expect(finishRun(tickSchedule(launchSchedule(newSchedule(), settings, at(0)).state, at(0), ready).state, settings, at(1), ok).last_run).not.toHaveProperty("by");
+  });
+
   it("ignores a finish for a run it doesn't know about", () => {
     const s = afterFirstCheck();
     expect(finishRun(s, settings, at(5), failed)).toBe(s);

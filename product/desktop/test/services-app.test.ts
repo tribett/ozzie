@@ -16,6 +16,8 @@ const native = vi.hoisted(() => ({
   recordings: [] as { organization: string; plan_id: string; completed_at: string; path_id: string }[],
   /** Youth Night's teams with ids of their own, as Planning Center gives each service type its own teams (same roles). */
   ownTeams: false,
+  /** Changes in Planning Center turned on for the church (native `changes_status`); otherwise that call never answers. */
+  changes: false,
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args: Record<string, unknown> = {}) => {
@@ -28,6 +30,14 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "connect_planning_center_app": native.status = { state: "waiting", organization: "", checked_at_ms: null, source: "", problem: null }; return native.status;
       case "list_sunday_recordings": return native.recordings.filter(r => r.organization === args.organization);
       case "pick_service": return native.pick;
+      case "changes_status": return native.changes ? { organization: ORG, on: true } : new Promise(() => {});
+      // One change got ready, as native answers after reading Planning Center again: for the plan asked about, on its day.
+      case "change_prepare": {
+        const youth = args.plan === "94000001";
+        return { change: youth ? "b".repeat(32) : "a".repeat(32), plan: args.plan, team: args.team, person: args.person, position: args.position,
+          sunday: youth ? "2026-11-25" : "2026-11-22", times: [{ starts_at: youth ? "2026-11-26T00:00:00Z" : "2026-11-22T14:30:00Z", ends_at: youth ? "2026-11-26T01:30:00Z" : "2026-11-22T15:30:00Z" }],
+          still_needed: 1, kids_team: false, advised_against: false, checked_at: new Date().toISOString(), expires_at: new Date(Date.now() + 5 * 60_000).toISOString() };
+      }
       case "check_sunday": {
         const plan = String(args.planId);
         // The first service is the fictional Sunday; Youth Night's plan is the fictional Wednesday, of its own service type.
@@ -72,7 +82,7 @@ const CONNECTED = { state: "connected", organization: ORG, checked_at_ms: Date.p
 
 let unmount: (() => Promise<void>) | null = null;
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-11-20T15:00:00Z")); native.status = null; native.pick = null;
-  native.calls = []; native.recordings = []; native.ownTeams = false; kept.clear(); });
+  native.calls = []; native.recordings = []; native.ownTeams = false; native.changes = false; kept.clear(); });
 afterEach(async () => { await unmount?.(); unmount = null; vi.useRealTimers(); });
 
 type Mounted = { settle: (n?: number) => Promise<void>; act: (f: () => Promise<void>) => Promise<void> };
@@ -120,14 +130,17 @@ const badge = () => {
 };
 const checked = () => native.calls.filter(([c]) => c === "check_sunday").map(([, a]) => a.planId);
 
-/** First run as a church with one service: connect, Allow, the service picked by itself and read, then No AI for now. */
-async function oneService() {
+/**
+ * First run as a church with one service: connect, Allow, the service picked by itself and read, then No AI for now.
+ * `scopes`: what the sign-in was granted (People too lets the change be offered).
+ */
+async function oneService(scopes?: string) {
   native.pick = pickReply(SUNDAY_MORNING);
   const app = await launch();
   if (dom.seen().includes("What does your church use?")) await press(app, "Planning Center");
   await press(app, "Connect Planning Center");
   if (dom.button("Open Planning Center in my browser")) await press(app, "Open Planning Center in my browser");
-  native.status = { ...CONNECTED };
+  native.status = { ...CONNECTED, ...(scopes ? { scopes } : {}) };
   await waitFor(app, "Next: choose how Ozzie uses AI");
   await press(app, "Next: choose how Ozzie uses AI");
   await waitFor(app, "No AI for now");
@@ -260,5 +273,59 @@ describe("watching more than one service (owner decision 2026-11-19)", () => {
     await press(app, "Check Planning Center now");
     await app.settle();
     expect(checked().slice(before)).toEqual(["92902197"]);
+  }, 120_000);
+});
+
+describe("the add confirmation names the service it adds to, the first one too (polish 3, item 3; write-back review L1)", () => {
+  const RILEY = "Add Riley to Greeter in Planning Center…";
+  /** The Add buttons for Riley on Greeter, in page order: the first service's part first (parts are in date order). */
+  const addRiley = () => nodes().filter(n => n.tagName === "BUTTON" && n.textContent === RILEY);
+  const title = () => nodes().find(n => n.tagName === "H4" && (n.getAttribute?.("class") ?? "").split(" ").includes("change-title"))?.textContent ?? null;
+  /** Presses one of those buttons and waits for its confirmation; returns its title, then closes it with Don't add. */
+  async function confirmation(app: Mounted, at: number): Promise<string | null> {
+    const button = addRiley()[at];
+    if (!button) throw new Error(`no "${RILEY}" #${at} in: ${dom.seen().slice(0, 900)}`);
+    await app.act(async () => { dom.press(button as unknown as Parameters<typeof dom.press>[0]); await tick(); });
+    await waitFor(app, "Don't add Riley");
+    const shown = title();
+    await press(app, "Don't add Riley");
+    return shown;
+  }
+
+  it("with one service, the title names that service and its day", async () => {
+    native.changes = true;
+    const app = await oneService("services-and-operations");
+    await go(app, "Services");
+    await waitFor(app, RILEY);
+    expect(await confirmation(app, 0)).toBe("Add Riley Thornbury to the Sunday Morning plan for Sunday, Nov 22?");
+  }, 120_000);
+
+  it("with two, the first chosen by ids only (Settings' picker before): Watch another service learns its name, and each title names its own", async () => {
+    native.changes = true;
+    await oneService("services-and-operations");
+    // As a plan chosen in Settings' picker before this kept its name: the first service's ids and day, and no name; then
+    // Ozzie is opened again.
+    const kept0 = JSON.parse(kept.get("ozzie.watched-day.v1")!) as Record<string, unknown>;
+    kept.set("ozzie.watched-day.v1", JSON.stringify({ ...kept0, service: null }));
+    await unmount!();
+    const app = await launch();
+    await go(app, "Services");
+    if (!dom.seen().includes(RILEY)) await press(app, "Check Planning Center now");
+    await waitFor(app, RILEY);
+    expect(await confirmation(app, 0)).toBe("Add Riley Thornbury to the plan for Sunday, Nov 22?");
+    native.pick = pickReply(SUNDAY_MORNING, YOUTH_NIGHT);
+    await press(app, "Watch another service");
+    await waitFor(app, "Watch Youth Night");
+    await press(app, "Watch Youth Night");
+    await youthRead(app);
+    // The list of services read for Watch another service named the first one too: kept on this Mac, and shown.
+    expect(JSON.parse(kept.get("ozzie.watched-day.v1")!)).toMatchObject({ planId: "92902197", service: "Sunday Morning" });
+    const heads = nodes().filter(n => n.tagName === "H2" && (n.getAttribute?.("class") ?? "") === "h2").map(n => n.textContent);
+    expect(heads).toEqual(["Sunday Morning", "Youth Night"]);
+    expect(addRiley()).toHaveLength(2);
+    expect(await confirmation(app, 0)).toBe("Add Riley Thornbury to the Sunday Morning plan for Sunday, Nov 22?");
+    expect(await confirmation(app, 1)).toBe("Add Riley Thornbury to the Youth Night plan for Wednesday, Nov 25?");
+    // Each Add asked native code for its own plan only.
+    expect(native.calls.filter(([c]) => c === "change_prepare").map(([, a]) => a.plan)).toEqual(["92902197", "92902197", "94000001"]);
   }, 120_000);
 });

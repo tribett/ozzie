@@ -135,8 +135,10 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
  * that order.
  */
 export function ConnectionPage({ system, others, watched, status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt,
-  changes, onDisconnectTried }: {
+  changes, onDisconnectTried, onPlanService }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
+  /** The plan picked in the picker, with its service's Planning Center name, so App can name that service on screen. */
+  onPlanService?: ((planId: string, name: string | null) => void) | undefined;
   /** A church on B1 Church or Breeze: its own section (system-settings.tsx), in place of Planning Center's. */
   system?: ReactNode;
   /** Every church's way to the other church systems: switching, and Genesis read beside (system-settings.tsx). */
@@ -285,7 +287,7 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
       <section className="find" aria-labelledby="sunday-title">
         <h3 id="sunday-title" className="settings-t">Which services Ozzie watches</h3>
         {/* The same picker as guided setup: upcoming plans once connected, with typing the plan by hand folded below. */}
-        <SundayPicker connected={status?.state === "connected" || Boolean(kept)} waiting={pending} settings={settings} onSettings={onSettings} />
+        <SundayPicker connected={status?.state === "connected" || Boolean(kept)} waiting={pending} settings={settings} onSettings={onSettings} onService={onPlanService} />
         {watched}
       </section>
       {changes?.section}

@@ -356,7 +356,8 @@ describe("kids findings flow into the briefing; background checks never leave th
     // Four items per section are read aloud; the rest are pointed to on screen. The background checks alone, names on:
     const checksOnly = { ...b, findings: b.findings.filter(f => f.kind === "background-check") };
     const named = buildSpokenBriefing({ attention: null, sunday: checksOnly }, { timeZone: "America/New_York", includeNames: true, names: capture.names });
-    expect(named.text).toContain("One person on Nursery has no current background check on file.");
+    // After "For Sunday, " the fixed opening is in lower case (it read "For Sunday, One person…"; polish 3).
+    expect(named.text).toContain("For Sunday, one person on Nursery has no current background check on file.");
     expect(named.text).toContain("One person on Lyrics has a background check on file that expires before Sunday.");
     for (const name of Object.values(capture.names)) expect(spoken.text + named.text).not.toContain(name);
   });

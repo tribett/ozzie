@@ -538,12 +538,16 @@ describe("several services' cards say every role's time the same way (coordinato
   }))));
   const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
-  it("beside another service, a role with no time of its own says its service's date and its one service time", () => {
+  it("beside another service, a role with no time of its own says its service's date, never the plan's one time as if it were the role's", () => {
+    // 0.5.3: "Greeter · Wednesday, November 25 at 7:00 PM" sat beside "Greeter isn't tied to a service time in Planning
+    // Center, so Ozzie can't tell when it serves." The service's times are in the part's own line above (polish 3, item 4).
     expect(wed.times).toHaveLength(1);
     const t = show(untimed, true);
-    expect(t).toContain(`${role} · Wednesday, November 25 at ${clock(wed.times![0]!)}`);
+    expect(t).toContain(`${role} · Wednesday, November 25 `);
+    expect(t).not.toContain(`${role} · Wednesday, November 25 at`);
     expect(t).not.toContain(`${role} · this Wednesday`);
-    // A timed role reads the same way: the full date and the time.
+    expect(t).toContain(`Wednesday, November 25 · ${clock(wed.times![0]!)}`);
+    // A timed role still says its own date and time.
     expect(show(wed, true)).toContain(`${role} · Wednesday, November 25 at ${clock(wed.findings[at]!.position!.interval!.starts_at)}`);
   });
 

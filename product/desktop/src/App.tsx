@@ -139,6 +139,16 @@ const watchedDay = {
     const kept = service === undefined ? watchedDay.get(planId)?.service ?? null : service;
     try { localStorage.setItem(WATCHED_DAY, JSON.stringify({ planId, sort_date, times: times.slice(0, 12), zone, service: kept })); } catch { /* per-device convenience only */ }
   },
+  /**
+   * The watched service's own name, learnt where a list of services was read anyway (Settings' plan picker, Watch another
+   * service), so the confirmation of an add and the Services page's parts name the first service too (review of
+   * write-back-050, L1). What is kept of that plan's day stays; for another plan nothing else is known yet.
+   */
+  named(planId: string, service: string | null) {
+    if (!service?.trim()) return;
+    const kept = watchedDay.get(planId);
+    watchedDay.set(planId, kept?.sort_date ?? null, kept?.times ?? [], kept?.zone ?? null, service.trim());
+  },
 };
 const proactive = desktopProactive();
 // A church on B1 Church or Breeze is kept watch over by its own schedule, beside Planning Center's (system-watch.ts).
@@ -1506,7 +1516,14 @@ export function App() {
   // Which services Ozzie watches, with Watch another service: on Settings and at the end of the Services page, once a
   // first service is watched (first run chooses that one, as before).
   const pcWatch = !offPc && !fictional && org && configured ? <WatchedServices mainName={mainName} mainTypeId={settings.serviceTypeId} also={also}
-    connected={connected} zone={brief?.time_zone ?? null} pick={() => onboarding.pickService()} onAdd={addAlso} onRemove={removeAlso} /> : null;
+    connected={connected} zone={brief?.time_zone ?? null} pick={() => onboarding.pickService()} onAdd={addAlso} onRemove={removeAlso}
+    // Kept for the plan Settings watch when the list comes back (it may have moved on meanwhile), only while that is still
+    // the same service and its name isn't known (review of polish 3, L3).
+    onMainName={(name, typeId) => {
+      const s = current.current.settings;
+      if (s.serviceTypeId !== typeId || watchedDay.get(s.planId)?.service) return;
+      watchedDay.named(s.planId, name); setWatchVersion(v => v + 1);
+    }} /> : null;
   const focusFor = (planId: string) => { const f = sundayFocus ? fromPartKey(sundayFocus) : null; return f && f.plan_id === planId ? f.key : null; };
   // Each other service's part: its latest check (or that none is read yet), its own decisions, its own problem or wait.
   // Its rooms, follow-ups and group meetings are the first service's, and its notes have no "I'll send it" marks yet.
@@ -1682,7 +1699,8 @@ export function App() {
           beside={card => <ChurchOwnWords state={sourcesState} card={card} onOpen={target => { churchSources.focus(target); setPage("lists"); }} />} />)}
         {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions} keptElsewhere={Object.entries(rulesByChurch.kept).map(([organization, k]) => ({ organization, ...(k.name ? { name: k.name } : {}) }))}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}
-          procedures={orderedProcedures} focus={focusProcedure} church={onSystem || onGenesis ? null : <ChurchReadsRules rules={rules} onChange={setRules} capture={capture} status={status} />} />}
+          procedures={orderedProcedures} focus={focusProcedure} church={onSystem || onGenesis ? null : <ChurchReadsRules rules={rules} onChange={setRules} capture={capture} status={status} />}
+          procedureDay={others.length && !offPc ? MANY_SERVICES : undefined} />}
         {page === "lists" && <ChurchListsPage sources={churchSources} positions={positions} />}
         {page === "automatic" && onSystem && <ProactivePage view={automatic} names={sys.capture?.names ?? {}} organization={systemChurchKey ?? ""} planId={sys.connection?.service_id ?? ""}
           church={sys.connection?.church_name ?? null} readiness={systemReadiness} busy={sys.busy} now={now}
@@ -1722,7 +1740,8 @@ export function App() {
           onDisconnectTried={() => setDisconnectTries(n => n + 1)}
           others={<OtherSystems state={sys.state} onSwitch={switchSystem} cards={openCards}
             genesis={onGenesis ? null : <GenesisAlsoRead also={sys.state.genesis} onAlso={genesis => sys.setState({ ...sys.state, genesis })} />} />}
-          openAt={settingsAt} onOpenAt={() => setSettingsAt(null)} status={status} kept={keptConnection} settings={settings} onSettings={setSettings} onStatus={setStatus} cards={openCards} onDiscardCards={discardCards}
+          openAt={settingsAt} onOpenAt={() => setSettingsAt(null)} status={status} kept={keptConnection} settings={settings} onSettings={setSettings} onStatus={setStatus}
+          onPlanService={(planId, name) => { watchedDay.named(planId, name); setWatchVersion(v => v + 1); }} cards={openCards} onDiscardCards={discardCards}
           // On another system, Planning Center's saved checks kept from before a switch count too: they hold names (release review L2).
           recordingCount={onSystem ? sys.savedChecks.length + recordings.length : recordings.length} onModel={setModelReady} onAiAnswer={how => setupMemo.set({ aiOffered: true, aiAnswer: how })} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}

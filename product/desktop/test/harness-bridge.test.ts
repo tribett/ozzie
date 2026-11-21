@@ -20,9 +20,11 @@ import {
   agentStep, askOzzie, buildHarnessData, checkFailure, createAppHarness, devLoop, grantedFor, LedgerRecorder, localTriggers, retryDenied, runtimeFor, StepFailure, stepFailure, StepNotes,
   type Invoke,
 } from "../src/harness-bridge.js";
-import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, CAN_DO_INSTEAD_SERVICES, canDoInstead, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, ledgerDetail, taskLine } from "../src/harness-words.js";
+import { MANY_SERVICES, mergedNames, mergeParts } from "../src/services-merge.js";
+import { wednesdayCapture } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { SUNDAY_WORDS } from "../../../core/src/service-day.js";
-import { sundayShownCount } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount } from "../../../core/src/sunday-brief.js";
 import { applyDecisions } from "../../../core/src/sunday-decisions.js";
 import { sundayCount } from "../src/today-groups.js";
 import { crowded } from "../../../core/test/harness/fixtures.js";
@@ -517,7 +519,7 @@ describe("Ask answers written on this Mac", () => {
       expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\. .* From Planning Center People, checked 10:00 AM on November 20\. Kept on this Mac; never sent to an AI\.$/u),
     ]);
     expect(a.basedOn).toMatch(/^Based on: Planning Center Services and People, checked [^;]+; your Church rules$/u);
-    expect(a.steps).toEqual(["Looked at the overview of the service — all of it", "Looked at the open roles for the service — all of it", "Looked at background checks, kept on this Mac"]);
+    expect(a.steps).toEqual(["Looked at the overview of the last check — all of it", "Looked at the open roles in the last check — all of it", "Looked at background checks, kept on this Mac"]);
     expect(a.notCovered).toBe(false);
     expect(a.body).not.toMatch(/\[(?:Person|Role) \d+\]/u);
   });
@@ -559,7 +561,7 @@ describe("Ask answers written on this Mac", () => {
     ]);
     expect(turn.answer.added).toBe(true);
     expect(turn.answer.basedOn).toMatch(/^Based on: Planning Center Services, Calendar and People, checked [^;]+$/u);
-    expect(turn.answer.steps).toEqual(["Looked at the overview of the service — all of it",
+    expect(turn.answer.steps).toEqual(["Looked at the overview of the last check — all of it",
       "Looked at room bookings — all of it", "Looked at follow-ups without an owner — all of it", "Looked at background checks, kept on this Mac"]);
     expect(JSON.stringify(m.requests)).not.toMatch(/background/iu);
   });
@@ -591,6 +593,24 @@ describe("Ask answers written on this Mac", () => {
     if (turn.state !== "answered") throw new Error(turn.state);
     expect(turn.answer.body.split("\n\n")).toEqual(["Ozzie can't tell from what it read.", CAN_DO_INSTEAD]);
     expect(ASK_FAILURES.fidelity).toContain("What can you do?");
+  });
+
+  it("with more than one service watched, what Ozzie can do instead speaks of the services it watches (polish 3, item 1)", async () => {
+    const one = fictionalData();
+    const wed = wednesdayCapture();
+    const other = buildSundayBrief(wed, RULES, wed.completed_at);
+    const m = mergeParts({ brief: one.brief!, decisions: [] }, [{ plan_id: "94000001", brief: other, decisions: [] }]);
+    const several = { ...one, capture: mergedNames(one.capture!, [wed]), brief: m.brief, decisions: m.decisions };
+    const turn = await askOzzie(harness(scripted([() => answer('{"answer":"not-covered"}')]).model, undefined, several), "When is the youth retreat?", { skills });
+    if (turn.state !== "answered") throw new Error(turn.state);
+    expect(turn.answer.body.split("\n\n")).toEqual(["Ozzie can't tell from what it read.", CAN_DO_INSTEAD_SERVICES]);
+    expect(CAN_DO_INSTEAD_SERVICES).toContain("for the services it watches");
+    expect(CAN_DO_INSTEAD_SERVICES.replace("the services it watches", "the service it watches")).toBe(CAN_DO_INSTEAD);
+    // One service, or a single plan whose times fall on several days (it has its dates), keeps the one service's words.
+    expect(canDoInstead(one.brief!.day)).toBe(CAN_DO_INSTEAD);
+    expect(canDoInstead(MANY_SERVICES)).toBe(CAN_DO_INSTEAD_SERVICES);
+    expect(canDoInstead({ ...MANY_SERVICES, day: "these services", date: "Wednesday, November 25 to Sunday, November 29" })).toBe(CAN_DO_INSTEAD);
+    expect(canDoInstead(null)).toBe(CAN_DO_INSTEAD);
   });
 });
 
@@ -969,7 +989,7 @@ describe("an overview too long for one answer (review item 6)", () => {
     const cut = (turn.answer.gaps.join(" ").match(/so (\d+) findings were left out/u) ?? [])[1];
     expect(turn.answer.gaps).toEqual([`Planning Center Services: the list was too long to say in full, so ${cut} findings were left out of this answer. They're on the Services page.`]);
     expect(Number(cut)).toBeGreaterThan(0);
-    expect(turn.answer.steps).toContain("Looked at the overview of the service — a shortened list");
+    expect(turn.answer.steps).toContain("Looked at the overview of the last check — a shortened list");
     expect(JSON.stringify(turn.answer)).not.toContain("couldn't be read");
     // A check whose reads didn't all complete still says so, beside the cut.
     const failed = crowded();
@@ -1090,7 +1110,7 @@ describe("AI on this Mac: an answer choosing more than 24 facts (native too-many
     // Never presented as the AI's choice or as an answer without the AI.
     expect([a.local, a.end, a.added]).toEqual([undefined, undefined, undefined]);
     expect(a).toMatchObject({ procedure: null, notCovered: false, page: "sunday", aiSteps: 2, draft: null });
-    expect(a.steps[0]).toBe("Looked at the overview of the service — all of it");
+    expect(a.steps[0]).toBe("Looked at the overview of the last check — all of it");
     // The AI's task is recorded as refused (fidelity); what Ozzie wrote is recorded as answered on this Mac.
     await r.idle();
     expect(shape(ledger.log)).toEqual(["admit ask answer-from-what-was-read", "to running", "tool sunday.overview complete", "to failed fidelity",

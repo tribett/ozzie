@@ -98,9 +98,10 @@ const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday:
 const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 /** When a card's time is: its service time, or the watched service by its real day ("this Wednesday") when it has none. */
 /**
- * With several services on one page, a role with no serving time of its own is said by its service's date, and by its one
- * service time when the plan has just one, as a timed role is ("Wednesday, November 25 at 7:00 PM"), never "this Wednesday"
- * beside another service's full date (coordinator's live read of 0.5.0). Null: the day's own words, as one service's page.
+ * With several services on one page, a role with no serving time of its own is said by its service's date ("Wednesday,
+ * November 25"), never "this Wednesday" beside another service's full date (coordinator's live read of 0.5.0), and never
+ * with the plan's one service time, which read as the role's own time beside "Worth a look: Greeter isn't tied to a
+ * service time" (0.5.3). Null: the day's own words, as one service's page.
  */
 const UntimedWhen = createContext<string | null>(null);
 const when = (i: ServingInterval | null, d: DayWords, untimed: string | null = null) =>
@@ -1346,7 +1347,7 @@ export function SundayPage(props: {
   const part = props.part;
   const partId = useId();
   const Root = part ? "section" : "div";
-  const untimed = part && d.date ? `${d.date}${brief?.times?.length === 1 ? ` at ${clock(brief.times[0]!)}` : ""}` : null;
+  const untimed = part && d.date ? d.date : null;
   return <DayProvider value={d}><UntimedWhen.Provider value={untimed}><Root className={part ? "stack service-part" : "col"} {...(part ? { "aria-labelledby": partId } : {})}>
     {/* The plan's own title from Planning Center, after its date as the plan picker shows it (click-through, 2026-11-19:
         added to the lede, it read as a sentence of its own). In its own case, and wrapped whole when long. */}

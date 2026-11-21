@@ -3,6 +3,13 @@
 // system clock, starts timers or touches storage. The caller persists state and runs the check.
 
 export type RunTrigger = "launch" | "scheduled" | "retry" | "resume" | "catch-up" | "manual";
+/**
+ * Who started a check outside the schedule ("manual"): a person (Check now, a question in Ask, the first read after
+ * setup) or Ozzie itself (its re-read while its window is on screen, a job's check, the read after the plan moves on,
+ * after Watch another service, or after it picks the only service by itself). Absent on a record kept before this was,
+ * and on every other trigger.
+ */
+export type StartedBy = "person" | "ozzie";
 export interface ScheduleSettings {
   /** Regular spacing between checks while Ozzie is open. Church-adjustable. */
   intervalMinutes: number;
@@ -13,6 +20,7 @@ export const DEFAULT_SCHEDULE: ScheduleSettings = { intervalMinutes: 60, runOnLa
 
 export interface RunRecord {
   trigger: RunTrigger; started_at: string; finished_at: string;
+  by?: StartedBy;
   outcome: "ok" | "failed" | "interrupted";
   /** Fixed local copy only; never provider text. */
   problem?: string;
@@ -24,7 +32,7 @@ export interface ScheduleState {
   next_trigger: RunTrigger;
   /** A check came due but its prerequisites (connection, chosen Sunday) were missing. Not a missed check. */
   waiting_since: string | null;
-  running: { trigger: RunTrigger; started_at: string } | null;
+  running: { trigger: RunTrigger; started_at: string; by?: StartedBy } | null;
   last_run: RunRecord | null;
   /** Consecutive failed checks. */
   failures: number;
@@ -63,7 +71,7 @@ export function launchSchedule(state: ScheduleState, settings: ScheduleSettings,
   const s: ScheduleState = { ...state };
   const step: Omit<Step, "state"> = {};
   if (s.running) {
-    step.interrupted = { trigger: s.running.trigger, started_at: s.running.started_at, finished_at: now, outcome: "interrupted" };
+    step.interrupted = { trigger: s.running.trigger, started_at: s.running.started_at, ...(s.running.by ? { by: s.running.by } : {}), finished_at: now, outcome: "interrupted" };
     s.last_run = step.interrupted;
     s.running = null;
   }
@@ -92,10 +100,10 @@ export function tickSchedule(state: ScheduleState, now: string, ready: boolean):
   return { state: { ...state, waiting_since: null, running: { trigger, started_at: now } }, start: trigger, ...(missed ? { missed } : {}) };
 }
 
-/** "Check now". Allowed while paused (a person asked); never while another check runs. */
-export function startManual(state: ScheduleState, now: string): Step {
+/** "Check now" and every other check outside the schedule, with who started it. Allowed while paused (a person asked); never while another check runs. */
+export function startManual(state: ScheduleState, now: string, by?: StartedBy): Step {
   if (state.running) return { state };
-  return { state: { ...state, running: { trigger: "manual", started_at: now } }, start: "manual" };
+  return { state: { ...state, running: { trigger: "manual", started_at: now, ...(by ? { by } : {}) } }, start: "manual" };
 }
 
 export function finishRun(state: ScheduleState, settings: ScheduleSettings, now: string, result: { ok: true } | { ok: false; problem: string }): ScheduleState {
@@ -104,7 +112,8 @@ export function finishRun(state: ScheduleState, settings: ScheduleSettings, now:
   const delay = result.ok ? intervalMs(settings) : retryDelayMs(failures, intervalMs(settings));
   return {
     ...state, running: null, failures,
-    last_run: { trigger: state.running.trigger, started_at: state.running.started_at, finished_at: now, outcome: result.ok ? "ok" : "failed", ...(result.ok ? {} : { problem: result.problem }) },
+    last_run: { trigger: state.running.trigger, started_at: state.running.started_at, ...(state.running.by ? { by: state.running.by } : {}), finished_at: now,
+      outcome: result.ok ? "ok" : "failed", ...(result.ok ? {} : { problem: result.problem }) },
     next_run_at: state.paused ? null : plus(now, delay),
     next_trigger: result.ok ? "scheduled" : "retry",
   };

@@ -33,6 +33,11 @@ export const MANY_SERVICES: DayWords = Object.freeze({
   kind: "spread", weekday: null, day: "your services", Day: "Your services", page: SERVICES_PAGE, question: SERVICES_QUESTION, date: null,
   thisOne: "your services",
 });
+/**
+ * Whether day words are those for every service at once (MANY_SERVICES, or a copy of it): a spread with no date. One plan
+ * whose times fall on several days always has its dates (core service-day.ts dayWords), so it never reads as several.
+ */
+export const watchesSeveral = (d: DayWords | null | undefined): boolean => d?.kind === "spread" && d.date === null;
 
 /** The leader's decisions across services: the first service's as they are, each other's under its own keys. The same list with none. */
 export function mergeDecisions(main: readonly SundayDecision[], others: readonly Pick<OtherPart, "plan_id" | "decisions">[]): readonly SundayDecision[] {

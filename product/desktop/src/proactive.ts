@@ -673,7 +673,8 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
     checkNow(source) {
       if (inflight) return inflight;
       if (!hooks) return Promise.reject("not-connected");
-      const step = startManual(schedule, deps.now());
+      // Who started it, as the task ledger records it: a person unless Ozzie's own caller says "automatic".
+      const step = startManual(schedule, deps.now(), source === "automatic" ? "ozzie" : "person");
       if (!step.start) return Promise.reject("busy");
       schedule = step.state;
       const work = run("manual", source);

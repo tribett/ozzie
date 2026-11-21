@@ -36,7 +36,7 @@ import { CAPTURE_PARTS, unreadParts } from "../../../core/src/church-systems/rea
 export { systemHarnessCapture } from "../../../core/src/church-systems/harness.js";
 import { operationsGranted, type ConnectionStatus } from "./connection.js";
 import {
-  ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, CAN_DO_INSTEAD, CHECK_FOUND, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
+  ASK_FAILURES, askFailureText, BACKGROUND_HERE, basedOnEvidence, canDoInstead, CHECK_FOUND, evidenceGaps, isTaskStart, ledgerDetail, localSteps, modelSteps, outcomeSteps, STATUS_WORDS, TASK_ENDS, TOOL_PHRASES,
   type CheckFound, type CheckTrigger, type TaskEnd, type TaskRow, type TaskStart,
 } from "./harness-words.js";
 
@@ -1024,8 +1024,9 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     const added = left !== null && left.paragraphs.length > 0;
     // "Nothing in this check needs a decision" counts only what the AI read; it is never said above decisions added here.
     const own = shown.body.split("\n\n").filter(p => p && !(added && p === NOTHING_TO_DECIDE));
-    // What Ozzie can do instead, for the system the church uses: never what it just said it can't (round 5).
-    const body = [...own, ...(added ? left.paragraphs.map(p => left.fill(harness.restore(p))) : []), ...(shown.notCovered && !added ? [canDoFor(harness.data) ?? CAN_DO_INSTEAD] : [])].join("\n\n");
+    // What Ozzie can do instead, for the system the church uses: never what it just said it can't (round 5); "the services
+    // it watches" while more than one is.
+    const body = [...own, ...(added ? left.paragraphs.map(p => left.fill(harness.restore(p))) : []), ...(shown.notCovered && !added ? [canDoFor(harness.data) ?? canDoInstead(harness.data.brief?.day)] : [])].join("\n\n");
     const mode = harness.data.mode;
     // How many people a role needs is said under an answer about coverage, and under any answer that says nothing needs
     // a decision (round 5: it led a "who could cover" one; review of round 5, H1: never "nothing needs a decision" alone).

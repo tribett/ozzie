@@ -41,6 +41,8 @@ export function noticeLine(day: NoticeDay): string {
 }
 
 const ON_SUNDAY = (d: DayWords) => d.kind === "weekday" && d.weekday === 0;
+/** The first half of that line, said alone above a procedure text that doesn't say Sunday (procedure-text.tsx). */
+export const EXACT_WORDS = "These are the exact words the AI is given.";
 /**
  * The line above a procedure's exact text (core/skills, pinned) for a service not on a Sunday: the text stays word for
  * word, since it is what the AI is given, and this says what its "Sunday" means. Null for a Sunday service.
@@ -48,7 +50,7 @@ const ON_SUNDAY = (d: DayWords) => d.kind === "weekday" && d.weekday === 0;
 export function procedureNote(d: DayWords): string | null {
   if (ON_SUNDAY(d)) return null;
   const meant = d.kind === "weekday" ? `your ${d.day} service` : d.kind === "unknown" ? "the service Ozzie watches" : d.day;
-  return `These are the exact words the AI is given. Where they say Sunday, they mean ${meant}.`;
+  return `${EXACT_WORDS} Where they say Sunday, they mean ${meant}.`;
 }
 /**
  * A procedure's purpose as shown above its exact text, the service named by its real day: "this Sunday" after a word like

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { describeChange, type SundayChange } from "../../../core/src/sunday-changes.js";
-import type { RunTrigger } from "../../../core/src/schedule.js";
+import type { RunRecord, RunTrigger, StartedBy } from "../../../core/src/schedule.js";
 import { LIVE_CHECK_VALID_MS } from "../../../core/src/sunday-capture.js";
 import { INTERVAL_CHOICES, type HistoryEntry, type ProactiveController, type ProactivePrefs, type ProactiveView, type Readiness } from "./proactive.js";
 import { Icon } from "./icons.js";
@@ -64,15 +64,20 @@ export function zoneText(churchTimeZone: string | null, mac = macZone(), source 
     : `${zoneLabel(churchTimeZone)}, the church's time zone in ${source}. Times on this page and quiet hours follow this Mac's clock: ${zoneLabel(mac)}.`;
 }
 /**
- * How the last check started. "manual" is every check outside the schedule, not only Check now: Ozzie's own re-read while
- * its window is on screen (App's stale refresh), a job's check, Ask checking again, the first read after setup and the
- * read after the watched plan moves on all start the same way (proactive.ts checkNow), and the schedule keeps no word of
- * which it was, so the page says only what is true of all of them, paused or not.
+ * How the last check started, finishing "Last check Sat, Nov 21 at 12:14 PM, …". "manual" is every check outside the
+ * schedule, not only Check now (proactive.ts checkNow), so it says who started it, as the task ledger does: a person
+ * (Check now, a question in Ask, the first read after setup or after choosing a zone or service on B1 Church or Breeze)
+ * or Ozzie itself (its re-read while its window is on screen, a job's check, the read after the watched plan moves on,
+ * after Watch another service, or after it picks the only service by itself). Each is true paused or not (a job or a
+ * plan moving on can still read while this is paused). A check kept before who started it was recorded says neither.
  */
 const why: Record<RunTrigger, string> = {
-  launch: "when Ozzie opened", scheduled: "on schedule", retry: "trying again after a problem", resume: "after resuming",
-  "catch-up": "catching up after a missed check", manual: "outside the schedule",
+  launch: "when Ozzie opened", scheduled: "on schedule", retry: "trying again after a problem", resume: "after checks were turned back on",
+  "catch-up": "catching up after a missed check", manual: "an extra check",
 };
+const startedBy: Record<StartedBy, string> = { person: "started by you", ozzie: "an extra check by Ozzie" };
+/** The words for how one check started. */
+export const lastCheckWhy = (r: Pick<RunRecord, "trigger" | "by">): string => r.trigger === "manual" && r.by && Object.hasOwn(startedBy, r.by) ? startedBy[r.by] : why[r.trigger];
 /** With its window on screen, Ozzie reads again once what it shows is this old (App's stale refresh, core LIVE_CHECK_VALID_MS). */
 const FRESH_MINUTES = LIVE_CHECK_VALID_MS / 60_000;
 const notice = (): Record<NonNullable<HistoryEntry["notice"]>, string | null> => ({
@@ -163,7 +168,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
     : shownReadiness !== "ready" ? <span className="badge b-look">Waiting for setup</span>
       : schedule.failures > 0 ? <span className="badge b-attn">Couldn't finish last time</span>
         : <span className="badge b-ok"><Icon name="check" small />On schedule</span>;
-  const ran = (r: NonNullable<typeof last>) => `${time(r.finished_at)}${why[r.trigger] ? `, ${why[r.trigger]}` : ""}`;
+  const ran = (r: NonNullable<typeof last>) => `${time(r.finished_at)}${lastCheckWhy(r) ? `, ${lastCheckWhy(r)}` : ""}`;
   const lastLine = !last ? "Not yet."
     : last.outcome === "failed" ? `${ran(last)}. Couldn't finish.`
       : last.outcome === "interrupted" ? `${time(last.finished_at)}. Stopped when Ozzie closed.`

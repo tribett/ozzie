@@ -12,26 +12,28 @@
 // the same language as a finding (the question, Ozzie's sentences, where the facts came from and when, and "See how
 // this works" with the steps), not a thread of chat bubbles. Earlier questions this session stay as a short list of
 // cards to reopen. Once there is an answer, the two notes about Ask fold away so the answer stays in view at any zoom.
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import "./ask-panel.css";
 import { MAX_QUESTION_CHARS, onDayPage, suggestedQuestions } from "../../../core/src/ask.js";
 import { kidsWording } from "../../../core/src/harness/compose.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
+import type { DayWords } from "../../../core/src/service-day.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
 import {
-  addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, HELP, LOCAL_HOW, LOCAL_NOTE, neverElsewhere, procedureTitle, type Account,
+  addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, COMPOSED_ENDED, composedHow, composedNote, HELP, HELP_SERVICES, LOCAL_HOW, LOCAL_NOTE, neverElsewhere, procedureTitle, type Account,
 } from "./harness-words.js";
 import { TaskAccount } from "./activity-page.js";
 import { ChooseAiButton, ChooseAiContext } from "./ai-line.js";
 import { NEEDS_AI } from "./ai-words.js";
 import { Icon } from "./icons.js";
-import { useDay } from "./day-words.js";
+import { DayProvider, useDay } from "./day-words.js";
 import { OPEN_SERVICES, pageRef, SERVICES } from "./day-phrases.js";
 import { ProcedureBody } from "./procedure-text.js";
 import { DraftActions, type OpenDraft } from "./draft-actions.js";
 import { PlanTurn, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { useSystemWords, type SystemWords } from "./church-system.js";
+import { MANY_SERVICES, watchesSeveral } from "./services-merge.js";
 import { isVoiceShortcut, listenInto, LISTENING_NOTE, nativeVoice, VOICE_HINT, VOICE_SHORTCUT, voiceOff, type Voice, type VoiceStatus } from "./voice.js";
 
 type Page = "sunday" | "today" | "connection" | "cards";
@@ -44,8 +46,11 @@ const MODEL_HOW = "The names Ozzie read from Planning Center, and its roles and 
  * what Ozzie does with it (no kids teams, background checks, rooms or follow-ups; who could help only where the system
  * ties a team to each role).
  */
-export function helpFor(w: SystemWords): { intro: string; can: readonly string[]; never: string; try: string; first: string } {
-  if (w.system === "planning-center" && !w.unchosen) return HELP;
+export function helpFor(w: SystemWords, several = false): { intro: string; can: readonly string[]; never: string; try: string; first: string } {
+  // Several services are watched only on Planning Center: its two lines about the service then say "services".
+  if (w.system === "planning-center" && !w.unchosen) {
+    return several ? { ...HELP, can: HELP.can.map((c, i) => i === 0 ? HELP_SERVICES.check : i === 3 ? HELP_SERVICES.keep : c), try: HELP_SERVICES.try } : HELP;
+  }
   // Nothing chosen yet (a fresh Mac): Planning Center's list, never "from what it reads in Planning Center" (release review L5).
   if (w.unchosen) return { ...HELP, intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first) };
   // Genesis shares no volunteer schedules (round 5): what Ozzie answers from it, all on this Mac.
@@ -75,7 +80,11 @@ export function helpFor(w: SystemWords): { intro: string; can: readonly string[]
 }
 type PlanRequest = Exclude<Parsed, { kind: "none" }>;
 type TurnState = { state: "asking" } | AskTurn | { state: "plan"; parsed: PlanRequest } | { state: "cards" } | { state: "help"; checked: boolean } | { state: "start" };
-export type Turn = { id: number; question: string } & TurnState;
+/**
+ * `several`: more than one Planning Center service was watched when it was asked (services-merge.ts MANY_SERVICES), kept
+ * with the turn so a card reopened later says what was true then: its help list, its procedure and its notes say "services".
+ */
+export type Turn = { id: number; question: string; several?: boolean } & TurnState;
 /** Taking something on from Ask: the deterministic reading of a request, and the plan card's needs. */
 export interface PlanHooks { parse: (typed: string) => Parsed; context: PlanContext; actions: PlanActions }
 /** One question, start to finish. Production: askOzzie over the app's Harness. */
@@ -154,15 +163,24 @@ export function answerAccount(answer: ShownAnswer): Account {
   return { started: "You asked a question.", looked: answer.steps, ai: aiText("ask", answer.local ? "on-this-mac" : undefined, answer.aiSteps, true), ended };
 }
 
+/**
+ * Every service's day words while more than one is watched (services-merge.ts MANY_SERVICES; AskPanel provides them): an
+ * answer covers them all, so the procedure it followed is named, and the line above its exact text and the note under an
+ * answer Ozzie wrote itself speak, for every service, never for the first one's day. Null with one service. Only these
+ * read it: a plan card in Ask keeps the page's own words.
+ */
+const AnswerServices = createContext<DayWords | null>(null);
+
 /** "See how this works": the procedure Ozzie followed, verbatim, and the steps it took, in plain words. */
 export function HowItWorks({ answer }: { answer: ShownAnswer }) {
-  const day = useDay();
+  const page = useDay();
+  const day = useContext(AnswerServices) ?? page;
   // The church's own system where these say where the names came from (Planning Center's words unchanged).
   const { say } = useSystemWords();
   return <div className="ask-how-body stack-tight">
     {answer.procedure && <>
       <p className="bold">Ozzie followed this procedure: {procedureTitle(answer.procedure.title, day) ?? answer.procedure.title}</p>
-      <ProcedureBody body={answer.procedure.body} />
+      <DayProvider value={day}><ProcedureBody body={answer.procedure.body} /></DayProvider>
     </>}
     <TaskAccount account={answerAccount(answer)} />
     {answer.local ? <p className="small">{say(LOCAL_HOW)}</p>
@@ -176,7 +194,7 @@ export function HowItWorks({ answer }: { answer: ShownAnswer }) {
 export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page: Page) => void }) {
   const [how, setHow] = useState(false);
   // Fixed lines that point to "the Sunday page" name the watched service's own page (onboarding spec §5).
-  const d = useDay();
+  const d = useDay(), services = useContext(AnswerServices);
   return <div className="body ask-answer">
     {(answer.notCovered || answer.gaps.length > 0) && <div className="stack-tight">
       <span className="badge b-look"><Icon name="eye" small />Worth a look</span>
@@ -185,7 +203,7 @@ export function Answer({ answer, onOpen }: { answer: ShownAnswer; onOpen: (page:
     {/* A line ending in a colon heads the lines under it ("Needs a decision:", "On the Sunday page, needing a decision:"). */}
     {answer.body && <div className="ask-lines">{onDayPage(answer.body, d).split(/\n{2,}/).map((p, i) => <p key={i} className={p.endsWith(":") ? "ask-group" : undefined}>{p}</p>)}</div>}
     {answer.local && <p className="small">{LOCAL_NOTE}</p>}
-    {answer.composedHere && <p className="small">{COMPOSED_NOTE}</p>}
+    {answer.composedHere && <p className="small">{composedNote(services ?? d)}</p>}
     {answer.draft && <DraftCard text={answer.draft} />}
     <div className="ask-src">
       <BasedOn text={answer.basedOn} />
@@ -279,7 +297,7 @@ function NextSteps({ page, onOpen }: { page: string | undefined; onOpen: (page: 
 export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined }) {
   const d = useDay();
   const w = useSystemWords();
-  const help = helpFor(w);
+  const help = helpFor(w, Boolean(turn.several));
   switch (turn.state) {
     case "plan": return plans ? <div className="body"><PlanTurn parsed={turn.parsed} context={plans.context} actions={plans.actions} /></div> : null;
     case "cards": return <div className="body"><p>{w.say(CARDS_POINTER)}</p>
@@ -340,6 +358,8 @@ export function AskPanel(props: {
   initialVoice?: VoiceStatus;
 }) {
   const { brief, modelReady } = props;
+  // Several services watched now: a turn asked now keeps it (Turn `several`), and its answer covers them all (AnswerServices).
+  const several = watchesSeveral(brief?.day);
   const words = useSystemWords();
   const voice = props.voice ?? nativeVoice;
   // "Choose how Ozzie uses AI" from inside the panel closes the panel as it opens the AI screens, which the panel would
@@ -381,7 +401,7 @@ export function AskPanel(props: {
   // plan, or, once something is read, a question about it.
   const canType = ready || Boolean(props.plans) || Boolean(props.ask);
   const micUsable = canType && !busy && voiceStatus?.status === "ready";
-  const update = (id: number, turn: AskTurn) => setTurns(all => all.map(t => t.id === id ? { id, question: t.question, ...turn } as Turn : t));
+  const update = (id: number, turn: AskTurn) => setTurns(all => all.map(t => t.id === id ? { id, question: t.question, ...(t.several ? { several: true } : {}), ...turn } as Turn : t));
 
   /** The microphone button and ⌘⇧L: start listening, or finish. The words only fill the box. */
   const toggleVoice = async () => {
@@ -414,7 +434,7 @@ export function AskPanel(props: {
       const id = nextId.current++;
       setInput("");
       setShownId(id);
-      setTurns(all => [...all, { id, question, ...turn }]);
+      setTurns(all => [...all, { id, question, ...(several ? { several: true } : {}), ...turn }]);
     };
     // Answered here from what was read (Genesis): what to take on and "What can you do?" keep their own answers. A card
     // asked about by count ("How many times was the visitor card filled in?") is a Genesis form, not the cards page.
@@ -438,7 +458,7 @@ export function AskPanel(props: {
     running.current = controller;
     setInput("");
     setShownId(id);
-    setTurns(all => [...all, { id, question, state: "asking" }]);
+    setTurns(all => [...all, { id, question, ...(several ? { several: true } : {}), state: "asking" }]);
     setBusy(true);
     try { update(id, await props.ask(typed, controller.signal)); }
     catch { update(id, { state: "problem", code: null, text: ASK_FAILURES.unfinished }); }
@@ -487,7 +507,7 @@ export function AskPanel(props: {
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
       {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />A saved copy of a check from {time(brief.completed_at)}. Not a current check.</p>}
       {brief && !answered && <BasedOn text={basedOnBrief(brief)} />}
-      {current && <div ref={cardRef} className="ask-current"><AskCard turn={current} page={props.page} onOpen={props.onOpen} plans={props.plans} /></div>}
+      {current && <AnswerServices.Provider value={current.several ? MANY_SERVICES : null}><div ref={cardRef} className="ask-current"><AskCard turn={current} page={props.page} onOpen={props.onOpen} plans={props.plans} /></div></AnswerServices.Provider>}
       {earlier.length > 0 && <section className="ask-earlier" aria-labelledby="ask-earlier-h">
         <h3 id="ask-earlier-h" className="small bold">Earlier questions</h3>
         <ul className="list">{earlier.map(t => <li key={t.id}>

@@ -22,7 +22,7 @@ export const FIRST_RUN = {
    * question say the same where each is turned on or first used.
    */
   reads: [
-    "For the service Ozzie watches: its times, the roles, who is scheduled and who said yes, each team's members and leaders, the times those people said they'll be away, and the other services they're scheduled for.",
+    "For each service Ozzie watches: its times, the roles, who is scheduled and who said yes, each team's members and leaders, the times those people said they'll be away, and the other services they're scheduled for.",
     "Background checks, only if you turn on the kids-team rule: whether each person scheduled on those teams has a current check, never its details. If you turn on adding people in Settings, adding someone to a team marked as a kids team first reads that person's background check status and end date (cleared and unfinished checks), even when that rule is off.",
     "Only if you turn on adding people in Settings, and only when you add someone: the plan, its open roles and the people on it again, that person's blockouts and other services then, and whether Planning Center lists them as a child and as active, read just before the change. It stays on this Mac and never goes to an AI.",
     "Email addresses or phone numbers, only when you open a note for one person in Mail or Messages and your connection includes People: that person's, and whether Planning Center lists them as a child. One is used to fill in To. They're kept nowhere and never go to an AI.",
@@ -44,7 +44,7 @@ export const FIRST_RUN = {
   notNow: "Not now",
   tryAgain: "Try again",
   readFold: "What will Ozzie read?",
-  readBody: "For the service Ozzie watches: its times, the roles, who is scheduled and who said yes, each team's members and leaders, the times those people said they'll be away, and the other services they're scheduled for. Nothing more unless you ask for it later, and Ozzie asks first.",
+  readBody: "For each service Ozzie watches: its times, the roles, who is scheduled and who said yes, each team's members and leaders, the times those people said they'll be away, and the other services they're scheduled for. Nothing more unless you ask for it later, and Ozzie asks first.",
   readWording: "Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection.",
   offline: "This Mac isn't connected to the internet. Connect to Wi-Fi, then try again.",
   selfBuilt: "For a copy of Ozzie you built yourself",

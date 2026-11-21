@@ -84,8 +84,8 @@ describe("Ask with more than one service watched names each role's service (rehe
       `Drew Halvorsen's availability for Greeter (${WEEKEND}) needs confirmation: a blockout couldn't be checked.`,
       `Sam Whitcombe was left out for Greeter (${WEEKEND}): a blockout covers this time.`,
       `Morgan Ellingsworth was left out for Greeter (${WEEKEND}): confirmed elsewhere at this time.`,
-      `On the team for Greeter (${YOUTH}), the check listed 0 people.`,
-      `Greeter (${YOUTH}) still needs 2 more people, by Planning Center's count. Ozzie can't tie this role to one service time.`,
+      `On the team for Greeter — ${YOUTH}, the check listed 0 people.`,
+      `Greeter — ${YOUTH} still needs 2 more people, by Planning Center's count. Ozzie can't tie this role to one service time.`,
       "That doesn't mean they're free or willing; only they can say.",
       "People are listed in no particular order, not ranked.",
     ]);
@@ -94,10 +94,12 @@ describe("Ask with more than one service watched names each role's service (rehe
   it("What still needs a decision? Each open role names its service; the one at no readable time says so", async () => {
     const { shown } = await ask(data(true), "What still needs a decision?", "sunday.overview", false);
     expect(shown).toContain(`Greeter (${WEEKEND}) at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.`);
-    expect(shown).toContain(`Greeter (${YOUTH}) still needs 2 more people, by Planning Center's count. Ozzie can't tie this role to one service time.`);
+    expect(shown).toContain(`Greeter — ${YOUTH} still needs 2 more people, by Planning Center's count. Ozzie can't tie this role to one service time.`);
     expect(shown).toContain(`Nursery (${WEEKEND}) at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count.`);
-    // Every line that names a role names its service.
-    for (const line of shown) if (/\b(?:Greeter|Nursery|Lyrics)\b/u.test(line)) expect(line).toMatch(new RegExp(`\\((?:${WEEKEND}|${YOUTH.replace(/[()]/gu, "\\$&")})\\)`, "u"));
+    // Every line that names a role names its service: in brackets, or after a dash when the service's own name ends in
+    // brackets (never a pair inside another, polish 3).
+    for (const line of shown) if (/\b(?:Greeter|Nursery|Lyrics)\b/u.test(line)) expect(line).toMatch(new RegExp(`\\(${WEEKEND}\\)| — ${YOUTH.replace(/[()]/gu, "\\$&")}`, "u"));
+    expect(shown.join("\n")).not.toContain(`(${YOUTH})`);
   });
 
   it("a note drafted for one service's Greeter names that service, even when the AI asked by the label for every Greeter", async () => {
@@ -119,7 +121,7 @@ describe("Ask with more than one service watched names each role's service (rehe
   it("never sends the AI a service's name or a person's: each team's label is a label like any other", async () => {
     const { sent } = await ask(data(true), "Who could cover Greeter?", "sunday.who_could_help", true);
     for (const name of [WEEKEND, YOUTH, "Youth Night", "Weekend"]) expect(sent).not.toContain(name);
-    expect(sent).not.toMatch(/Riley|Thornbury|Greeter \(/u);
+    expect(sent).not.toMatch(/Riley|Thornbury|Greeter \(|Greeter —/u);
   });
 });
 
@@ -136,14 +138,14 @@ describe("several services: the AI's other lookups beside who could help", () =>
     const res = await h.ask("Who could cover Greeter?");
     if (!res.ok) throw new Error(res.refusal);
     const shown = composeAnswer(res.outcome.answer!, res.outcome.evidence, d.brief!.day ?? null).paragraphs.map(p => h.restore(p));
-    const weekend = shown.indexOf(`On the team for Greeter (${WEEKEND}), the check listed 5 people.`), youth = shown.indexOf(`On the team for Greeter (${YOUTH}), the check listed 0 people.`);
+    const weekend = shown.indexOf(`On the team for Greeter (${WEEKEND}), the check listed 5 people.`), youth = shown.indexOf(`On the team for Greeter — ${YOUTH}, the check listed 0 people.`);
     expect(weekend).toBeGreaterThanOrEqual(0);
     expect(youth).toBeGreaterThan(weekend);
     // Each team's time and count, in the open roles' words, right under its own count; said once.
     expect(shown[weekend + 1]).toMatch(new RegExp(`^Greeter \\(${WEEKEND}\\) at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count\\. Already confirmed`, "u"));
-    expect(shown[youth + 1]).toMatch(/^Greeter \(Ozzie Demo Youth Night \(fictional\)\) still needs 2 more people, by Planning Center's count\. Ozzie can't tie this role to one service time\./u);
+    expect(shown[youth + 1]).toMatch(/^Greeter — Ozzie Demo Youth Night \(fictional\) still needs 2 more people, by Planning Center's count\. Ozzie can't tie this role to one service time\./u);
     expect(shown.filter(p => p.startsWith(`Greeter (${WEEKEND}) at 9:30 AM`))).toHaveLength(1);
-    expect(shown.filter(p => p.startsWith(`Greeter (${YOUTH})`))).toHaveLength(1);
+    expect(shown.filter(p => p.startsWith(`Greeter — ${YOUTH}`))).toHaveLength(1);
   });
 
   it("two teams of one service with the same role: one label for every Greeter, everyone listed once, as before", async () => {
