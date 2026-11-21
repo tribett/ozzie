@@ -21,15 +21,30 @@ describe("promises", () => {
     expect(found).toEqual([]);
   });
 
-  it("this build only reads, so every promise is in form A", () => {
-    expect(WRITE_BACK_BUILD).toBe(false);
-    expect(BUILD_FORM).toBe("A");
+  it("this build holds the one change a person confirms (owner decision 2026-11-21), so every promise is in form B", () => {
+    expect(WRITE_BACK_BUILD).toBe(true);
+    expect(BUILD_FORM).toBe("B");
     expect(firstScreenPromises()).toEqual([
-      "It only reads. It never changes anything in Planning Center.",
+      "It changes nothing in Planning Center unless you confirm that one change.",
       "The names Ozzie reads from Planning Center stay on this Mac. The AI sees stand-ins instead.",
-      "It never sends anything for you. You send every note yourself.",
+      "It never sends a message for you. You send every note yourself.",
     ]);
-    expect(promise("readsShort")).toBe("Reads only.");
+    expect(promise("readsShort")).toBe("Changes only what you confirm.");
+  });
+
+  it("a church on another system, and anything that only reads whatever the switch says, says form A (it only reads)", () => {
+    const src = (f: string) => readFileSync(new URL(f, src0), "utf8");
+    const src0 = new URL("../src/", import.meta.url);
+    // A job, and the scheduled check's "What it can do": they never make a change.
+    expect(src("responsibility-words.ts")).toContain("`${promise(\"reads\", \"A\")} It won't contact anyone; you decide what happens next.`");
+    expect(src("responsibility-words.ts")).toContain("${promise(\"readsShort\", \"A\")}");
+    expect(src("proactive-page.tsx")).toContain("{promise(\"readsShort\", \"A\")} It never sends messages.");
+    // The sidebar and Keeping watch: form A off Planning Center (B1 Church, Breeze, Genesis).
+    expect(src("App.tsx")).toContain("promise(\"readsShort\", offPc ? \"A\" : BUILD_FORM)");
+    expect(src("proactive-page.tsx")).toContain("promise(\"connectAnd\", w.system === \"planning-center\" ? BUILD_FORM : \"A\")");
+    // What happened on another system: that system's own promise, and form A's never-sends line.
+    expect(src("activity-page.tsx")).toContain("system ? systemPromise(\"reads\", system.name)");
+    expect(src("activity-page.tsx")).toContain("system ? promise(\"sends\", \"A\") : promise(\"sends\")");
   });
 
   it("a write-back build says form B, with no reads-only promise left anywhere", () => {
@@ -38,9 +53,12 @@ describe("promises", () => {
     expect(b).toContain("It never sends a message for you. You send every note yourself.");
     expect(promise("readsShort", "B")).toBe("Changes only what you confirm.");
     expect(promise("connectReads", "B")).toBe("Ozzie changes nothing in Planning Center unless you confirm that one change.");
-    for (const line of [...b, ...(["readsShort", "connectReads", "still", "connectAnd", "request"] as const).map(n => promise(n, "B"))]) {
+    for (const line of [...b, ...(["readsShort", "connectReads", "still", "connectAnd", "request", "systemsRead", "chooseReads"] as const).map(n => promise(n, "B"))]) {
       expect(line).not.toMatch(/only reads|never changes anything|Reads only/u);
     }
+    // Never more than the one change, and only for Planning Center.
+    expect(promise("systemsRead", "B")).toBe("Ozzie reads Planning Center, B1 Church, Breeze or Genesis. It changes nothing in any of them, except one change in Planning Center that you turn on and confirm.");
+    expect(promise("chooseReads", "B")).toBe("It changes nothing there, except one change in Planning Center that you turn on and confirm.");
   });
 
   it("form A stays exactly true: while this build says it only reads, nothing in it can write to Planning Center (review M12)", () => {

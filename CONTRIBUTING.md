@@ -9,8 +9,16 @@ send. Contributions are welcome when they fit inside the rules below.
 These are safety boundaries, not settings. A change that weakens one will not
 be merged.
 
-- **Read-only.** Ozzie reads Planning Center with a fixed list of GET
-  requests. There is no write path, and no tool that sends a message.
+- **Reads, and only the one change a person confirms.** Ozzie reads Planning
+  Center with a fixed list of GET requests. Its only write is the closed list
+  in `core/native-auth/src/change.rs`: adding one person to an open role as
+  unconfirmed, and taking that same person off again while the request is
+  unsent, each only after a person confirms that one change on screen, and
+  off unless the church turns it on. A change that adds another write, lets a
+  model, a schedule or another app start one, or skips the confirmation will
+  not be merged. B1 Church, Breeze and Genesis are read with GET requests only
+  (`core/church-systems/`) and have no write at all. There is no tool that
+  sends a message.
 - **The names Ozzie reads never go to an AI model.** Models see placeholders;
   names are put back on the Mac. Background-check facts never go to a model at
   all, even as placeholders.

@@ -23,7 +23,7 @@ import { useSystemWords } from "./church-system.js";
 /** How Planning Center words a connection at sign-in (spec §6), said beside the promise. */
 export const CONNECTION_WORDING = "Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection.";
 /** Where the connection is kept, only inside "See how this works" (spec §6: "Keychain" nowhere else). */
-export const CONNECTION_HOW = "The connection is kept in this Mac's Keychain, where macOS keeps passwords. Ozzie uses it only to read your church's Planning Center, and disconnecting removes it.";
+export const CONNECTION_HOW = "The connection is kept in this Mac's Keychain, where macOS keeps passwords. Ozzie uses it to read your church's Planning Center and, only if you turn on adding people, to make the one change you confirm. Disconnecting removes it.";
 /** "When the window is closed": the menu bar named for someone who has never heard the words (spec §6), then by name. */
 export const CLOSED_WINDOW = "Ozzie keeps running when you close its window, as the small Ozzie picture at the top of your screen, so it can keep an eye on what you asked. To stop it completely, click that picture in the menu bar and choose Quit Ozzie.";
 /** Where Settings' switch for rooms, follow-ups and group events is set, once the access is granted (operations-reads.ts). */
@@ -134,7 +134,8 @@ export function SettingsIndex({ sections, onGo }: { sections: readonly { id: str
  * and notices, calendars, lists, other AI apps with Spotlight and Shortcuts, updates, saved checks and Check my setup, in
  * that order.
  */
-export function ConnectionPage({ system, others, watched, status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt }: {
+export function ConnectionPage({ system, others, watched, status, kept = null, settings, onSettings, onStatus, recordingCount = 0, onDeleteRecordings, onModel, onAiAnswer, prefs, onAutomatic, onSetup, onCheckSetup, onLists, developer, autostart, sharing, siri, oneClick, nameStore, updates, calendars, phone, cards = 0, onDiscardCards, operationsReads: readsProp, openAt, onOpenAt,
+  changes, onDisconnectTried }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   /** A church on B1 Church or Breeze: its own section (system-settings.tsx), in place of Planning Center's. */
   system?: ReactNode;
@@ -185,6 +186,13 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
   /** Opens at this section (its heading's id: AI help after the AI screens were open over Settings), then `onOpenAt`. */
   openAt?: "ai-title" | null;
   onOpenAt?: () => void;
+  /**
+   * "Let Ozzie make changes you confirm" (change-card.tsx `ChangesSwitch`), and the line about reading as it reads while
+   * that is on (`banner`): App passes it only while Planning Center is connected, the banner only while the switch is on.
+   */
+  changes?: { section: ReactNode; banner: { strong: string; rest: string } | null } | undefined;
+  /** A Disconnect was tried, however it ended (planning-center-forms.tsx `ConnectForm`). */
+  onDisconnectTried?: (() => void) | undefined;
 }) {
   const w = useSystemWords();
   const control = useConnectionControl(settings, onStatus, status, oneClick);
@@ -262,7 +270,9 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
     : <section className="settings-sec" aria-labelledby="pco-title">
       <h2 id="pco-title" className="h3" tabIndex={-1} ref={at("pco-title")}>Planning Center and which services Ozzie watches</h2>
       <div className="banner"><Icon name="lock" small /><div className="stack-tight">
-        <span><strong>{promise("readsShort")}</strong> {CONNECTION_WORDING} {promise("still")} The connection is kept safely on this Mac.</span>
+        {changes?.banner
+          ? <span><strong>{changes.banner.strong}</strong> {changes.banner.rest}</span>
+          : <span><strong>{promise("readsShort")}</strong> {CONNECTION_WORDING} {promise("still")} The connection is kept safely on this Mac.</span>}
         <details className="listen-more">
           <summary><Icon name="chev" small />See how this works</summary>
           <p className="small">{CONNECTION_HOW}</p>
@@ -270,7 +280,7 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
       </div></div>
       <section className="find" aria-labelledby="signin-title">
         <h3 id="signin-title" className="settings-t">Sign in</h3>
-        <ConnectForm status={status} kept={kept} settings={settings} onSettings={onSettings} control={control} cards={cards} onDiscardCards={onDiscardCards} />
+        <ConnectForm status={status} kept={kept} settings={settings} onSettings={onSettings} control={control} cards={cards} onDiscardCards={onDiscardCards} onDisconnectTried={onDisconnectTried} />
       </section>
       <section className="find" aria-labelledby="sunday-title">
         <h3 id="sunday-title" className="settings-t">Which services Ozzie watches</h3>
@@ -278,11 +288,12 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
         <SundayPicker connected={status?.state === "connected" || Boolean(kept)} waiting={pending} settings={settings} onSettings={onSettings} />
         {watched}
       </section>
+      {changes?.section}
       <section className="find" aria-labelledby="operations-title">
         <h3 id="operations-title" className="settings-t">Rooms, follow-ups and group events</h3>
         <p className="find-body">Ozzie can also check room bookings in Planning Center Calendar, follow-ups without an owner in People, and group events at the same time as serving in Groups. {operationsGranted(status)
           ? "Your connection already includes Calendar, People and Groups, so turning this on needs no new sign-in."
-          : "Turning this on signs in again and asks Planning Center for Calendar, People and Groups access."} Planning Center grants each of those as read-and-write; Ozzie only reads, and has no way to change anything there. People access is also used when you open a note for one person in Mail or Messages: Ozzie then reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, and uses one only to fill in To.</p>
+          : "Turning this on signs in again and asks Planning Center for Calendar, People and Groups access."} Planning Center grants each of those as read-and-write; Ozzie only reads Calendar, People and Groups, and has no way to change anything in them. People access is also used when you open a note for one person in Mail or Messages: Ozzie then reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, and uses one only to fill in To.</p>
         <p className="checkline granted">{grantedCopy(status, readsOn)}</p>
         <div className="row form-actions">
           {!operationsGranted(status)

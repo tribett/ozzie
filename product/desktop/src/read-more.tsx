@@ -112,7 +112,7 @@ export const moreRefused = (products: readonly Product[]) => `Planning Center di
   + `The account you signed in with may not have access to ${products.length === 1 ? "it" : "them"} there. A Planning Center administrator at your church can give it access.`;
 /**
  * "Copy a message for your administrator" for these products (planning-center-forms.tsx `CopyForAdministrator`): what
- * Ozzie is, that it only reads, and what the account can't see. No name, church, service or number; no permission path
+ * Ozzie is, what it may change (promises.ts `request`), and what the account can't see. No name, church, service or number; no permission path
  * Ozzie hasn't read in Planning Center's own help (Services' is in sunday-source.ts `adminMessage`).
  */
 export const productsAdminMessage = (products: readonly Product[]) => "Hi! I'd like to use Ozzie, an app on my Mac that reads our church's Planning Center "

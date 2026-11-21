@@ -4,6 +4,7 @@
 // treated as Planning Center's position names are: shown here, and as [Role] in a note's placeholder text.
 // Every "Why I flagged this" line names the system the fact came from, never Planning Center.
 import { evaluateCoverage, type CandidateAssessment, type ServingInterval } from "../coverage.js";
+import { plainIssues } from "../coverage-words.js";
 import { applyFeedback, briefTarget, feedbackOf, type FeedbackEntry } from "../finding-feedback.js";
 import { needKey, type Finding, type PositionStatus, type Roster, type SundayBrief } from "../sunday-brief.js";
 import { LIVE_CHECK_VALID_MS } from "../sunday-capture.js";
@@ -187,7 +188,7 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
       ...(stale ? ["This check was read more than 30 minutes ago, so Ozzie doesn't treat it as current."] : []),
       ...(failed.length ? [`${plural(failed.length, `${name} read`)} didn't complete, so this check isn't a full picture.`] : []),
       ...(unnumbered.length && !noneNumbered ? [numbersNotShared(capture.system, unnumbered.map(p => roleName(p.id)))] : []),
-      ...[...new Set(scopeIssues.map(i => i.message))],
+      ...plainIssues(scopeIssues, id => roleName(id), name),
     ],
   });
 

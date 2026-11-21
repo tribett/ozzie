@@ -25,29 +25,34 @@ export type ChecksState = {
 export function checksOn({ readiness, schedule, watch }: ChecksState): boolean {
   return (readiness === "ready" && !schedule.paused) || (!watch.paused_all && watch.items.some(r => r.status === "active"));
 }
-/** Tells native code what quitting would stop or lose, whenever that changes: open cards (a count) and whether checks are on. */
-export function useQuitGuard(cards: number, state: ChecksState): void {
-  const on = checksOn(state);
+/**
+ * Tells native code what quitting would stop or lose, whenever that changes: open cards (a count) and whether checks are on.
+ * `undoable`: someone added in Planning Center this session can still be taken off here, which quitting ends too; native
+ * code hears it only as a reason to ask (with checks), and the question's own lines say which (`QuitQuestion`).
+ */
+export function useQuitGuard(cards: number, state: ChecksState, undoable = false): void {
+  const on = checksOn(state) || undoable;
   useEffect(() => { quitting.guard(cards, on); }, [cards, on]);
 }
-/** The question's words, by what quitting would stop or lose. */
-export function quitWords({ cards, checks }: QuitAsk): { title: string; lines: string[]; quit: string; keep: string } {
+/** The question's words, by what quitting would stop or lose. `undo`: App's sentence about who can't be taken off after quitting. */
+export function quitWords({ cards, checks }: QuitAsk, undo: string | null = null): { title: string; lines: string[]; quit: string; keep: string } {
   const lines = [
     ...(cards > 0 ? [`You have ${cards === 1 ? "1 visitor card that isn't" : `${cards} visitor cards that aren't`} saved anywhere. Quitting discards ${cards === 1 ? "it" : "them"}.`] : []),
     ...(checks ? ["Checks and notices stop until you open Ozzie again."] : []),
+    ...(undo ? [undo] : []),
     "Closing the window instead keeps Ozzie running, as the small Ozzie picture at the top of your screen.",
   ];
   return {
-    title: cards > 0 && !checks ? `Quit and discard ${cards === 1 ? "the card" : "the cards"}?` : "Quit Ozzie?",
+    title: cards > 0 && !checks && !undo ? `Quit and discard ${cards === 1 ? "the card" : "the cards"}?` : "Quit Ozzie?",
     lines, quit: cards > 0 ? `Quit and discard ${cards === 1 ? "the card" : "the cards"}` : "Quit Ozzie", keep: "Keep Ozzie running",
   };
 }
 
-export function QuitQuestion({ ask, onQuit, onKeep }: { ask: QuitAsk; onQuit: () => void; onKeep: () => void }) {
+export function QuitQuestion({ ask, onQuit, onKeep, undo = null }: { ask: QuitAsk; onQuit: () => void; onKeep: () => void; undo?: string | null }) {
   const keep = useRef<HTMLButtonElement>(null);
   // Keeping Ozzie running is where focus starts: the safe answer.
   useEffect(() => { keep.current?.focus(); }, []);
-  const words = quitWords(ask);
+  const words = quitWords(ask, undo);
   return <div className="quit-scrim">
     <div className="quit-question" role="alertdialog" aria-modal="true" aria-labelledby="quit-title" aria-describedby="quit-body"
       onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); onKeep(); } }}>

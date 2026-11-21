@@ -807,6 +807,17 @@ impl Connections {
     /// first (`finished`). A refused hand-over leaves the finder in place, so nothing reads; the
     /// person signs in again. The hand-over's Keychain reads and the listing run outside the
     /// lock; the result is installed only if the session is still the one looked at.
+    /// For a one-click sign-in still under way: the church whose connection it replaced, which
+    /// Disconnect also revokes (none for any other session, or a finder that replaced nothing).
+    pub fn replaced_church(&self) -> Option<String> {
+        let state = self.lock().ok()?;
+        let session = state.session.as_ref().filter(|s| s.finding)?;
+        session
+            .bound
+            .as_ref()
+            .map(|(_, organization)| organization.clone())
+            .filter(|organization| !organization.is_empty())
+    }
     pub fn settle(&self) -> Result<Option<(Arc<AuthController>, bool)>, ConnectionsError> {
         let (auth, finding, previous) = {
             let state = self.lock()?;

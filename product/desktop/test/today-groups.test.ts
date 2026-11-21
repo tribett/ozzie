@@ -20,6 +20,7 @@ import {
   setAsideChoices, sundayCount, sundayCountText, todayItems, todayMemory, type RegularCheck, type TodayInput, type TodayItem,
 } from "../src/today-groups.js";
 import { TodayPage } from "../src/today-page.js";
+import { promise } from "../src/promises.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
 
 const ET = "America/New_York";
@@ -468,7 +469,7 @@ describe("the fictional example never looks real (audit item 2)", () => {
     expect(notConnected).not.toMatch(invented);
     // The spec's card (onboarding spec §2, after the failures table), its promise from promises.ts.
     expect(notConnected).toContain("Not connected yet Planning Center Connect Planning Center to see your Sunday");
-    expect(notConnected).toContain("Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and Ozzie only reads.");
+    expect(notConnected).toContain(`Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and ${promise("connectAnd")}`);
     expect(notConnected).toContain("Connect Planning Center See an example church first");
     // Nothing to brief before anything is read; no set-aside on a card asking to connect.
     expect(notConnected).not.toContain("Listen to today's briefing");

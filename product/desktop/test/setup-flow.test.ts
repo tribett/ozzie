@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {
 import { FirstRun } from "../src/setup-flow.js";
 import { BrowserStep, ConnectedBanner, FIRST_RUN, FirstScreen, NotMyChurchSheet, PromisesSheet, WaitingStep } from "../src/first-run-screens.js";
 import { connectFailure, FAILURE_TEXT, RESUME_LINE, setupMemory } from "../src/first-run-state.js";
-import { allPromises, firstScreenPromises } from "../src/promises.js";
+import { allPromises, firstScreenPromises, promise } from "../src/promises.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import { App, backToName } from "../src/App.js";
 import { dayWords, SUNDAY_WORDS, UNKNOWN_WORDS } from "../src/day-words.js";
@@ -28,7 +28,8 @@ describe("the first screen (S1)", () => {
     const t = text(firstRun());
     expect(t).toContain("Ozzie reads your church's Planning Center and tells you what needs you before your next service.");
     for (const line of firstScreenPromises()) expect(t).toContain(line);
-    expect(t).toContain("It only reads. It never changes anything in Planning Center.");
+    expect(t).toContain(promise("reads"));
+    expect(promise("reads")).toBe("It changes nothing in Planning Center unless you confirm that one change.");
     expect(t).toContain("Connect Planning Center");
     expect(t).toContain("See an example church first");
     expect(t).toContain("Read all of Ozzie's promises");
@@ -78,12 +79,12 @@ describe("before the browser (S2)", () => {
     expect(firstRun({ start: "browser" })).toMatch(/<p class="eyebrow" aria-hidden="true">Step 1 of 3<\/p>/u);
     expect(t).toContain("Next, allow Ozzie to read your Planning Center");
     expect(t).toContain("Your browser will open Planning Center. Sign in as you always do, then choose Allow.");
-    expect(t).toContain("Ozzie only reads. It can't change anything in Planning Center.");
+    expect(t).toContain(promise("connectReads"));
     expect(t).toContain("Your password stays with Planning Center. Ozzie never sees it, and you can disconnect any time.");
     expect(t).toContain("Open Planning Center in my browser");
     expect(t).toContain("Back");
     expect(t).toContain("What will Ozzie read?");
-    expect(t).toContain("Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection. Ozzie still only reads.");
+    expect(t).toContain(`Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection. ${promise("still")}`);
     expect(html).toContain(`aria-label="${FIRST_RUN.pictureAlt}"`);
   });
 

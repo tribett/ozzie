@@ -1,10 +1,13 @@
-//! Read-only native authentication; Sunday production issuance remains unavailable.
+//! Native authentication and Planning Center reads (GET-only), plus the one change a person
+//! confirms (`change`); Sunday production issuance remains unavailable.
 pub mod agent;
 // Claude through Anthropic's own Messages API: Ozzie's Chat Completions requests and replies, translated.
 pub mod anthropic;
 pub mod background;
 pub mod calendar_link;
 pub mod callback;
+// Changes in Planning Center, one at a time, with a person's yes: the closed list of writes.
+pub mod change;
 // Whole-day calendar arithmetic: the own-key route's month, a plan's weekday.
 pub mod civil;
 pub mod connections;

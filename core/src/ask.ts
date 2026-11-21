@@ -59,7 +59,8 @@ import { backgroundWording, newerCharacter } from "./harness/background-wording.
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 import { SYSTEMS } from "./church-systems/types.js";
 
-// Pinned natively by model_tests.rs (`the_fixed_ask_text_matches_the_webview_exactly`).
+// Ozzie's one change to Planning Center is made only on the Sunday page after a person confirms it, never from Ask:
+// these lines are true of the AI and of Ask whether or not adding people is on (review Y, L-Y3).
 export const ASK_SYSTEM = [
   "You are Ozzie, church administration software. You prepare and explain; people decide and people go.",
   "Answer the leader's question using only the fact lines in the message, which come from checks already made on this Mac.",
@@ -67,7 +68,7 @@ export const ASK_SYSTEM = [
   "Never invent people, availability or willingness. No overlap found does not mean someone is free or willing; only they can say.",
   "Never rank, score, compare or label people, and keep people in the order given.",
   "Refer to people and roles only by their bracketed labels, written exactly, such as [Person 1] or [Role 1]. Add no names and no other bracketed text.",
-  "You cannot send messages or change Planning Center, and nothing has been sent or changed. Never say otherwise.",
+  "You cannot send messages or change Planning Center, and you have sent and changed nothing. Never say otherwise.",
   "No prayers, sermons, scripture, blessings or devotional content.",
   "Write plain text without markdown, warm and short: under 120 words, and never show the codes.",
   "Don't describe where the facts came from; the screen already shows the source and when it was read.",
@@ -526,7 +527,7 @@ export const REFUSALS = {
   backgroundNoteAlone: "Ozzie doesn't use AI help for notes with background-check or child-safety screening wording, so nothing was sent. You can write that note yourself, or look at the Services page.",
   /** A character no question may hold once cleaned (hiddenInQuestion): the native and ozzie.church checks refuse it too. */
   hidden: "This question has a hidden or invisible character in it, so Ozzie didn't send it to the AI. Try typing it again in plain words.",
-  send: "Ozzie can't send messages or change Planning Center. It can draft a note for you to send yourself.",
+  send: "Ask can't send messages or change Planning Center. It can draft a note for you to send yourself.",
   rank: "Ozzie doesn't rank, score or label people. Ask who has no overlap found; people are listed in no particular order.",
   name: "Something in your question could be part of a name in Planning Center. Nothing was sent. Try different wording.",
   facts: "Ozzie couldn't prepare these facts without something that looks like a name, so nothing was sent.",
@@ -931,7 +932,7 @@ export const ANSWER_PROBLEMS = {
   label: "The answer mentioned someone Ozzie didn't ask about, so it isn't shown.",
   apart: "The answer didn't keep people's placeholders separate from other words, so Ozzie couldn't check it. It isn't shown. Try asking again.",
   religious: "The answer included religious content Ozzie doesn't write, so it isn't shown.",
-  claim: "The answer said something was sent or changed. Ozzie can't do that, so the answer isn't shown.",
+  claim: "The answer said something was sent or changed. The AI can't do that, so the answer isn't shown.",
   rank: "The answer ranked or scored people, which Ozzie doesn't do, so it isn't shown.",
   describe: "The answer described a person in a way Ozzie doesn't, so it isn't shown.",
   name: "The answer included a name the AI was never given, so it isn't shown.",

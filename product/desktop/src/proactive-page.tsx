@@ -7,7 +7,7 @@ import { Icon } from "./icons.js";
 import { EYE_ABOUT, QUIT_LINE, WATCH_HOW } from "./responsibility-words.js";
 import { useDay } from "./day-words.js";
 import { eyeLine, keepTitle, noticeDayOf, noticeLine, SERVICES } from "./day-phrases.js";
-import { promise } from "./promises.js";
+import { BUILD_FORM, promise } from "./promises.js";
 import { CHECK_REFUSED } from "./sunday-source.js";
 import { CopyForAdministrator } from "./planning-center-forms.js";
 import type { DayWords } from "../../../core/src/service-day.js";
@@ -115,7 +115,7 @@ function Entry({ entry, names, d }: { entry: HistoryEntry; names: Names; d: DayW
 /**
  * "Keeping watch" (spec §6): what is running first. Ozzie's steady look at the watched service (where it stands, then what
  * it does, its controls and what it found) beside Keep {day} covered as one item, then how it works in a fold, what
- * changed, and the schedule and quiet hours. "Ozzie only reads" and "Nothing runs after you quit Ozzie or while this Mac is
+ * changed, and the schedule and quiet hours. What Ozzie changes (the build's promise) and "Nothing runs after you quit Ozzie or while this Mac is
  * asleep" are said outside any fold. Every sentence names the service by its real day (the day words, spec §5).
  */
 export function ProactivePage({ view, names, organization, planId, readiness, shownReadiness = readiness, busy, now, churchTimeZone = null, church = null, onCheckNow, onPause,
@@ -200,7 +200,7 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
         <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{lastLine}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Next check</span><span>{nextLine}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">What it does</span><span>Reads open roles, who is scheduled and service times for the service Ozzie watches, then compares them with the last check.</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">What it can do</span><span>{promise("readsShort")} It never sends messages.</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">What it can do</span><span>{promise("readsShort", "A")} It never sends messages.</span></div>
         <div className="sp-row sp-2"><span className="sp-h">How often</span><span>{howOften}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Telling you</span><span>When something gets worse, a private notice on this Mac: “{noticeLine(noticeDayOf(d))}” It never includes names or details. Quiet hours {clock(prefs.quietStart)} to {clock(prefs.quietEnd)}: notices wait until they end{prefs.urgentDuringQuiet ? ", except urgent ones" : ""}.</span></div>
       </div>
@@ -217,7 +217,8 @@ export function ProactivePage({ view, names, organization, planId, readiness, sh
   return <div className="col">
     <p className="eyebrow">Keeping watch</p>
     <h1 className="h1">What Ozzie does on its own</h1>
-    <p className="lede">Ozzie checks {w.name} for you and tells you privately when something needs you. {promise("connectAnd")}</p>
+    {/* Planning Center's line is the build's form; another system only reads (form A). */}
+    <p className="lede">Ozzie checks {w.name} for you and tells you privately when something needs you. {promise("connectAnd", w.system === "planning-center" ? BUILD_FORM : "A")}</p>
     {/* Without the list (it is always there in the app): the same order, what is running before how it works. */}
     {responsibilities ? responsibilities(regular) : <section className="stack" aria-labelledby="watching-title">
       <h2 id="watching-title" className="h3">What Ozzie is watching</h2>

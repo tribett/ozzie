@@ -192,9 +192,9 @@ pub trait Provider: Send + Sync {
     }
 }
 /// A Planning Center product set: what a sign-in asks consent for, and what a token response
-/// granted. Each product scope permits both reading and writing in that product; Ozzie never
-/// writes, and enforces GET-only source reads in its own HTTP layer (`source::NativeSourceHttp`),
-/// not through the scope. Least privilege is the default: `Services`. Every other product is an
+/// granted. Each product scope permits both reading and writing in that product. Ozzie's reads are
+/// GET-only, enforced in their own HTTP layer (`source::NativeSourceHttp`), not through the scope;
+/// its only write is change.rs's one confirmed change and its undo, in Services. Least privilege is the default: `Services`. Every other product is an
 /// explicit opt-in, and widening a saved connection needs new consent:
 /// - operations: Calendar, People and Groups together (rooms, follow-ups, group events, the
 ///   background-check read and the People forms the church chooses);
@@ -1003,7 +1003,8 @@ impl AuthController {
             ("client_id", self.binding.client_id.as_str()),
             ("redirect_uri", REDIRECT_URI),
             ("response_type", "code"),
-            // Product scopes permit read and write in Planning Center; Ozzie only reads (GET).
+            // Product scopes permit read and write in Planning Center; Ozzie's reads are GET, and its
+            // only write is change.rs's one confirmed change.
             ("scope", scopes.oauth().as_str()),
             ("state", &state),
             ("code_challenge", &challenge),
@@ -1564,6 +1565,39 @@ impl AuthController {
         self.source_session(verified.generation, cancelled, |access, _, _| {
             http.read(request, access)
         })
+    }
+    /// One write of change.rs's closed list (`change::Write`) under an earlier identity proof, the way
+    /// `read_verified_using` reads: the proof's generation, the binding's church and a saved, valid
+    /// credential, each checked before anything goes out. Unlike a read, nothing after the send can
+    /// turn its result into a refusal: once the one request is sent, its answer (or its lack of one)
+    /// is what comes back, so a cancel meanwhile can never hide a change Planning Center made. Never
+    /// retried here. Only change.rs calls this (change_tests.rs).
+    pub(crate) fn change_verified_using(
+        &self,
+        verified: &VerifiedSource,
+        write: &crate::change::Write,
+        cancelled: &AtomicBool,
+        http: &dyn crate::change::ChangeHttp,
+    ) -> Result<crate::change::Sent, crate::source::SourceError> {
+        use crate::source::SourceError;
+        if self.sunday.is_some() || self.finding.is_some() {
+            return Err(SourceError::Busy);
+        }
+        let check = || {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err(SourceError::Cancelled);
+            }
+            self.check(verified.generation, None).map_err(source_error)
+        };
+        check()?;
+        let _operation = self.operation().map_err(source_error)?;
+        check()?;
+        let stored = self.stored();
+        check()?;
+        let stored = stored.map_err(source_error)?;
+        // The last point anything stops it. Past here the one request goes out.
+        check()?;
+        Ok(http.send(write, &stored.tokens.access_token))
     }
     /// A read's identity check: the organization the saved access token belongs to, from one
     /// userinfo read as before. When Planning Center refuses the token itself (401 or 403), it ran

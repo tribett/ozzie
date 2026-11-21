@@ -18,14 +18,14 @@ import {
 import { FIRST_RUN, Sheet, StepHead, useTitleFocus } from "./first-run-screens.js";
 import { Icon } from "./icons.js";
 import { eyeLine, pageRef } from "./day-phrases.js";
-import { systemPromise } from "./promises.js";
+import { promise, systemPromise } from "./promises.js";
 import { browserStore, loadPrefs } from "./proactive.js";
 import { zoneLabel } from "./proactive-page.js";
 import "./first-run.css";
 
 export const CHOOSE = {
   title: "What does your church use?",
-  body: "Ozzie reads it and tells you what needs you before your next service. It only reads: it never changes anything there.",
+  body: `Ozzie reads it and tells you what needs you before your next service. ${promise("chooseReads")}`,
   help: "Choose where your church plans its services and schedules its volunteers.",
   systems: [
     { id: "planning-center", name: "Planning Center", line: "Who's scheduled, who said yes, who could help, and more of Planning Center if you want it." },

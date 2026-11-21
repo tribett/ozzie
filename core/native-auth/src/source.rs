@@ -198,6 +198,19 @@ pub enum Collection {
     PersonEmails,
     /// One person's phone numbers (`include=phone_numbers`): `number`, `primary` and `location` only.
     PersonPhoneNumbers,
+    // Adding a person to an open role (change.rs): in-process only, never on the stdin protocol,
+    // never part of a Sunday check or a recording. Read just before a change is shown and again just
+    // before it is made.
+    /// Whether Planning Center lists one person as a child, and as active or inactive
+    /// (`fields[Person]=child,status`), and nothing else.
+    PersonChild,
+    /// One person's background checks still waiting for the applicant (`filter=awaiting_applicant`):
+    /// their status only. With the two below, a check that isn't finished yet, for a kids team.
+    PendingChecksAwaitingApplicant,
+    /// One person's background checks whose report is being processed (`filter=report_processing`).
+    PendingChecksReportProcessing,
+    /// One person's background checks waiting for the church's review (`filter=needs_review`).
+    PendingChecksNeedsReview,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -263,6 +276,10 @@ impl Collection {
             Self::RegistrationsAttendees => "registrations_attendees",
             Self::PersonEmails => "person_emails",
             Self::PersonPhoneNumbers => "person_phone_numbers",
+            Self::PersonChild => "person_child",
+            Self::PendingChecksAwaitingApplicant => "pending_checks_awaiting_applicant",
+            Self::PendingChecksReportProcessing => "pending_checks_report_processing",
+            Self::PendingChecksNeedsReview => "pending_checks_needs_review",
         }
     }
     pub fn product(self) -> Product {
@@ -278,7 +295,11 @@ impl Collection {
             | Self::PeopleForms
             | Self::PeopleFormSubmissions
             | Self::PersonEmails
-            | Self::PersonPhoneNumbers => Product::People,
+            | Self::PersonPhoneNumbers
+            | Self::PersonChild
+            | Self::PendingChecksAwaitingApplicant
+            | Self::PendingChecksReportProcessing
+            | Self::PendingChecksNeedsReview => Product::People,
             Self::GroupsPersonMemberships | Self::GroupsGroupEvents => Product::Groups,
             Self::CheckInsEvents
             | Self::CheckInsLocations
@@ -313,7 +334,10 @@ impl Collection {
             | Self::PeopleWorkflowSnoozedCards => Scope::Workflow,
             Self::GroupsGroupEvents => Scope::Group,
             Self::GroupsPersonMemberships => Scope::GroupsPerson,
-            Self::PeopleBackgroundChecks => Scope::PeoplePerson,
+            Self::PeopleBackgroundChecks
+            | Self::PendingChecksAwaitingApplicant
+            | Self::PendingChecksReportProcessing
+            | Self::PendingChecksNeedsReview => Scope::PeoplePerson,
             // `/services/v2/service_types`: the Services Organization is its parent.
             Self::ServiceTypes => Scope::Organization,
             Self::UpcomingPlans => Scope::ServiceTypePlans,
@@ -324,7 +348,9 @@ impl Collection {
             Self::CheckInsLocations | Self::CheckInsEventPeriods => Scope::CheckInsEvent,
             Self::CheckInsLocationCounts => Scope::CheckInsEventTime,
             Self::RegistrationsAttendees => Scope::Signup,
-            Self::PersonEmails | Self::PersonPhoneNumbers => Scope::PersonRecord,
+            Self::PersonEmails | Self::PersonPhoneNumbers | Self::PersonChild => {
+                Scope::PersonRecord
+            }
         }
     }
     /// Which Sunday ids a request names: (service type, plan). Every Sunday read names both;
@@ -332,7 +358,13 @@ impl Collection {
     /// person's contact read belongs to no plan at all.
     fn context(self) -> (bool, bool) {
         match self {
-            Self::ServiceTypes | Self::PersonEmails | Self::PersonPhoneNumbers => (false, false),
+            Self::ServiceTypes
+            | Self::PersonEmails
+            | Self::PersonPhoneNumbers
+            | Self::PersonChild
+            | Self::PendingChecksAwaitingApplicant
+            | Self::PendingChecksReportProcessing
+            | Self::PendingChecksNeedsReview => (false, false),
             Self::UpcomingPlans => (true, false),
             _ => (true, true),
         }
@@ -372,7 +404,11 @@ impl Collection {
     fn paginated(self) -> bool {
         !matches!(
             self,
-            Self::Plan | Self::Organization | Self::PersonEmails | Self::PersonPhoneNumbers
+            Self::Plan
+                | Self::Organization
+                | Self::PersonEmails
+                | Self::PersonPhoneNumbers
+                | Self::PersonChild
         )
     }
     fn path(self) -> &'static str {
@@ -380,7 +416,11 @@ impl Collection {
             Self::NeededPositions => "needed_positions",
             Self::TeamMembers => "team_members",
             Self::PlanTimes => "plan_times",
-            Self::Plan | Self::Organization | Self::PersonEmails | Self::PersonPhoneNumbers => "",
+            Self::Plan
+            | Self::Organization
+            | Self::PersonEmails
+            | Self::PersonPhoneNumbers
+            | Self::PersonChild => "",
             Self::TeamPositionAssignments => "person_team_position_assignments",
             Self::TeamLeaders => "team_leaders",
             Self::PersonSchedules | Self::PersonSchedulesUnfiltered => "schedules",
@@ -393,7 +433,10 @@ impl Collection {
             Self::PeopleWorkflowReadyCards | Self::PeopleWorkflowSnoozedCards => "cards",
             Self::GroupsPersonMemberships => "memberships",
             Self::GroupsGroupEvents => "events",
-            Self::PeopleBackgroundChecks => "background_checks",
+            Self::PeopleBackgroundChecks
+            | Self::PendingChecksAwaitingApplicant
+            | Self::PendingChecksReportProcessing
+            | Self::PendingChecksNeedsReview => "background_checks",
             Self::ServiceTypes => "service_types",
             Self::UpcomingPlans => "plans",
             Self::PeopleForms => "forms",
@@ -425,7 +468,10 @@ impl Collection {
             Self::PeopleWorkflowReadyCards | Self::PeopleWorkflowSnoozedCards => "WorkflowCard",
             Self::GroupsPersonMemberships => "Membership",
             Self::GroupsGroupEvents => "Event",
-            Self::PeopleBackgroundChecks => "BackgroundCheck",
+            Self::PeopleBackgroundChecks
+            | Self::PendingChecksAwaitingApplicant
+            | Self::PendingChecksReportProcessing
+            | Self::PendingChecksNeedsReview => "BackgroundCheck",
             Self::ServiceTypes => "ServiceType",
             Self::UpcomingPlans => "Plan",
             Self::PeopleForms => "Form",
@@ -436,7 +482,7 @@ impl Collection {
             Self::CheckInsLocationCounts => "LocationEventTime",
             Self::RegistrationsSignups => "Signup",
             Self::RegistrationsAttendees => "Attendee",
-            Self::PersonEmails | Self::PersonPhoneNumbers => "Person",
+            Self::PersonEmails | Self::PersonPhoneNumbers | Self::PersonChild => "Person",
         }
     }
 }
@@ -832,6 +878,25 @@ impl SourceRequest {
                 ("include", "phone_numbers"),
                 ("fields[Person]", "child,phone_numbers"),
                 ("fields[PhoneNumber]", "number,primary,location"),
+            ]),
+            // Adding someone to a role (change.rs): whether they are a child and whether they are
+            // active (the Person's `status`, "active" or "inactive"), and nothing else.
+            Collection::PersonChild => fixed(&[("fields[Person]", "child,status")]),
+            // A check that isn't finished, one status at a time (People 2025-11-10 OpenAPI: the
+            // person's `background_checks` filter), with its status and person only: no note, no
+            // report link, no one who entered it. A finished check that didn't clear is never asked
+            // for, so it never reaches this Mac.
+            Collection::PendingChecksAwaitingApplicant => fixed(&[
+                ("filter", "awaiting_applicant"),
+                ("fields[BackgroundCheck]", "status,person"),
+            ]),
+            Collection::PendingChecksReportProcessing => fixed(&[
+                ("filter", "report_processing"),
+                ("fields[BackgroundCheck]", "status,person"),
+            ]),
+            Collection::PendingChecksNeedsReview => fixed(&[
+                ("filter", "needs_review"),
+                ("fields[BackgroundCheck]", "status,person"),
             ]),
             _ => Vec::new(),
         }
@@ -1364,6 +1429,8 @@ enum Fact {
     Label,
     /// Short source status code whose values the provider does not enumerate.
     Code,
+    /// Null or a `Code` (a person's `status`, which a record may leave out).
+    MaybeCode,
     /// Null or an IANA time zone name's shape (`UTC`, or `Area/Location[/...]`). Whether this
     /// Mac knows the zone is the webview's check.
     Zone,
@@ -1391,6 +1458,7 @@ impl Fact {
                 (1..=32).contains(&s.len())
                     && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             }),
+            Self::MaybeCode => v.is_null() || Self::Code.valid(v),
             Self::Zone => v.is_null() || v.as_str().is_some_and(zone_name),
             Self::Repeat => {
                 v.is_null()
@@ -1442,7 +1510,9 @@ impl SourceRequest {
             Profile::Capture
                 if matches!(
                     self.collection,
-                    Collection::PersonEmails | Collection::PersonPhoneNumbers
+                    Collection::PersonEmails
+                        | Collection::PersonPhoneNumbers
+                        | Collection::PersonChild
                 ) =>
             {
                 PERSON
@@ -1476,7 +1546,13 @@ impl SourceRequest {
             (Collection::CalendarEventConflicts, _) => EVENT,
             (Collection::PeopleWorkflowSteps, _) => WORKFLOW,
             (Collection::GroupsPersonMemberships, "person") => PERSON,
-            (Collection::PeopleBackgroundChecks, _) => PERSON,
+            (
+                Collection::PeopleBackgroundChecks
+                | Collection::PendingChecksAwaitingApplicant
+                | Collection::PendingChecksReportProcessing
+                | Collection::PendingChecksNeedsReview,
+                _,
+            ) => PERSON,
             (Collection::PeopleFormSubmissions, "form") => FORM,
             (Collection::PeopleFormSubmissions, _) => PERSON,
             (Collection::CheckInsEventPeriods, _) => &["Event"],
@@ -1635,6 +1711,16 @@ impl SourceRequest {
             Collection::PersonEmails | Collection::PersonPhoneNumbers => {
                 &[("child", true, Fact::Flag)]
             }
+            // The same, and the person's status: absent, null or a code change.rs doesn't know is
+            // kept as said (or not said), and change.rs refuses all but "active".
+            Collection::PersonChild => &[
+                ("child", true, Fact::Flag),
+                ("status", false, Fact::MaybeCode),
+            ],
+            // Only the status, kept to prove the filter held (`confirm`).
+            Collection::PendingChecksAwaitingApplicant
+            | Collection::PendingChecksReportProcessing
+            | Collection::PendingChecksNeedsReview => &[("status", true, Fact::Code)],
         }
     }
     fn relationships(&self) -> &'static [&'static str] {
@@ -1705,6 +1791,11 @@ impl SourceRequest {
             // Which included rows are the person's own: every other link is dropped.
             Collection::PersonEmails => &["emails"],
             Collection::PersonPhoneNumbers => &["phone_numbers"],
+            Collection::PersonChild => &[],
+            // Whose check it is.
+            Collection::PendingChecksAwaitingApplicant
+            | Collection::PendingChecksReportProcessing
+            | Collection::PendingChecksNeedsReview => &["person"],
         }
     }
     /// Included resource types this read asked for. Protocol reads never keep `included`.
@@ -1855,8 +1946,21 @@ fn confirm(request: &SourceRequest, row: &Value) -> Result<(), SourceError> {
                 && flag("waitlisted") != Some(true)
         }
         // Exactly the person asked about, never anyone else's record.
-        Collection::PersonEmails | Collection::PersonPhoneNumbers => {
+        Collection::PersonEmails | Collection::PersonPhoneNumbers | Collection::PersonChild => {
             row["id"].as_str() == request.people_person_id.as_deref()
+        }
+        // Exactly the requested person, and only the status asked for.
+        Collection::PendingChecksAwaitingApplicant => {
+            parent("person", &request.people_person_id)
+                && attribute("status") == Some("awaiting_applicant")
+        }
+        Collection::PendingChecksReportProcessing => {
+            parent("person", &request.people_person_id)
+                && attribute("status") == Some("report_processing")
+        }
+        Collection::PendingChecksNeedsReview => {
+            parent("person", &request.people_person_id)
+                && attribute("status") == Some("needs_review")
         }
         _ => true,
     };
@@ -2198,7 +2302,8 @@ pub(crate) fn status_error(
 impl NativeSourceHttp {
     /// The one request shape this client can send: a GET of the validated, allowlisted URL with
     /// the product's pinned version. OAuth product scopes permit writes in Planning Center; this
-    /// is where Ozzie's read-only rule is enforced, so no other method is ever built here.
+    /// is where the read path's GET-only rule is enforced, so no other method is ever built here
+    /// (Ozzie's one write, a change a person confirms, has its own client in change.rs).
     pub(crate) fn build(
         &self,
         request: &SourceRequest,

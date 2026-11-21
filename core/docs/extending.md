@@ -271,12 +271,15 @@ on this Mac: loopback only; never Planning Center).
 
 ## What is deliberately not extensible in this version
 
-- **No write tools.** Ozzie reads Planning Center and changes nothing there.
-  There is no tool that writes, edits, schedules, accepts or deletes, and the
-  only request shape the native read path makes is a GET of an allow-listed
-  address (`core/native-auth/src/source.rs`). Writing back would need its own
-  design with a person approving each action, and is not part of this
-  version.
+- **No write tools.** The model has no tool that writes, edits, schedules,
+  accepts or deletes anything. Ozzie's one change to Planning Center (adding
+  one person to an open role as unconfirmed, and taking that same person off
+  again while the request is unsent) is made only by
+  `core/native-auth/src/change.rs`, only after a person confirms that one
+  change on screen with the church's switch on; no tool, procedure, schedule
+  or other app can start it. The read path's only request shape is a GET of
+  an allow-listed address (`core/native-auth/src/source.rs`). Any other write
+  needs its own design, a recorded owner decision and an independent review.
 - **No send, shell, file, browser or network tools.** The contract says so in
   `NATIVE_TOOL_ALLOWLIST`, and none may be added without a recorded decision.
   A tool reads the last check Ozzie already made; the model never reaches

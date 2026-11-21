@@ -19,6 +19,10 @@ _Avoid_: Settings, policies, skills
 A fact Ozzie checked, shown with its source and the time it was checked. A finding is never a judgement of a person.
 _Avoid_: Alert (unless it interrupts), risk flag, score
 
+**Change you confirm**:
+One exact change to Planning Center that Ozzie built from what a check read, shown in full and made only after a person says yes to it. Today there is one: adding a person who could help to an open role as unconfirmed, with the request waiting, and taking that same person off again while the request is unsent.
+_Avoid_: Action, write, task, approve
+
 **Why I flagged this**:
 The short explanation on a finding naming the church rule, the limit in that rule, and the facts that matched it.
 _Avoid_: View sources, reasoning, explanation trace

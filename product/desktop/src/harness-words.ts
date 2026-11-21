@@ -221,10 +221,15 @@ export const HELP = Object.freeze({
     "Give you a morning briefing on Today.",
     "Read visitor cards on this Mac, on the Visitor cards page.",
   ]),
-  never: "Ozzie never sends messages, never changes anything in Planning Center, and never writes prayers, sermons or scripture. People decide and people go.",
+  // Planning Center's line: true with changes off (none is made) and on (only the one a person confirms). Another system
+  // only reads, so its line is `neverElsewhere` by its name (ask-panel.tsx helpFor).
+  never: "Ozzie never sends messages, never changes Planning Center unless you confirm that one change, and never writes prayers, sermons or scripture. People decide and people go.",
   try: "You could ask “What still needs a decision?”, or say “Keep an eye on the service”.",
   first: `To start, connect Planning Center in Settings, or open the fictional example on ${SERVICE_PAGE}.`,
 });
+/** HELP's never-line for a church on another system (B1 Church, Breeze, Genesis), by its name: Ozzie only reads there. */
+export const neverElsewhere = (system: string) =>
+  `Ozzie never sends messages, never changes anything in ${system}, and never writes prayers, sermons or scripture. People decide and people go.`;
 /** A question before anything was read: what to do next, never an error. */
 export const ASK_START = `Ozzie hasn't read anything from Planning Center yet, so it can't answer that. Connect Planning Center in Settings, or check Planning Center on ${SERVICE_PAGE}. You can also open the fictional example there.`;
 /** A question asked in the moment before Ozzie's procedures have loaded. */

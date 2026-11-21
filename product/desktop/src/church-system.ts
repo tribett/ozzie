@@ -301,9 +301,11 @@ const PLANNING_CENTER: SystemWords = Object.freeze({
   notConnected: "Planning Center not connected", connected: "Planning Center connected", connectedTo: (church: string) => `Planning Center: ${church}`,
   checksOnItsOwn: true, jobs: true, askAndShare: true, savedChecks: true, extras: true, notHere: (what: string) => what,
   say: (text: string) => text, reads: null,
-  howEnd: "Why I flagged this lists the rule and the facts. Every read in the latest check is on What happened. Nothing in Planning Center changed.",
+  // Reading changes nothing; the one change a leader may confirm (planning-center-changes.ts) is never made from a card's reading.
+  howEnd: "Why I flagged this lists the rule and the facts. Every read in the latest check is on What happened. Reading it changed nothing in Planning Center.",
   noTeam: null,
-  remaining: (n: number) => `Planning Center still shows ${n === 1 ? "1 remaining request" : `${n} remaining requests`}; Ozzie hasn't changed anything there.`,
+  // The leader's own decision changed nothing in Planning Center (true whether or not Ozzie can add people there).
+  remaining: (n: number) => `Planning Center still shows ${n === 1 ? "1 remaining request" : `${n} remaining requests`}; your decision here didn't change anything there.`,
 });
 const other = (system: SystemId): SystemWords => {
   const name = SYSTEMS[system].name;

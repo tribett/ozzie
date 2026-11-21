@@ -211,7 +211,7 @@ export const EVERY_READ = "Every read in this check, each listed on What happene
 export const readsFor = (finding: Pick<Finding, "kind"> | { kind: "rooms" | "follow-ups" | "group-meetings" }): string[] =>
   Object.hasOwn(READS_FOR, finding.kind) ? READS_FOR[finding.kind]!.map(activityLabel) : [EVERY_READ];
 export const FIXED_HOW = "Ozzie's own check of Planning Center found this, with no AI. It applies the same fixed rules, including your Church rules, to what it read every time it checks. It read:";
-export const FIXED_HOW_END = "Why I flagged this lists the rule and the facts. Every read in the latest check is on What happened. Nothing in Planning Center changed.";
+export const FIXED_HOW_END = "Why I flagged this lists the rule and the facts. Every read in the latest check is on What happened. Reading it changed nothing in Planning Center.";
 /** "See how this works" under Why I flagged this: how the finding was worked out, and the reads it used. */
 function HowFixed({ reads }: { reads: readonly string[] }) {
   const [open, setOpen] = useState(false);
@@ -360,11 +360,13 @@ type Opener = (key: string) => (el: HTMLButtonElement | null) => void;
  * 2026-11-19: under the whole list it was off screen and the button seemed to do nothing). Hidden, the list stays in
  * the page, so a note being written there is kept until the people are shown again.
  */
-function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null, openPc = null }: {
+function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null, openPc = null, changes = null, busy = false }: {
   finding: Finding; names: Names; onNote: (person: string) => void; opener: Opener; hidden: boolean;
   /** The open note, for the person it's to (one at a time per card). */
   note: { person: string; draft: ReactNode } | null;
   asked?: AskedSlot | null | undefined; openPc?: OpenPlanningCenter | null | undefined;
+  /** Adding a person in Planning Center (change-card.tsx): only while changes are on and the check is live. */
+  changes?: SundayChanges | null | undefined; busy?: boolean;
 }) {
   const w = useSystemWords();
   const row = (x: Listed) => {
@@ -376,12 +378,15 @@ function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null
         {openPc && <div className="person-pc"><OpenInPlanningCenter open={openPc} page="person" id={id} label={OPEN_PERSON} name={nameOf(names, id)} /></div>}
         {/* A mark shows once: in their open note, which follows this row, else here. */}
         {!open && asked?.lines.filter(l => l.key === finding.key && l.person_id === id).map(l => <AskedNote key={l.key + l.person_id} line={l} />)}
+        {/* The leader's own click on one person, never a pick: the list's grouping and order stay as they are. */}
+        {changes && isPersonId(id) && changes.row({ finding, person: id, full: nameOf(names, id), label: x.label, left: x.left, busy })}
       </PersonRow>
       {open && note?.draft}
     </Fragment>;
   };
   return <div className="stack people" hidden={hidden}>
     <p className="small">People on this {w.system === "planning-center" ? "team" : "role's team"} in {w.name}. Grouped by what Ozzie found, alphabetical within each group, not ranked. Whether someone is willing is theirs to say.</p>
+    {changes?.waiting(finding)}
     <FoldedPeople all={listedPeople(finding, names)} row={row} none={<p className="find-body">{noOneText(finding, w)}</p>} />
   </div>;
 }
@@ -706,8 +711,27 @@ export interface Occurrence { id: string; label: string | null }
  */
 export type Beside = (p: { kind: string; team_id?: string; position_id?: string; name?: string }) => ReactNode;
 
+/**
+ * Changes in Planning Center the leader confirms one at a time (change-card.tsx `sundayChanges`): App builds this only
+ * while changes are on for the church in use, and this page shows it only for a live check. The page imports nothing
+ * that makes a change; it draws what App hands it, where App says.
+ */
+export interface SundayChanges {
+  /** On a person's row in who could help: the button for adding them, and the change under it (nothing when not offered). */
+  row: (p: { finding: Finding; person: string; full: string; label: PeopleLabel; left: boolean; busy: boolean }) => ReactNode;
+  /** What came back from changes confirmed just now, above the open cards. */
+  results: ReactNode;
+  /**
+   * In place of an open role's people while the check a change came from is being taken again (the old one no longer
+   * holds), or says that check didn't come; nothing for any other role.
+   */
+  recheck: (finding: Finding) => ReactNode;
+  /** Above another open role's people while that check is being taken (its Add buttons wait too); nothing otherwise. */
+  waiting: (finding: Finding) => ReactNode;
+}
+
 function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDecide, whoCouldHelp, feedback = null, occurrence, beside, people = null, asked = null,
-  openPc = null, planId = null, titleRef, pane }: {
+  openPc = null, planId = null, titleRef, pane, changes = null, busy = false }: {
   item: DecidedItem; names: Names; checkedAt: string | null; sender: string; sunday: string | null; canReword: boolean; people?: PeopleAccess | null | undefined;
   asked?: AskedSlot | null | undefined;
   /** The page pane App scrolls, so a note opened by its button is brought into view by scrolling only it. */
@@ -721,6 +745,8 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   feedback?: FeedbackControls | null;
   occurrence: Occurrence;
   beside?: Beside | undefined;
+  /** Adding a person in Planning Center from who could help: only while changes are on and the check is live. */
+  changes?: SundayChanges | null | undefined; busy?: boolean;
 }) {
   const { finding } = item;
   const d = useDay(), untimed = useContext(UntimedWhen);
@@ -741,6 +767,8 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   const [choosing, setChoosing] = useState<DecisionChoice | null>(null);
   const [open, setOpen] = useState(finding.kind === "needs-people");
   const hasPeople = listsPeople(finding);
+  // After a change to this role, its people wait for the new check (the old list no longer holds).
+  const rechecking = changes?.recheck(finding) ?? null;
   const listed = finding.people ? [...finding.people.suggestions, ...finding.people.conflicts, ...finding.people.unverified] : [];
   const onRow = (person: string) => finding.kind === "needs-people" && hasPeople && open && listed.some(x => x.person_id === person);
   // A note to one person sits under their row whenever the list shows them (hidden with the list, and kept), otherwise
@@ -878,9 +906,12 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
     {finding.kind === "needs-people" && <>
       {/* Someone no longer on the list (a later check) keeps their note, here, rather than losing it. */}
       {personNote && !underRow && personNote}
-      {hasPeople && <PeopleList finding={finding} names={names} hidden={!open} note={underRow && draftFor ? { person: draftFor, draft: personNote } : null} onNote={notePerson}
-        opener={opener} asked={asked} openPc={openPc} />}
-      {hasPeople && open && whoCouldHelp && <AiLook finding={finding} names={names} look={whoCouldHelp} />}
+      {/* After a change to this role, its people wait for the new check (the old list no longer holds); a note being
+          written stays, hidden with the list. */}
+      {open && rechecking}
+      {hasPeople && (!rechecking || underRow) && <PeopleList finding={finding} names={names} hidden={!open || Boolean(rechecking)} note={underRow && draftFor ? { person: draftFor, draft: personNote } : null} onNote={notePerson}
+        opener={opener} asked={asked} openPc={openPc} changes={changes} busy={busy} />}
+      {hasPeople && open && !rechecking && whoCouldHelp && <AiLook finding={finding} names={names} look={whoCouldHelp} />}
     </>}
     {/* A mark shows once: in the note open for that person, else on their row in the people shown, else here on the card. */}
     {asked?.lines.filter(l => l.key === finding.key && !onRow(l.person_id) && !inOpenNote(l.person_id)).map(l => <AskedNote key={l.person_id} line={l} />)}
@@ -889,6 +920,9 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   </article>;
 }
 
+
+// The leader's own decision changed nothing in Planning Center (true whether or not Ozzie can add people there).
+const NO_LEAD_TEXT = "Planning Center still shows no confirmed lead; your decision here didn't change anything there.";
 
 function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedAt: string | null; onUndo: () => void }) {
   const d = item.decision!, f = item.finding;
@@ -900,7 +934,7 @@ function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedA
       {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words, untimed)}</span>}</div>
     <h3 className="find-title">{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
     <p className="find-quote">“{d.reason}”</p>
-    <p className="find-body">You decided this {time(d.decided_at)}. {f.kind === "needs-people" ? w.remaining(f.remaining ?? 0) : w.say("Planning Center still shows no confirmed lead; Ozzie hasn't changed anything there.")}</p>
+    <p className="find-body">You decided this {time(d.decided_at)}. {f.kind === "needs-people" ? w.remaining(f.remaining ?? 0) : w.system === "planning-center" ? NO_LEAD_TEXT : w.say("Planning Center still shows no confirmed lead; Ozzie hasn't changed anything there.")}</p>
     {d.earlier.length > 0 && <ul className="list earlier">{d.earlier.map(e => <li key={e.decided_at + e.reason}><Icon name="history" small />
       <span>Before that, you said {CHOICE_TEXT[e.choice].earlier} ({time(e.decided_at)}): “{e.reason}”</span></li>)}</ul>}
     <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={onUndo}>Undo — bring it back to the list</button></div>
@@ -1132,7 +1166,7 @@ export function PageControls(props: Pick<Parameters<typeof SundayPage>[0], "brie
         <button type="button" className="btn btn-quiet btn-sm" onClick={props.stuck}>{CHECK_CONNECTION}</button></p>
       : props.adding ? null
       : (!props.connected || !props.configured) && <p className="small row">
-        <span>{!props.connected ? w.unchosen ? "Choose what your church uses to check your own service. Ozzie only reads it."
+        <span>{!props.connected ? w.unchosen ? `Choose what your church uses to check your own service. ${promise("connectAnd")}`
           : w.system === "planning-center" ? `Connect Planning Center to check your own service. ${promise("connectAnd")}` : `Connect ${w.name} to check your own service. Ozzie only reads it.` : "Choose which service Ozzie watches."}</span>
         {(props.onSetUp ?? props.onSettings) && <button type="button" className="btn btn-quiet btn-sm" onClick={props.onSetUp ?? props.onSettings}>
           {props.onSetUp ? !props.connected ? w.connect : "Choose a service" : "Open Settings"}</button>}</p>}
@@ -1227,10 +1261,18 @@ export function SundayPage(props: {
    * above all the parts. Absent: the whole page, as for one service.
    */
   part?: ServicePartHead | undefined;
+  /**
+   * Adding a person who could help in Planning Center, one confirmed change at a time (change-card.tsx). App passes it only
+   * while changes are on for the church in use, Planning Center is its system and this service's check on screen is live;
+   * without it the page is as it always was.
+   */
+  changes?: SundayChanges | null | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
   const d = useDay();
   const w = useSystemWords();
+  // Never for the example, a saved check or another church system, whatever App passes.
+  const changes = brief?.mode === "live" && w.system === "planning-center" && !brief.source ? props.changes ?? null : null;
   // "Your name for notes" from Settings, put in on this Mac after any rewording; [Your name] when none is set.
   const sender = props.sender.trim() || yourName.get();
   const { controls, notice } = useFeedback(props.feedback, names);
@@ -1276,7 +1318,7 @@ export function SundayPage(props: {
   const card = (i: DecidedItem) => brief && <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword}
     onDecide={onDecide} whoCouldHelp={props.whoCouldHelp} asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter}
     planId={brief.plan.id} titleRef={titleRef(i.finding.key)} pane={props.pane} feedback={controls} occurrence={occurrence} beside={props.beside}
-    people={brief.mode === "fictional" ? null : props.people} />;
+    people={brief.mode === "fictional" ? null : props.people} changes={changes} busy={props.busy} />;
   const part = props.part;
   const partId = useId();
   const Root = part ? "section" : "div";
@@ -1313,6 +1355,7 @@ export function SundayPage(props: {
     {brief && <section className="stack" aria-labelledby={part ? `${partId}-open` : "sunday-open-title"}>
       <h2 id={part ? `${partId}-open` : "sunday-open-title"} className="sr-only">Open for {part?.name ?? d.thisOne}</h2>
       {notice}
+      {changes?.results}
       {(groups ? lead : open).map(card)}
       {!groups && props.worthALook}
       {roster && <RosterSection roster={roster} names={names} source={source} at={brief.checked_at ?? brief.completed_at} />}

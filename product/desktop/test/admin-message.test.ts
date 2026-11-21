@@ -30,8 +30,9 @@ describe("the message", () => {
     expect(m).toBe("Hi! I'd like to use Ozzie, an app on my Mac that reads our church's Planning Center Services to show me who's scheduled and what still needs people. "
       + `${promise("request")} Planning Center doesn't let my account see our service plans yet. Could you give my account the Viewer permission in Services? `
       + "In Services, open People, choose my name, then Actions, then Manage permissions. Set People and Plans to Viewer, then choose Update. Thank you!");
-    // The build's own promise, from promises.ts only.
-    expect(m).toContain("It only reads.");
+    // The build's own promise, from promises.ts only (form B: this build can make the one change a person confirms).
+    expect(m).toContain(promise("request"));
+    expect(promise("request")).toBe("It changes nothing unless I confirm it.");
     expect(m.length).toBeLessThan(520);
     // No name, church, service, number or address: nothing beyond what the person sees on screen.
     expect(m).not.toMatch(/\d|@|https?:|Grace|Fictional|Sunday Morning|\[/u);

@@ -54,7 +54,7 @@ export function KidsTeamsRules({ rules, onChange, teams }: {
           onChange={e => onChange(withKidsBackgroundChecks(rules, e.target.checked))} />
         <span>Ask for a current background check before anyone serves on these teams</span>
       </label>
-      <p className="small">Ozzie reads only whether each person scheduled on these teams has a current background check in Planning Center People, never its details. It needs People in your Planning Center connection, and it's read on the next check. What it finds stays in Ozzie on this Mac: it's never sent to an AI.</p>
+      <p className="small">For each check of your services, Ozzie reads only whether each person scheduled on these teams has a current background check in Planning Center People, never its details. If you turn on adding people in Settings, adding someone to one of these teams also reads that person's background check status and end date first, even with this off. It needs People in your Planning Center connection, and it's read on the next check. What it finds stays in Ozzie on this Mac: it's never sent to an AI.</p>
     </div>}
   </section>;
 }

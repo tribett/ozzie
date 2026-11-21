@@ -66,6 +66,6 @@ describe("asking before Ozzie quits (audit items 20 and 23)", () => {
       ["quit_now"], ["quit_kept"]]);
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
     // What App tells it, and when, is test/quit-guard.test.ts (review P, L2).
-    expect(app).toContain("useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch });");
+    expect(app).toContain("useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch }, changes.undoable.length > 0);");
   });
 });

@@ -98,7 +98,7 @@ const yourService = (d: DayWords) => d.kind === "weekday" ? `your ${d.day}` : d.
 export const connectTitle = (d: DayWords, system = "Planning Center") => `Connect ${system} to see ${yourService(d)}`;
 /** Its body: what connecting is, then the promise (promises.ts, never retyped). Another system connects with its own key. */
 export const connectBody = (w?: SystemWords) => w?.unchosen
-  ? "Nothing on this page is about your church yet. Ozzie reads Planning Center, B1 Church, Breeze or Genesis, and only reads: it never changes anything there."
+  ? `Nothing on this page is about your church yet. ${promise("systemsRead")}`
   : w && w.system !== "planning-center"
   ? `Nothing on this page is about your church yet. Connecting takes a key from your church's ${w.name}, and Ozzie only reads it: it never changes anything in ${w.name}.`
   : `Nothing on this page is about your church yet. Connecting is a sign-in in your browser, and ${promise("connectAnd")}`;

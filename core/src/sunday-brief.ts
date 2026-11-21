@@ -2,6 +2,7 @@
 // findings carry person ids; the desktop view resolves names locally at render time.
 import { evaluateCoverage, type CandidateAssessment, type CoverageResult, type PositionAssessment, type ServingInterval } from "./coverage.js";
 import { churchTimeZone, planDate, planStart } from "./church-time.js";
+import { plainIssues } from "./coverage-words.js";
 import { applyFeedback, briefTarget, feedbackOf, type CorrectionEntry, type StopEntry } from "./finding-feedback.js";
 import { kidsFindings } from "./kids-rules.js";
 import { captureToCoverage, isChurchRead, isKidsRead, isOperationsRead, LIVE_CHECK_VALID_MS, ORGANIZATION_COLLECTION, servingStreaks, type SundayCapture, type SundayRead, type SundayRules } from "./sunday-capture.js";
@@ -389,7 +390,7 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
     why: [
       ...(stale ? ["This check was read more than 30 minutes ago, so Ozzie doesn't treat it as current."] : []),
       ...(failed.length ? [`${plural(failed.length, "Planning Center read")} didn't complete, so this check isn't a full picture.`] : []),
-      ...[...new Set(scopeIssues.map(i => i.message))],
+      ...plainIssues(scopeIssues, id => mapped.positions.find(p => p.position_id === id)?.name ?? null, "Planning Center"),
     ],
   });
   // What the person said on earlier cards, applied to this check. A check that couldn't be completed always shows.

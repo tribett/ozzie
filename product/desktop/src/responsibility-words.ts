@@ -106,7 +106,7 @@ export function areasText(template: TemplateId): string {
 }
 /** Which Planning Center areas it reads, with the church by its name when known (never its organization number, spec §6). */
 export function accountsText(template: TemplateId, church?: string | null): string {
-  return `${areasText(template)}${church ? `, ${church}` : ""}. ${promise("readsShort")}`;
+  return `${areasText(template)}${church ? `, ${church}` : ""}. ${promise("readsShort", "A")}`;
 }
 /** The access a template needs that this connection hasn't granted, or null. */
 export function missingAccess(template: TemplateId, granted: readonly string[]): string | null {
@@ -162,7 +162,8 @@ export function limitsText(plan: Pick<Plan, "limits">, modelReady: boolean): str
     : `${checks} No AI model is set up, so Ozzie reports what Planning Center shows without a written summary.`;
 }
 export const STOP_TEXT = "Stop it any time in Keeping watch.";
-export const NEVER_TEXT = `${promise("reads")} It won't contact anyone; you decide what happens next.`;
+// A job only reads, whatever the church's switch for changes says: form A of the promise is exact for it.
+export const NEVER_TEXT = `${promise("reads", "A")} It won't contact anyone; you decide what happens next.`;
 export function assumedText(plan: Plan, assumed: readonly string[]): string | null {
   if (!assumed.includes("lifetime")) return null;
   return plan.lifetime.kind === "until"

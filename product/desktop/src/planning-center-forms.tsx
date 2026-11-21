@@ -123,7 +123,7 @@ function OwnRegistration({ settings, onSettings, control, connected }: {
  * `firstRun` only changes how a missing connection reads ("Not connected yet.").
  * Buttons carry no `type`: this is not a form, and nothing here submits.
  */
-export function ConnectForm({ status, kept = null, settings, onSettings, control, firstRun = false, stake, cards = 0, onDiscardCards }: {
+export function ConnectForm({ status, kept = null, settings, onSettings, control, firstRun = false, stake, cards = 0, onDiscardCards, onDisconnectTried }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; control: ConnectionControl; firstRun?: boolean;
   /**
    * The church's last confirmed connection while a sign-in for that church is under way, or after one ended (cancelled,
@@ -137,6 +137,11 @@ export function ConnectForm({ status, kept = null, settings, onSettings, control
   onDiscardCards?: (() => void) | undefined;
   /** Tests only: the Church rules at stake in a switch, instead of reading this Mac's. */
   stake?: RulesAtStake;
+  /**
+   * A Disconnect was tried, whatever it came back with (a refused Keychain delete included): native code turns changes
+   * off for that church either way, so App reads the switch again.
+   */
+  onDisconnectTried?: (() => void) | undefined;
 }) {
   const { working, pending, asking, builtIn, ownIds, canCheck, registered, run } = control;
   const problem = control.problem?.from === "sign-in" ? control.problem.text : "";
@@ -231,7 +236,8 @@ export function ConnectForm({ status, kept = null, settings, onSettings, control
     {saved && !asking && <DisconnectButton cards={cards} working={working} onDiscardCards={onDiscardCards} onDisconnect={async () => {
       // What the disconnect came back with, or null when it failed (its problem is shown, like not-revoked).
       const after: { status: ConnectionStatus | null } = { status: null };
-      await run(async () => { after.status = await connection.disconnect(); return after.status; });
+      try { await run(async () => { after.status = await connection.disconnect(); return after.status; }); }
+      finally { onDisconnectTried?.(); }
       return after.status;
     }} />}
     {builtIn && <details className="listen-more" open={ownIds || undefined}>

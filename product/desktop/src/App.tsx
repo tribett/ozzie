@@ -52,7 +52,7 @@ import { aiStillOpen, firstRunScreen, isConnected, setupMemory, type FirstRunScr
 import { decideService, type ResultView } from "./your-service.js";
 import { decisionLines, type RegularCheck } from "./today-groups.js";
 import { DayProvider, dayWords, UNKNOWN_WORDS, type DayWords } from "./day-words.js";
-import { promise } from "./promises.js";
+import { BUILD_FORM, promise } from "./promises.js";
 import { AiChoice, AiFlow, type AiStep } from "./ai-choice.js";
 import { MacEndedLine, OllamaEndedLine, thisMacShown } from "./ai-this-mac.js";
 import { AiLine, ChooseAiContext } from "./ai-line.js";
@@ -69,13 +69,13 @@ import { onboarding, type ModelProgress, type NoticeDay, type OllamaHistory, typ
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { pausedWhen, type ModelStatus } from "./model.js";
 import { askedMark, askedMemory, askedText, holding, type AskedMark } from "./asked.js";
-import type { AskedLine, AskedSlot } from "./sunday-page.js";
+import type { AskedLine, AskedSlot, SundayChanges } from "./sunday-page.js";
 import { localDate, planDate } from "../../../core/src/church-time.js";
 import { longDate, planTimes } from "../../../core/src/service-day.js";
 import { openInPlanningCenter } from "./planning-center-pages.js";
 import { invoke } from "@tauri-apps/api/core";
 import { autostart, background, quitting, startProbe } from "./background.js";
-import { QuitQuestion, useQuitGuard, type QuitAsk } from "./quit-question.js";
+import { checksOn, QuitQuestion, useQuitGuard, type QuitAsk } from "./quit-question.js";
 import { allowanceSpent, createRunner, handChanges, nativeResponsibilities, responsibilityStep, type RunnerHooks } from "./responsibility-runner.js";
 import { ResponsibilityList, useRunnerView, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
@@ -102,6 +102,8 @@ import { choiceLine, ChooseSystem, listedToday, soonest, SystemFirstRun, systemF
 import { GenesisAlsoRead, OtherSystems, SystemFactsList, SystemSettings } from "./system-settings.js";
 import { ListsSystemName } from "./church-notes.js";
 import { refusalLine, SystemNotices } from "./system-pages.js";
+import { ChangeHistory, ChangeResults, ChangesSwitch, sundayChanges, useChanges } from "./change-card.js";
+import { ACTIVITY_LEDE_ON, quitUndo, SETTINGS_BANNER_ON, SIDEBAR_ON } from "./planning-center-changes.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
 /** The sidebar's pages. The services' own page is "Services", whatever day they are on (owner decision 2026-11-19). */
@@ -826,10 +828,6 @@ export function App() {
     lastSystemRefresh.current = Date.now();
     void systemProactive.checkNow("automatic").catch(() => undefined);
   }, [maySystemRefresh]);
-  // The roles and teams of the check on screen, by their ids, for Church rules, Church lists and the kids question: for a
-  // church on another system, its own check's roles (their names local only, as Planning Center's are).
-  const positions = useMemo(() => onSystem ? sys.capture ? systemPositions(sys.capture) : [] : capture ? captureToCoverage(capture, rules, now).positions : [],
-    [capture, rules, now, onSystem, sys.capture]);
   const [decisions, setDecisions] = useSundayDecisions(onSystem ? (fictional ? systemExample && { organization: `example:${onSystem}`, plan_id: systemExample.brief.plan.id } : sys.decisionsKey) : capture, brief);
   // Rooms, follow-ups and group meetings from the capture's own reads, on the church's own time zone
   // (the example's fictional church is on Eastern time). A fictional example is evaluated as of its own check.
@@ -842,6 +840,16 @@ export function App() {
     return c && c.organization === org && (inUseOrg === undefined || c.organization === inUseOrg) && c.service_type_id === s.serviceTypeId ? [{ service: s, capture: c }] : [];
   }), [also, alsoCaptures, offPc, fictional, org, inUseOrg]);
   const alsoParts = useMemo(() => alsoShownCaptures.map(p => ({ ...p, brief: buildSundayBrief(p.capture, rules, now) })), [alsoShownCaptures, rules, now]);
+  // The roles and teams of the check on screen, by their ids, for Church rules, Church lists and the kids question: for a
+  // church on another system, its own check's roles (their names local only, as Planning Center's are). With several
+  // services watched, every service's teams too (each service type has teams of its own), so a kids team of any watched
+  // service can be marked, and adding someone to it gets the kids-team advice (security review of write-back-050, M1).
+  const positions = useMemo(() => {
+    if (onSystem) return sys.capture ? systemPositions(sys.capture) : [];
+    const all = [capture, ...alsoShownCaptures.map(p => p.capture)].filter((c): c is SundayCapture => Boolean(c))
+      .flatMap(c => captureToCoverage(c, rules, now).positions);
+    return [...new Map(all.map(p => [`${p.team_id}:${p.position_id}`, p])).values()];
+  }, [capture, alsoShownCaptures, rules, now, onSystem, sys.capture]);
   const alsoKeys = alsoParts.map(p => decisionsStorageKey(p.brief.mode, p.capture.organization, p.capture.plan_id));
   const [alsoDecisions, setAlsoDecisions] = useDecisionsMap(alsoKeys);
   const others: OtherPart[] = useMemo(() => alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief,
@@ -1132,15 +1140,46 @@ export function App() {
       .finally(() => { void recorder.idle().then(() => setLedgerVersion(v => v + 1)); })
     : undefined, [procedures, modelReady, workspace, loop, recorder, harnessSession]);
 
-  const act = async (work: () => Promise<SundayCapture>, isFictional = false) => {
+  // Says whether the check came (a change's role waits for it).
+  const act = async (work: () => Promise<SundayCapture>, isFictional = false): Promise<boolean> => {
     setBusy(true); setProblem(""); setRefused(false);
-    try { setCapture(await work()); setFictional(isFictional); setNow(new Date().toISOString()); }
-    catch (error) { setProblem(sundayProblem(error)); setRefused(refusedRead(error)); }
+    try { setCapture(await work()); setFictional(isFictional); setNow(new Date().toISOString()); return true; }
+    catch (error) { setProblem(sundayProblem(error)); setRefused(refusedRead(error)); return false; }
     finally { setBusy(false); }
   };
   // Same check as always (re-verify a saved connection, then read), through the one path that
   // never runs two checks at once and remembers what changed.
   const check = () => act(() => proactive.checkNow());
+  // ---- Changes in Planning Center the leader confirms one at a time (change-card.tsx; owner decisions 2026-11-17 and
+  // 2026-11-21) ----
+  // Planning Center only: a church on B1 Church, Breeze or Genesis gets no switch, no button and no change line, and
+  // native code refuses there too (changes.rs). Off unless turned on for the church in use.
+  // Each Disconnect tried from Settings or first run, however it ended: the switch is read again after it.
+  const [disconnectTries, setDisconnectTries] = useState(0);
+  const kidsTeamIds = useMemo(() => kidsTeams(rules).map(t => t.team_id), [rules]);
+  // The live check on screen of each service watched, by its plan: a role waiting after a change shows its people again
+  // once its own plan's new check is in (another service's check doesn't end the wait).
+  const checkedPlans = useMemo<Readonly<Record<string, string>>>(() => offPc || fictional ? {} : Object.fromEntries([
+    ...(capture && capture.kind === "live" && capture.organization === org ? [[capture.plan_id, capture.completed_at] as const] : []),
+    ...alsoShownCaptures.filter(p => p.capture.kind === "live").map(p => [p.capture.plan_id, p.capture.completed_at] as const),
+  ]), [offPc, fictional, capture, org, alsoShownCaptures]);
+  // After anything is sent, native code drops the check of that plan, so a fresh round is taken: it says whether that plan's
+  // own new check came (the first service's, or another's, which reaches App during the round: onAlsoCapture).
+  const afterWrite = async (plan: string): Promise<boolean> => {
+    if (!alsoNow.current.also.some(x => x.planId === plan)) return check();
+    const before = alsoNow.current.captures[plan]?.completed_at;
+    const ok = await check();
+    const after = alsoNow.current.captures[plan]?.completed_at;
+    return ok && Boolean(after) && after !== before;
+  };
+  const changes = useChanges({ organization: offPc ? "" : org, connected: connected && !offPc, disconnected: status?.state === "disconnected", kidsTeamIds,
+    afterWrite, checked: checkedPlans, showingHistory: page === "activity", disconnectTries });
+  const changesOn = !offPc && changes.on;
+  // Every "reads only / changes only when you confirm" line follows one rule: the on form only while Planning Center is
+  // connected and the switch is on; otherwise the off form, whose words hold with the switch on but not connected.
+  const changesShownOn = connected && changesOn;
+  // Without People access native code refuses every change (it can't see whether someone is listed as a child): none is offered.
+  const peopleOk = operationsGranted(status);
   // First run opens by itself only at launch, at the first unmet fact (spec §0.3): not connected, nothing watched, or no
   // result seen yet (no saved check of this church). Once launch, the status and the saved checks are known, it is
   // decided once; then it stays as the person leaves it, and opens again only from a button.
@@ -1253,7 +1292,9 @@ export function App() {
       // Its saved checks hold volunteers' names: they go with it, or are kept to delete again (church-system.ts).
       void deleteChecksOrLater(c);
     } else if (from.main === "planning-center" && (Boolean(org) || (status !== null && status.state !== "disconnected"))) {
-      const after = await connection.disconnect().catch(() => null);
+      // Leaving Planning Center for another system: native code turns adding people off for the church left, however
+      // the Disconnect ends, so the switch is read again.
+      const after = await connection.disconnect().catch(() => null).finally(() => setDisconnectTries(n => n + 1));
       if (after) setStatus(after);
       if (after?.state !== "disconnected") return "Ozzie couldn't sign out of Planning Center just now (a check may be under way), so nothing was switched. Wait a moment, then try again.";
     }
@@ -1305,7 +1346,10 @@ export function App() {
   // The regular Sunday check as Today shows it (audit item 24): its schedule, last and next look, and what it missed today.
   // What quitting would stop or lose, told to native code as it changes: open cards (a count) and whether the regular
   // Sunday check or any job is on.
-  useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch });
+  // Someone added this session who can still be taken off is lost on quit too, so it is asked then as well; the question's
+  // own line about checks follows whether checks are really on.
+  const checksNow = checksOn({ readiness, schedule: automatic.schedule, watch });
+  useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch }, changes.undoable.length > 0);
   // While a Planning Center sign-in is in the browser, checks wait so as not to cancel it, and the church in use is still
   // connected: Today says what was true before it started, never "Nothing runs yet" (review 2026-11-18).
   const shownReadiness = useHeldWhile(readiness, status?.state === "waiting" || status?.state === "checking");
@@ -1326,6 +1370,10 @@ export function App() {
   // Names for "What changed" come only from the current real check of the same organization.
   // With other services watched, their people too (Keeping watch lists their changes).
   const changeNames = capture && !fictional && capture.organization === org ? harnessCapture?.names ?? capture.names : {};
+  // What happened's changes name people from every service's live check on screen (a change on another service's plan
+  // names someone that service's check read).
+  const historyNames = useMemo(() => Object.assign({}, ...alsoShownCaptures.map(p => p.capture.names), changeNames) as Readonly<Record<string, string>>,
+    [alsoShownCaptures, changeNames]);
   // The church's time zone as Planning Center Services gave it, from a real check of the same organization only.
   const churchZone = capture && !fictional && capture.organization === org ? brief?.time_zone ?? null : null;
   // Responsibilities follow the church's clock when a check has read it, otherwise this Mac's.
@@ -1379,7 +1427,7 @@ export function App() {
   // Jobs read Planning Center checks only: on another system none runs, so none counts here.
   const automaticCount = page !== "automatic" ? automatic.unseen + (offPc ? 0 : watch.unseen) : 0;
   // The sidebar keeps its words at every width (audit item 22c); a narrow window puts them under Menu, which Escape closes.
-  // Its two lines (reads only; the church in use) go under Menu too, and the church stays in the bar (review F, L-6).
+  // Its two lines (what Ozzie reads or changes; the church in use) go under Menu too, and the church stays in the bar (review F, L-6).
   // The church's name stays in the sidebar while a sign-in for it is in the browser (native names no church in use then).
   const shownChurch = inUse ?? (reconnecting || addingAccess ? heldInUse : null);
   const churchLine = onSystem ? (!sys.connection ? words.notConnected : sys.connection.church_name ? words.connectedTo(sys.connection.church_name) : words.connected)
@@ -1452,6 +1500,24 @@ export function App() {
   const focusFor = (planId: string) => { const f = sundayFocus ? fromPartKey(sundayFocus) : null; return f && f.plan_id === planId ? f.key : null; };
   // Each other service's part: its latest check (or that none is read yet), its own decisions, its own problem or wait.
   // Its rooms, follow-ups and group meetings are the first service's, and its notes have no "I'll send it" marks yet.
+  // Each watched service's Planning Center name by its service type, for What happened's lines (review of write-back-050, L6).
+  const serviceNamesById: Readonly<Record<string, string>> = Object.fromEntries([[settings.serviceTypeId, mainName], ...also.map(x => [x.serviceTypeId, x.name] as const)]
+    .filter((e): e is [string, string] => Boolean(e[1])));
+  // A change's slot for one service's part of the Services page (owner decision 2026-11-21: any Planning Center service
+  // watched): only for a live check of the church in use, on that service's own plan, with its name and zone for the
+  // confirmation. What came back from a change shows on its own plan's part.
+  const mainLive = Boolean(liveBrief && capture?.kind === "live" && capture.organization === org && !offPc);
+  const alsoLive = (p: (typeof alsoParts)[number] | undefined) => Boolean(p && p.capture.kind === "live" && p.brief.mode === "live");
+  const changeSlot = (plan: string, zone: string | null, service: string | null): SundayChanges | null => changesOn
+    ? sundayChanges({ control: changes, zone, openPc: openInPlanningCenter, people: peopleOk, plan, service, resultsHere: planOf => planOf === plan }) : null;
+  const changesOnSunday = mainLive && liveBrief ? changeSlot(liveBrief.plan.id, liveBrief.time_zone, mainName) : null;
+  // Plans whose part shows a live check now. A result on any other plan (the service moved on, stopped being watched, or its
+  // part shows a saved check) is shown above the parts, so its "Take … off again" stays reachable while Ozzie is open
+  // (review of write-back-050, L5).
+  const liveSlotPlans = [...(mainLive && liveBrief ? [liveBrief.plan.id] : []), ...(servicesShown ? alsoParts.filter(alsoLive).map(p => p.capture.plan_id) : [])];
+  const resultsElsewhere = changesOn && changes.results.some(r => !liveSlotPlans.includes(r.plan))
+    ? <div className="col change-elsewhere"><ChangeResults slot={{ control: changes, zone: brief?.time_zone ?? null, openPc: openInPlanningCenter, people: peopleOk,
+      plan: "", service: null, resultsHere: planOf => !liveSlotPlans.includes(planOf) }} /></div> : null;
   const otherParts = servicesShown ? also.map(s => {
     const p = alsoParts.find(x => x.service.serviceTypeId === s.serviceTypeId);
     const words = p?.brief.day ?? dayWords({ sort_date: s.sort_date, times: s.times }, s.zone);
@@ -1461,7 +1527,8 @@ export function App() {
         hasRecording={false} canReword={modelReady} decisions={key ? alsoDecisions[key] ?? [] : []} onDecisions={next => { if (key) setAlsoDecisions(key, next); }} operations={null}
         onCheck={() => { void check(); }} onRecording={() => undefined} onExample={showExample} feedback={feedback} onSettings={() => setPage("connection")}
         people={{ granted: operationsGranted(status), onAdd: () => setPage("connection") }} asked={null} focus={focusFor(s.planId)} onFocused={() => setSundayFocus(null)}
-        openInPlanningCenter={openInPlanningCenter} pane={mainRef} part={{ name: s.name, waiting: alsoWaiting[s.serviceTypeId] ?? null, opsWith: mainName ?? "your first service" }} />
+        openInPlanningCenter={openInPlanningCenter} pane={mainRef} part={{ name: s.name, waiting: alsoWaiting[s.serviceTypeId] ?? null, opsWith: mainName ?? "your first service" }}
+        changes={p && alsoLive(p) ? changeSlot(p.capture.plan_id, p.brief.time_zone, s.name) : null} />
     </DayProvider> };
   }) : [];
   /** The Services page: the one service's page as always, or, with more than one watched, every service in date order. */
@@ -1492,7 +1559,8 @@ export function App() {
           {n.id === "automatic" && automaticCount > 0 && <span className="count"><span aria-hidden="true">{automaticCount}</span>
             <span className="sr-only">, {automaticCount} new</span></span>}</a>)}</nav>
         <div className="side-foot">
-          <p className="quiet-note"><Icon name="lock" small /><span className="nav-label">{promise("readsShort")} The names Ozzie reads stay on this Mac.</span></p>
+          <p className="quiet-note"><Icon name="lock" small /><span className="nav-label">{changesShownOn ? SIDEBAR_ON
+            : `${promise("readsShort", offPc ? "A" : BUILD_FORM)} The names Ozzie reads stay on this Mac.`}</span></p>
           <p className="small side-org">{churchLine}</p>
           {/* AI and Ask wait for the first result: before it, nothing should pull a person off the one step that matters. */}
           {askShown && <div className="small side-ai"><AiLine status={modelStatus} small onChange={chooseAi} /></div>}
@@ -1523,7 +1591,7 @@ export function App() {
           read={firstRead} result={firstResult} again={recordings.length > 0} rules={hasRules} intervalMinutes={automatic.prefs.intervalMinutes} nowMs={Date.parse(now)} memory={setupMemo}
           cards={openCards} onDiscardCards={discardCards} onLeave={to => leaveSetup(to)} onDeferred={() => setServiceDeferred(true)}
           renderAi={done => <AiChoice mode="first-run" onModel={setModelReady} onDone={how => done(how)} onCheckSetup={() => { done(); setChecking(true); }} />}
-          onExample={() => { leaveSetup("sunday"); showExample(); }} />}
+          onExample={() => { leaveSetup("sunday"); showExample(); }} onDisconnectTried={() => setDisconnectTries(n => n + 1)} />}
         {!showSetup && fictional && <ExampleBand onLeave={leaveExample} onSetUp={() => { leaveExample(); openSetup(); }} />}
         {!showSetup && aiChoosing && <div className="col"><AiFlow key={aiOpened} mode="settings" onModel={setModelReady} start={aiStart}
           backTo={backToName(page, day)}
@@ -1570,6 +1638,7 @@ export function App() {
         {/* A church on B1 Church or Breeze: its own check, connection and facts, and none of Planning Center's extras. */}
         {page === "sunday" && onGenesis && <GenesisPage capture={genesisShown.capture} view={genesisShown.view} busy={genesis.busy} problem={fictional ? "" : genesis.problem}
           onCheck={() => { void genesis.read("manual"); }} fictional={fictional} connected={Boolean(sys.state.genesis?.zone)} onSetUp={() => openSetup("first")} />}
+        {page === "sunday" && !onGenesis && resultsElsewhere}
         {page === "sunday" && !onGenesis && servicesPage(<SundayPage brief={brief} names={shownNames ?? {}} busy={systemShown ? sys.busy : busy} part={servicesShown ? { name: mainName, waiting: waitingLine } : undefined}
           problem={systemShown ? (systemAsking ? keychainAsking(words.name) : sys.problem) : servicesShown ? "" : problem} sender=""
           connected={onSystem ? systemConnected : connected} adding={!onSystem && (addingAccess || reconnecting)} configured={onSystem ? systemConfigured : configured}
@@ -1583,7 +1652,7 @@ export function App() {
             ? () => { void act(() => Promise.resolve(withFictionalOperations(nov22LaterCapture())), true); } : undefined}
           whoCouldHelp={onSystem === "breeze" ? undefined : whoCouldHelp} feedback={feedback} onSettings={() => setPage("connection")} refused={!onSystem && refused} onSetUp={() => openSetup()}
           people={onSystem ? null : { granted: operationsGranted(status), onAdd: () => setPage("connection") }} asked={askedSlot} focus={sundayFocus && !fromPartKey(sundayFocus) ? sundayFocus : null} onFocused={() => setSundayFocus(null)}
-          openInPlanningCenter={fictional || onSystem ? null : openInPlanningCenter} pane={mainRef}
+          openInPlanningCenter={fictional || onSystem ? null : openInPlanningCenter} pane={mainRef} changes={changesOnSunday}
           uncheckedLine={systemShown && onSystem ? refusalLine(onSystem, sys.refusal) : null}
           worthALook={systemShown && sys.connection ? <SystemNotices connection={sys.connection} capture={sys.capture} notices={sys.built?.notices ?? []}
             waitingForZone={sys.built?.coverage.waiting_for_zone ?? false} refusal={sys.refusal}
@@ -1618,7 +1687,9 @@ export function App() {
           tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} found={triggers.found} source={triggers.source} parts={triggers.parts} ollama={ollamaDone}
           service={triggers.service} serviceNames={servicesShown ? Object.fromEntries([[settings.serviceTypeId, mainName], ...also.map(x => [x.serviceTypeId, x.name] as const)]
             .filter((e): e is [string, string] => Boolean(e[1]))) : {}}
-          system={onSystem ? { name: words.name, check: sys.capture } : onGenesis ? { name: words.name, check: genesis.capture } : null} />}
+          system={onSystem ? { name: words.name, check: sys.capture } : onGenesis ? { name: words.name, check: genesis.capture } : null}
+          changes={!offPc && (changesOn || (changes.history?.length ?? 0) > 0)
+            ? { lede: changesShownOn ? ACTIVITY_LEDE_ON : null, section: <ChangeHistory records={changes.history} names={historyNames} services={serviceNamesById} /> } : undefined} />}
         {page === "connection" && <ConnectionPage
           system={onSystem && sys.connection ? <SystemSettings connection={sys.connection} onConnection={next => { sys.setState({ ...sys.state, connection: next });
             if (next.service_id !== sys.connection?.service_id || next.zone !== sys.connection?.zone) void sys.check(next); }}
@@ -1631,10 +1702,12 @@ export function App() {
               onConnection={next => sys.setState({ ...sys.state, genesis: next ? { ...next, result_seen: true } : null })} />
             // Nothing chosen yet (round 5): the way to choose, in place of Planning Center's sign-in.
             : nothingChosen ? <section className="settings-sec" aria-labelledby="pco-title"><h2 id="pco-title" className="h3" tabIndex={-1}>What your church uses</h2>
-              <div className="find"><p className="find-body">{NOT_CHOSEN.notConnected}. Ozzie reads Planning Center, B1 Church, Breeze or Genesis, and only reads: it never changes anything there.</p>
+              <div className="find"><p className="find-body">{NOT_CHOSEN.notConnected}. {promise("systemsRead")}</p>
                 <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => openSetup("first")}>{NOT_CHOSEN.connect}</button></div></div></section>
             : undefined}
           watched={pcWatch}
+          changes={connected && !offPc ? { section: <ChangesSwitch control={changes} church={inUse?.name ?? null} people={peopleOk} />, banner: changesShownOn ? SETTINGS_BANNER_ON : null } : undefined}
+          onDisconnectTried={() => setDisconnectTries(n => n + 1)}
           others={<OtherSystems state={sys.state} onSwitch={switchSystem} cards={openCards}
             genesis={onGenesis ? null : <GenesisAlsoRead also={sys.state.genesis} onAlso={genesis => sys.setState({ ...sys.state, genesis })} />} />}
           openAt={settingsAt} onOpenAt={() => setSettingsAt(null)} status={status} kept={keptConnection} settings={settings} onSettings={setSettings} onStatus={setStatus} cards={openCards} onDiscardCards={discardCards}
@@ -1660,7 +1733,7 @@ export function App() {
             disconnected={onSystem ? !systemConnected : onGenesis ? !sys.state.genesis : status?.state === "disconnected"} signInAgain={!offPc && needsSignIn(status)}
             noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null} /></div>}
       </main>
-      {quitAsk && <QuitQuestion ask={quitAsk} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
+      {quitAsk && <QuitQuestion ask={{ ...quitAsk, checks: checksNow }} undo={changes.undoable.length ? quitUndo(changes.undoable) : null} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
       <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} modelReady={modelReady} onOpen={setPage}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : onGenesis ? (sys.state.genesis ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),

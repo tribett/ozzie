@@ -350,9 +350,12 @@ describe("a note for one person opens addressed when Planning Center has one det
 describe("what happened to a note stays on its card (audit item 19, review Y)", () => {
   it("a reason such as child is said only on the note card: no other module names it, and the card's actions call only the two open commands", async () => {
     const { ALL, code, NATIVE_COMMANDS, names: namesCommand, reach } = await import("../../../core/test/stays-on-this-mac-imports.js");
-    // "child" as a reason is said in one place: the page's own words for it.
+    // "child" as a reason is said in one place: the page's own words for it. The other module naming it is the change
+    // contract's own refusal (a change Ozzie never makes for a child), said in its own words there and held to the page by
+    // planning-center-changes.test.ts; it imports nothing of a note's.
     const naming = ALL.filter(p => /["'`]child["'`]/u.test(code(p)) && p.startsWith("product/desktop/src/"));
-    expect(naming).toEqual(["product/desktop/src/draft-actions.tsx"]);
+    expect(naming).toEqual(["product/desktop/src/draft-actions.tsx", "product/desktop/src/planning-center-changes.ts"]);
+    expect(reach("product/desktop/src/planning-center-changes.ts")).toEqual(new Set(["product/desktop/src/planning-center-changes.ts"]));
     const own = code("product/desktop/src/draft-actions.tsx");
     expect(NATIVE_COMMANDS.filter(c => namesCommand(own, c)).sort()).toEqual(["open_draft", "open_draft_to"]);
     // Nothing it reaches records, notifies, shares or asks a model.

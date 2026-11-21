@@ -429,7 +429,7 @@ pub(crate) fn read_recipient_with(
         .take_now(Reader::Note)
         .map_err(|holder| match holder {
             Reader::Note => NoRecipient::BusyWithAnotherNote,
-            Reader::Check | Reader::Picker => NoRecipient::BusyWithACheck,
+            Reader::Check | Reader::Picker | Reader::Change => NoRecipient::BusyWithACheck,
         })?;
     let auth = connect().ok_or(NoRecipient::CouldNotRead)?;
     // Only someone a check of this church showed, and nothing read otherwise.

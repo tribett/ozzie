@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { quietCheck, quietChecksLine, taskAccount, taskLine, type Account, type CheckFound, type TaskEnd, type TaskRow, type TaskStart } from "./harness-words.js";
@@ -187,8 +187,12 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   </>;
 }
 
-/** "What happened": what Ozzie did recently, then every Planning Center read in the latest check. All reads; no writes exist. */
-export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, service, serviceNames, now, ollama = null, system = null }: {
+/**
+ * "What happened": what Ozzie did recently, then every read in the latest check. With changes off for the church, all
+ * reads; with them on (Planning Center only), the changes the leader confirmed come first (`changes`, change-card.tsx
+ * `ChangeHistory`).
+ */
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, service, serviceNames, now, ollama = null, system = null, changes }: {
   /** Each check's Planning Center service type, and each watched service's name by it (several services watched). */
   service?: (taskId: string) => string | undefined; serviceNames?: Readonly<Record<string, string>>;
   capture: SundayCapture | null; notGranted?: boolean;
@@ -200,12 +204,15 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
   parts?: (taskId: string) => readonly CapturePart[] | undefined; now?: Date;
   /** Each time Ozzie got Ollama (native `ollama_install_history`), oldest first: a time and a closed word, never a path. */
   ollama?: OllamaHistory["done"] | null;
+  /** The changes confirmed for this church, and the line about reading as it reads then: App passes them only while changes are on. */
+  changes?: { lede: string | null; section: ReactNode } | undefined;
 }) {
   const w = useSystemWords();
   return <div className="col">
     <p className="eyebrow">What happened</p>
     <h1 className="h1">What Ozzie did</h1>
-    <p className="lede">{system ? systemPromise("reads", system.name) : w.unchosen ? w.say(promise("reads")) : promise("reads")} {promise("sends")}</p>
+    <p className="lede">{changes?.lede ?? <>{system ? systemPromise("reads", system.name) : w.unchosen ? w.say(promise("reads")) : promise("reads")} {system ? promise("sends", "A") : promise("sends")}</>}</p>
+    {!system && changes?.section}
     <section className="stack" aria-labelledby="recent-title">
       <h2 id="recent-title" className="h3">Recent work</h2>
       <RecentWork tasks={tasks} procedures={procedures} {...(trigger ? { trigger } : {})} {...(end ? { end } : {})} {...(found ? { found } : {})} {...(source ? { source } : {})} {...(parts ? { parts } : {})} {...(now ? { now } : {})}

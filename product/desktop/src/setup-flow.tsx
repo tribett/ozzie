@@ -33,7 +33,7 @@ const atFrom = (start: FirstRunScreen): At => start === "waiting" ? "browser" : 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 export function FirstRun({ status, settings, onSettings, onStatus, start, read, result, rules, intervalMinutes, nowMs, onExample, onLeave, onDeferred, onWatching, renderAi,
-  bridge = onboarding, memory = defaultMemory(), builtIn: builtInProp, cards = 0, onDiscardCards, again = false }: {
+  bridge = onboarding, memory = defaultMemory(), builtIn: builtInProp, cards = 0, onDiscardCards, again = false, onDisconnectTried }: {
   status: ConnectionStatus | null; settings: Settings; onSettings: (s: Settings) => void; onStatus: (s: ConnectionStatus) => void;
   /** Where it opened: from facts at launch, or from a button (Today's "Connect Planning Center", Settings, the example band). */
   start: FirstRunScreen;
@@ -61,6 +61,11 @@ export function FirstRun({ status, settings, onSettings, onStatus, start, read, 
   cards?: number; onDiscardCards?: (() => void) | undefined;
   /** This church already saw a result (a saved check exists): connecting again says so, with no step counter. */
   again?: boolean;
+  /**
+   * A Disconnect was tried here ("This isn't my church", or the sign-in form of a copy built by hand), however it ended:
+   * native code turns changes off for that church either way, so App reads the switch again.
+   */
+  onDisconnectTried?: (() => void) | undefined;
 }) {
   const [at, setAt] = useState<At>(atFrom(start));
   const [promises, setPromises] = useState(false);
@@ -150,7 +155,7 @@ export function FirstRun({ status, settings, onSettings, onStatus, start, read, 
           onStatus(after);
           if (after.state === "disconnected" && cards > 0) onDiscardCards?.();
           setNotMine(false); setJustConnected(false); setAttempted(false); setAt("browser");
-        }, () => setNotMine(false)).finally(() => setWorking(false));
+        }, () => setNotMine(false)).finally(() => { setWorking(false); onDisconnectTried?.(); });
       }} />}
     </>;
   }
@@ -161,7 +166,7 @@ export function FirstRun({ status, settings, onSettings, onStatus, start, read, 
     </>;
   }
   const selfBuilt = builtIn === false
-    ? <ConnectForm status={status} settings={settings} onSettings={onSettings} control={control} firstRun cards={cards} onDiscardCards={onDiscardCards} /> : undefined;
+    ? <ConnectForm status={status} settings={settings} onSettings={onSettings} control={control} firstRun cards={cards} onDiscardCards={onDiscardCards} onDisconnectTried={onDisconnectTried} /> : undefined;
   return <BrowserStep failure={failure} resume={!triedHere && resume ? RESUME_LINE[resume] : null} offline={offline} working={working || builtIn === null}
     onOpen={() => { void open(); }} onBack={() => { setThrown(null); setAttempted(false); setAt("first"); }} onNotNow={() => onLeave("today")} selfBuilt={selfBuilt} again={again} />;
 }

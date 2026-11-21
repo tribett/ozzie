@@ -379,7 +379,7 @@ describe("Ask before anything is connected, and what Ozzie can do (owner decisio
   it("lists what Ozzie can do here and what it never does, with nothing sent", () => {
     const t = text(body({ id: 1, question: "What can you do?", state: "help", checked: true }));
     for (const s of ["Check the service Ozzie watches", "who on a team could help", "Prepare a note", "copy", "Keep an eye on the service", "room bookings", "follow-ups", "group meetings",
-      "morning briefing", "visitor cards", "never sends messages", "never changes anything in Planning Center", "prayers", "sermons", "Nothing was sent."]) expect(t, s).toContain(s);
+      "morning briefing", "visitor cards", "never sends messages", "never changes Planning Center unless you confirm that one change", "prayers", "sermons", "Nothing was sent."]) expect(t, s).toContain(s);
     expect(t).not.toMatch(HIDDEN_WORDS);
     // Before anything is checked: what to do first, and the way there.
     const first = body({ id: 1, question: "help", state: "help", checked: false });

@@ -26,6 +26,7 @@ import {
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
 import { DayProvider } from "../src/day-words.js";
 import { wednesdayWords } from "../../../core/test/fixtures/service-days/wednesday.js";
+import { promise } from "../src/promises.js";
 
 const ET = "America/New_York";
 const FRI = "2026-11-20T15:00:00.000Z";
@@ -419,7 +420,7 @@ describe("Keeping watch reads top to bottom: what is running, then how it works 
   it("keeps every fact the old explanation gave: on the page, and at most one click away", () => {
     // The old lead, its paragraph, Pause everything's line, the line about the two things that look at Sunday, and the card's rows.
     const facts = [
-      "tells you privately when something needs you", "Ozzie only reads.", "even with its window closed",
+      "tells you privately when something needs you", promise("connectAnd"), "even with its window closed",
       "Ozzie keeps checking while its window is closed.", "It stays as the small Ozzie picture at the top of your screen.",
       QUIT_LINE, "Ozzie catches up once when it can.",
       "Ozzie runs one job of each kind at a time", "use Change on its card instead of setting up another",
@@ -442,9 +443,9 @@ describe("Keeping watch reads top to bottom: what is running, then how it works 
     for (const page of [on, off]) expect(folded(page)).toBe(` See how this works ${[...WATCH_HOW, oneOfEach()].join(" ")} `);
   });
 
-  it("says Ozzie only reads, and that nothing runs after quitting or while asleep, without opening anything", () => {
+  it("says what Ozzie changes (the build's promise), and that nothing runs after quitting or while asleep, without opening anything", () => {
     for (const page of [on, off]) {
-      expect(unfolded(page)).toContain("tells you privately when something needs you. Ozzie only reads.");
+      expect(unfolded(page)).toContain(`tells you privately when something needs you. ${promise("connectAnd")}`);
       expect(unfolded(page)).toContain(QUIT_LINE);
       expect(unfolded(page)).toContain("Reads only. It never sends messages.");
       expect(unfolded(page)).not.toContain(WATCH_HOW[0]!);
@@ -648,7 +649,7 @@ describe("drafted notes and your name", () => {
     expect(settings).toContain("Your name on notes");
     // Near the top of Settings (audit item 18): second, right after Planning Center and which Sunday, in the order a
     // leader meets them (audit item 27), and in the index at the very top.
-    const sections = settings.slice(settings.indexOf("Planning Center and which services Ozzie watches Reads only."));
+    const sections = settings.slice(settings.indexOf(`Planning Center and which services Ozzie watches ${promise("readsShort")}`));
     expect(sections.indexOf("Your name on notes")).toBeGreaterThan(0);
     expect(sections.indexOf("Your name on notes")).toBeLessThan(sections.indexOf("AI help"));
     expect(settings.indexOf("On this page Planning Center and which services Ozzie watches Your name on notes")).toBeGreaterThan(-1);

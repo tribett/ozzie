@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ConnectionPage } from "../src/connection-page.js";
 import { cleanYourName, connectionProblem, foundOrganization, organizationDiagnosticProblem, signNote, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "../src/connection.js";
+import { promise } from "../src/promises.js";
 
 describe("private consumer status-only presentation", () => {
   it("starts disconnected with connection actions disabled until Public registration is confirmed", () => {
@@ -10,7 +11,8 @@ describe("private consumer status-only presentation", () => {
     const html = renderToStaticMarkup(React.createElement(ConnectionPage, { status: null, settings, onSettings: () => {}, onStatus: () => {} }));
     expect(html).toContain("Planning Center is disconnected.");
     expect(html).toMatch(/<button class="btn btn-primary" disabled="">Connect Planning Center<\/button>/);
-    expect(html).toContain("Reads only.");
+    // The build's form of the short promise (promises.ts), true with adding people off as well as on.
+    expect(html).toContain(promise("readsShort"));
     expect(html).not.toMatch(/type="password"|access_token|refresh_token|code_verifier/);
   });
   it("shows fixed actionable storage errors and never echoes provider credential material", () => {

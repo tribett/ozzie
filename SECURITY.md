@@ -19,7 +19,10 @@ bug bounty.
 Reports in these areas are especially welcome:
 
 - any way Ozzie could change or send something in Planning Center or another
-  church system (it must only read);
+  church system other than the one change a person confirms on screen (adding
+  one person to an open role as unconfirmed, and taking them off again), or
+  make that change without the confirmation, for another church, or with
+  changes turned off;
 - any way a name Ozzie read, a contact detail or a background-check fact
   could reach an AI model or another app;
 - any way text inside church data (an email, a note, a plan title) could be

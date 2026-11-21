@@ -58,7 +58,7 @@ describe("whether quitting would stop checks", () => {
 
   it("is what App tells native code: its own settings' readiness, the regular check's schedule and the jobs", () => {
     const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-    expect(app).toContain("useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch });");
+    expect(app).toContain("useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch }, changes.undoable.length > 0);");
     expect(app).not.toMatch(/quitting\.guard\(/u);
   });
 });

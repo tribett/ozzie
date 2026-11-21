@@ -19,6 +19,7 @@ import {
 import { AUTOMATIC_OFF, UpdateLine, UpdatesSection } from "../src/updates-view.js";
 import { ConnectionPage } from "../src/connection-page.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
+import { promise } from "../src/promises.js";
 
 // Thursday 2026-11-19, 2:30 PM on this Mac.
 const NOW = new Date(2026, 10, 19, 14, 30).getTime();
@@ -162,7 +163,7 @@ describe("updates: Settings section", () => {
       updates: React.createElement(UpdatesSection, { state: state(view()), nowMs: NOW, cards: 0 }),
     })));
     // The sections themselves, after Settings' index (audit item 27), which names them too.
-    const sections = settings.slice(settings.indexOf("Planning Center and which services Ozzie watches Reads only."));
+    const sections = settings.slice(settings.indexOf(`Planning Center and which services Ozzie watches ${promise("readsShort")}`));
     expect(sections.indexOf("When the window is closed")).toBeGreaterThan(-1);
     expect(sections.indexOf("Updates")).toBeGreaterThan(sections.indexOf("When the window is closed"));
     expect(sections.indexOf("Saved checks")).toBeGreaterThan(sections.indexOf("Updates"));

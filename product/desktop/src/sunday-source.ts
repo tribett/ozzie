@@ -109,7 +109,7 @@ export const REFUSED = {
 } as const;
 /**
  * "Copy a message for your administrator", beside each refusal above that says an administrator can give access
- * (walk-through, 2026-11-18): what Ozzie is, that it only reads, the permission it needs and where it's changed, with no
+ * (walk-through, 2026-11-18): what Ozzie is, what it may change (promises.ts `request`), the permission it needs and where it's changed, with no
  * name, church, service or number in it. The permission and the way to it are Planning Center's own (its help page
  * "Permissions in Services", read 2026-11-18): Viewer is the lowest level that sees plans the person isn't scheduled
  * on, and an administrator sets it in Services under People, the person, Actions, Manage permissions, then Update.

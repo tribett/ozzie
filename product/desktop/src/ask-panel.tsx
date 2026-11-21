@@ -20,7 +20,7 @@ import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
 import {
-  addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, HELP, LOCAL_HOW, LOCAL_NOTE, procedureTitle, type Account,
+  addedHow, aiText, ASK_FAILURES, ASK_LOADING, ASK_START, basedOnBrief, COMPOSED_ENDED, COMPOSED_NOTE, composedHow, HELP, LOCAL_HOW, LOCAL_NOTE, neverElsewhere, procedureTitle, type Account,
 } from "./harness-words.js";
 import { TaskAccount } from "./activity-page.js";
 import { ChooseAiButton, ChooseAiContext } from "./ai-line.js";
@@ -50,7 +50,7 @@ export function helpFor(w: SystemWords): { intro: string; can: readonly string[]
   if (w.unchosen) return { ...HELP, intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first) };
   // Genesis shares no volunteer schedules (round 5): what Ozzie answers from it, all on this Mac.
   if (w.system === "genesis") return {
-    intro: "Here is what Ozzie can do for you, from what it reads in Genesis:", never: w.say(HELP.never), first: w.say(HELP.first),
+    intro: "Here is what Ozzie can do for you, from what it reads in Genesis:", never: neverElsewhere(w.name), first: w.say(HELP.first),
     try: "You could ask “What events are coming up?” or “How many times was each form filled in?”.",
     can: [
       "Show the events of the next four weeks, and how many attended the ones just past.",
@@ -61,7 +61,7 @@ export function helpFor(w: SystemWords): { intro: string; can: readonly string[]
     ],
   };
   return {
-    intro: w.say(HELP.intro), never: w.say(HELP.never), first: w.say(HELP.first),
+    intro: w.say(HELP.intro), never: neverElsewhere(w.name), first: w.say(HELP.first),
     // Where no team is tied to roles (Breeze), what works there instead of who could help (round 5).
     try: w.noTeam ? "You could ask “Who is scheduled?” or “Who hasn't answered yet?”, or say “Keep an eye on the service”." : HELP.try,
     can: [

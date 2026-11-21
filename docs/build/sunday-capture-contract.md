@@ -132,17 +132,19 @@ person ("Follow-up for ..."), so they never sit inside a read's `body`.
 Status: build contract, 2026-11-13 (stream S1, `core/native-auth`). Additive to
 v1: same `SundayCapture` (`version: 1`), same `reads` list, appended after every
 Services read. Feeds `core/src/operations-findings` (room overlaps, unowned
-overdue follow-ups) and the group-meeting overlap check. All GET; nothing is
-ever written.
+overdue follow-ups) and the group-meeting overlap check. All GET; these reads
+write nothing (Ozzie's one write is in "Reads for a change you confirm" below).
 
 ### Consent (least privilege)
 
 Each Planning Center product scope permits both reading and writing in that
-product. Ozzie never writes: GET-only is enforced in its own HTTP layer
+product. Every read is GET-only, enforced in its own HTTP layer
 (`NativeSourceHttp::build`, the one request shape; a test builds every
 collection and checks method GET, no body, the allowlisted URL and the pinned
-version). The scope is therefore not the safety boundary, and the default asks
-for the least:
+version). Ozzie's only writes are the one change a person confirms and its undo
+(`core/native-auth/src/change.rs`), each only with the church's switch on. The
+scope is therefore not the safety boundary, and the default asks for the
+least:
 
 | scope set | OAuth `scope` | how |
 |---|---|---|
@@ -523,3 +525,31 @@ webview (`core/src/kids-rules.ts`):
   scope. Not yet verified live: that People person ids equal Services person ids here (as they do for Groups),
   whether a login without background-check access gets 403 or an empty list, and the meaning of `current` and
   of a null `expires_on` in reads.
+
+## Reads for a change you confirm (2026-11-17)
+
+Not part of a capture or a recording, and never on the stdin protocol. When a leader asks to add someone to an
+open role (`core/native-auth/src/change.rs`, off by default for each church), Ozzie reads Planning Center again,
+just before the confirmation is shown and again just before the change is made, through the same verified,
+GET-only path: the plan, its times, its needed positions, its people, the team's position assignments, the
+person's blockouts and schedules (all already above), and these narrow People reads:
+
+| Collection | Version | Path | Fixed query | Kept |
+|---|---|---|---|---|
+| `person_child` | People 2025-11-10 | `/people/v2/people/{person}` | `fields[Person]=child,status` | `child`, `status` |
+| `people_background_checks` | People 2025-11-10 | `/people/v2/people/{person}/background_checks` | `filter=complete_clear` | as above |
+| `pending_checks_awaiting_applicant` | People 2025-11-10 | `/people/v2/people/{person}/background_checks` | `filter=awaiting_applicant&fields[BackgroundCheck]=status,person` | `status`, `person` |
+| `pending_checks_report_processing` | People 2025-11-10 | same | `filter=report_processing&fields[BackgroundCheck]=status,person` | `status`, `person` |
+| `pending_checks_needs_review` | People 2025-11-10 | same | `filter=needs_review&fields[BackgroundCheck]=status,person` | `status`, `person` |
+
+- `person_child` is read for every change: a person Planning Center lists as a child, or whose record doesn't
+  say, is never added. The one extra field on that same request is the Person's `status` (`active` or
+  `inactive`; security review S, L9): a person listed as inactive, or whose record leaves it out, empty or with
+  another value, is never added. `inactivated_at` is not asked for. The values come from Planning Center's own
+  published tool schema for People (a person's `status` filter, `active` / `inactive`); a live read hasn't
+  confirmed them yet. Services' own `archived` flag on a person is not read: a person archived in Services but
+  active in People isn't caught by this field. The background-check reads are made only for a team marked as a kids team in Church
+  rules, even when the background-check rule is off; a finished check that didn't clear, a canceled one and an
+  expired invitation are never asked for.
+- What is read is used for that one change on this Mac and kept nowhere; nothing of it goes to a model, the
+  copies for other AI apps or Siri, or a notice.

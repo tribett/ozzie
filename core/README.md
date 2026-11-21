@@ -115,7 +115,7 @@ Planning Center path exist only in native code, where the requests are made.
 | The final answer is only fact ids this task's tools returned | `verify.ts` | `fixed.rs` `final_answer` |
 | At most 6 model steps and 10 tool calls a task | `contract.ts` `HARNESS_LIMITS`, in both loops | `agent.rs` `MAX_STEPS`, `MAX_TOOL_CALLS`, counted from the ledger |
 | A daily allowance per AI route, zero data retention where required | | `model.rs` |
-| Planning Center is only read | (no TypeScript path reaches it in the app) | `source.rs`: a GET of an allow-listed address is the only request shape |
+| Planning Center is read, and changed only by the one change a person confirms | (no TypeScript path reaches it in the app) | `source.rs`: a GET of an allow-listed address is the only read shape; `change.rs`: the one POST and its DELETE, each only with the church's switch on, after a fresh read and the person's confirmation on screen |
 
 The TypeScript and Rust checks run the same test vectors
 (`core/test/ask-parity.json`, `core/test/answer-parity.json`), and both sides

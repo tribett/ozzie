@@ -2,7 +2,7 @@
 // Registrations each sign in again and ask Planning Center for that product only when the person chooses it;
 // a connection made before keeps working and these simply aren't read until allowed. People forms use the
 // People access already asked for with rooms, follow-ups and group events; which forms to watch is chosen on
-// Church rules. Ozzie only reads, and only counts and names of forms, rooms and signups (on this Mac).
+// Church rules. Ozzie only reads these products, and only counts and names of forms, rooms and signups (on this Mac).
 import { granted, moreOf, operationsGranted, type ConnectionStatus, type MoreProducts } from "./connection.js";
 import type { ConnectionControl } from "./planning-center-forms.js";
 
@@ -56,7 +56,7 @@ export function MoreFromPlanningCenter({ status, control }: { status: Connection
   };
   return <section className="find" aria-labelledby="more-pco-title">
     <h3 id="more-pco-title" className="settings-t">Forms, check-ins and signups</h3>
-    <p className="find-body">Each of these is its own choice. Check-Ins and Registrations sign in again and ask Planning Center for that access; Planning Center grants it as read-and-write, and Ozzie only reads. Until you allow one, Ozzie simply doesn't read it.</p>
+    <p className="find-body">Each of these is its own choice. Check-Ins and Registrations sign in again and ask Planning Center for that access; Planning Center grants it as read-and-write, and Ozzie only reads them. Until you allow one, Ozzie simply doesn't read it.</p>
     <div className="more-choice">
       <h4 className="bold">{MORE_COPY.forms.title}</h4>
       <p className="find-body">{MORE_COPY.forms.body}</p>

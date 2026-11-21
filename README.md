@@ -24,15 +24,24 @@ invented people). No church data is shown.
 
 ## What Ozzie does
 
-- **Reads Planning Center, and only reads.** Ozzie makes a fixed list of GET
+- **Reads Planning Center, and changes it only when you confirm one change.**
+  Ozzie makes a fixed list of GET
   requests (Services plans, positions and schedules, and the upcoming plans
   setup lists to choose from; with your consent, Calendar room bookings,
   People workflow cards, cleared People background checks for people
   scheduled on kids teams, and Groups events; each only if you turn it
-  on, People forms, Check-Ins and Registrations, below; and, with People
+  on, People forms, Check-Ins and Registrations, below; with People
   access, one person's email addresses or phone numbers when you open a note
-  for them, below). It never
-  writes, edits or deletes anything in Planning Center. The Services, Calendar,
+  for them, below; and, when you ask to add someone to an open role, whether
+  Planning Center lists that person as a child and as active and, for a team
+  marked as a kids team, their background check status and end date (cleared
+  and unfinished checks), below). It changes nothing in
+  Planning Center unless your church turned on changes and you confirm one:
+  adding one person who could help to an open role as unconfirmed, with the
+  request waiting for you to send in Planning Center
+  (`core/native-auth/src/change.rs`), and taking that person off again while
+  the request is unsent. It never sends that request, never changes or removes
+  anything else, and never changes anything on its own. The Services, Calendar,
   People and Groups reads are listed in
   [docs/build/sunday-capture-contract.md](docs/build/sunday-capture-contract.md);
   every read, these three and the two below included, is an operation in
@@ -43,7 +52,7 @@ invented people). No church data is shown.
   (Messages), for that one person (`core/native-auth/src/contact.rs`).
   Signing in, renewing access and disconnecting use Planning Center's standard
   OAuth sign-in endpoints.
-- **Or reads B1 Church or Breeze, and only reads.** A church that plans its
+- **Or reads B1 Church or Breeze, and changes nothing there.** A church that plans its
   services in B1 Church or Breeze chooses it when Ozzie first opens, and gives
   Ozzie a key made in that system; the key goes only to that system and is
   kept in the Mac's Keychain. Ozzie reads the service it watches (roles, who is
@@ -56,7 +65,7 @@ invented people). No church data is shown.
   checks and Ask work with them as with Planning Center; jobs, Siri and
   Shortcuts, the copy for other AI apps and the extras below work with Planning
   Center only for now.
-- **Or reads Genesis, and only reads, with no coverage check.** Genesis shares
+- **Or reads Genesis, and changes nothing there, with no coverage check.** Genesis shares
   no volunteer schedules, so Ozzie can't check whether a service is covered
   there and never says it is. A church on Genesis gives Ozzie a key with Read
   for Groups, Events and Forms only (no People: Ozzie reads no one's name from
@@ -111,8 +120,17 @@ invented people). No church data is shown.
   your Mac that you said you'd ask them, so Sunday and Today show it, with
   Undo. Nothing is sent and Planning Center doesn't change.
 - **Open in Planning Center.** Each Sunday card and person row can open that
-  plan or person in Planning Center in your browser. Ozzie changes nothing
-  there.
+  plan or person in Planning Center in your browser. Opening it changes
+  nothing there.
+- **Add someone you choose, when you confirm.** If your church turns it on in
+  Settings, a person in "who could help" has a button to add them to that role
+  in Planning Center as unconfirmed. Ozzie reads Planning Center again, shows
+  exactly what will change, and adds them only after you confirm. Ozzie sends
+  them nothing; Planning Center sends its request when you press Send there.
+  For a team marked as a kids team, Ozzie shows the background check on file
+  first and advises against adding anyone without a current one. Until you send
+  the request, you can take them off again while Ozzie stays open. See
+  [Changes you confirm](#changes-you-confirm).
 - **Learns your corrections as Church rules you can see.** Every finding card
   offers "This isn't right", "Stop flagging this", "Always do this" and, per
   kind of finding, "Always tell me right away" or "Put this in the briefing".
@@ -240,11 +258,54 @@ In short, Ozzie never:
 - pretends to give pastoral care, counselling or prayer;
 - scores, ranks or labels a person's spiritual health, faithfulness or risk;
 - makes a pastoral decision or acts without a named person approving it;
-- writes to Planning Center, B1 Church, Breeze or Genesis;
+- changes Planning Center without a person confirming that one change;
+- writes to B1 Church, Breeze or Genesis;
 - sends the names it read from any of them to an AI model;
 - presents uncertainty as fact, or hides what it read and when.
 
 These are not settings. No user, church or plan can switch them off.
+
+## Changes you confirm
+
+Ozzie reads Planning Center. It changes it in one way only, and only when you
+say so. This is for Planning Center only: Ozzie only reads B1 Church, Breeze
+and Genesis, and has no way to change anything in them.
+
+- **Off until you turn it on, for each church.** Settings, under "Adding people
+  in Planning Center". Switching churches or disconnecting turns it off for the
+  church you leave.
+- **One change at a time, only when you confirm it.** On an open role's "who
+  could help" list, you choose a person. Ozzie reads Planning Center again,
+  shows exactly who, which role, which service, its date and times, and adds
+  them only after you confirm that one change. Ozzie never picks a person, never adds
+  anyone on its own, on a schedule or from an AI's answer, and never adds
+  several at once.
+- **What is added.** The person, to that role on that one service's plan, as
+  unconfirmed, with Planning Center's request waiting. Ozzie sends them
+  nothing; Planning Center sends its request when you press Send there.
+  Planning Center shows you, the person signed in, as the one who scheduled
+  them, and the open place counts as filled even before they are asked.
+- **What is removed.** Only a person Ozzie added, when you ask ("Take … off
+  again"), while their request is unsent and while Ozzie stays open. Quitting,
+  switching churches, disconnecting or turning this off ends that; then you
+  take them off in Planning Center. Nothing else is ever removed.
+- **What Ozzie checks first.** That the role is still open, the person isn't on
+  the plan, still holds that position, has no blockout or other plan then, is
+  listed as active, and is listed as not a child (someone listed as inactive or
+  as a child, or whose record doesn't say, is never added; this needs People
+  access). For a team marked as a kids
+  team in Church rules, it shows the person's background check as Planning
+  Center records it and advises against adding anyone without a current one;
+  going ahead anyway takes a separate choice, which What happened records.
+- **What Ozzie never does.** It never sends a request or a message, never
+  accepts or declines for anyone, never edits a plan's notes, times or
+  positions, and never changes another church. The AI has no tool to make a
+  change.
+
+Each change and its result are listed in What happened, on this Mac only,
+while that church is connected (also after adding people is turned off).
+Whether Planning Center's automatic reminders, if your church uses them, reach
+someone added this way before the request is sent hasn't been confirmed.
 
 ## What the AI does, and what fixed logic does
 

@@ -6,7 +6,7 @@
 // "Open it without an address" opens it with To empty and is remembered (moments.ts), so the sheet is asked again only
 // from the note's own "Fill in who it's to" link.
 //
-// Ozzie still only reads: the sign-in asks for People together with Calendar and Groups because Planning Center gives
+// Ozzie still only reads People: the sign-in asks for People together with Calendar and Groups because Planning Center gives
 // them together. Nothing here reads an address: native fills in To when the note opens (draft-actions.tsx).
 import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./icons.js";

@@ -1692,12 +1692,13 @@ pub fn delete_plan_recordings(
     Ok(removed)
 }
 
-/// The Sunday check, setup's picker and filling in To on a note (contact.rs) share one Planning
-/// Center connection, so they take turns: one reader at a time, the whole time it uses the
-/// connection. A second check, or a second note, is refused at once rather than queued. A check
-/// waits out a picker read or a note (each bounded) so it never records `busy` gaps because of
-/// them; a picker read waits for the others up to its own bound; a note never waits, and opens with
-/// no one in To instead. With nobody else reading, a turn is taken at once and nothing about the
+/// The Sunday check, setup's picker, filling in To on a note (contact.rs) and a change a person
+/// approved (change.rs) share one Planning Center connection, so they take turns: one reader at a
+/// time, the whole time it uses the connection. A second check, note or change is refused at once
+/// rather than queued. A check waits out a picker read, a note or a change (each bounded; a change
+/// at most `change::LONGEST_TURN`, which the desktop app's check waits longer than) so it never
+/// records `busy` gaps because of them; a picker read waits for the others up to its own bound and
+/// can answer busy; a note or a change never waits, and says it couldn't go ahead instead. With nobody else reading, a turn is taken at once and nothing about the
 /// reader changes. (Moved from the desktop app's main.rs, so the rule lives in core.)
 #[derive(Clone, Default)]
 pub struct Turns(std::sync::Arc<(std::sync::Mutex<Option<Reader>>, std::sync::Condvar)>);
@@ -1707,6 +1708,8 @@ pub enum Reader {
     Picker,
     /// Filling in To on a note: one person's email address or mobile number (contact.rs).
     Note,
+    /// A change a person approved: its fresh reads and its one write (change.rs).
+    Change,
 }
 /// A held turn; dropping it lets the next reader in.
 pub struct Turn(Turns);

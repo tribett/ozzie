@@ -128,7 +128,7 @@ export const signNote = (text: string, name: string) => text.split(PLACEHOLDER).
 
 export const connection = {
   status: () => invoke<ConnectionStatus | null>("connection_status"),
-  /** `operations` asks Planning Center for Calendar, People and Groups too; `more` for Check-Ins and Registrations. Ozzie still only reads. */
+  /** `operations` asks Planning Center for Calendar, People and Groups too; `more` for Check-Ins and Registrations. Ozzie still only reads these products. */
   connect: (client_id: string, organization: string, registered: boolean, operations = false, more: MoreProducts = {}, purpose?: SignInPurpose) => {
     signInStarting(purpose);
     return invoke<ConnectionStatus>("connect_planning_center",

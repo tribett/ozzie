@@ -112,7 +112,7 @@ describe("Sunday page", () => {
     expect(t).toContain("Resolved by you — this Sunday only");
     expect(t).toContain("Nursery isn't needed this Sunday.");
     expect(t).toContain("“Only two babies registered”");
-    expect(t).toContain("Planning Center still shows 1 remaining request; Ozzie hasn't changed anything there.");
+    expect(t).toContain("Planning Center still shows 1 remaining request; your decision here didn't change anything there.");
     expect(t).not.toContain("Confirmed in Planning Center");
     expect(t).toContain("1 thing needs a decision");
     expect(t).toContain("You resolved 1 yourself.");

@@ -927,6 +927,11 @@ fn target_for(collection: Collection) -> Target {
         Collection::RegistrationsAttendees => Target::signup("640"),
         // Filling in To on a drafted note (contact_tests.rs).
         Collection::PersonEmails | Collection::PersonPhoneNumbers => Target::people_person("50"),
+        // Adding someone to a role (change_tests.rs).
+        Collection::PersonChild
+        | Collection::PendingChecksAwaitingApplicant
+        | Collection::PendingChecksReportProcessing
+        | Collection::PendingChecksNeedsReview => Target::people_person("50"),
     }
 }
 /// A valid request for every collection: the picker's reads come before a plan is chosen, so
@@ -934,9 +939,13 @@ fn target_for(collection: Collection) -> Target {
 /// contact read names neither.
 fn valid(collection: Collection) -> SourceRequest {
     let (service_type, plan) = match collection {
-        Collection::ServiceTypes | Collection::PersonEmails | Collection::PersonPhoneNumbers => {
-            ("", "")
-        }
+        Collection::ServiceTypes
+        | Collection::PersonEmails
+        | Collection::PersonPhoneNumbers
+        | Collection::PersonChild
+        | Collection::PendingChecksAwaitingApplicant
+        | Collection::PendingChecksReportProcessing
+        | Collection::PendingChecksNeedsReview => ("", ""),
         Collection::UpcomingPlans => ("10", ""),
         _ => ("10", "20"),
     };
@@ -951,7 +960,7 @@ fn valid(collection: Collection) -> SourceRequest {
     )
     .unwrap()
 }
-const ALL: [Collection; 32] = [
+const ALL: [Collection; 36] = [
     Collection::Plan,
     Collection::Organization,
     Collection::PlanTimes,
@@ -984,12 +993,16 @@ const ALL: [Collection; 32] = [
     Collection::RegistrationsAttendees,
     Collection::PersonEmails,
     Collection::PersonPhoneNumbers,
+    Collection::PersonChild,
+    Collection::PendingChecksAwaitingApplicant,
+    Collection::PendingChecksReportProcessing,
+    Collection::PendingChecksNeedsReview,
 ];
 
 #[test]
 fn the_source_client_only_ever_builds_get_requests_for_every_collection() {
-    // Planning Center product scopes permit both reading and writing in that product. Ozzie's
-    // read-only rule is enforced here, in the HTTP layer: every request built is a bodiless GET
+    // Planning Center product scopes permit both reading and writing in that product. The read
+    // path's GET-only rule is enforced here, in the HTTP layer: every request built is a bodiless GET
     // of the allowlisted URL, with that product's pinned version.
     let http = NativeSourceHttp::new().unwrap();
     let mut requests: Vec<SourceRequest> = ALL.iter().map(|&c| valid(c)).collect();

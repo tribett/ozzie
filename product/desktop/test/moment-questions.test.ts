@@ -120,7 +120,7 @@ describe("Fill in who it's to?", () => {
     expect(dom.seen()).toContain(PEOPLE_TITLE);
     expect(dom.seen()).toContain(peopleBody("Riley Thornbury"));
     // The bundle is Ozzie's own ask (oauth.rs Scopes::oauth), not Planning Center's (review H1).
-    expect(peopleBody("Riley Thornbury")).toBe("To put Riley Thornbury's email address or mobile number in To, Ozzie needs to read Planning Center People. Ozzie asks for People together with Calendar and Groups, and Planning Center words it as read-and-write. Ozzie only reads.");
+    expect(peopleBody("Riley Thornbury")).toBe(`To put Riley Thornbury's email address or mobile number in To, Ozzie needs to read Planning Center People. Ozzie asks for People together with Calendar and Groups, and Planning Center words it as read-and-write. ${promise("connectAnd")}`);
     // What is then read, and when, is shown before anything is allowed (review H1, mutation M7).
     expect(dom.seen()).toContain(PEOPLE_READS);
     expect(PEOPLE_READS).toContain("Ozzie reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child");

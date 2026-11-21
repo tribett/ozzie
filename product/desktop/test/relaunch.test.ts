@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sunday.js";
 import { NOTHING_PLANNED, pickReply, SUNDAY_MORNING } from "./onboarding-fakes.js";
+import { promise } from "../src/promises.js";
 
 const ORG = "1001";
 type Status = Record<string, unknown>;
@@ -85,7 +86,8 @@ const CONNECTED: Status = { state: "connected", organization: ORG, checked_at_ms
 /** What native reports after a launch's check of the saved sign-in: connected, not a new sign-in. */
 const CHECKED: Status = { ...CONNECTED, found: undefined, found_at_ms: undefined };
 
-const FIRST_SCREEN = "It only reads. It never changes anything in Planning Center.";
+// The build's own form of the promise (promises.ts): form B, since this build holds the one change a person confirms.
+const FIRST_SCREEN = promise("reads");
 /** A brand-new Mac's first screen since a second church system shipped (onboarding decision 21). */
 const CHOOSE_SCREEN = "What does your church use?";
 /** The service page's and Today's word for a saved check (sunday-page.tsx), with its real time. */

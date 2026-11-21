@@ -44,6 +44,9 @@ mod church_sources;
 // B1 Church, Breeze and Genesis, read-only: keys through the native key window, reads through core/church-systems.
 mod church_systems;
 mod key_sheet;
+// "Let Ozzie make changes you confirm, one at a time": add one person to an open role in Planning
+// Center, unconfirmed with the request waiting, after the leader's yes (core `change`). Off by default.
+mod changes;
 // "Open in Mail" / "Open in Messages" on drafts: a new, unsent message the person sends.
 mod draft_apps;
 mod local_tools;
@@ -198,14 +201,16 @@ impl SessionNames {
 /// for the others up to `sunday_picker::WAIT_FOR_CONTROLLER`, then answers `busy`; a note never
 /// waits (draft_apps::open_draft_to).
 type SundayChecks = sunday_check::Turns;
-/// How long a check waits for the turn. A note's read holds it about 23 s at the very worst (its 8 s
+/// How long a check waits for the turn: longer than a change can hold it (core
+/// `change::LONGEST_TURN`, 65 s; its sign-in is renewed before it takes the turn). A note's read holds
+/// it about 23 s at the very worst (its 8 s
 /// deadline, then an identity check already under way, which the sign-in client limits to 15 s; a
 /// page read is limited to 5 s; it never renews the sign-in), so a check outlasts it. A picker read
 /// (up to 10 s waiting for the connection, then the identity check and one page) can take about this
 /// long at the very worst; one that first renews the sign-in (`renewed_auth`: up to `RENEWAL_WAITS`
 /// for a sign-in or Disconnect under way, then a token request and an identity check, each limited
 /// to 15 s) can take longer, and a check waiting for it then answers `busy`.
-const CHECK_WAITS_FOR_PICKER: Duration = Duration::from_secs(30);
+const CHECK_WAITS_FOR_PICKER: Duration = Duration::from_secs(75);
 /// How long a renewal waits for a sign-in, a check of the saved sign-in, a church-switch answer or
 /// Disconnect under way to finish before the read answers `busy` (`renewed_auth`).
 const RENEWAL_WAITS: Duration = Duration::from_secs(10);
@@ -257,8 +262,8 @@ async fn connection_status(
 /// `operations` (optional, default false) opts in to the Calendar, People and Groups scopes for
 /// the Sunday check's operations reads; `check_ins` and `registrations` (optional, default false)
 /// each opt in to that product's counts. Each Planning Center product scope permits read and
-/// write in that product; Ozzie only issues GET source reads, and asks for Services alone unless
-/// the person chooses more. `ConnectionStatus.scopes` reports what Planning Center actually
+/// write in that product; Ozzie's reads are GET source reads (its only writes are change.rs's one
+/// confirmed change and its undo), and it asks for Services alone unless the person chooses more. `ConnectionStatus.scopes` reports what Planning Center actually
 /// granted, read from its token response; a grant wider than asked fails as `scope-mismatch`
 /// and saves nothing. A new sign-in revokes the saved credential it replaces. One that ends bound
 /// to another church changes nothing about the earlier one until the person answers
@@ -310,7 +315,7 @@ async fn connect_planning_center(
 }
 /// One-click connect: Ozzie's built-in registration; Planning Center names the organization
 /// after sign-in, and the connection is then bound to it (`Consumer::settle`). Same scopes,
-/// Keychain storage and read-only reads as `connect_planning_center`. `again` (optional) names the
+/// Keychain storage and GET-only reads as `connect_planning_center`. `again` (optional) names the
 /// church this is a sign-in again for (the church in use, or the one in "Sign in to {church}
 /// instead"): it asks for what that church's saved sign-in holds now (`again_ask`). For a church
 /// saved here other than the one in use it is bound to that church, with the same registration,
@@ -532,17 +537,34 @@ async fn check_saved_connection(
 #[tauri::command]
 async fn disconnect_planning_center(
     consumer: tauri::State<'_, Consumer>,
+    changes: tauri::State<'_, changes::ChangesState>,
+    app: tauri::AppHandle,
 ) -> Result<ConnectionStatus, ConsumerError> {
     let consumer = consumer.inner().clone();
+    let changes = changes.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (_transition, _) = consumer
-            .1
-            .enter()
-            .ok_or(ConsumerError::Authentication(AuthError::Busy))?;
-        Ok(consumer.0.disconnect()?)
+        disconnect_and_leave(&consumer, |left| changes::left(&app, &changes, left))
     })
     .await
     .map_err(|_| ConsumerError::NativeUnavailable)?
+}
+/// Disconnect, then, whatever it returned, `leave` the church being left: its changes are dropped and
+/// turned off (`changes::left`). The person asked to leave it, so this holds when the revoke is out of
+/// reach, the Keychain refuses a read or the delete, the wait for a read in flight ends `NotRevoked`,
+/// or another sign-in step is under way (busy: the church is then read without the transition, as
+/// status polls read it). Live test 2026-11-17: a refused Keychain delete left the switch on.
+fn disconnect_and_leave(
+    consumer: &Consumer,
+    leave: impl FnOnce(Option<&str>),
+) -> Result<ConnectionStatus, ConsumerError> {
+    let Some((_transition, _)) = consumer.1.enter() else {
+        leave(bound_church(consumer).as_deref());
+        return Err(ConsumerError::Authentication(AuthError::Busy));
+    };
+    let left = bound_church(consumer);
+    let result = consumer.0.disconnect().map_err(ConsumerError::from);
+    leave(left.as_deref());
+    result
 }
 /// The person's answer to "Switch Ozzie to this church?" (`question`: the question's native id).
 /// `switch` checks the new church with Planning Center, then signs Ozzie out of every other saved
@@ -555,21 +577,29 @@ async fn disconnect_planning_center(
 #[tauri::command]
 async fn answer_church_switch(
     consumer: tauri::State<'_, Consumer>,
+    changes: tauri::State<'_, changes::ChangesState>,
     app: tauri::AppHandle,
     decision: Decision,
     question: u64,
 ) -> Result<SwitchAnswer, ConsumerError> {
     let consumer = consumer.inner().clone();
+    let changes = changes.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (_transition, _) = consumer
             .1
             .enter()
             .ok_or(ConsumerError::Authentication(AuthError::Busy))?;
+        let before = bound_church(&consumer);
         let answer = consumer.0.answer(decision, question)?;
+        let after = bound_church(&consumer);
         if decision == Decision::Switch
             && let Ok(dir) = app.path().app_data_dir()
         {
             decide_at_switch(&dir, &answer.organization);
+        }
+        // Another church in use: changes for the one left are dropped and turned off.
+        if before != after {
+            changes::left(&app, &changes, before.as_deref());
         }
         Ok(answer)
     })
@@ -618,6 +648,7 @@ async fn check_sunday(
     checks: tauri::State<'_, SundayChecks>,
     names: tauri::State<'_, SessionNames>,
     people: tauri::State<'_, CheckedPeople>,
+    changes: tauri::State<'_, changes::ChangesState>,
     app: tauri::AppHandle,
     service_type_id: String,
     plan_id: String,
@@ -634,6 +665,7 @@ async fn check_sunday(
     let checks = checks.inner().clone();
     let names = names.inner().clone();
     let people = people.inner().clone();
+    let changes = changes.inner().clone();
     let kids_team_ids = kids_team_ids.unwrap_or_default();
     // Rooms, follow-ups and group events only while this church's Settings switch is on (first-run review H1).
     let operations = match (current_church(&consumer), app.path().app_data_dir()) {
@@ -663,6 +695,8 @@ async fn check_sunday(
         names.remember(&capture);
         // Who "Open in Mail" or "Open in Messages" may put in To (draft_apps::open_draft_to).
         people.remember(&capture);
+        // The open roles and who could help, for a change the leader confirms (changes.rs).
+        changes::checked(&changes, &capture);
         // The guard also learns names the capture pruned; `read` itself is dropped here.
         names.remember_read(&read);
         drop(read);
@@ -954,6 +988,18 @@ fn operations_reads(app: tauri::AppHandle, consumer: tauri::State<'_, Consumer>)
         .and_then(|dir| operations_reads_saved(&dir, &organization))
         .unwrap_or(false)
 }
+/// The church the session's sign-in is bound to, whatever state that sign-in is in (stored and
+/// unchecked, expired, failed or connected); for a one-click sign-in still under way, the church whose
+/// connection it replaced (Disconnect revokes that one too: review X, L-c). Used where a church is
+/// being left, so its changes are turned off even when its sign-in isn't connected.
+fn bound_church(consumer: &Consumer) -> Option<String> {
+    let (auth, finding) = consumer.0.settle().ok()??;
+    if finding {
+        return consumer.0.replaced_church();
+    }
+    let organization = auth.bound_to().1;
+    (!organization.is_empty()).then(|| organization.to_owned())
+}
 /// This session's verified Planning Center connection, or NotConnected, as it is: never renewed here.
 /// The Sunday check and setup's picker read through `read_renewing`, which renews a sign-in that needs
 /// it first (`renewed_auth`). This is the To line's lookup
@@ -1143,17 +1189,21 @@ async fn list_sunday_recordings(
 async fn load_sunday_recording(
     names: tauri::State<'_, SessionNames>,
     people: tauri::State<'_, CheckedPeople>,
+    changes: tauri::State<'_, changes::ChangesState>,
     app: tauri::AppHandle,
     organization: String,
     path_id: String,
 ) -> Result<SundayCapture, ConsumerError> {
     let names = names.inner().clone();
     let people = people.inner().clone();
+    let changes = changes.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let capture = sunday_check::load_recording(&recordings(&app)?, &organization, &path_id)
             .map_err(ConsumerError::Recording)?;
         names.remember(&capture);
         people.remember(&capture);
+        // A recording never makes a change: the last live check's roles are dropped.
+        changes::checked(&changes, &capture);
         Ok(capture)
     })
     .await
@@ -1744,6 +1794,7 @@ fn main() {
         .manage(ai_setup::ModelJob::default())
         .manage(ollama_setup::OllamaJob::default())
         .manage(CheckedPeople::default())
+        .manage(changes::state())
         .manage(Ledger::default())
         .manage(ManagedConnect::default())
         .manage(SignIns::default())
@@ -1775,6 +1826,7 @@ fn main() {
             }
             // What a quit left of getting Ollama (a partial download, an unpacked copy) is removed at every start.
             ollama_setup::startup(app.handle());
+            changes::setup(app.handle());
             updater::setup(app);
             phone_notice::setup(app);
             always_on::setup(app)?;
@@ -1872,6 +1924,12 @@ fn main() {
             card_picker::choose_card_photos,
             draft_apps::open_draft,
             draft_apps::open_draft_to,
+            changes::changes_status,
+            changes::changes_set,
+            changes::change_prepare,
+            changes::change_confirm,
+            changes::change_undo,
+            changes::change_history,
             planning_center_pages::open_in_planning_center,
             local_tools::voice_status_check,
             local_tools::listen_for_question,
@@ -2206,8 +2264,19 @@ mod tests {
 
         const HOUR: u64 = 3_600_000;
 
+        /// What the fakes refuse when told to: Planning Center's revoke, and the Keychain's read and
+        /// delete (live test 2026-11-17: an item the release app doesn't own).
+        #[derive(Default)]
+        struct Refusals {
+            revoke: AtomicBool,
+            read: AtomicBool,
+            delete: AtomicBool,
+        }
         /// Saved sign-ins by church.
-        struct Store(Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+        struct Store(
+            Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+            Arc<Refusals>,
+        );
         impl CredentialStore for Store {
             fn put(&self, _: &str, organization: &str, value: &[u8]) -> Result<(), StoreError> {
                 self.0
@@ -2217,9 +2286,15 @@ mod tests {
                 Ok(())
             }
             fn get(&self, _: &str, organization: &str) -> Result<Option<Vec<u8>>, StoreError> {
+                if self.1.read.load(Ordering::SeqCst) {
+                    return Err(StoreError::Denied);
+                }
                 Ok(self.0.lock().unwrap().get(organization).cloned())
             }
             fn delete(&self, _: &str, organization: &str) -> Result<(), StoreError> {
+                if self.1.delete.load(Ordering::SeqCst) {
+                    return Err(StoreError::Denied);
+                }
                 self.0.lock().unwrap().remove(organization);
                 Ok(())
             }
@@ -2237,6 +2312,7 @@ mod tests {
             quits: Mutex<Option<Arc<lifetime::Lifetime>>>,
             /// The church the signed-in person's userinfo names.
             church: Mutex<&'static str>,
+            refusals: Arc<Refusals>,
         }
         impl Pco {
             fn accepts(&self, access: &str) -> bool {
@@ -2290,6 +2366,9 @@ mod tests {
                 })
             }
             fn revoke(&self, _: &str, _: &str, _: &str) -> Result<(), AuthError> {
+                if self.refusals.revoke.load(Ordering::SeqCst) {
+                    return Err(AuthError::ProviderFailure);
+                }
                 Ok(())
             }
         }
@@ -2309,6 +2388,7 @@ mod tests {
                 identity: AtomicUsize::new(0),
                 quits: Mutex::new(None),
                 church: Mutex::new("1001"),
+                refusals: Arc::default(),
             });
             let saved = |church: &str| {
                 format!(
@@ -2326,7 +2406,7 @@ mod tests {
                 Arc::new(Connections::new(
                     WORKSPACE_PREFIX,
                     None,
-                    Arc::new(Store(Mutex::new(store))),
+                    Arc::new(Store(Mutex::new(store), pco.refusals.clone())),
                     Box::new(move || Ok(provider.clone() as Arc<dyn Provider>)),
                     Box::new(move || {
                         let now = now.clone();
@@ -2493,7 +2573,7 @@ mod tests {
                 AuthController::find_organization(
                     "fictional-client".into(),
                     WORKSPACE_PREFIX,
-                    Arc::new(Store(Mutex::default())),
+                    Arc::new(Store(Mutex::default(), Arc::default())),
                     Arc::new(NoProvider),
                     Arc::new(|| 0),
                 )
@@ -3060,6 +3140,167 @@ mod tests {
             });
             assert_eq!(result.unwrap(), Err(SourceError::ProviderFailure));
             assert_eq!((reads.load(Ordering::SeqCst), pco.renewals()), (1, 1));
+        }
+
+        /// Live test 2026-11-17: Disconnect turns changes off for the church being left whatever it
+        /// returned: when it works, when the revoke is out of reach, when the Keychain refuses the read
+        /// or the delete, and when another sign-in step is under way.
+        #[test]
+        fn disconnect_turns_changes_off_for_the_church_whatever_it_returned() {
+            use ozzie_native_auth::change::{ChangeSwitch, Changes};
+            let dir = std::env::temp_dir().join(format!(
+                "ozzie-disconnect-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            /// A case: its name, what the fakes refuse, and whether another step holds the transition.
+            type Case = (&'static str, fn(&Refusals), bool);
+            let cases: [Case; 5] = [
+                ("works", |_| {}, false),
+                (
+                    "revoke out of reach",
+                    |r| r.revoke.store(true, Ordering::SeqCst),
+                    false,
+                ),
+                (
+                    "Keychain read refused",
+                    |r| r.read.store(true, Ordering::SeqCst),
+                    false,
+                ),
+                (
+                    "Keychain delete refused",
+                    |r| r.delete.store(true, Ordering::SeqCst),
+                    false,
+                ),
+                ("busy", |_| {}, true),
+            ];
+            for (case, refuse, busy) in cases {
+                let (consumer, pco, _clock) = launched();
+                let switch = ChangeSwitch::at(&dir);
+                switch.set("1001", true).unwrap();
+                switch.set("2002", true).unwrap();
+                let changes = Changes::default();
+                refuse(&pco.refusals);
+                let held = busy.then(|| consumer.1.enter().unwrap());
+                let result = disconnect_and_leave(&consumer, |left| {
+                    changes::left_in(Some(&dir), &changes, left)
+                });
+                drop(held);
+                assert!(!switch.is_on("1001"), "{case}: {result:?}");
+                assert!(switch.is_on("2002"), "{case}: only the church left");
+                if busy {
+                    assert!(
+                        matches!(result, Err(ConsumerError::Authentication(AuthError::Busy))),
+                        "{case}: {result:?}"
+                    );
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A consumer with a saved sign-in for church 1001, not yet checked (`app`: a one-click
+        /// registration, for a finder).
+        fn saved(app: Option<String>) -> (Consumer, Arc<Pco>, Arc<AtomicU64>) {
+            let clock = Arc::new(AtomicU64::new(0));
+            let pco = Arc::new(Pco {
+                clock: clock.clone(),
+                issued: Mutex::default(),
+                refuse: AtomicBool::new(false),
+                unreachable: AtomicBool::new(false),
+                renewals: AtomicUsize::new(0),
+                identity: AtomicUsize::new(0),
+                quits: Mutex::new(None),
+                church: Mutex::new("1001"),
+                refusals: Arc::default(),
+            });
+            let saved = br#"{"client_id":"fictional-client","organization":"1001","tokens":{"access_token":"fictional-access-0","refresh_token":"fictional-refresh-0","token_type":"bearer","expires_in":7200}}"#;
+            let store = std::collections::BTreeMap::from([("1001".to_string(), saved.to_vec())]);
+            let (provider, now) = (pco.clone(), clock.clone());
+            let consumer = Consumer(
+                Arc::new(Connections::new(
+                    WORKSPACE_PREFIX,
+                    app,
+                    Arc::new(Store(Mutex::new(store), pco.refusals.clone())),
+                    Box::new(move || Ok(provider.clone() as Arc<dyn Provider>)),
+                    Box::new(move || {
+                        let now = now.clone();
+                        Ok(Arc::new(move || now.load(Ordering::SeqCst))
+                            as Arc<dyn Fn() -> u64 + Send + Sync>)
+                    }),
+                )),
+                Arc::default(),
+            );
+            (consumer, pco, clock)
+        }
+
+        /// M2 and L-c (review S; review X, N3): the church being left is the sign-in's own in every
+        /// state Disconnect is offered, not only a connected one, and a one-click sign-in under way
+        /// leaves the church it replaced.
+        #[test]
+        fn the_church_left_is_known_in_every_sign_in_state() {
+            let (consumer, _pco, _clock) = saved(None);
+            assert_eq!(bound_church(&consumer), None, "nothing prepared yet");
+            consumer
+                .0
+                .prepare_check("fictional-client".into(), "1001".into(), true)
+                .unwrap();
+            assert_eq!(
+                bound_church(&consumer).as_deref(),
+                Some("1001"),
+                "stored, unchecked"
+            );
+            assert!(session_auth(&consumer).is_err());
+            // The launch check can't reach Planning Center, or the renewal is refused.
+            for refuse in [false, true] {
+                let (consumer, pco, _clock) = saved(None);
+                if refuse {
+                    pco.refuse.store(true, Ordering::SeqCst);
+                } else {
+                    pco.unreachable.store(true, Ordering::SeqCst);
+                }
+                let auth = consumer
+                    .0
+                    .prepare_check("fictional-client".into(), "1001".into(), true)
+                    .unwrap();
+                let _ = auth.refresh();
+                assert_ne!(
+                    auth.status_or_busy().unwrap().state,
+                    ConnectionState::Connected
+                );
+                assert_eq!(
+                    bound_church(&consumer).as_deref(),
+                    Some("1001"),
+                    "refused {refuse}"
+                );
+            }
+            // Connected, then the renewal three hours later is refused.
+            let (consumer, pco, clock) = launched();
+            pco.refuse.store(true, Ordering::SeqCst);
+            clock.store(3 * HOUR, Ordering::SeqCst);
+            let _ = renewed_auth(&consumer);
+            assert!(session_auth(&consumer).is_err());
+            assert_eq!(
+                bound_church(&consumer).as_deref(),
+                Some("1001"),
+                "expired after use"
+            );
+            // A one-click sign-in under way from church 1001: the church it replaced.
+            let (consumer, _pco, _clock) = saved(Some("fictional-app".into()));
+            let auth = consumer
+                .0
+                .prepare_check("fictional-client".into(), "1001".into(), true)
+                .unwrap();
+            let _ = auth.refresh();
+            consumer.0.prepare_finder().unwrap();
+            assert_eq!(
+                bound_church(&consumer).as_deref(),
+                Some("1001"),
+                "finder under way"
+            );
         }
     }
 

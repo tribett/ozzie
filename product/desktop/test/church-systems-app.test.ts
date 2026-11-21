@@ -9,6 +9,7 @@ import { b1Capture, breezeCapture, breezeUntimedCapture } from "../../../core/te
 import { fictionalGenesis } from "../../../core/src/church-systems/fictional.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
+import { promise } from "../src/promises.js";
 
 const native = vi.hoisted(() => ({ calls: [] as [string, Record<string, unknown>][], connect: [] as string[], capture: "" as string, keyGone: false,
   choices: null as unknown, pcSaved: null as unknown, pcStatus: null as unknown, saved: "" as string }));
@@ -168,8 +169,9 @@ describe("a fresh Mac that hasn't chosen what its church uses (round 5)", () => 
     await app.waitFor("What does your church use?");
     for (const page of ["Today", "Services", "Keeping watch", "What happened", "Visitor cards"]) {
       await app.go(page);
-      // Planning Center is named only among the choices ("Ozzie reads Planning Center, B1 Church or Breeze").
-      expect(misnamed(dom.seen().replace(/Ozzie reads Planning Center, B1 Church, Breeze or Genesis/gu, "")), page).toEqual([]);
+      // Planning Center is named only among the choices ("Ozzie reads Planning Center, B1 Church or Breeze"), and as where
+      // the one change a church may turn on is made (promises.ts systemsRead), which assumes no system.
+      expect(misnamed(dom.seen().replaceAll(promise("systemsRead"), "").replace(/Ozzie reads Planning Center, B1 Church, Breeze or Genesis/gu, "")), page).toEqual([]);
     }
     await app.go("Today");
     expect(dom.seen()).toContain("Choose what your church uses to see your service");

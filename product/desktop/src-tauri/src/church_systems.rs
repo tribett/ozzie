@@ -519,6 +519,22 @@ fn keychain(system: System) -> Box<dyn CredentialStore> {
     Box::new(keys::keychain(system))
 }
 
+/// Whether this Mac keeps a key for B1 Church or Breeze: a church that plans its services there uses it as its one system
+/// (decision 21; Genesis can also be "also read" beside Planning Center, so it isn't counted). Ozzie only reads those
+/// systems, and changes.rs changes nothing in Planning Center while one is in use (owner decision 2026-11-21). From the
+/// Keychain's item attributes only, never a key, never a prompt; a listing that fails counts as a key saved, so a change
+/// never goes ahead on a guess.
+pub(crate) fn service_system_saved() -> bool {
+    service_system_saved_in(&keychain)
+}
+pub(crate) fn service_system_saved_in(
+    store_of: &dyn Fn(System) -> Box<dyn CredentialStore>,
+) -> bool {
+    [System::B1, System::Breeze]
+        .into_iter()
+        .any(|system| keys::saved(&*store_of(system)).map_or(true, |churches| !churches.is_empty()))
+}
+
 /// Clears the "busy" mark however a connect ends.
 struct Connecting(Arc<Shared>);
 impl Drop for Connecting {

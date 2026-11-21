@@ -234,8 +234,9 @@ describe("readable text, targets and zoom in the CSS (audit item 22)", () => {
     const box = app.slice(app.indexOf('<div id="side-nav" className="side-pages">'), app.indexOf('className="btn btn-secondary ask-entry"'));
     expect(app).toContain('aria-expanded={menu} aria-controls="side-nav"');
     expect(box).toContain('<nav className="nav" aria-label="Pages">');
-    // The promise line comes from promises.ts (onboarding spec §0.2); the AI line follows the church (§4.4).
-    expect(box).toMatch(/<div className="side-foot">\s*<p className="quiet-note">.*\{promise\("readsShort"\)\} The names Ozzie reads stay on this Mac\.<\/span><\/p>\s*<p className="small side-org">\{churchLine\}<\/p>\s*\{\/\*[^*]*\*\/\}\s*\{askShown && <div className="small side-ai"><AiLine /u);
+    // The promise line comes from promises.ts (onboarding spec §0.2), its on form only while connected with adding people
+    // on (planning-center-changes.ts SIDEBAR_ON); the AI line follows the church (§4.4).
+    expect(box).toMatch(/<div className="side-foot">\s*<p className="quiet-note">.*\{changesShownOn \? SIDEBAR_ON\s*: `\$\{promise\("readsShort", offPc \? "A" : BUILD_FORM\)\} The names Ozzie reads stay on this Mac\.`\}<\/span><\/p>\s*<p className="small side-org">\{churchLine\}<\/p>\s*\{\/\*[^*]*\*\/\}\s*\{askShown && <div className="small side-ai"><AiLine /u);
     expect(app).toContain('<p className="small side-bar-org">{churchLine}</p>');
     const narrow = styles.slice(styles.search(/@media \(max-width: 760px\) \{\s*\.oz \.shell, /u));
     const block = narrow.slice(0, narrow.indexOf("\n}\n"));

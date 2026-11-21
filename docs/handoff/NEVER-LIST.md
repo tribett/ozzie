@@ -18,7 +18,13 @@ switch them off.
    "drifting / at risk" language. Ever.
 5. Make a pastoral decision or act without a named human approving that
    specific action and seeing its exact effect first.
-6. Write to Planning Center (or any church system) in v1. Read-only.
+6. Change Planning Center (or any church system) in any way except the one
+   change in core/native-auth/src/change.rs (adding one person to an open role
+   as unconfirmed with the request waiting, and taking that same person off
+   again while the request is unsent), and never even that unless the church
+   turned changes on and a person confirmed that one exact change after seeing
+   what it will do. Never on its own, never in a batch, never on a schedule.
+   Any other write needs a recorded owner decision and an independent review.
 7. Send people's real names (or leader care-share text) to a model.
    Placeholders go out; names are restored locally.
 8. Present uncertainty as fact. Uncertain items are visibly weaker,
