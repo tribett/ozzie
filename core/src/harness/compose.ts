@@ -576,8 +576,26 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
     if (j >= 0 && ![...fuller.values()].includes(j)) fuller.set(i, j);
   });
   const moved = new Set(fuller.values());
-  const kept = rendered.flatMap((r, i) => fuller.has(i) ? [rendered[fuller.get(i)!]!] : moved.has(i) ? []
+  const once = rendered.flatMap((r, i) => fuller.has(i) ? [rendered[fuller.get(i)!]!] : moved.has(i) ? []
     : rendered.some((o, j) => j !== i && (o.key === r.key ? j < i : o.key.startsWith(`${r.key} `))) ? [] : [r]);
+  // One of the overview's rows said again by another tool, in the same words or at the start of a longer sentence
+  // (0.5.8 said "Greeter still needs 2 more people…" twice): said once, in the longer words, where the overview's row
+  // stands under its tone. Only rows and sentences that are still to be said pair up, each sentence with one row, and
+  // only with the same decision of the person's (a settled or reopened need never lends its words to an open one).
+  const CHANGED = "A later check changed something";
+  const inFull = new Map<Fact, Fact>();
+  const placed = new Set([...fuller.values()].map(j => rendered[j]!.f));
+  for (const r of once) {
+    if (!(r.f.tool === "sunday.overview" && r.f.list === "findings")) continue;
+    const own = finding(r.f.row, NO_DAY, day, here(r.f));
+    if (!own) continue;
+    const mine = decided(r.f.row, day);
+    const longer = once.find(o => o.f.tool !== "sunday.overview" && !placed.has(o.f) && (o.key === `${own}${mine}` || o.key.startsWith(`${own} `))
+      && (mine ? o.key.includes(mine) : !o.key.includes(" You decided: ")) && o.key.includes(CHANGED) === mine.includes(CHANGED));
+    if (longer) { inFull.set(r.f, longer.f); placed.add(longer.f); }
+  }
+  const paired = new Set(inFull.values());
+  const kept = once.filter(r => !paired.has(r.f));
   // The overview's own sentence, as shown: the date it names isn't said again by a time on it after it.
   const leads = new Map(kept.filter(r => isLead(r.f)).map(r => [r.f.envelope, r.f.payload]));
   const from = kept.findIndex(r => isLead(r.f)), onDay = saidBy([...leads.values()], day);
@@ -587,7 +605,8 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
   const blocks = new Map<number, { tone: string; text: string }[]>();
   kept.forEach((r, i) => {
     if (r.f.tool === "sunday.overview" && r.f.list === "findings") {
-      const text = overviewRow(r.f.row, day, said(i), here(r.f));
+      const longer = inFull.get(r.f);
+      const text = longer ? sentenceFor(longer, day, said(i), system) : overviewRow(r.f.row, day, said(i), here(r.f));
       if (!text) return;
       if (!blocks.has(r.f.envelope)) { blocks.set(r.f.envelope, []); entries.push({ block: r.f.envelope }); }
       blocks.get(r.f.envelope)!.push({ tone: toneOfRow(r.f.row), text });
