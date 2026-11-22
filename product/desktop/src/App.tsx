@@ -18,7 +18,7 @@ import { captureRooms, sundayOperations } from "../../../core/src/operations-cap
 import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { CHECKING_LINE, PageControls, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { addService, alsoWatched, movedOn, readDay, removeService, type AlsoWatched, type ServiceChoice } from "./watched-services.js";
-import { fromPartKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
+import { askServices, fromPartKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
 import { ServicesPage } from "./services-page.js";
 import { serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
 import { WatchedServices } from "./watch-another.js";
@@ -37,6 +37,7 @@ import {
 import { desktopSystemProactive, systemReady } from "./system-watch.js";
 import { ProactivePage, useProactiveView } from "./proactive-page.js";
 import { AskIcon, AskPanel, type AskFn, type PlanHooks } from "./ask-panel.js";
+import { rolePositions } from "../../../core/src/ask.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { HarnessData } from "../../../core/src/harness/index.js";
 import { HarnessSession } from "../../../core/src/harness/session.js";
@@ -653,10 +654,14 @@ export function App() {
     const more = othersNow(at);
     const first = buildSundayBrief(c, own.rules, at);
     const m = mergeParts({ brief: first, decisions: own.decisions }, more.parts);
-    const teams = teamServices({ brief: first, name: watchedDay.get(current.current.settings.planId)?.service ?? null },
-      more.parts.map(p => ({ brief: p.brief, name: alsoNow.current.also.find(x => x.planId === p.plan_id)?.name ?? null })));
+    const mainName = watchedDay.get(current.current.settings.planId)?.service ?? null;
+    const named = more.parts.map(p => ({ plan_id: p.plan_id, brief: p.brief, name: alsoNow.current.also.find(x => x.planId === p.plan_id)?.name ?? null }));
+    const teams = teamServices({ brief: first, name: mainName }, named);
+    // A question may name any service watched; its name becomes a label, never sent (core ask.ts PrepareOptions `services`).
+    const asked = askServices({ brief: first, name: mainName }, named,
+      alsoNow.current.also.filter(x => !more.parts.some(p => p.plan_id === x.planId)).map(x => x.name));
     return buildHarnessData({ capture: mergedNames(c, more.captures), fictional: false, rules: own.rules, decisions: m.decisions, status: own.status, configured: own.configured,
-      now: at, brief: m.brief, operations: sundayOperations(c, own.rules, { now: at }), serviceOfTeam: teams }, refresh);
+      now: at, brief: m.brief, operations: sundayOperations(c, own.rules, { now: at }), serviceOfTeam: teams, ...asked }, refresh);
   };
   const runnerState = useRef({ readiness, status, rules, decisions: [] as readonly SundayDecision[], modelReady,
     prefs: automatic.prefs, zone: macZone(), procedures, loop, workspace: "this-mac", capture, fictional, configured: false, sunday: null as string | null });
@@ -1104,10 +1109,36 @@ export function App() {
     alsoParts.map(p => ({ brief: p.brief, name: p.service.name }))) : undefined, [brief, offPc, alsoParts, settings.planId]);
   // The same for Church lists' matching, which keeps to its own modules (church-notes.tsx).
   const listsTeamServices = useMemo(() => serviceOfTeam ? new Map(Object.entries(serviceOfTeam)) : undefined, [serviceOfTeam]);
+  // Ask: a question may name any service watched, never beside the example; its name becomes a label and is never sent,
+  // and the answer is about that service only (core ask.ts PrepareOptions `services`, harness tools.ts `scope`).
+  const askedServices = useMemo(() => brief && !offPc ? askServices({ brief, name: watchedDay.get(settings.planId)?.service ?? null },
+    alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief, name: p.service.name })),
+    fictional ? [] : also.filter(s => !alsoParts.some(p => p.service.serviceTypeId === s.serviceTypeId)).map(s => s.name)) : undefined,
+  [brief, offPc, alsoParts, also, fictional, settings.planId]);
+  // Native's own check refuses any request that still holds one of those names (name_guard.rs `service_named`): told
+  // when the page starts (so a page loaded again never leaves native an older list) and whenever they change, held in
+  // memory only; with one service it holds none. Kept as told only once native took it, and tried again up to three
+  // times for each list when it didn't (review A, L6).
+  const watchedNames = JSON.stringify(askedServices?.services.map(s => s.name) ?? []);
+  const toldNative = useRef<string | null>(null);
+  const nativeTries = useRef({ names: "", count: 0 });
+  const [nativeRetry, setNativeRetry] = useState(0);
+  useEffect(() => {
+    if (watchedNames === toldNative.current) return;
+    if (nativeTries.current.names !== watchedNames) nativeTries.current = { names: watchedNames, count: 0 };
+    try {
+      void invoke("remember_watched_services", { names: JSON.parse(watchedNames) as string[] })
+        .then(() => { toldNative.current = watchedNames; }, () => {
+          if (nativeTries.current.names === watchedNames && ++nativeTries.current.count <= 3) setTimeout(() => setNativeRetry(n => n + 1), 5_000);
+        });
+    } catch { /* not in the app */ }
+  }, [watchedNames, nativeRetry]);
+  // Ask's suggested questions say which service's role they mean when two services hold one of that name.
+  const chipServices = useMemo(() => serviceOfTeam && merged ? { teams: serviceOfTeam, positions: rolePositions(merged.brief) } : undefined, [serviceOfTeam, merged]);
   const pcHarnessData = useMemo(() => buildHarnessData({
     capture: harnessCapture, fictional, rules, decisions: harnessDecisions, status, configured: Boolean(org && configured), now, brief: offPc ? null : harnessBrief, operations, fictionalImport,
-    serviceOfTeam,
-  }, refreshForHarness), [harnessCapture, fictional, rules, harnessDecisions, status, org, configured, now, harnessBrief, operations, fictionalImport, refreshForHarness, offPc, serviceOfTeam]);
+    serviceOfTeam, ...askedServices,
+  }, refreshForHarness), [harnessCapture, fictional, rules, harnessDecisions, status, org, configured, now, harnessBrief, operations, fictionalImport, refreshForHarness, offPc, serviceOfTeam, askedServices]);
   // A church on B1 Church or Breeze: Ask reads its own check (or its fictional example) through the same tools, with the
   // system named as the source; its names stay on this Mac as Planning Center's do (harness-bridge systemHarnessCapture).
   // It offers no Planning Center check again, and nothing of Calendar, People or Groups.
@@ -1765,7 +1796,7 @@ export function App() {
             noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null} /></div>}
       </main>
       {quitAsk && <QuitQuestion ask={{ ...quitAsk, checks: checksNow }} undo={changes.undoable.length ? quitUndo(changes.undoable) : null} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
-      <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} modelReady={modelReady} onOpen={setPage}
+      <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} modelReady={modelReady} onOpen={setPage}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : onGenesis ? (sys.state.genesis ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),
           // What was read decides what Ask offers on Genesis, never Planning Center's check (review of e9cbd97d, M1).

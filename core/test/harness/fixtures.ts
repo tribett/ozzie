@@ -126,7 +126,20 @@ export const FIXTURES: [string, () => HarnessData][] = [
   ["kids teams and background checks", () => harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()) })],
   ["kids teams, People not granted", () => harnessData({ mode: "live", rules: KIDS_RULES, capture: withFictionalBackgroundChecks(nov22Capture()),
     outcomes: { people_background_checks: "not-requested" } })],
+  ["two services watched", () => twoServices(harnessData({ mode: "live" }))],
 ];
+
+/**
+ * Two services watched (owner request 2026-11-21): the Lyrics team is a second service's, every other team the first's,
+ * with canary service names, so the tools' reads for one service (HarnessTools.run `scope`) are read over a fixture too.
+ */
+export function twoServices(data: HarnessData): HarnessData {
+  const first = "Canary Weekend Service", second = "Canary Youth Night";
+  const serviceOfTeam = Object.fromEntries((data.brief?.positions ?? []).map(p => [p.team_id, p.team_id === TEAMS.lyrics ? second : first]));
+  return { ...data, serviceOfTeam, services: [{ name: first, read: true, first: true }, { name: second, read: true }] };
+}
+/** The tools a service-scoped task reads for its services only (tools.ts `scope`). */
+const SCOPED = ["sunday.overview", "sunday.open_needs", "sunday.pending_requests", "sunday.rule_checkins"] as const;
 
 /** Every envelope every tool returns over one fixture, with every role and person label as arguments. */
 export async function allEnvelopes(data: HarnessData): Promise<ToolEnvelope[]> {
@@ -140,6 +153,15 @@ export async function allEnvelopes(data: HarnessData): Promise<ToolEnvelope[]> {
     await attempt("sunday.who_could_help", { role });
     for (const person of labels().filter(l => l.startsWith("[Person "))) await attempt("drafts.prepare_note", { person, role });
   }
+  // With more than one service watched, every scoped read for each one.
+  for (const { name } of data.services ?? []) {
+    const scoped = async (tool: string, args: Record<string, unknown> = {}) => { try { out.push(await tools.run(tool, args, signal, "", [name])); } catch { /* as above */ } };
+    for (const tool of SCOPED) await scoped(tool);
+    for (const role of labels().filter(l => l.startsWith("[Role "))) {
+      await scoped("sunday.who_could_help", { role });
+      for (const person of labels().filter(l => l.startsWith("[Person "))) await scoped("drafts.prepare_note", { person, role });
+    }
+  }
   return out;
 }
 
@@ -148,6 +170,7 @@ export function sourceStrings(data: HarnessData): string[] {
   const out = new Set<string>();
   const capture = data.capture!;
   for (const name of Object.values(capture.names)) out.add(name);
+  for (const s of data.services ?? []) out.add(s.name);
   for (const label of Object.values(capture.labels ?? {})) out.add(label);
   for (const label of Object.values(data.operations?.labels ?? {})) out.add(label);
   if (data.brief?.plan.title) out.add(data.brief.plan.title);

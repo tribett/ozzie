@@ -190,9 +190,34 @@ impl SessionNames {
             .unwrap_or_else(|e| e.into_inner())
             .remember(names);
     }
+    /// The watched services' own names while more than one is watched (`remember_watched_services`),
+    /// replacing the last list. Guard-only: never returned or saved.
+    fn set_services(&self, names: &[String]) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_services(names);
+    }
     fn snapshot(&self) -> NameGuard {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+}
+/// At most this many watched services' names are held (the webview watches at most four).
+const WATCHED_SERVICES: usize = 8;
+/// A watched service's name is at most this many characters (the webview keeps 120).
+const SERVICE_NAME_CHARS: usize = 200;
+/// The services Ozzie watches, by their own Planning Center names, while more than one is (the
+/// webview's App.tsx; owner request 2026-11-21): held in memory only so `agent_step` refuses a request
+/// that still holds one (core native-auth name_guard.rs `service_named`), as the page itself does
+/// before anything is sent. Never saved, logged or returned; an empty list (one service) clears them.
+#[tauri::command]
+fn remember_watched_services(session: tauri::State<'_, SessionNames>, names: Vec<String>) {
+    let names: Vec<String> = names
+        .into_iter()
+        .take(WATCHED_SERVICES)
+        .map(|name| name.chars().take(SERVICE_NAME_CHARS).collect())
+        .collect();
+    session.set_services(&names);
 }
 /// The Sunday check, setup's picker and a note opened with its person in To take turns on the one
 /// Planning Center connection; core `sunday_check::Turns` holds the rule. A second check is refused
@@ -1834,6 +1859,7 @@ fn main() {
         })
         .on_window_event(always_on::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            remember_watched_services,
             connection_status,
             connect_planning_center,
             connect_planning_center_app,

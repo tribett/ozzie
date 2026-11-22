@@ -9,9 +9,23 @@
 // codes. Each run goes through an AuthorizationBroker bound to the workspace and to the service types
 // this host was set up for, so a task for another workspace, or data from another service type
 // passed in later, is denied there too.
+// An ask task whose question holds a watched service's [Service N] label (ask.ts prepareAsk) reads the services tools for
+// that service only: the services its question's own labels stand for in this session are the tools' `scope` (tools.ts),
+// decided here from the checked task, never from anything the model says.
 import { AuthorizationBroker, ToolFailure } from "../broker.js";
 import { HARNESS_LIMITS, type AgentTask, type Skill, type ToolEnvelope, type ToolHost, type ToolResult, type ToolSpec } from "./contract.js";
-import { checkArguments, isToolName, OPERATIONS_TOOLS, TOOL_SPECS, type HarnessTools } from "./tools.js";
+import type { HarnessSession } from "./session.js";
+import { checkArguments, isToolName, OPERATIONS_TOOLS, TOOL_SPECS, type HarnessTools, type Scope } from "./tools.js";
+
+/** The services an ask task's question names, by their own names, from its [Service N] labels this session issued. */
+export function serviceScope(question: string | undefined, session: HarnessSession): Scope {
+  const names = new Set<string>();
+  for (const m of (question ?? "").matchAll(/\[Service [1-9]\d{0,3}\]/gu)) {
+    const t = session.target(m[0]);
+    if (t?.kind === "service") names.add(t.name);
+  }
+  return [...names];
+}
 
 export interface HostOptions {
   /** The workspace this host serves; tasks for any other are admitted nothing. */
@@ -74,7 +88,8 @@ export class HarnessHost implements ToolHost {
     if (this.#serviceTypes === null && this.#tools.data.capture?.service_type_id) this.#serviceTypes = Object.freeze([serviceType]);
     const broker = new AuthorizationBroker(this.#workspace, [...(this.#serviceTypes ?? [])]);
     const tools = this.#tools;
-    broker.register({ name, read: (_args, context) => tools.run(name, checked, context?.signal ?? signal, task.id) });
+    const scope = task.kind === "ask" ? serviceScope(task.question, tools.session) : [];
+    broker.register({ name, read: (_args, context) => tools.run(name, checked, context?.signal ?? signal, task.id, scope) });
 
     // One controller per tool: aborted by the task's signal or when the tool runs past toolMs.
     const controller = new AbortController();

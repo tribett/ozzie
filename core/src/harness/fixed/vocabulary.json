@@ -19,7 +19,7 @@
   "completeness": ["complete", "partial", "stale", "denied"],
   "tool_errors": ["denied", "stale", "partial", "provider-failure", "unverified"],
   "labels": {
-    "families": ["Person", "Role", "Room", "Workflow", "Step", "Event"],
+    "families": ["Person", "Role", "Room", "Workflow", "Step", "Event", "Service"],
     "pattern": "[<family> <n>], n from 1 to 9999 with no leading zero",
     "your_name": "[Your name]",
     "your_name_keys": ["draft"]
@@ -35,7 +35,7 @@
     "imported_at", "items", "kept_on_this_mac", "kind", "label", "lead_role", "leads_not_accepted", "left_out", "left_out_for_length", "listed_for_role", "mode",
     "needed", "needs", "needs_a_decision", "needs_confirmation", "no_overlap_found", "open_need", "order", "overlap", "pending", "pending_means",
     "people", "people_listed", "person", "possible_conflict", "reads", "reads_not_completed", "reason", "reasons", "remaining", "remaining_means",
-    "request", "request_not_sent", "role", "room", "rooms", "rooms_follow_ups_groups", "rule", "scheduled_to_lead_not_accepted", "serving", "services", "setup_minutes",
+    "request", "request_not_sent", "role", "room", "rooms", "rooms_follow_ups_groups", "rule", "scheduled_to_lead_not_accepted", "service", "serving", "services", "setup_minutes",
     "starts_at", "status", "status_differs_by_time", "step", "sunday", "sunday_leads", "sundays_in_a_row", "team_leaders", "team_leaders_means",
     "time", "times", "tone", "too_old_to_treat_as_current", "volunteers_contacted", "willingness", "workflow", "worked_out_in_planning_center",
     "worth_a_look"

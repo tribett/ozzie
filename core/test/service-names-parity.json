@@ -1,0 +1,616 @@
+{
+ "about": "Shared vectors for a watched service's name in a question (core/src/service-names.ts serviceNamed, native name_guard.rs NameGuard::service_named), under the owner's capitalized-only name rule with common-words.txt. Each group is the watched services' own names; each case is a question and whether a watched service's name counts in it. Fewer than two watched services (two whose names read the same count as two): nothing counts. Both sides run every case (core/test/service-names.test.ts, name_guard.rs tests).",
+ "groups": [
+  {
+   "services": [
+    "Weekend Service",
+    "Ozzie Demo Youth Night (fictional)"
+   ],
+   "cases": [
+    {
+     "text": "Is Weekend Service covered?",
+     "named": true
+    },
+    {
+     "text": "is weekend service covered?",
+     "named": false
+    },
+    {
+     "text": "Is Weekend service covered?",
+     "named": false
+    },
+    {
+     "text": "IS WEEKEND SERVICE COVERED?",
+     "named": true
+    },
+    {
+     "text": "Is Weekend  Service covered?",
+     "named": true
+    },
+    {
+     "text": "Who could cover Greeter (Weekend Service)?",
+     "named": true
+    },
+    {
+     "text": "Who could cover Greeter—Weekend Service?",
+     "named": true
+    },
+    {
+     "text": "Who could cover Greeter - Weekend Service?",
+     "named": true
+    },
+    {
+     "text": "Is WeekendService covered?",
+     "named": true
+    },
+    {
+     "text": "is weekendservice covered?",
+     "named": false
+    },
+    {
+     "text": "Is weekend-service covered?",
+     "named": true
+    },
+    {
+     "text": "Is weekend_service covered?",
+     "named": true
+    },
+    {
+     "text": "Is weekend/service covered?",
+     "named": true
+    },
+    {
+     "text": "Is Weekend—Service covered?",
+     "named": true
+    },
+    {
+     "text": "Is Weekend Service's team ready?",
+     "named": true
+    },
+    {
+     "text": "Is Weekend covered?",
+     "named": false
+    },
+    {
+     "text": "Is Service covered?",
+     "named": false
+    },
+    {
+     "text": "Is Youth Night covered?",
+     "named": true
+    },
+    {
+     "text": "is youth night covered?",
+     "named": false
+    },
+    {
+     "text": "Is ozzie demo youth night (fictional) covered?",
+     "named": true
+    },
+    {
+     "text": "Who could cover Greeter — Ozzie Demo Youth Night (fictional)?",
+     "named": true
+    },
+    {
+     "text": "Is Ozzie Demo covered?",
+     "named": true
+    },
+    {
+     "text": "is demo youth covered",
+     "named": true
+    },
+    {
+     "text": "Is Evening Service covered?",
+     "named": false
+    },
+    {
+     "text": "Is Youth Service covered?",
+     "named": false
+    },
+    {
+     "text": "Is Wеekend Service covered?",
+     "named": true
+    },
+    {
+     "text": "Is Уouth Night covered?",
+     "named": true
+    },
+    {
+     "text": "Is WeekendServiceTeam covered?",
+     "named": false
+    },
+    {
+     "text": "Is Weekend Service2 covered?",
+     "named": false
+    },
+    {
+     "text": "Is Weekend - - Service covered?",
+     "named": false
+    },
+    {
+     "text": "Who could cover [Role 1] at [Service 1]?",
+     "named": false
+    },
+    {
+     "text": "What still needs a decision for your services?",
+     "named": false
+    },
+    {
+     "text": "Are the Weekend Services covered?",
+     "named": true
+    },
+    {
+     "text": "Who could cover Greeter at Youth Nights?",
+     "named": true
+    },
+    {
+     "text": "Is W e e k e n d Service covered?",
+     "named": false
+    },
+    {
+     "text": "Is youth-night covered?",
+     "named": false
+    },
+    {
+     "text": "Is Youth-Night covered?",
+     "named": true
+    },
+    {
+     "text": "Is OzzieDemo covered?",
+     "named": true
+    },
+    {
+     "text": "is ozziedemoyouthnight covered",
+     "named": true
+    },
+    {
+     "text": "Is youthnight covered?",
+     "named": false
+    },
+    {
+     "text": "Is YouthNight covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Sunday Morning",
+    "Services"
+   ],
+   "cases": [
+    {
+     "text": "Who is serving sunday morning?",
+     "named": false
+    },
+    {
+     "text": "Who is serving Sunday Morning?",
+     "named": true
+    },
+    {
+     "text": "Who is serving Sunday morning?",
+     "named": false
+    },
+    {
+     "text": "What still needs a decision for your services?",
+     "named": false
+    },
+    {
+     "text": "Are all services covered?",
+     "named": false
+    },
+    {
+     "text": "Are Services covered?",
+     "named": true
+    },
+    {
+     "text": "Is Sunday covered?",
+     "named": false
+    },
+    {
+     "text": "Is sundaymorning covered?",
+     "named": false
+    },
+    {
+     "text": "Is SundayMorning covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Riverside Campus 9am",
+    "Riverside Campus 11am"
+   ],
+   "cases": [
+    {
+     "text": "Is Riverside Campus covered?",
+     "named": true
+    },
+    {
+     "text": "is riverside campus covered",
+     "named": true
+    },
+    {
+     "text": "Is Riverside Campus 9am covered?",
+     "named": true
+    },
+    {
+     "text": "is riverside campus 11am covered",
+     "named": true
+    },
+    {
+     "text": "Is the riverside covered?",
+     "named": false
+    },
+    {
+     "text": "Is 9am covered?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Sunday",
+    "Wednesday Night"
+   ],
+   "cases": [
+    {
+     "text": "Is Sunday covered?",
+     "named": false
+    },
+    {
+     "text": "Who is serving this Sunday?",
+     "named": false
+    },
+    {
+     "text": "Is Wednesday Night covered?",
+     "named": true
+    },
+    {
+     "text": "is wednesday night covered",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "主日崇拜",
+    "Youth Night"
+   ],
+   "cases": [
+    {
+     "text": "主日崇拜的人手够吗",
+     "named": true
+    },
+    {
+     "text": "Is Youth Night covered?",
+     "named": true
+    },
+    {
+     "text": "Is it covered?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Weekend Service"
+   ],
+   "cases": [
+    {
+     "text": "Is Weekend Service covered?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Weekend Service",
+    "weekend service"
+   ],
+   "cases": [
+    {
+     "text": "Is Weekend Service covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Weekend Service",
+    "Worship in the Park"
+   ],
+   "cases": [
+    {
+     "text": "Who could cover Greeter in the morning?",
+     "named": false
+    },
+    {
+     "text": "What's the status of the Greeter role in the plan?",
+     "named": false
+    },
+    {
+     "text": "Who could cover Greeter in the Park?",
+     "named": true
+    },
+    {
+     "text": "is worship in the park covered",
+     "named": false
+    },
+    {
+     "text": "Is Worship in the Park covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Weekend Service",
+    "Stations of the Cross"
+   ],
+   "cases": [
+    {
+     "text": "What is the state of the plan?",
+     "named": false
+    },
+    {
+     "text": "Is Stations of the Cross covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Christmas in the City",
+    "Worship in the Park"
+   ],
+   "cases": [
+    {
+     "text": "Who is serving in the nursery?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "8:00 AM",
+    "10:30 AM"
+   ],
+   "cases": [
+    {
+     "text": "Who could cover Greeter at 9:00 AM?",
+     "named": false
+    },
+    {
+     "text": "Is 8:00 AM covered?",
+     "named": true
+    },
+    {
+     "text": "Is 8:00 am covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "9:00 AM Service",
+    "11:00 AM Service"
+   ],
+   "cases": [
+    {
+     "text": "Is everything covered at 10:00 AM?",
+     "named": false
+    },
+    {
+     "text": "who is serving at 10:00 am?",
+     "named": false
+    },
+    {
+     "text": "Is the 10:00 AM Service covered?",
+     "named": false
+    },
+    {
+     "text": "Is the 9:00 AM Service covered?",
+     "named": true
+    },
+    {
+     "text": "Is the AMService covered?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Weekend Service",
+    "Children's Church"
+   ],
+   "cases": [
+    {
+     "text": "Who could cover Greeter at this week's church service?",
+     "named": false
+    },
+    {
+     "text": "Is the children's area covered?",
+     "named": false
+    },
+    {
+     "text": "Is Children's Church covered?",
+     "named": true
+    },
+    {
+     "text": "Is Childrens Church covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Men's Breakfast",
+    "Women's Breakfast"
+   ],
+   "cases": [
+    {
+     "text": "What's breakfast need this week?",
+     "named": false
+    },
+    {
+     "text": "Is Mens Breakfast covered?",
+     "named": true
+    },
+    {
+     "text": "Is Men's Breakfast covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Main Campus 9am",
+    "Main Campus 11am"
+   ],
+   "cases": [
+    {
+     "text": "who serves at the main campus this week?",
+     "named": true
+    },
+    {
+     "text": "Is the Main covered?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Sunday Service",
+    "Sunday Service"
+   ],
+   "cases": [
+    {
+     "text": "Is Sunday Service covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Riverside Campus Sunday",
+    "Weekend Service"
+   ],
+   "cases": [
+    {
+     "text": "Is RiversideCampus covered?",
+     "named": true
+    },
+    {
+     "text": "is riversidecampus covered",
+     "named": true
+    },
+    {
+     "text": "Is CampusSunday covered?",
+     "named": true
+    },
+    {
+     "text": "Is the riverside covered?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Youth Night Worship",
+    "Youth Night Prayer"
+   ],
+   "cases": [
+    {
+     "text": "Is Youth Night covered?",
+     "named": true
+    },
+    {
+     "text": "is youth night covered?",
+     "named": false
+    },
+    {
+     "text": "Is Youth night covered?",
+     "named": false
+    },
+    {
+     "text": "Is YouthNight covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Sunday Morning 9am",
+    "Sunday Morning 11am"
+   ],
+   "cases": [
+    {
+     "text": "Who is serving Sunday Morning?",
+     "named": true
+    },
+    {
+     "text": "Who is serving sunday morning?",
+     "named": false
+    }
+   ]
+  },
+  {
+   "services": [
+    "Sun Day Camp",
+    "Weekend Service"
+   ],
+   "cases": [
+    {
+     "text": "Who is serving this Sunday?",
+     "named": false
+    },
+    {
+     "text": "Is SunDay covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Every One Welcome",
+    "Weekend Service"
+   ],
+   "cases": [
+    {
+     "text": "Everyone covered?",
+     "named": false
+    },
+    {
+     "text": "Is EveryOne covered?",
+     "named": true
+    }
+   ]
+  },
+  {
+   "services": [
+    "Light House",
+    "Weekend Service"
+   ],
+   "cases": [
+    {
+     "text": "Is the lighthouse team ready?",
+     "named": false
+    },
+    {
+     "text": "Is the Lighthouse team ready?",
+     "named": false
+    },
+    {
+     "text": "Is LightHouse covered?",
+     "named": true
+    },
+    {
+     "text": "Is Light House covered?",
+     "named": true
+    }
+   ]
+  }
+ ]
+}

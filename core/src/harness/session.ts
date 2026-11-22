@@ -8,17 +8,24 @@
 // position of the same name, the tools label each team's one by (team, name) instead, so their
 // people and statuses are never merged (review 2026-11-14 B-S2); a question naming the position
 // still gets the name's own label, which stands for every team's position of that name.
+//
+// With more than one service watched (owner request 2026-11-21), each service a question names gets a [Service N] label
+// here, by its own name (core/src/service-names.ts serviceKey: two names that read the same are one service). A task whose
+// question holds one reads the services tools for that service only (host.ts, tools.ts `scope`); the label is put back as
+// the service's name on this Mac only.
 import { AskSession, type AskedQuestion } from "../ask.js";
+import { serviceKey } from "../service-names.js";
 import { roleWithService } from "../sunday-brief.js";
 
-export type LabelKind = "person" | "role" | "room" | "workflow" | "step" | "event";
+export type LabelKind = "person" | "role" | "room" | "workflow" | "step" | "event" | "service";
 export type LabelTarget =
   | { kind: "person"; scope: string; id: string }
   | { kind: "role"; name: string; team?: string }
-  | { kind: "room" | "workflow" | "step" | "event"; id: string };
+  | { kind: "room" | "workflow" | "step" | "event"; id: string }
+  | { kind: "service"; name: string };
 
 /** Every label a tool may issue: the families below, numbered from 1. */
-export const LABEL_PATTERN = /\[(?:Person|Role|Room|Workflow|Step|Event) [1-9]\d{0,3}\]/gu;
+export const LABEL_PATTERN = /\[(?:Person|Role|Room|Workflow|Step|Event|Service) [1-9]\d{0,3}\]/gu;
 /** Any square-bracketed text, label or not. */
 export const BRACKETED = /\[[^\]\n]{0,80}\]/gu;
 export const YOUR_NAME = "[Your name]";
@@ -29,6 +36,7 @@ export class HarnessSession {
   readonly #targets = new Map<string, LabelTarget>();
   readonly #own = new Map<string, string>();
   readonly #counts = { room: 0, workflow: 0, step: 0, event: 0 };
+  readonly #services = new Map<string, string>();
   constructor(ask: AskSession = new AskSession()) { this.ask = ask; }
 
   /** `scope` is the organization, so one Planning Center person keeps one label across checks. */
@@ -47,6 +55,17 @@ export class HarnessSession {
   workflow(id: string): string { return this.#mint("workflow", id); }
   step(id: string): string { return this.#mint("step", id); }
   event(id: string): string { return this.#mint("event", id); }
+  /** A watched service, by its own name (header); one label for names that read the same. */
+  service(name: string): string {
+    const key = serviceKey(name) || name.trim();
+    let label = this.#services.get(key);
+    if (!label) {
+      label = `[Service ${this.#services.size + 1}]`;
+      this.#services.set(key, label);
+      this.#targets.set(label, { kind: "service", name: name.trim() });
+    }
+    return label;
+  }
   #mint(kind: "room" | "workflow" | "step" | "event", id: string): string {
     const key = `${kind}\u0000${id}`;
     let label = this.#own.get(key);
@@ -70,7 +89,7 @@ export class HarnessSession {
 
 export const labelsIn = (text: string): string[] => [...new Set(text.match(LABEL_PATTERN) ?? [])];
 export const kindOf = (label: string): LabelKind | null => {
-  const m = /^\[(Person|Role|Room|Workflow|Step|Event) [1-9]\d{0,3}\]$/u.exec(label);
+  const m = /^\[(Person|Role|Room|Workflow|Step|Event|Service) [1-9]\d{0,3}\]$/u.exec(label);
   return m ? m[1]!.toLowerCase() as LabelKind : null;
 };
 
@@ -99,6 +118,7 @@ export interface RestoreSources {
 }
 const GENERIC: Record<LabelKind, string> = {
   person: "a team member", role: "a role", room: "a room", workflow: "a follow-up workflow", step: "a follow-up step", event: "an event",
+  service: "a service",
 };
 
 // Times stay ISO 8601 all the way to this Mac (the model copies them exactly; verification checks them
@@ -170,6 +190,7 @@ export function restoreLabels(text: string, session: HarnessSession, sources: Re
       return name ? (sources.firstNames ? name.split(/\s+/u)[0]! : name) : GENERIC.person;
     }
     if (t.kind === "role") return roleWithService(t.name, sources.roleService?.(t.name, t.team));
+    if (t.kind === "service") return t.name || GENERIC.service;
     const restored = t.kind === "event" ? sources.events?.[t.id] : place(t.kind, t.id);
     return restored?.trim() || GENERIC[t.kind];
   });

@@ -7,6 +7,7 @@
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
+import type { HarnessData } from "../../../core/src/harness/tools.js";
 import { SERVICES_PAGE, SERVICES_QUESTION, type DayWords } from "../../../core/src/service-day.js";
 
 /** One other service watched, as its own check read it, with the leader's own decisions for it. */
@@ -100,4 +101,33 @@ export function mergedNames(main: SundayCapture, others: readonly SundayCapture[
   const names: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const c of [...others, main]) for (const [id, name] of Object.entries(c.names)) names[id] = name;
   return { ...main, names };
+}
+
+/**
+ * With more than one service watched (owner request 2026-11-21): what Ask needs so a question can name a service without
+ * that name reaching a model (core ask.ts PrepareOptions `services`, harness tools.ts `scope`): every watched service by
+ * its own Planning Center name and whether this check holds it (`unread`: the others watched, not read yet), the first
+ * service first (its check holds the rooms, follow-ups and group meetings), each read one with its own reads, failed reads,
+ * staleness and what it didn't check (review B, F3 and F7), and each finding's service by its id in the merged brief
+ * (mergeParts: the first service's ids as they are, each other's as `<plan>:<id>`), set-aside findings included. Undefined
+ * with one service watched, so that church reads exactly as before. Local only: never part of anything sent.
+ */
+export function askServices(main: { brief: SundayBrief; name: string | null }, others: readonly { plan_id: string; brief: SundayBrief; name: string | null }[],
+  unread: readonly (string | null)[] = []): { services: NonNullable<HarnessData["services"]>[number][]; serviceOfFinding: Record<string, string> } | undefined {
+  if (!others.length && !unread.length) return undefined;
+  const sources = (b: SundayBrief) => ({ checked_at: b.checked_at, reads: b.sources.reads, failed: b.sources.failed.length, stale: !!b.stale, not_checked: [...b.not_checked] });
+  const services = [
+    ...[main, ...others].map((p, i) => ({ name: p.name?.trim() ?? "", read: true, ...(i === 0 ? { first: true } : {}), ...sources(p.brief) })),
+    ...unread.map(n => ({ name: n?.trim() ?? "", read: false })),
+  ].filter(s => s.name);
+  if (services.length < 2) return undefined;
+  const serviceOfFinding: Record<string, string> = Object.create(null) as Record<string, string>;
+  const findings = (b: SundayBrief) => [...b.findings, ...(b.hidden ?? []).map(h => h.finding)];
+  const own = main.name?.trim();
+  if (own) for (const f of findings(main.brief)) serviceOfFinding[f.id] = own;
+  for (const o of others) {
+    const name = o.name?.trim();
+    if (name) for (const f of findings(o.brief)) serviceOfFinding[`${o.plan_id}:${f.id}`] = name;
+  }
+  return { services, serviceOfFinding };
 }

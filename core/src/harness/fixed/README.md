@@ -64,6 +64,15 @@ an object with exactly the keys `tool`, `source`, `check_time`, `completeness`, 
 `core/src/harness/fixed.ts` `envelopeProblems` is the reference implementation; the harness seals every tool
 result with it (and with this session's own labels), so anything outside the grammar is never sent.
 
+With more than one service watched (owner request 2026-11-21), a question that names a watched service carries that
+service's `[Service <n>]` label instead of its name (`core/src/ask.ts` `prepareAsk`, `core/src/service-names.ts`), and the
+task's own service labels keep the overview, open roles, who could help, pending requests, check-ins, what wasn't
+checked and drafts to those services (`host.ts`, `tools.ts` `scope`), with those services' own reads and completeness,
+and rooms, follow-ups and group meetings only for the first service (its page shows them); each such result says so
+first, under `service`: one label, or a list of them.
+No tool takes a service as an argument, so the tool specs, the policies and every system message are unchanged; only
+this grammar gained the `Service` family and the `service` key. Without a service named, every result is as before.
+
 Every result states facts with ids (structured answers, review 2026-11-14 section C): the payload itself under
 `fact` (the tool's own summary), each row of the lists `tools.ts` `FACT_LISTS` names under `fact`, and a prepared
 draft under `draft_id` instead. Ids are numbered in order within one task.

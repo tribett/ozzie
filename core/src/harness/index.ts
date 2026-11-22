@@ -6,15 +6,18 @@
 // positions become [Role N] labels before any name is looked for, then roster names become person
 // labels while room, follow-up and imported event names are kept whole; contact details, written-out
 // email addresses, religious requests, requests to contact people or change records, and ranking are
-// refused), and then those place names become their labels too. Only that placeholder form
+// refused), and then those place names become their labels too. With more than one service watched, a watched
+// service's name becomes that service's [Service N] label with the positions (owner request 2026-11-21), and the task's
+// service labels keep its lookups to those services (host.ts). Only that placeholder form
 // becomes the task. Names follow the "capitalized only" rule (names.ts). Every task is checked again
 // before the loop sees it: an ask whose question still holds a roster name, a position, room,
-// follow-up or event name as typed, or a contact detail fails as "egress" before any model step.
+// follow-up, event or watched service's name as typed, or a contact detail fails as "egress" before any model step.
 // Ask tasks are only made by ask(); run() still checks any task it is handed.
-import { buildAskContext, hasContactDetailStrict, MAX_SENT_QUESTION_CHARS, prepareAsk, REFUSALS, TEAM_MEMBER, type AskedQuestion } from "../ask.js";
+import { buildAskContext, hasContactDetailStrict, MAX_SENT_QUESTION_CHARS, placeKey, placeSpans, prepareAsk, REFUSALS, TEAM_MEMBER, type AskedQuestion } from "../ask.js";
 import { fold } from "../draft-request.js";
+import { serviceKey, serviceNamed, wordRuns } from "../service-names.js";
 import type { AgentRuntime, AgentTask, FailureCode, ModelStep, RunOptions, RuntimeDeps, Skill, TaskOutcome } from "./contract.js";
-import { HarnessHost } from "./host.js";
+import { HarnessHost, serviceScope } from "./host.js";
 import { instructionsFor } from "./instructions.js";
 import { DEFAULT_NAME_MODE, nameOptions, namedIn, type NameMode } from "./names.js";
 import { BRACKETED, HarnessSession, keptNames, restoreLabels } from "./session.js";
@@ -22,7 +25,8 @@ import { ASK_SKILL } from "./skills.js";
 import { HarnessTools, type HarnessData } from "./tools.js";
 import { verifier } from "./verify.js";
 
-export type { HarnessData } from "./tools.js";
+export type { HarnessData, Scope } from "./tools.js";
+export { serviceScope } from "./host.js";
 export type { NameMode } from "./names.js";
 export { ASK_SKILL } from "./skills.js";
 /** What happened: runtime events in the native ledger's grammar (review A6). */
@@ -54,13 +58,23 @@ function placeNames(data: HarnessData): Place[] {
   for (const s of data.attention?.sources ?? []) if ("title" in s && s.title.trim()) out.set(`event\u0000${s.id}`, { kind: "event", id: s.id, name: s.title.trim() });
   return [...out.values()];
 }
+/**
+ * With more than one service watched (HarnessData `services`), every watched service's own name and those no check has
+ * read; none with one, so a church with one service reads exactly as before. Local only.
+ */
+function watchedServices(data: HarnessData): { names: string[]; unread: string[] } | null {
+  const list = (data.services ?? []).filter(s => typeof s.name === "string" && serviceKey(s.name));
+  if (list.length < 2) return null;
+  // Not read yet only when no read service has a name that reads the same (review A, round 2, L2).
+  const unread = list.filter(s => !s.read && !list.some(o => o.read && serviceKey(o.name) === serviceKey(s.name)));
+  return { names: list.map(s => s.name.trim()), unread: unread.map(s => s.name.trim()) };
+}
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 /** Whole phrases, any case, any run of spaces between words, never inside a word. `folded`: phrases in folded form, for folded text. */
 const phrases = (list: readonly string[], folded = false) => list.length
   ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${[...list].sort((a, b) => b.length - a.length)
     .map(n => escape(folded ? fold(n) : n.normalize("NFKC")).replace(/\s+/gu, "\\s+")).join("|")})(?![\\p{L}\\p{N}])`, "giu")
   : null;
-const key = (s: string) => s.normalize("NFKC").toLocaleLowerCase("en").replace(/\s+/gu, " ");
 
 /**
  * Room, follow-up and event names still in the question become their labels (review B-S5). Existing labels
@@ -68,16 +82,19 @@ const key = (s: string) => s.normalize("NFKC").toLocaleLowerCase("en").replace(/
  */
 function labelPlaces(sent: string, session: HarnessSession, data: HarnessData): string {
   const places = placeNames(data);
-  const re = phrases(places.map(p => p.name));
-  if (!re) return sent;
-  const byKey = new Map(places.map(p => [key(p.name), p]));
-  return sent.split(/(\[[^\]\n]{0,80}\])/u).map((part, i) => i % 2 ? part : part.replace(re, (m: string, offset: number) => {
-    const p = byKey.get(key(m));
-    if (!p) return m;
+  // Ask's own place matcher (ask.ts placeSpans), so a place Ask let a service's name rest inside is labelled here.
+  const spans = placeSpans(sent, places.map(p => p.name));
+  if (!spans.length) return sent;
+  const byKey = new Map(places.map(p => [placeKey(p.name), p]));
+  let out = "", last = 0;
+  for (const { start, end } of spans) {
+    const p = byKey.get(placeKey(sent.slice(start, end)))!;
     const label = session[p.kind](p.id);
-    const before = part[offset - 1], after = part[offset + m.length];
-    return `${before && /[\p{L}\p{N}]/u.test(before) ? " " : ""}${label}${after && /[\p{L}\p{N}]/u.test(after) ? " " : ""}`;
-  })).join("");
+    const before = sent[start - 1], after = sent[end];
+    out += `${sent.slice(last, start)}${before && /[\p{L}\p{N}]/u.test(before) ? " " : ""}${label}${after && /[\p{L}\p{N}]/u.test(after) ? " " : ""}`;
+    last = end;
+  }
+  return out + sent.slice(last);
 }
 
 /** The leader's typed question in placeholder form, through the same boundary as Ask. Refusals send nothing. */
@@ -92,7 +109,10 @@ export function prepareAgentQuestion(session: HarnessSession, data: HarnessData,
   // This plan's positions are labelled before any name is looked for (review B-S6), by name as Ask labels them.
   const roles = new Map(positionNames(data).map(name => [session.role(name), name]));
   // Room, follow-up and event names are kept whole while names are replaced, then labelled (review C5: "Thornbury Hall").
-  const prepared = prepareAsk(session.ask, context, typed, { roles, protect: placeNames(data).map(p => p.name), ...nameOptions(mode) });
+  // With more than one service watched, each watched service's name becomes its own label (ask.ts PrepareOptions `services`).
+  const watched = watchedServices(data);
+  const prepared = prepareAsk(session.ask, context, typed, { roles, protect: placeNames(data).map(p => p.name), ...nameOptions(mode),
+    ...(watched ? { services: { ...watched, label: (name: string) => session.service(name) } } : {}) });
   if (!prepared.ok) return prepared;
   session.record(prepared.asked, capture.organization);
   return { ok: true, question: labelPlaces(prepared.asked.sent, session, data), asked: prepared.asked };
@@ -153,6 +173,8 @@ export class Harness {
   update(data: HarnessData): void { this.tools.update(data); }
 
   prepare(typed: string): AgentQuestion { return prepareAgentQuestion(this.session, this.tools.data, typed, this.nameMode); }
+  /** The services an ask task's question names (host.ts serviceScope), for what Ozzie adds to its answer on this Mac. */
+  scope(task: AgentTask): readonly string[] { return task.kind === "ask" ? serviceScope(task.question, this.session) : []; }
   #task(kind: AgentTask["kind"], skill_id: string, question?: string): AgentTask {
     return { id: this.#newId(), kind, skill_id, ...(question !== undefined ? { question } : {}), workspace_id: this.#workspace, created_at: this.#now() };
   }
@@ -169,6 +191,9 @@ export class Harness {
       // A position, room, follow-up or event name as typed (review B-S7), outside the labels.
       const unlabelled = q.replace(BRACKETED, " ");
       for (const re of [phrases(positionNames(data), true), phrases(placeNames(data).map(p => p.name), true)]) if (re && re.test(fold(unlabelled))) return "egress";
+      // A watched service's name as prepareAsk would label it (owner request 2026-11-21), outside the labels.
+      const watched = watchedServices(data);
+      if (watched && serviceNamed(unlabelled, watched.names, { ...nameOptions(this.nameMode), exclude: new Set(Object.values(data.capture?.names ?? {}).flatMap(wordRuns)) })) return "egress";
       for (const m of q.matchAll(BRACKETED)) if (!this.session.has(m[0]) && m[0] !== TEAM_MEMBER) return "invalid-task";
     }
     if (task.kind === "skill" && (task.skill_id === ASK_SKILL || !this.#skills.has(task.skill_id) || task.question !== undefined)) return "invalid-task";

@@ -19,7 +19,16 @@
 // Nothing here writes anywhere. `planning_center.refresh` runs the injected native Sunday check
 // (GET-only reads) when the last check is out of date or a recording; `drafts.prepare_note` returns
 // a draft that a person reviews and sends, only to someone listed for a role that still needs people.
+//
+// A task whose question names a watched service (owner request 2026-11-21: core/src/ask.ts prepareAsk gives it a
+// [Service N] label, host.ts passes that service on as the task's `scope`) reads the overview, open roles, who could help,
+// pending requests, check-ins, what wasn't checked and drafts for the services it names only, each result saying so
+// first under `service` (their labels), with those services' own reads and completeness when the app gives them, so "Is
+// [Service 1] covered?" is answered about that service alone. Rooms, follow-ups and group meetings are the first
+// service's, as its page shows them: a scoped overview holds them only when it is for the first service. Without a scope
+// every result is exactly as before.
 import { hasContactDetail } from "../ask.js";
+import { serviceKey } from "../service-names.js";
 import { ToolFailure } from "../broker.js";
 import type { AttentionReport } from "../attention-import/index.js";
 import { roomRules, type SundayOperations } from "../operations-capture.js";
@@ -65,8 +74,28 @@ export interface HarnessData {
    * reads it, and nothing in it is ever sent. Absent with one service.
    */
   serviceOfTeam?: Readonly<Record<string, string>>;
+  /**
+   * With more than one service watched (owner request 2026-11-21): every watched service by its own Planning Center name,
+   * and whether this check holds it (`read`), so a question naming one sends its [Service N] label instead (ask.ts
+   * PrepareOptions `services`). `first` marks the first service, whose check holds the rooms, follow-ups and group
+   * meetings (reviews A round 2 N3, B round 2 N4: never by its place in the list). A read one may carry when it was read,
+   * its own reads, failed reads, staleness and what it didn't check, which a task about it says instead of the whole
+   * check's (review B, F3, F7 and round 2 N2). Local only: a service's name never reaches a model. Absent with one service.
+   */
+  services?: readonly {
+    readonly name: string; readonly read: boolean; readonly first?: boolean; readonly checked_at?: string | null;
+    readonly reads?: number; readonly failed?: number; readonly stale?: boolean; readonly not_checked?: readonly string[];
+  }[];
+  /**
+   * With more than one service watched: each finding's service by its own name, by the finding's id (the merged brief's,
+   * desktop services-merge.ts), so a task about one service reads that service's findings only, a check-in or a part of
+   * the check that couldn't be verified included. Local only. Absent with one service; then a finding's team says it.
+   */
+  serviceOfFinding?: Readonly<Record<string, string>>;
 }
 export interface HarnessToolsOptions { now?: () => string }
+/** The services a task's question names, by their own names (header): its reads are for them only. Empty: every service. */
+export type Scope = readonly string[];
 
 // ---- Specs ---------------------------------------------------------------------------------------
 
@@ -244,14 +273,14 @@ export class HarnessTools {
    * Runs one tool for a task (`task`: its id, so fact ids are unique within it). Throws ToolFailure: "denied" for an
    * unknown tool or arguments that don't fit, "unverified" when there's nothing to read.
    */
-  async run(name: string, args: Record<string, unknown>, signal: AbortSignal, task = ""): Promise<ToolEnvelope> {
+  async run(name: string, args: Record<string, unknown>, signal: AbortSignal, task = "", scope: Scope = []): Promise<ToolEnvelope> {
     if (!isToolName(name)) throw new ToolFailure("denied");
     const checked = checkArguments(TOOL_SPECS[name], args, this.session);
     if (!checked) throw new ToolFailure("denied");
     if (signal.aborted) throw new ToolFailure("unverified");
     let result: Result;
     if (name === "planning_center.refresh") result = await this.#refresh(signal);
-    else result = this.#read(name, checked);
+    else result = this.#read(name, checked, scope);
     return this.#seal(name, fit(name, numbered(name, result, this.#numberingFor(task))));
   }
   #numberingFor(task: string): Numbering {
@@ -264,20 +293,20 @@ export class HarnessTools {
     return n;
   }
 
-  #read(name: Exclude<ToolName, "planning_center.refresh">, args: Record<string, string | number | boolean>): Result {
+  #read(name: Exclude<ToolName, "planning_center.refresh">, args: Record<string, string | number | boolean>, scope: Scope): Result {
     switch (name) {
-      case "sunday.overview": return this.#overview();
-      case "sunday.open_needs": return this.#openNeeds();
-      case "sunday.who_could_help": return this.#whoCouldHelp(String(args["role"]));
-      case "sunday.pending_requests": return this.#pending();
-      case "sunday.rule_checkins": return this.#checkins();
-      case "sunday.not_checked": return this.#notChecked();
+      case "sunday.overview": return this.#overview(scope);
+      case "sunday.open_needs": return this.#openNeeds(scope);
+      case "sunday.who_could_help": return this.#whoCouldHelp(String(args["role"]), scope);
+      case "sunday.pending_requests": return this.#pending(scope);
+      case "sunday.rule_checkins": return this.#checkins(scope);
+      case "sunday.not_checked": return this.#notChecked(scope);
       case "rooms.conflicts": return this.#rooms();
       case "followups.unowned": return this.#followUps();
       case "groups.clashes": return this.#groups();
       case "today.attention": return this.#attention();
       case "rules.current": return this.#rules();
-      case "drafts.prepare_note": return this.#draft(String(args["person"]), String(args["role"]));
+      case "drafts.prepare_note": return this.#draft(String(args["person"]), String(args["role"]), scope);
     }
   }
 
@@ -298,16 +327,49 @@ export class HarnessTools {
     // Every tool reads the brief as models may see it: background checks stay on this Mac (review M2/M3).
     return { brief: forModels(brief), capture, org: capture.organization, zone: brief.time_zone };
   }
-  #stale(checkedAt: string | null): boolean {
-    const { mode, brief } = this.#data;
+  /** `own`: the brief's own staleness, or a scope's services' (#reads). */
+  #stale(checkedAt: string | null, own: boolean = !!this.#data.brief?.stale): boolean {
+    const { mode } = this.#data;
     if (mode === "recording") return true;
     if (mode !== "live") return false;
-    return !!brief?.stale || (checkedAt !== null && Date.parse(this.#now()) > Date.parse(checkedAt) + LIVE_CHECK_VALID_MS);
+    return own || (checkedAt !== null && Date.parse(this.#now()) > Date.parse(checkedAt) + LIVE_CHECK_VALID_MS);
   }
-  #servicesResult(payload: Record<string, unknown>, list?: string): Result {
+  #servicesResult(payload: Record<string, unknown>, list?: string, scope: Scope = []): Result {
+    const own = this.#reads(scope), at = this.#checkedAt(scope);
+    const completeness: Completeness = this.#stale(at, own.stale) ? "stale" : own.failed ? "partial" : "complete";
+    return { source: this.#data.source ?? SERVICES, check_time: checkTime(at), completeness, payload, ...(list ? { list } : {}) };
+  }
+  /**
+   * When the check read: for a scope, the earliest of its services' own read times when the app gave them all (review B,
+   * round 2, N2), never another service's older one; otherwise the whole check's, as before.
+   */
+  #checkedAt(scope: Scope): string | null {
     const { brief } = this.#services();
-    const completeness: Completeness = this.#stale(brief.checked_at) ? "stale" : brief.sources.failed.length ? "partial" : "complete";
-    return { source: this.#data.source ?? SERVICES, check_time: checkTime(brief.checked_at), completeness, payload, ...(list ? { list } : {}) };
+    const own = scope.length ? this.#scopedServices(scope) : [];
+    if (!own.length || !own.every(s => typeof s.checked_at === "string")) return brief.checked_at;
+    return own.map(s => s.checked_at!).reduce((a, b) => Date.parse(b) < Date.parse(a) ? b : a);
+  }
+  /** The watched services a scope names, as HarnessData `services` holds them. */
+  #scopedServices(scope: Scope): NonNullable<HarnessData["services"]>[number][] {
+    const keys = new Set(scope.map(serviceKey));
+    return (this.#data.services ?? []).filter(s => keys.has(serviceKey(s.name)));
+  }
+  /**
+   * Reads, failed reads and whether out of date: for a scope, its services' own when the app gave them all (review B,
+   * F3), never another service's failures; otherwise the whole check's, as before.
+   */
+  #reads(scope: Scope): { reads: number; failed: number; stale: boolean } {
+    const { brief } = this.#services();
+    const own = scope.length ? this.#scopedServices(scope) : [];
+    if (own.length && own.every(s => typeof s.reads === "number" && typeof s.failed === "number")) {
+      return { reads: own.reduce((n, s) => n + s.reads!, 0), failed: own.reduce((n, s) => n + s.failed!, 0), stale: own.some(s => s.stale === true) };
+    }
+    return { reads: brief.sources.reads, failed: brief.sources.failed.length, stale: !!brief.stale };
+  }
+  /** Whether rooms, follow-ups and group meetings go with a scope: always unscoped, and for the first service (its page shows them). */
+  opsInScope(scope: Scope): boolean {
+    const first = this.#data.services?.find(s => s.first === true)?.name;
+    return !scope.length || (first !== undefined && scope.some(s => serviceKey(s) === serviceKey(first)));
   }
   /** A church on B1 Church or Breeze: no team leaders, no Planning Center counts, no lead, room or kids rules of Planning Center's. */
   get #other(): boolean { return this.#data.source !== undefined; }
@@ -325,6 +387,25 @@ export class HarnessTools {
     return teams.size > 1 ? this.session.role(n, team) : this.session.role(n);
   }
   #role(f: Pick<Finding, "position">): string { return this.#roleOf(f.position?.name, f.position?.team_id); }
+  /** A finding's service by its own name (HarnessData `serviceOfFinding`, else its team's), or null when that isn't known. */
+  #serviceOf(f: Finding): string | null {
+    const { serviceOfFinding: byId, serviceOfTeam: teams } = this.#data;
+    if (byId && Object.hasOwn(byId, f.id)) return byId[f.id]?.trim() || null;
+    const team = f.position?.team_id ?? f.serving?.[0]?.team_id;
+    return team !== undefined && teams && Object.hasOwn(teams, team) ? teams[team]?.trim() || null : null;
+  }
+  /** Whether a finding is one of the services a scoped task reads (header); every finding when unscoped. */
+  inScope(f: Finding, scope: Scope): boolean {
+    if (!scope.length) return true;
+    const own = this.#serviceOf(f);
+    return own !== null && scope.some(s => serviceKey(s) === serviceKey(own));
+  }
+  /** A scoped result's `service`, said before anything else: the label of each service it is for. Nothing when unscoped. */
+  #scoped(scope: Scope): Record<string, unknown> {
+    if (!scope.length) return {};
+    const labels = [...new Set(scope.map(s => this.session.service(s)))];
+    return { service: labels.length === 1 ? labels[0] : labels };
+  }
   /**
    * Whether rooms, follow-ups and group meetings are said from this check: the connection holds Calendar, People and
    * Groups now, or this check read them. The Sunday page, Today and the sidebar show what the check on screen read
@@ -390,11 +471,13 @@ export class HarnessTools {
    * (a settled one is listed with its decision, never counted), then rooms, follow-ups and group meetings as rows of their
    * own. Background checks never reach the tools (forModels): the overview says some findings stay on this Mac instead.
    */
-  #overview(): Result {
+  #overview(scope: Scope = []): Result {
     const { brief, zone } = this.#services();
     const decided = this.#decided();
-    const open = brief.findings.filter(f => decided.get(f.id)?.state !== "resolved");
-    const findings = brief.findings.map(f => {
+    const own = this.#reads(scope);
+    const mine = brief.findings.filter(f => this.inScope(f, scope));
+    const open = mine.filter(f => decided.get(f.id)?.state !== "resolved");
+    const findings = mine.map(f => {
       const base: Record<string, unknown> = { kind: kindWord(f.kind), tone: f.tone === "decision" ? "needs a decision" : "worth a look" };
       switch (f.kind) {
         case "needs-people": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN }); break;
@@ -402,7 +485,7 @@ export class HarnessTools {
         case "pending": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), person: this.#person(f.person_id),
           request: this.#request(f) }); break;
         case "streak": Object.assign(base, { person: this.#person(f.person_id), sundays_in_a_row: f.sundays ?? NOT_KNOWN }); break;
-        case "worth-a-look": Object.assign(base, { reads_not_completed: brief.sources.failed.length, too_old_to_treat_as_current: !!f.stale }); break;
+        case "worth-a-look": Object.assign(base, { reads_not_completed: own.failed, too_old_to_treat_as_current: !!f.stale }); break;
         // Counts only: who is confirmed or pending stays on this Mac.
         case "too-few-confirmed": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), confirmed: f.confirmed?.length ?? 0,
           needed: f.needed ?? NOT_KNOWN, asked_no_answer: f.asked?.length ?? 0, request_not_sent: f.not_sent?.length ?? 0, ages: AGES }); break;
@@ -412,14 +495,17 @@ export class HarnessTools {
       }
       return { ...base, ...this.#decision(decided.get(f.id)) };
     });
-    // After the Services findings, so their labels are numbered as before.
-    const ops = this.#operationsShown(zone);
+    // After the Services findings, so their labels are numbered as before. Rooms, follow-ups and group meetings are the
+    // first service's (opsInScope): a scoped overview for another service leaves them out.
+    const ops = this.opsInScope(scope) ? this.#operationsShown(zone) : { rows: [], decisions: 0, looks: 0 };
+    // Several services watched: the brief's plan is the first service's, so a scoped overview doesn't say its date.
+    const sunday = scope.length && this.#data.serviceOfTeam ? NOT_KNOWN : brief.plan.date ?? NOT_KNOWN;
     return this.#servicesResult({
-      mode: this.#data.mode, sunday: brief.plan.date ?? NOT_KNOWN, reads: brief.sources.reads, reads_not_completed: brief.sources.failed.length,
+      ...this.#scoped(scope), mode: this.#data.mode, sunday, reads: own.reads, reads_not_completed: own.failed,
       needs_a_decision: open.filter(f => f.tone === "decision").length + ops.decisions, worth_a_look: open.filter(f => f.tone === "look").length + ops.looks,
       ...(!this.#other && backgroundChecksOn(this.#data.rules) ? { kept_on_this_mac: KEPT_ON_THIS_MAC } : {}),
       findings: [...findings, ...ops.rows],
-    }, "findings");
+    }, "findings", scope);
   }
 
   /**
@@ -457,10 +543,10 @@ export class HarnessTools {
     };
   }
 
-  #openNeeds(): Result {
+  #openNeeds(scope: Scope = []): Result {
     const { brief, zone } = this.#services();
     const decided = this.#decided();
-    const needs = brief.findings.flatMap((f): Record<string, unknown>[] => {
+    const needs = brief.findings.filter(f => this.inScope(f, scope)).flatMap((f): Record<string, unknown>[] => {
       if (f.kind === "needs-people") {
         const p = f.people;
         return [{
@@ -482,10 +568,10 @@ export class HarnessTools {
       return [];
     });
     // Planning Center's own counts and its team leaders are Planning Center's words: another system's check says neither.
-    return this.#servicesResult(this.#other ? { needs } : {
-      needs, remaining_means: "Planning Center's own count of open requests; people who accepted or are pending are already counted",
+    return this.#servicesResult(this.#other ? { ...this.#scoped(scope), needs } : {
+      ...this.#scoped(scope), needs, remaining_means: "Planning Center's own count of open requests; people who accepted or are pending are already counted",
       team_leaders_means: "oversight of the team, not a Sunday assignment",
-    }, "needs");
+    }, "needs", scope);
   }
 
   /**
@@ -506,10 +592,26 @@ export class HarnessTools {
     return groups.size > 1 && named.every(Boolean) && new Set(named).size === named.length ? [...groups] : null;
   }
 
+  /**
+   * Findings by role and service, in the brief's order, each group under its first team's own label (#role), which restores
+   * with its service on this Mac: what a scoped who-could-help lists under. Two teams of one service with the role's name
+   * are one group, everyone listed once with the most cautious status, as #people merges them (review B, F4).
+   */
+  #ownTeams(findings: readonly Finding[]): [string, Finding[]][] {
+    const groups = new Map<string, [string, Finding[]]>();
+    for (const f of findings) {
+      const key = `${f.position?.name.trim() ?? ""}\u0000${serviceKey(this.#serviceOf(f) ?? "")}`;
+      const group = groups.get(key);
+      if (group) group[1].push(f); else groups.set(key, [this.#role(f), [f]]);
+    }
+    return [...groups.values()];
+  }
+
   /** The asked-for role is echoed under `asked_for`, which never counts as evidence (verify.ts, review B-S1). */
-  #whoCouldHelp(role: string): Result {
+  #whoCouldHelp(role: string, scope: Scope = []): Result {
     const { zone, brief } = this.#services();
-    const findings = this.#needsFor(role);
+    const findings = this.#needsFor(role).filter(f => this.inScope(f, scope));
+    const scoped = this.#scoped(scope);
     if (!findings.length) {
       // A church system's role whose need isn't known (no number shared, or its answers not read whole; review of round 4,
       // M1): "no open need" would be a guess. With no team tied to it (Breeze) that is said as for an open need; with a
@@ -517,59 +619,69 @@ export class HarnessTools {
       const target = this.session.target(role);
       const unknown = this.#other && target?.kind === "role"
         ? brief.positions.filter(p => p.name.trim() === target.name && p.remaining === null) : [];
-      if (unknown.length && unknown.every(p => p.team_id === "?")) return this.#servicesResult({ asked_for: { role }, people_listed: NO_TEAM, people: [] }, "people");
-      if (unknown.length) return this.#servicesResult({ asked_for: { role }, open_need: NOT_KNOWN, people: [] });
-      return this.#servicesResult({ asked_for: { role }, open_need: "none in the last check", people: [] });
+      if (unknown.length && unknown.every(p => p.team_id === "?")) return this.#servicesResult({ ...scoped, asked_for: { role }, people_listed: NO_TEAM, people: [] }, "people", scope);
+      if (unknown.length) return this.#servicesResult({ ...scoped, asked_for: { role }, open_need: NOT_KNOWN, people: [] }, undefined, scope);
+      // For a service with no such need, the role by a label that restores without another service's name (review A,
+      // round 2, L4): its name, on no team.
+      const plain = scope.length && this.#data.serviceOfTeam && target?.kind === "role" ? { role: this.session.role(target.name, "") } : {};
+      return this.#servicesResult({ ...scoped, asked_for: { role }, ...plain, open_need: "none in the last check", people: [] }, undefined, scope);
     }
     // A system that ties no team to its roles (Breeze): the role's times, and that no one can be listed, never an empty team.
     if (this.#other && findings.every(f => !f.people)) {
-      return this.#servicesResult({ asked_for: { role }, times: findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
-        people_listed: NO_TEAM, people: [] }, "people");
+      return this.#servicesResult({ ...scoped, asked_for: { role }, times: findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
+        people_listed: NO_TEAM, people: [] }, "people", scope);
     }
     // Several services, each with this role: each team's times and people under its own label, one team after another, so
-    // a list cut for length (fit) leaves out the last team's people first.
-    const teams = this.#byTeam(findings);
+    // a list cut for length (fit) leaves out the last team's people first. Scoped to a service, always by each team's own
+    // label, which restores with its service on this Mac, so every line names the service it is about.
+    const teams = scope.length && this.#data.serviceOfTeam ? this.#ownTeams(findings) : this.#byTeam(findings);
     return this.#servicesResult({
-      asked_for: { role },
+      ...scoped, asked_for: { role },
       times: teams ? teams.flatMap(([label, own]) => own.map(f => ({ role: label, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })))
         : findings.map(f => ({ role, time: span(f.position?.interval, zone), remaining: f.remaining ?? NOT_KNOWN })),
       people: teams ? teams.flatMap(([label, own]) => this.#people(own).map(p => ({ role: label, ...p }))) : this.#people(findings).map(p => ({ role, ...p })),
       order: "in no particular order, not ranked", willingness: "not recorded; no overlap found doesn't mean free or willing, only the person can say",
-    }, "people");
+    }, "people", scope);
   }
 
-  #pending(): Result {
+  #pending(scope: Scope = []): Result {
     const { brief, zone } = this.#services();
-    const pending = brief.findings.filter(f => f.kind === "pending").map(f => ({
+    const mine = brief.findings.filter(f => this.inScope(f, scope));
+    const pending = mine.filter(f => f.kind === "pending").map(f => ({
       role: this.#role(f), time: span(f.position?.interval, zone), person: this.#person(f.person_id), request: this.#request(f),
     }));
-    const leads = brief.findings.filter(f => f.kind === "lead-missing").flatMap(f => [...new Set(f.pending_leads ?? [])].sort(byId)
+    const leads = mine.filter(f => f.kind === "lead-missing").flatMap(f => [...new Set(f.pending_leads ?? [])].sort(byId)
       .map(id => ({ role: this.#role(f), person: this.#person(id), status: "scheduled to lead, hasn't accepted" })));
-    return this.#servicesResult({ pending, leads_not_accepted: leads, pending_means: "not accepted yet; pending is not the same as asked" }, "pending");
+    return this.#servicesResult({ ...this.#scoped(scope), pending, leads_not_accepted: leads, pending_means: "not accepted yet; pending is not the same as asked" }, "pending", scope);
   }
 
-  #checkins(): Result {
+  #checkins(scope: Scope = []): Result {
     const { brief } = this.#services();
     const threshold = this.#data.rules.checkInAfterSundaysInARow;
-    const check_ins = brief.findings.filter(f => f.kind === "streak").map(f => ({ person: this.#person(f.person_id), sundays_in_a_row: f.sundays ?? NOT_KNOWN }));
+    const check_ins = brief.findings.filter(f => f.kind === "streak" && this.inScope(f, scope)).map(f => ({ person: this.#person(f.person_id), sundays_in_a_row: f.sundays ?? NOT_KNOWN }));
     return this.#servicesResult({
-      check_in_after_sundays_in_a_row: threshold > 0 ? threshold : "off", check_ins,
+      ...this.#scoped(scope), check_in_after_sundays_in_a_row: threshold > 0 ? threshold : "off", check_ins,
       check_in_means: "a schedule fact for a person to look at; about care, not performance",
-    }, "check_ins");
+    }, "check_ins", scope);
   }
 
-  #notChecked(): Result {
+  #notChecked(scope: Scope = []): Result {
     const { brief } = this.#services();
     const ops = this.#data.operations;
     // Ozzie's own sentences (fixed templates with counts); one that isn't made only of fixed words is never passed along.
     const fixed = (lines: readonly string[]) => [...new Set(lines.map(l => sentenceFits(l) ? l : UNDESCRIBED))];
+    // For a scope, its services' own lines when the app gave them (review B, F7); rooms and the rest with the first service.
+    const own = this.#reads(scope), mine = scope.length ? this.#scopedServices(scope) : [];
+    const lines = mine.length && mine.every(s => s.not_checked) ? mine.flatMap(s => s.not_checked!) : brief.not_checked;
     return this.#servicesResult({
-      reads: brief.sources.reads, reads_not_completed: brief.sources.failed.length, too_old_to_treat_as_current: this.#stale(brief.checked_at),
-      services: fixed(brief.not_checked),
+      ...this.#scoped(scope), reads: own.reads, reads_not_completed: own.failed, too_old_to_treat_as_current: this.#stale(this.#checkedAt(scope), own.stale),
+      services: fixed(lines),
       // As the Sunday page's "What I didn't check" for this check, once it read them or the connection holds them.
-      rooms_follow_ups_groups: !this.#operationsSaid() ? ["Rooms, follow-ups and group meetings are not part of this connection."]
-        : ops ? fixed(ops.not_checked) : ["Rooms, follow-ups and group meetings weren't part of this check."],
-    });
+      ...(this.opsInScope(scope) ? {
+        rooms_follow_ups_groups: !this.#operationsSaid() ? ["Rooms, follow-ups and group meetings are not part of this connection."]
+          : ops ? fixed(ops.not_checked) : ["Rooms, follow-ups and group meetings weren't part of this check."],
+      } : {}),
+    }, undefined, scope);
   }
 
   // -- Calendar, People and Groups --
@@ -716,11 +828,18 @@ export class HarnessTools {
    * A draft only to someone the check listed for a role that still needs people (reviews B-S1, N3): otherwise no
    * draft. The asked-for person and role are echoed under `asked_for`, and neither they nor the draft count as evidence.
    */
-  #draft(person: string, role: string): Result {
+  #draft(person: string, role: string, scope: Scope = []): Result {
     const { brief, zone } = this.#services();
     const asked_for = { person, role };
-    const finding = this.#needsFor(role).find(f => this.#listed(f).some(p => p.person === person));
-    if (!finding) return this.#servicesResult({ asked_for, status: "no draft prepared", reason: "not listed for an open need of this role" });
+    // Scoped, a team's label stands for every team of that service with the role's name, as a scoped who-could-help lists
+    // them together under it (#ownTeams; review B, round 2, N3).
+    const target = this.session.target(role), teams = this.#data.serviceOfTeam;
+    const service = scope.length && target?.kind === "role" && target.team !== undefined && teams && Object.hasOwn(teams, target.team) ? teams[target.team]! : null;
+    const named = service === null ? this.#needsFor(role) : brief.findings.filter(f => f.kind === "needs-people" && target?.kind === "role" &&
+      f.position?.name.trim() === target.name && serviceKey(this.#serviceOf(f) ?? "") === serviceKey(service));
+    const needs = named.filter(f => this.inScope(f, scope));
+    const finding = needs.find(f => this.#listed(f).some(p => p.person === person));
+    if (!finding) return this.#servicesResult({ ...this.#scoped(scope), asked_for, status: "no draft prepared", reason: "not listed for an open need of this role" }, undefined, scope);
     const start = localIso(finding.position?.interval?.starts_at, zone);
     // When: the service time, else the plan's own church-local date, else nothing; never a fixed "this Sunday", since the
     // service may be on any day (onboarding spec §5, decision 18). The vocabulary has no words for "the next service".
@@ -737,8 +856,8 @@ export class HarnessTools {
       "It's completely fine to say no. Just let me know either way so we can plan.",
       `Thank you,\n${YOUR_NAME}`,
     ].join("\n\n");
-    const listed = this.#people(this.#needsFor(role)).find(p => p["person"] === person)!["status"];
-    return this.#servicesResult({ asked_for, draft, status: "draft only; nothing has been sent", listed_for_role: listed });
+    const listed = this.#people(needs).find(p => p["person"] === person)!["status"];
+    return this.#servicesResult({ ...this.#scoped(scope), asked_for, draft, status: "draft only; nothing has been sent", listed_for_role: listed }, undefined, scope);
   }
 }
 

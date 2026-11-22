@@ -16,6 +16,11 @@
 //! "capitalized only" rule (`present_in_prose`, core/src/harness/names.ts; vectors
 //! `capitalizedCommonWords`); everything else stays strict. Names live only in memory: never
 //! persisted, logged or returned.
+//!
+//! With more than one service watched, the watched services' own names too (`set_services`,
+//! `service_named`; owner request 2026-11-21): the webview turns each into a [Service N] label
+//! before anything is sent (core/src/service-names.ts, the same rules; shared vectors in
+//! core/test/service-names-parity.json), and a request that still holds one is refused here.
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 use icu_properties::{
     CodePointMapData, CodePointSetData,
@@ -588,6 +593,106 @@ fn reword_hit(text: &str, terms: &BTreeSet<String>) -> bool {
     })
 }
 
+/// One watched service's name as core/src/service-names.ts reads it: its words (runs of word
+/// characters and decimal digits, look-alike letters read as Latin, folded) and whether each is
+/// written with a capital; or, in a script written without spaces, the whole folded name.
+#[derive(Clone)]
+struct ServiceName {
+    words: Vec<String>,
+    caps: Vec<bool>,
+    anywhere: Option<String>,
+}
+/// One word of a text as service names are read (core/src/service-names.ts `tokenize`): folded,
+/// and whether its first letter is a capital.
+struct ServiceWord {
+    folded: String,
+    capital: bool,
+    /// Its letters before folding (look-alikes read as Latin), to read where each word of a part
+    /// run together into it starts.
+    raw: Vec<char>,
+}
+/// An apostrophe as `fold` unifies them: one between two letters of a service name's word is dropped.
+fn apostrophe(c: char) -> bool {
+    matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{2bc}' | '\u{2b9}' | '`' | '\u{b4}')
+}
+/// Words that never mark out a part of a name: a possessive "s" left alone, and times of day.
+const NEVER_MARKS: [&str; 3] = ["s", "am", "pm"];
+/// The words of a text for service names and the folded gaps around them (`gaps[i]` before
+/// `words[i]`): a word is a run of `word_char` letters and decimal digits, a mark continues one, an
+/// apostrophe between two of its letters is dropped and the word goes on, invisible, format and
+/// private-use characters neither split nor join one, and look-alike letters are read as the Latin
+/// letters they imitate.
+fn service_words(text: &str) -> (Vec<ServiceWord>, Vec<String>) {
+    let compat = ComposingNormalizerBorrowed::new_nfkc().normalize(text);
+    let (mut words, mut gaps) = (Vec::new(), Vec::new());
+    let (mut word, mut gap) = (String::new(), String::new());
+    let flush = |word: &mut String, words: &mut Vec<ServiceWord>| {
+        let capital = word.chars().next().is_some_and(|c| {
+            matches!(
+                category(c),
+                GeneralCategory::UppercaseLetter | GeneralCategory::TitlecaseLetter
+            )
+        });
+        words.push(ServiceWord {
+            folded: fold_compat(word),
+            capital,
+            raw: word.chars().collect(),
+        });
+        word.clear();
+    };
+    let chars: Vec<char> = compat.chars().collect();
+    for (at, &raw) in chars.iter().enumerate() {
+        let c = lookalike(raw).unwrap_or(raw);
+        if invisible(c)
+            || matches!(
+                category(c),
+                GeneralCategory::Format | GeneralCategory::PrivateUse
+            )
+        {
+            continue;
+        }
+        if !word.is_empty()
+            && apostrophe(c)
+            && chars.get(at + 1).is_some_and(|&next| {
+                let next = lookalike(next).unwrap_or(next);
+                word_char(next) || decimal_digit(next)
+            })
+        {
+            continue;
+        }
+        let mark = GeneralCategoryGroup::Mark.contains(category(c));
+        if word_char(c) || decimal_digit(c) || (mark && !word.is_empty()) {
+            if word.is_empty() {
+                gaps.push(fold_compat(&std::mem::take(&mut gap)));
+            }
+            word.push(c);
+        } else {
+            if !word.is_empty() {
+                flush(&mut word, &mut words);
+            }
+            gap.push(c);
+        }
+    }
+    if !word.is_empty() {
+        flush(&mut word, &mut words);
+    }
+    gaps.push(fold_compat(&gap));
+    (words, gaps)
+}
+/// A word ordinary prose uses (core/src/service-names.ts `everyday`): a common word, a weekday or
+/// month, a plural of one, or a number.
+fn everyday(word: &str, common: &HashSet<String>) -> bool {
+    let plain = |w: &str| common.contains(w) || CALENDAR_WORDS.contains(&w);
+    word.chars().all(|c| c.is_ascii_digit()) && !word.is_empty()
+        || plain(word)
+        || word.strip_suffix('s').is_some_and(plain)
+        || word.strip_suffix("es").is_some_and(|w| common.contains(w))
+}
+/// The comparison form with every run of whitespace one space, trimmed.
+fn spaced(folded: &str) -> String {
+    folded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Remembered name terms for this session. Deliberately not Debug, Serialize or persisted.
 #[derive(Clone, Default)]
 pub struct NameGuard {
@@ -604,6 +709,10 @@ pub struct NameGuard {
     /// For each calendar word or "church" among a name's parts, every other part of that name
     /// (`present_in_prose`).
     neighbours: HashMap<String, HashSet<String>>,
+    /// The watched services' own names while more than one is watched (`service_named`).
+    services: Vec<ServiceName>,
+    /// How many watched services those names are, two that read the same counted as two.
+    watched: usize,
 }
 /// The comparison form as words: each run of letters and numbers, one space between.
 fn words(folded: &str) -> String {
@@ -642,6 +751,193 @@ impl NameGuard {
                 );
             }
         }
+    }
+    /// Every watched service's own name, replacing the last list (the webview tells native when its
+    /// page starts and whenever they change; an empty list clears them). Two names that read the
+    /// same are one service.
+    pub fn set_services(&mut self, names: &[String]) {
+        self.services.clear();
+        self.watched = 0;
+        for name in names {
+            let text = ComposingNormalizerBorrowed::new_nfkc()
+                .normalize(name.trim())
+                .replace('[', "(")
+                .replace(']', ")");
+            let service = if unspaced(&text) {
+                let anywhere = spaced(&fold(&text));
+                if anywhere.is_empty() {
+                    continue;
+                }
+                ServiceName {
+                    words: Vec::new(),
+                    caps: Vec::new(),
+                    anywhere: Some(anywhere),
+                }
+            } else {
+                let (words, _) = service_words(&text);
+                if words.is_empty() {
+                    continue;
+                }
+                ServiceName {
+                    caps: words.iter().map(|w| w.capital).collect(),
+                    words: words.into_iter().map(|w| w.folded).collect(),
+                    anywhere: None,
+                }
+            };
+            let key = |s: &ServiceName| s.anywhere.clone().unwrap_or_else(|| s.words.join(" "));
+            self.watched += 1;
+            if !self.services.iter().any(|known| key(known) == key(&service)) {
+                self.services.push(service);
+            }
+        }
+    }
+    /// Whether a watched service's own name counts in `text` (core/src/service-names.ts
+    /// `serviceNamed`, the same rules and shared vectors): its whole name, or two or more of its
+    /// words in a row that aren't another watched service's whole name and hold a word that marks
+    /// them out (not an everyday word, of three letters or more; or written with a capital by the
+    /// service, typed with one, and in no other watched service's name; never a number, a single
+    /// letter, "s", "am" or "pm"), separated by one to three characters that aren't letters, digits
+    /// or line breaks, or joined by "-", "_" or "/"; a whole name also run together (made only of
+    /// everyday words, with the service's capitals where its words start), and a part run together
+    /// when a word that isn't an everyday one, or two of its words' capitals, mark it; the last word
+    /// with a plural "s" or "es"; a name made only of everyday words, spaced, only where every word
+    /// the service writes with a capital is typed with one; a one-word name that is a weekday or
+    /// month never; an unspaced-script name anywhere. Look-alike letters are read as Latin. With
+    /// fewer than two watched services nothing counts.
+    pub fn service_named(&self, text: &str) -> bool {
+        if self.watched < 2 {
+            return false;
+        }
+        let common = crate::fixed::common_words();
+        let folded = spaced(&fold(text));
+        if self
+            .services
+            .iter()
+            .filter_map(|s| s.anywhere.as_deref())
+            .any(|term| folded.contains(term))
+        {
+            return true;
+        }
+        let wholes: Vec<String> = self.services.iter().map(|s| s.words.join(" ")).collect();
+        let (tokens, gaps) = service_words(text);
+        let last = |typed: &str, w: &str| {
+            typed == w || typed.strip_suffix('s') == Some(w) || typed.strip_suffix("es") == Some(w)
+        };
+        let markable = |w: &str| {
+            !w.chars().all(|c| c.is_ascii_digit()) && w.chars().count() >= 2 && !NEVER_MARKS.contains(&w)
+        };
+        let marks = |of: usize, m: usize, capital: bool| {
+            let w = self.services[of].words[m].as_str();
+            if !markable(w) {
+                return false;
+            }
+            if !everyday(w, common) {
+                return w.chars().count() >= 3;
+            }
+            self.services[of].caps[m]
+                && capital
+                && self
+                    .services
+                    .iter()
+                    .enumerate()
+                    .all(|(other, s)| other == of || !s.words.iter().any(|x| x == w))
+        };
+        // One word that marks the part out, or two words the service capitalises typed with capitals.
+        // Run together (`joined`), one capital marks nothing: a compound word starts with one.
+        let marked = |of: usize, a: usize, capitals: &[bool], joined: bool| {
+            (0..capitals.len()).any(|m| marks(of, a + m, !joined && capitals[m]))
+                || (0..capitals.len())
+                    .filter(|&m| {
+                        self.services[of].caps[a + m]
+                            && capitals[m]
+                            && markable(&self.services[of].words[a + m])
+                    })
+                    .count()
+                    >= 2
+        };
+        // Where each word of a part run together into one token starts: capital or not.
+        let glued_capitals = |token: &ServiceWord, words: &[String]| -> Vec<bool> {
+            if token.raw.len() != token.folded.chars().count() {
+                return vec![false; words.len()];
+            }
+            let mut at = 0;
+            words
+                .iter()
+                .map(|w| {
+                    let capital = token.raw.get(at).is_some_and(|&c| {
+                        matches!(
+                            category(c),
+                            GeneralCategory::UppercaseLetter | GeneralCategory::TitlecaseLetter
+                        )
+                    });
+                    at += w.chars().count();
+                    capital
+                })
+                .collect()
+        };
+        self.services.iter().enumerate().any(|(of, s)| {
+            let n = s.words.len();
+            (0..n).any(|a| {
+                (a + 1..=n).any(|b| {
+                    let whole = a == 0 && b == n;
+                    let words = &s.words[a..b];
+                    let key = words.join(" ");
+                    if !whole
+                        && (b - a < 2
+                            || wholes
+                                .iter()
+                                .enumerate()
+                                .any(|(other, w)| other != of && *w == key))
+                    {
+                        return false;
+                    }
+                    let k = words.len();
+                    let glued = words.concat();
+                    (0..tokens.len()).any(|t| {
+                        if k >= 2 && last(&tokens[t].folded, &glued) {
+                            let capitals = glued_capitals(&tokens[t], words);
+                            let counted = if whole {
+                                !words.iter().all(|w| everyday(w, common))
+                                    || (0..k).all(|m| !self.services[of].caps[a + m] || capitals[m])
+                            } else {
+                                marked(of, a, &capitals, true)
+                            };
+                            if counted {
+                                return true;
+                            }
+                        }
+                        if t + k > tokens.len()
+                            || !words.iter().enumerate().all(|(m, w)| {
+                                if m == k - 1 {
+                                    last(&tokens[t + m].folded, w)
+                                } else {
+                                    tokens[t + m].folded == *w
+                                }
+                            })
+                        {
+                            return false;
+                        }
+                        let between = &gaps[t + 1..t + k];
+                        if !between.iter().all(|g| {
+                            (1..=3).contains(&g.chars().count()) && !g.chars().any(line_break)
+                        }) {
+                            return false;
+                        }
+                        if k == 1 && CALENDAR_WORDS.contains(&words[0].as_str()) {
+                            return false;
+                        }
+                        let capitals: Vec<bool> = (0..k).map(|m| tokens[t + m].capital).collect();
+                        if !whole && !marked(of, a, &capitals, false) {
+                            return false;
+                        }
+                        let joined = k >= 2 && between.iter().all(|g| ["-", "_", "/"].contains(&g.as_str()));
+                        joined
+                            || !words.iter().all(|w| everyday(w, common))
+                            || (0..k).all(|m| !s.caps[a + m] || tokens[t + m].capital)
+                    })
+                })
+            })
+        })
     }
     pub fn len(&self) -> usize {
         self.terms.len()
@@ -868,6 +1164,52 @@ mod tests {
             );
             assert_eq!(ask, case.ask.iter().cloned().collect(), "{:?}", case.name);
         }
+    }
+
+    /// core/test/service-names-parity.json, which core/test/service-names.test.ts runs against the
+    /// webview's own reading of a watched service's name.
+    #[test]
+    fn watched_services_names_count_where_the_webview_counts_them() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            text: String,
+            named: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Group {
+            services: Vec<String>,
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Parity {
+            groups: Vec<Group>,
+        }
+        let parity: Parity =
+            serde_json::from_str(include_str!("../../test/service-names-parity.json")).unwrap();
+        assert!(parity.groups.iter().map(|g| g.cases.len()).sum::<usize>() >= 50);
+        for group in &parity.groups {
+            let mut guard = NameGuard::default();
+            guard.set_services(&group.services);
+            for case in &group.cases {
+                assert_eq!(
+                    guard.service_named(&case.text),
+                    case.named,
+                    "{:?} in {:?}",
+                    case.text,
+                    group.services
+                );
+            }
+        }
+        // A new list replaces the last; an empty one clears it, as with one service watched.
+        let mut guard = NameGuard::default();
+        guard.set_services(&["Weekend Service".to_owned(), "Youth Night".to_owned()]);
+        assert!(guard.service_named("Is Weekend Service covered?"));
+        guard.set_services(&["Evening Service".to_owned(), "Youth Night".to_owned()]);
+        assert!(!guard.service_named("Is Weekend Service covered?"));
+        guard.set_services(&[]);
+        assert!(!guard.service_named("Is Youth Night covered?"));
+        // Service names are never person names: no roster term is added for them.
+        assert!(guard.is_empty());
     }
 
     #[test]

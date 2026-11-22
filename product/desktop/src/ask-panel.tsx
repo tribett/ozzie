@@ -14,7 +14,7 @@
 // cards to reopen. Once there is an answer, the two notes about Ask fold away so the answer stays in view at any zoom.
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import "./ask-panel.css";
-import { MAX_QUESTION_CHARS, onDayPage, suggestedQuestions } from "../../../core/src/ask.js";
+import { MAX_QUESTION_CHARS, onDayPage, suggestedQuestions, type ChipServices } from "../../../core/src/ask.js";
 import { kidsWording } from "../../../core/src/harness/compose.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
@@ -356,6 +356,11 @@ export function AskPanel(props: {
   jobsNotHere?: { parse: (typed: string) => Parsed; text: string } | undefined;
   /** Whether listening is possible, before the check (tests and restored views). */
   initialVoice?: VoiceStatus;
+  /**
+   * More than one service watched: each team's service and every watched service's positions, so a suggested question
+   * names the service of a role two of them hold ("Greeter (Weekend Service)"). Asking it sends labels only.
+   */
+  services?: ChipServices | undefined;
 }) {
   const { brief, modelReady } = props;
   // Several services watched now: a turn asked now keeps it (Turn `several`), and its answer covers them all (AnswerServices).
@@ -466,7 +471,7 @@ export function AskPanel(props: {
   };
 
   const chips = !canType || busy || listening !== "no" ? [] : props.here ? (props.here.checked ? [...props.here.chips] : [HELP_CHIP])
-    : ready ? suggestedQuestions(brief) : [HELP_CHIP];
+    : ready ? suggestedQuestions(brief, props.services) : [HELP_CHIP];
   const off = voiceOff(voiceStatus);
   const answered = turns.length > 0;
   // What speaking does, or why it's off: under the question box until there is an answer, then folded with the other

@@ -51,13 +51,14 @@
 // Replies are checked before anyone sees them (acceptAskReply) and names are put back on this Mac
 // only (restoreAnswer). A rejected reply is never shown or restored.
 import type { AttentionReport } from "./attention-import/index.js";
-import type { BriefPerson, Finding, SundayBrief } from "./sunday-brief.js";
+import { roleWithService, serviceOfTeam, type BriefPerson, type Finding, type SundayBrief, type TeamServices } from "./sunday-brief.js";
 import { applyDecisions, type DecisionChoice, type SundayDecision } from "./sunday-decisions.js";
 import { BACKGROUND_LINE, forModels } from "./kids-rules.js";
 import { BOOKS, containsName, fold, nameTerms, NOT_OURS, UNSPACED } from "./draft-request.js";
 import { backgroundWording, newerCharacter } from "./harness/background-wording.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 import { SYSTEMS } from "./church-systems/types.js";
+import { nameable, serviceKey, serviceMatches, serviceNamed, wordRuns, type ServiceMatch } from "./service-names.js";
 
 // Ozzie's one change to Planning Center is made only on the Sunday page after a person confirms it, never from Ask:
 // these lines are true of the AI and of Ask whether or not adding people is on (review Y, L-Y3).
@@ -162,7 +163,7 @@ export interface AskContext {
 
 // ---- Shared checks -------------------------------------------------------------------------
 
-const LABEL = /\[(?:Person [1-9]\d{0,3}|Role [1-9]\d{0,3}|Your name|a team member)\]/gu;
+const LABEL = /\[(?:Person [1-9]\d{0,3}|Role [1-9]\d{0,3}|Service [1-9]\d{0,3}|Your name|a team member)\]/gu;
 /** Stands in for a name part several people share, such as a family surname. */
 export const TEAM_MEMBER = "[a team member]";
 const labelsIn = (text: string) => [...new Set(text.match(LABEL) ?? [])];
@@ -493,6 +494,8 @@ export interface AskedQuestion {
   /** Every label in the request, to the person id or position name it stands for. Local only. */
   readonly people: ReadonlyMap<string, string>;
   readonly roles: ReadonlyMap<string, string>;
+  /** Each watched service's label in the question, to that service's own name (PrepareOptions `services`). Local only. */
+  readonly services: ReadonlyMap<string, string>;
   readonly allowed: ReadonlySet<string>;
   /** The leader asked for a note to be drafted. */
   readonly draft: boolean;
@@ -530,6 +533,8 @@ export const REFUSALS = {
   send: "Ask can't send messages or change Planning Center. It can draft a note for you to send yourself.",
   rank: "Ozzie doesn't rank, score or label people. Ask who has no overlap found; people are listed in no particular order.",
   name: "Something in your question could be part of a name in Planning Center. Nothing was sent. Try different wording.",
+  /** A watched service no check has read yet: there is nothing to answer from, and its name is never sent. */
+  serviceUnread: "Ozzie hasn't read that service from Planning Center yet, so there's nothing to ask about it. Nothing was sent. Check it on the Services page first.",
   facts: "Ozzie couldn't prepare these facts without something that looks like a name, so nothing was sent.",
   apart: "Ozzie couldn't keep a name in your question apart from the words around it. Nothing was sent. Try different wording.",
   onlyNames: "Your question only has names or roles in it. Add what you'd like to know about them.",
@@ -846,10 +851,96 @@ const only = (keys: ReadonlySet<string>) => keys.size === 1 ? [...keys][0] : und
  *  - protect: room, follow-up and event names the caller replaces with its own labels straight after
  *    (review 2026-11-14 C5): kept whole as typed, so no person label lands inside one, and set aside by
  *    the name checks here. The caller must label every one before anything is sent.
+ *  - services: with more than one service watched (owner request 2026-11-21), every watched service's own name, the ones
+ *    no check has read yet (`unread`), and `label(name)`, the [Service N] label that service goes by (the harness
+ *    session's). A watched service's name in the question (core/src/service-names.ts: whole, run together or hyphenated,
+ *    or a part that marks it out, under the name rule of `common`) becomes its label, found with the position names
+ *    before any roster name is looked for; so "Greeter (Weekend Service)" is sent as "[Role 1] ([Service 1])" and the
+ *    service's name never is. A part two services' names share stands for each of them ("[Service 1] and [Service 2]",
+ *    reviews A M1 and B F1: never a refusal). A room, follow-up or event name the caller protects keeps its words whole
+ *    (review B, F2). A service no check has read is refused (REFUSALS.serviceUnread) where a roster name left is, so every
+ *    refusal before it still comes first. With fewer than two names, or none in the question, nothing changes.
  */
 export interface PrepareOptions extends NameMatchOptions {
   readonly roles?: ReadonlyMap<string, string>;
   readonly protect?: readonly string[];
+  readonly services?: { readonly names: readonly string[]; readonly unread?: readonly string[]; readonly label: (name: string) => string };
+}
+
+interface Span { start: number; end: number; label: string }
+/** How the harness compares a typed place name with its own (labelPlaces): compatibility forms, case, one space. */
+export const placeKey = (s: string): string => s.normalize("NFKC").toLocaleLowerCase("en").replace(/\s+/gu, " ");
+/**
+ * Where a room, follow-up or event name is in a text as the harness labels it (harness/index.ts labelPlaces uses this, the
+ * one matcher): as written, in any case and run of spaces, whole, outside any square brackets, longest first. So a place
+ * that Ask lets a service's name rest inside is one the harness surely labels (automated review 1).
+ */
+export function placeSpans(text: string, names: readonly string[]): { start: number; end: number }[] {
+  const list = [...new Set(names.filter(n => n.trim()))];
+  if (!list.length) return [];
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${[...list].sort((a, b) => b.length - a.length)
+    .map(n => escape(n.normalize("NFKC")).replace(/\s+/gu, "\\s+")).join("|")})(?![\\p{L}\\p{N}])`, "giu");
+  const known = new Set(list.map(placeKey));
+  const out: { start: number; end: number }[] = [];
+  let offset = 0;
+  text.split(/(\[[^\]\n]{0,80}\])/u).forEach((part, i) => {
+    if (i % 2 === 0) for (const m of part.matchAll(re)) if (known.has(placeKey(m[0]))) out.push({ start: offset + m.index, end: offset + m.index + m[0].length });
+    offset += part.length;
+  });
+  return out;
+}
+/** Whether `services` names two or more watched services (two whose names read the same count as two: review A, L2). */
+const several = (services: PrepareOptions["services"]) => (services?.names ?? []).filter(n => serviceKey(n)).length >= 2;
+/**
+ * The position spans of a question with each watched service's name among them (PrepareOptions `services`), longest
+ * first, a position before a service of the same length, so a position named like a service stays its own label; a part
+ * of a service's name never takes a position's words (review A, L5), and otherwise the longest service's name wins, a
+ * part of one or another's whole name (review B, round 2, N1). A room, follow-up or event name (`places`: where Ask
+ * protects one, and where the harness will label one) that holds a service's name and is longer keeps its words for the
+ * harness to label whole (review B, F2), but only when the harness surely labels it there: found by its own matcher
+ * (placeSpans; automated review 1) and with no position's name inside it to break it (review A, round 3); a service's
+ * name that holds every place it touches is the service, a place named exactly like it included; a place that can't be
+ * labelled running past a service's name can't be sent either way, and is refused (REFUSALS.apart). A service's span gets
+ * that service's label, or each read service's when a part is theirs alike (added to `labels`); `problem` is the refusal
+ * (REFUSALS.serviceUnread when no service it names is read yet), the span labelled meanwhile and never sent. No service's
+ * name: the positions as they were.
+ */
+function withServiceSpans(question: string, roles: readonly Span[], services: NonNullable<PrepareOptions["services"]>, exclude: ReadonlySet<string>,
+  common: ReadonlySet<string> | undefined, labels: Map<string, string>,
+  places: { readonly protected: readonly [number, number][]; readonly labelled: readonly { start: number; end: number }[] }): { spans: readonly Span[]; problem: string | null } {
+  let problem: string | null = null;
+  const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end && b.start < a.end;
+  const labelled = places.labelled.filter(p => !roles.some(r => overlaps(r, p)));
+  const found = serviceMatches(question, services.names, { common, exclude }).filter(m => {
+    if (!m.whole && roles.some(r => overlaps(r, m))) return false;
+    const over = places.protected.filter(([a, b]) => m.start < b && a < m.end);
+    if (!over.length) return true;
+    if (labelled.some(p => p.start <= m.start && m.end <= p.end && p.end - p.start > m.end - m.start)) return false;
+    if (over.every(([a, b]) => m.start <= a && b <= m.end)) return true;
+    problem ??= REFUSALS.apart;
+    return false;
+  });
+  if (!found.length) return { spans: roles, problem };
+  const unread = new Set((services.unread ?? []).map(serviceKey).filter(Boolean));
+  const all: (Span & { match: ServiceMatch | null })[] = [...roles.map(r => ({ ...r, match: null })), ...found.map(m => ({ start: m.start, end: m.end, label: "", match: m }))];
+  const taken: typeof all = [];
+  for (const x of [...all].sort((x, y) => (y.end - y.start) - (x.end - x.start) || Number(x.match !== null) - Number(y.match !== null) || x.start - y.start)) {
+    if (!taken.some(t => overlaps(t, x))) taken.push(x);
+  }
+  const spans = taken.sort((x, y) => x.start - y.start).map(({ start, end, label, match }) => {
+    if (!match) return { start, end, label };
+    // A part several services share stands for those read; none read yet is refused (reviews A L2, B round 2 N5).
+    const read = match.services.filter(name => !unread.has(serviceKey(name)));
+    if (!read.length) problem ??= REFUSALS.serviceUnread;
+    const own = (read.length ? read : match.services).map(name => {
+      const label = services.label(name);
+      labels.set(label, name);
+      return label;
+    });
+    return { start, end, label: own.length > 1 ? `${own.slice(0, -1).join(", ")} and ${own.at(-1)!}` : own[0]! };
+  });
+  return { spans, problem };
 }
 
 /** Everything that happens to a question before it can be sent. Refusals send nothing. */
@@ -865,11 +956,21 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   // They are cleaned the way the question was, so a suggested question always finds its position.
   const roleLabels = new Map([...context.roles, ...(options.roles ?? [])]);
   const roleTerms = new Map([...roleLabels].map(([label, role]) => [fold(clean(role)), new Set([label])]));
-  const withRoles = replaceSpans(question, hits(question, roleTerms).map(h => ({ ...h, label: [...h.keys][0]! })));
-  if (strictContactIn(withRoles)) return refuse(REFUSALS.contact);
+  const roleSpans: Span[] = hits(question, roleTerms).map(h => ({ start: h.start, end: h.end, label: [...h.keys][0]! }));
+  // With more than one service watched, each service's name becomes its label with the positions (PrepareOptions `services`).
+  const watched = several(options.services) ? options.services : undefined;
+  const notServices = new Set(watched ? Object.values(names).flatMap(wordRuns) : []);
+  const serviceLabels = new Map<string, string>();
   // Place names the caller labels next (PrepareOptions.protect) are kept whole, so a surname inside one
-  // ("Thornbury Hall") never becomes a person label; the name checks below look past them too.
+  // ("Thornbury Hall") never becomes a person label, nor a service's name inside one a service's label; the name checks
+  // below look past them too.
   const protectTerms = new Map((options.protect ?? []).filter(n => n.trim()).map(n => [fold(clean(n)), new Set([n])]));
+  const places = watched && protectTerms.size
+    ? { protected: hits(question, protectTerms).map((h): [number, number] => [h.start, h.end]), labelled: placeSpans(question, options.protect ?? []) }
+    : { protected: [], labelled: [] };
+  const placed = watched ? withServiceSpans(question, roleSpans, watched, notServices, match.common, serviceLabels, places) : { spans: roleSpans, problem: null };
+  const withRoles = replaceSpans(question, [...placed.spans]);
+  if (strictContactIn(withRoles)) return refuse(REFUSALS.contact);
   const protectedSpans = (text: string): [number, number][] => protectTerms.size ? hits(text, protectTerms, labelSpans(text)).map(h => [h.start, h.end]) : [];
   const unprotected = (text: string) => protectedSpans(text).reduceRight((t, [a, b]) => t.slice(0, a) + " ".repeat(b - a) + t.slice(b), text);
   // Then roster names (header, point 4). Adjacent parts join into one label only when each is one and
@@ -892,6 +993,8 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   if (!/[\p{L}\p{N}]{2}/u.test(withoutLabels(sent, " "))) return refuse(REFUSALS.onlyNames);
   const plain = fold(withoutLabels(sent, " ")).replace(/\s+/gu, " ").trim();
   // Person labels as \u0001 and role labels as \u0002, for "Text [Person 1]" or "Add [Person 1] to [Role 1]".
+  // A service's label is neither (a space, as its words were before it had one), so naming a service refuses nothing
+  // its name typed out didn't: "Please confirm [Service 1] is covered" is still a question.
   const marked = fold(sent.replace(LABEL, l => l.startsWith("[Person ") || l === TEAM_MEMBER ? " \u0001 " : l.startsWith("[Role ") ? " \u0002 " : " "))
     .replace(/\s+/gu, " ").trim();
   if (religiousAsk(plain)) return refuse(REFUSALS.religious);
@@ -903,6 +1006,12 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   if (mentionsBackgroundCheck(plain) || mentionsBackgroundCheck(typed)) return refuse(DRAFT_ASK.test(plain) ? REFUSALS.backgroundNote : REFUSALS.background);
   // What cleaning kept of a hidden character, as the native and ozzie.church checks would refuse it (review B3 L-1).
   if (hiddenInQuestion(sent)) return refuse(REFUSALS.hidden);
+  // A service's name no one label can stand for, or one no check has read (PrepareOptions `services`), then any watched
+  // service's name still there as the harness's second check reads it (labels as spaces): never sent.
+  if (placed.problem) return refuse(placed.problem);
+  // Only the places the harness surely labels next are looked past (placeSpans, its own matcher; automated review 1).
+  const labelledPlaces = (text: string) => placeSpans(text, options.protect ?? []).reduceRight((t, p) => t.slice(0, p.start) + " ".repeat(p.end - p.start) + t.slice(p.end), text);
+  if (watched && serviceNamed(withoutLabels(labelledPlaces(sent), " "), watched.names, { common: match.common, exclude: notServices })) return refuse(REFUSALS.apart);
   // Fail closed: no roster name may remain as a whole word (header, point 5).
   if (containsNameWord(unprotected(sent), names, match)) return refuse(REFUSALS.name);
   if (sent.length > MAX_SENT_QUESTION_CHARS) return refuse(REFUSALS.long);
@@ -910,13 +1019,13 @@ export function prepareAsk(session: AskSession, context: AskContext, typed: stri
   if (user.length > MAX_USER_CHARS) return refuse(REFUSALS.size);
   // The whole message, as the native route checks it.
   if (contactIn(user)) return refuse(REFUSALS.contact);
-  const allowed = new Set([...people.keys(), ...roleLabels.keys(), TEAM_MEMBER]);
+  const allowed = new Set([...people.keys(), ...roleLabels.keys(), ...serviceLabels.keys(), TEAM_MEMBER]);
   if (labelProblem(user, allowed)) return refuse(REFUSALS.apart);
   if (containsNameWord(unprotected(user), names, match)) return refuse(REFUSALS.name);
   const roles = new Map(roleLabels);
   const result: AskedQuestion = Object.freeze({
     request: Object.freeze({ system: ASK_SYSTEM, user, max_tokens: ASK_MAX_TOKENS }),
-    question, sent, people, roles, allowed: new Set([...labelsIn(user), "[Your name]"]), draft: DRAFT_ASK.test(plain), context,
+    question, sent, people, roles, services: serviceLabels, allowed: new Set([...labelsIn(user), "[Your name]"]), draft: DRAFT_ASK.test(plain), context,
   });
   asked.add(result);
   return { ok: true, asked: result };
@@ -1059,16 +1168,39 @@ export function restoreAnswer(answer: CheckedAnswer, sender: string): AskAnswer 
   });
 }
 
+/**
+ * With more than one service watched (the desktop's services-merge.ts `teamServices`, and every watched service's
+ * positions): what a suggested question needs to say which service's role it means.
+ */
+export interface ChipServices { readonly teams: TeamServices; readonly positions: readonly { readonly name: string; readonly team_id: string }[] }
+/**
+ * Every position a brief names, with its team: its positions and its findings' (a pending or blockout finding can name a
+ * role on a team with no such position). What a suggested question counts (review of polish 4, N3).
+ */
+export const rolePositions = (brief: Pick<SundayBrief, "positions" | "findings"> | null | undefined): { name: string; team_id: string }[] =>
+  [...(brief?.positions ?? []), ...(brief?.findings ?? []).flatMap(f => f.position ? [f.position] : [])];
+
+// With `services` (more than one service watched), a role that teams of two or more of them hold is said with its
+// finding's service, as answers say it ("Greeter (Weekend Service)"); asking it sends the role's label and that service's
+// own [Service N] label, never the service's name (PrepareOptions `services`), and the answer is about that service only.
 /** Up to four questions that fit what was read. Local text; asking one still goes through prepareAsk,
  *  which sends each position as its [Role N] label like the facts. The note it suggests is one Ozzie's drafting
  *  tool can prepare: to someone the check listed for a role that still needs people (structured answers show only
  *  that tool's draft, never one the AI writes). */
-export function suggestedQuestions(brief: SundayBrief | null): string[] {
+export function suggestedQuestions(brief: SundayBrief | null, services?: ChipServices): string[] {
   if (!brief) return [];
   const day = brief.day ?? SUNDAY_WORDS;
   // One day or weekend as it is said ("this Sunday"); services spread over days with "for" ("for your services").
   const thisOne = day.kind === "spread" ? `for ${day.thisOne}` : day.thisOne;
-  const role = (f: Finding) => f.position?.name.replace(/\s+/gu, " ").trim() ?? "";
+  const spaced = (name: string) => name.replace(/\s+/gu, " ").trim();
+  const holding = (name: string) => (services?.positions ?? []).filter(p => spaced(p.name) === name);
+  // Named only when another service, by a name that reads differently, holds a role of the same name, and only by a name
+  // a question can name (no weekday alone: review A, L2 and L3); otherwise the chip reads as it always did.
+  const role = (f: Finding) => {
+    const name = spaced(f.position?.name ?? ""), service = serviceOfTeam(f.position?.team_id, services?.teams);
+    if (!name || !services || !service || !nameable(service)) return name;
+    return new Set(holding(name).flatMap(p => serviceKey(serviceOfTeam(p.team_id, services.teams) ?? "") || [])).size > 1 ? roleWithService(name, service) : name;
+  };
   // A church system that ties no team to its roles (Breeze) lists no one who could cover: neither question is offered.
   const open = brief.findings.find(f => f.kind === "needs-people" && role(f) && !(brief.source && !f.people));
   const flagged = brief.findings.find(f => role(f));

@@ -22,7 +22,7 @@ import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
 import { checkTime } from "./session.js";
-import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources } from "./tools.js";
+import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources, type Scope } from "./tools.js";
 import { SYSTEMS } from "../church-systems/types.js";
 
 export interface ComposedAnswer {
@@ -41,6 +41,10 @@ const PERSON_LISTS: ReadonlySet<string> = new Set(["people", "pending", "leads_n
 export const NOT_FREE = "That doesn't mean they're free or willing; only they can say.";
 export const NOT_RANKED = "People are listed in no particular order, not ranked.";
 export const NOTHING_TO_DECIDE = "Nothing in this check needs a decision right now.";
+/** The same, when every overview the answer read was for the services a question named (tools.ts `scope`). */
+export const nothingToDecideAt = (where: string) => `Nothing at ${where} needs a decision right now.`;
+/** Whether a paragraph, as shown, is NOTHING_TO_DECIDE or its scoped form (restored on this Mac). */
+export const isNothingToDecide = (p: string): boolean => p === NOTHING_TO_DECIDE || (p.startsWith("Nothing at ") && p.endsWith(" needs a decision right now."));
 export const DRAFT_INTRO = "Here is a draft for you to read, change and send yourself. Nothing has been sent.";
 /**
  * An answer the facts don't cover, in Ozzie's voice: the tool is never a person, so never "I" (round 5; the model's own
@@ -59,6 +63,8 @@ const list = (items: readonly string[]) => items.length <= 1 ? items.join("") : 
 const labels = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 const sentence = (s: string) => /[.!?]$/u.test(s) ? s : `${s}.`;
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** The services a scoped result is for (tools.ts `scope`): its `service` labels, in placeholder form; none when unscoped. */
+const scopeOf = (p: Row | null | undefined): string[] => typeof p?.["service"] === "string" ? [p["service"]] : labels(p?.["service"]);
 /** A church-local ISO time's date and clock ("2026-11-29T10:15-05:00" → 2026-11-29, "10:15 AM"). Null for a UTC time or
  *  anything else, which keeps its full form so the app's restore can say UTC when the church's zone isn't known. */
 const LOCAL_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})[+-]\d{2}:\d{2}$/u;
@@ -149,6 +155,8 @@ const NOT_NEEDED = "not needed this Sunday";
  *  words of a spread with no date: desktop services-merge.ts MANY_SERVICES): "your services", and no date, so each item
  *  below says its own service's date. */
 const overviewWhen = (p: Row, day: Day) => {
+  const scope = scopeOf(p);
+  if (scope.length) return list(scope);
   if (day && several(day)) return day.thisOne;
   const date = str(p["sunday"]), planDay = date && /^\d{4}-\d{2}-\d{2}$/u.test(date) ? longDate(date) : null;
   return day?.date ?? (planDay && !planDay.startsWith("Invalid") ? planDay : "this service");
@@ -315,16 +323,20 @@ function summary(tool: string, p: Row, day: Day): string | null {
     case "sunday.open_needs": {
       const rows = Array.isArray(p["needs"]) ? p["needs"] as Row[] : [];
       const open = rows.filter(r => r["kind"] === "needs people").length, lead = rows.filter(r => r["kind"] === "no scheduled lead").length;
-      if (!open && !lead) return "This check found no role that still needs people, and none without a scheduled lead.";
+      // For the services a question named: said first (tools.ts `scope`).
+      const scope = scopeOf(p), found = scope.length ? `At ${list(scope)}, this check found` : "This check found";
+      if (!open && !lead) return `${found} no role that still needs people, and none without a scheduled lead.`;
       // A count of none isn't said (owner's read of 0.3.2): "and 0 with no scheduled lead" adds nothing.
       const people = `${plural(open, "role", "roles")} that still need${open === 1 ? "s" : ""} people`;
-      return `This check found ${open && lead ? `${people} and ${lead} with no scheduled lead` : open ? people : `${plural(lead, "role", "roles")} with no scheduled lead`}.`;
+      return `${found} ${open && lead ? `${people} and ${lead} with no scheduled lead` : open ? people : `${plural(lead, "role", "roles")} with no scheduled lead`}.`;
     }
     case "sunday.who_could_help": {
-      const role = str((p["asked_for"] as Row | null)?.["role"]) ?? "This role";
-      if (p["open_need"] === "none in the last check") return `${role} has no open need in the last check.`;
+      // For the services a question named, the role as its one team's own label, which restores with its service.
+      const scope = scopeOf(p), own = teamsIn(p), at = scope.length ? ` at ${list(scope)}` : "";
+      const role = (scope.length && own.length === 1 ? own[0] : null) ?? (scope.length ? str(p["role"]) : null) ?? str((p["asked_for"] as Row | null)?.["role"]) ?? "This role";
+      if (p["open_need"] === "none in the last check") return `${role} has no open need${at} in the last check.`;
       // A church system's role whose need the check couldn't tell (tools.ts `#whoCouldHelp`, review of round 4, M1).
-      if (p["open_need"] === "not known") return `The check couldn't tell whether ${role} needs anyone, so Ozzie doesn't list anyone for it.`;
+      if (p["open_need"] === "not known") return `The check couldn't tell whether ${role} needs anyone${at}, so Ozzie doesn't list anyone for it.`;
       // Everyone the check listed, those left out of a copy cut to fit included. No order is named: the app's card shows
       // them alphabetically and Ask in person-id order, each saying so beside the people it shows (review K).
       const n = (Array.isArray(p["people"]) ? p["people"].length : 0) + (num(p["left_out_for_length"]) ?? 0);
@@ -337,17 +349,21 @@ function summary(tool: string, p: Row, day: Day): string | null {
     }
     case "sunday.pending_requests": {
       const n = Array.isArray(p["pending"]) ? p["pending"].length : 0, m = Array.isArray(p["leads_not_accepted"]) ? p["leads_not_accepted"].length : 0;
-      return `Planning Center shows ${plural(n, "pending request", "pending requests")} and ${plural(m, "scheduled lead", "scheduled leads")} who ${m === 1 ? "hasn't" : "haven't"} accepted. Pending means not accepted yet, which is not the same as asked.`;
+      const scope = scopeOf(p);
+      return `${scope.length ? `At ${list(scope)}, ` : ""}Planning Center shows ${plural(n, "pending request", "pending requests")} and ${plural(m, "scheduled lead", "scheduled leads")} who ${m === 1 ? "hasn't" : "haven't"} accepted. Pending means not accepted yet, which is not the same as asked.`;
     }
     case "sunday.rule_checkins": {
       const t = p["check_in_after_sundays_in_a_row"], n = Array.isArray(p["check_ins"]) ? p["check_ins"].length : 0;
       if (t === "off") return "Check-ins are turned off in your Church rules.";
-      return `Your Church rules suggest a check-in after ${typeof t === "number" ? t : "several"} weeks in a row; ${plural(n, "person", "people")} reached that ${atService(day)}.`;
+      const scope = scopeOf(p);
+      return `Your Church rules suggest a check-in after ${typeof t === "number" ? t : "several"} weeks in a row; ${plural(n, "person", "people")} reached that ${scope.length ? `at ${list(scope)}` : atService(day)}.`;
     }
     case "sunday.not_checked": {
       const reads = num(p["reads"]) ?? 0, failed = num(p["reads_not_completed"]) ?? 0;
       const lines = [...labels(p["services"]), ...labels(p["rooms_follow_ups_groups"])].map(sentence);
-      return [failed ? `Of ${reads} Planning Center reads, ${failed} didn't complete.` : `All ${reads} Planning Center reads completed.`,
+      // For the services a question named, said first (tools.ts `scope`).
+      const scope = scopeOf(p), at = scope.length ? `At ${list(scope)}, ` : "";
+      return [failed ? `${at}${at ? "of" : "Of"} ${reads} Planning Center reads, ${failed} didn't complete.` : `${at}${at ? "all" : "All"} ${reads} Planning Center reads completed.`,
         ...(p["too_old_to_treat_as_current"] === true ? ["This check is too old to treat as current."] : []), ...lines].join(" ");
     }
     case "rooms.conflicts": {
@@ -578,8 +594,12 @@ export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[],
       return lines.length ? { kind: "facts", paragraphs: [...lines, ...after], draft: null } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
     case "not-covered":
       return { kind: "not-covered", paragraphs: [CANT_TELL, ...(lines.length ? [NOT_COVERED_MORE, ...lines, ...after] : [])], draft: null };
-    case "nothing-needs-a-decision":
-      return { kind: "nothing-needs-a-decision", paragraphs: [NOTHING_TO_DECIDE, ...lines, ...after], draft: null };
+    case "nothing-needs-a-decision": {
+      // Every overview it read was for the services the question named: said for them, never for the whole check.
+      const scopes = evidence.filter(e => e.tool === "sunday.overview").map(e => scopeOf(e.payload as Row));
+      const where = scopes.length && scopes.every(x => x.length) ? list([...new Set(scopes.flat())]) : null;
+      return { kind: "nothing-needs-a-decision", paragraphs: [where ? nothingToDecideAt(where) : NOTHING_TO_DECIDE, ...lines, ...after], draft: null };
+    }
     case "draft":
       return draft ? { kind: "draft", paragraphs: [DRAFT_INTRO, ...lines, ...after], draft } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
   }
@@ -641,6 +661,8 @@ export const onPage = (d: DayWords) => `On ${dayPage(d)}, needing a decision:`;
 export const ALSO_ON_SUNDAY = alsoOnPage(SUNDAY_WORDS);
 export const ON_SUNDAY = onPage(SUNDAY_WORDS);
 export const NOTHING_OPEN = "This check found nothing open that needs a decision.";
+/** The same for the services a question named, by their labels (placeholder form; review B, F5). */
+export const nothingOpenAt = (labels: readonly string[]) => `This check found nothing open at ${list(labels)} that needs a decision.`;
 /** Findings set aside with "This isn't right" or "Stop flagging this", in the service page's words: counted, never dropped. */
 export const setAside = (n: number, what = "finding", d: DayWords = SUNDAY_WORDS) => n === 1
   ? `One ${what} is set aside by your Church rules, so it isn't listed here; it's on ${dayPage(d)}.`
@@ -693,10 +715,10 @@ let localRuns = 0;
 /** Each answer written here numbers its facts afresh, as a task does, so ids never run past the grammar's four digits. */
 const localTask = () => `local-${++localRuns}`;
 /** The read-only tools on this Mac; a tool that can't read gives nothing, as it would give the AI nothing. */
-function reader(tools: HarnessTools, signal: AbortSignal) {
+function reader(tools: HarnessTools, signal: AbortSignal, scope: Scope = []) {
   const task = localTask();
   return async (name: string, args: Record<string, unknown> = {}): Promise<ToolEnvelope | null> => {
-    try { return await tools.run(name, args, signal, task); } catch { return null; }
+    try { return await tools.run(name, args, signal, task, scope); } catch { return null; }
   };
 }
 /** The watched service's day words; a brief built by hand (a test) has none, and gets the Sunday words (sunday-brief.ts). */
@@ -955,10 +977,11 @@ function keysOf(f: Fact): string[] {
  * The decisions the Sunday page shows as open that an answer left out, written here (no silent omission): findings that
  * need a decision and weren't settled by the leader, background checks (which never reach the AI, so never its answer),
  * room overlaps confirmed by a Church rule, and follow-ups without an owner; then how many findings Church rules set
- * aside. Empty when the answer said them all and nothing is set aside.
+ * aside. Empty when the answer said them all and nothing is set aside. `scope`: the services the question named (tools.ts):
+ * only their decisions, from an overview read for them; rooms and follow-ups belong to no one service and aren't added.
  */
 export async function decisionsLeftOut(tools: HarnessTools, answer: string, evidence: readonly ToolEnvelope[], signal: AbortSignal,
-  framing?: { head: string; none: string | null }): Promise<LocalAnswer> {
+  framing?: { head: string; none: string | null }, scope: Scope = []): Promise<LocalAnswer> {
   const names = new KeptNames();
   const out: LocalAnswer = { paragraphs: [], fill: names.fill, evidence: [], sources: [], gaps: [] };
   const data = tools.data, { brief, decisions } = data;
@@ -970,16 +993,19 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
   for (const f of chosen) for (const k of keysOf(f)) said.add(k);
   // The answer above said the overview's date ("For Sunday, November 22, …"): a time on it here is said by its clock alone.
   const onDay = saidBy(chosen.filter(isLead).map(f => f.payload), day);
-  const read = reader(tools, signal);
-  const overview = await read("sunday.overview"), rooms = await read("rooms.conflicts"), followUps = await read("followups.unowned");
+  const read = reader(tools, signal, scope);
+  const overview = await read("sunday.overview");
+  // Rooms and follow-ups are the first service's, as its page shows them (tools.ts opsInScope).
+  const ops = tools.opsInScope(scope);
+  const rooms = ops ? await read("rooms.conflicts") : null, followUps = ops ? await read("followups.unowned") : null;
   out.evidence = [overview, rooms, followUps].filter((e): e is ToolEnvelope => e !== null);
   const settled = new Set(applyDecisions(brief, decisions).items.filter(i => i.decision && i.state !== "reopened").map(i => i.finding.id));
   // Each finding's own row, by its place in the overview even when rows were left out for length (tools.ts rowAt).
-  const shared = forModels(brief).findings;
+  const shared = forModels(brief).findings.filter(f => tools.inScope(f, scope));
   const items: string[] = [], sources: { source: string; check_time: string }[] = [];
   // Every item here needs a decision, and the heading says so: no item says it again (owner's read of 0.3.2).
   for (const f of brief.findings) {
-    if (f.tone !== "decision" || settled.has(f.id)) continue;
+    if (f.tone !== "decision" || settled.has(f.id) || !tools.inScope(f, scope)) continue;
     if (f.kind === "background-check") { const k = kept(data, names, f, null, onDay); items.push(k.text); sources.push(k.source); continue; }
     const row = rowAt(overview, "findings", shared.findIndex(x => x.id === f.id));
     if (!row || !overview || said.has(findingKey(str(row["kind"]), row))) continue;
@@ -997,7 +1023,7 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
     const text = sentenceFor(factOf(followUps!, "follow_ups", row), day);
     if (text) items.push(text);
   }
-  const aside = brief.hidden?.length ?? 0;
+  const aside = (brief.hidden ?? []).filter(h => tools.inScope(h.finding, scope)).length;
   out.paragraphs = [...(items.length ? [head, ...items] : none ? [none] : []), ...(aside ? [setAside(aside, "finding", day)] : [])];
   out.sources = once(sources);
   return out;

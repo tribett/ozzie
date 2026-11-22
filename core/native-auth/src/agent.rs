@@ -35,7 +35,8 @@
 //!    checks: no hidden character (controls, format, private-use, Default_Ignorable_Code_Point, the
 //!    blank braille pattern), no escape that spells a character (`\u`, `\x`, `&#`, a named entity
 //!    such as `&shy;`, `%69`), no contact detail (`model::contact_detail_strict`, which also reads
-//!    "pat [at] example [dot] org" and "555----123----4567") and no name this session has shown, on
+//!    "pat [at] example [dot] org" and "555----123----4567") and no name this session has shown (and,
+//!    with more than one service watched, no watched service's own name: `NameGuard::service_named`), on
 //!    the text with labels removed, spaced, reduced to their tags and with other brackets deleted.
 //!    The question and the model's words use the owner's "capitalized only" rule
 //!    (`NameGuard::present_in_prose`); arguments the strict one (`present_as_word_strict`). Tool
@@ -492,10 +493,17 @@ enum Rule {
 /// out Ask's every-bracket-is-a-label grammar here, so bracketed text that isn't a known label stays
 /// in the label variants and is checked like any other text ("[Riley 1]"), while the others see
 /// through it ("Ri[x]ley").
+///
+/// With more than one service watched, a watched service's own name counts as a name here too, under
+/// either rule (`NameGuard::service_named`, the webview's own rules): the webview sends each as a
+/// [Service N] label, so one left in the question, the model's words or an argument is refused.
 fn named(text: &str, names: &NameGuard, rule: Rule) -> bool {
-    let found = |text: &str| match rule {
-        Rule::Strict => names.present_as_word_strict(text),
-        Rule::Prose => names.present_in_prose(text),
+    let found = |text: &str| {
+        names.service_named(text)
+            || match rule {
+                Rule::Strict => names.present_as_word_strict(text),
+                Rule::Prose => names.present_in_prose(text),
+            }
     };
     let compat = nfkc(text);
     let forms: &[&str] = if compat == text {

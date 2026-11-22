@@ -798,6 +798,63 @@ fn members_named_after_ozzies_own_words_never_stop_a_step() {
     }
 }
 
+/// Owner request 2026-11-21: with more than one service watched, a watched service's own name is
+/// refused anywhere a name is (the question, the model's words, an argument) before any key, budget
+/// or request; its [Service N] label, a tool result scoped to it, an everyday phrase typed in lower
+/// case, a service that isn't watched and a church with one service all go through as before.
+#[test]
+fn a_watched_services_name_is_refused_and_its_label_goes_through() {
+    let mut names = roster();
+    names.set_services(&["Weekend Service".to_owned(), "Ozzie Demo Youth Night (fictional)".to_owned()]);
+    for text in [
+        "Is Weekend Service covered?",
+        "Who could cover [Role 1] (Weekend Service)?",
+        "Who could cover [Role 1] at WeekendService?",
+        "Is Youth Night covered?",
+        "Is ozzie demo youth night (fictional) covered?",
+        "Is W\u{435}ekend Service covered?",
+    ] {
+        refused(Bench::new("service"), with_user(text), &names, text);
+        refused(Bench::new("service"), with_assistant(text), &names, text);
+    }
+    refused(
+        Bench::new("service"),
+        with_arguments(&json!({"role": "Weekend Service"}).to_string()),
+        &names,
+        "argument",
+    );
+    // A scoped who-could-help result, as core/src/harness/tools.ts writes it for [Service 1].
+    let mut scoped: Value = serde_json::from_str(HELP).unwrap();
+    let payload = scoped["payload"].as_object_mut().unwrap();
+    let mut first = serde_json::Map::new();
+    first.insert("fact".into(), payload.remove("fact").unwrap());
+    first.insert("service".into(), json!("[Service 1]"));
+    first.extend(std::mem::take(payload));
+    scoped["payload"] = Value::Object(first);
+    for (label, value) in [
+        ("label", with_user("Is [Service 1] covered?")),
+        ("both labels", with_user("Who could cover [Role 1] ([Service 1])?")),
+        ("everyday words", with_user("is weekend service covered?")),
+        ("not watched", with_user("Is Evening Service covered?")),
+        ("scoped result", {
+            let mut value = after_tool_round();
+            value["messages"][1]["content"] = json!("Who could cover [Role 1] at [Service 1]?");
+            value["messages"][3]["content"] = json!(scoped.to_string());
+            value
+        }),
+    ] {
+        let bench = Bench::new("service-ok").echo(&value).answering(vec![(200, text_reply(NOT_COVERED))]);
+        let reply = bench.step(value, &names);
+        assert!(reply.is_ok(), "{label}: {:?}", reply.err());
+    }
+    // One service watched: the webview tells native none, and its name reads as it did in 0.5.6.
+    let mut one = roster();
+    one.set_services(&["Weekend Service".to_owned()]);
+    let value = with_user("Is Weekend Service covered?");
+    let bench = Bench::new("one-service").echo(&value).answering(vec![(200, text_reply(NOT_COVERED))]);
+    assert!(bench.step(value, &one).is_ok());
+}
+
 /// Review C4: members named after the words in Ozzie's procedure ids (Read, Ready, Sunday, Help,
 /// Room, Night) can't stop a procedure from being admitted or from taking its first step. The id is
 /// one of a few fixed words, paired with its kind and the bundled file's hash, so it is never

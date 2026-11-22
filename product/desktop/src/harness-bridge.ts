@@ -15,7 +15,7 @@ import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { AgentRuntime, AgentStepReply, FailureCode, ModelStep, Skill, TaskEvent, TaskOutcome, ToolEnvelope } from "../../../core/src/harness/contract.js";
 import { REFUSALS } from "../../../core/src/ask.js";
 import {
-  asksAboutChecksOrKids, asksAboutCoverage, canDoFor, chosenSources, decisionsLeftOut, isDecisionQuestion, kidsAnswer, kidsQuestion, NOTHING_OPEN, NOTHING_TO_DECIDE, onPage, openDecisions,
+  asksAboutChecksOrKids, asksAboutCoverage, canDoFor, chosenSources, decisionsLeftOut, isDecisionQuestion, isNothingToDecide, kidsAnswer, kidsQuestion, NOTHING_OPEN, nothingOpenAt, onPage, openDecisions,
   rosterAnswer, rosterNote, rosterQuestion, type KidsQuestion, type LocalAnswer,
 } from "../../../core/src/harness/compose.js";
 import { reminderDraft, restoreReminder } from "../../../core/src/reminder-draft.js";
@@ -199,6 +199,10 @@ export interface AppSnapshot {
   source?: string;
   /** Several services watched: each team's service by its own name, for answers written on this Mac (HarnessData `serviceOfTeam`). */
   serviceOfTeam?: Readonly<Record<string, string>> | undefined;
+  /** Several services watched: every watched service's own name and whether this check holds it (HarnessData `services`). */
+  services?: HarnessData["services"] | undefined;
+  /** Several services watched: each finding's service by the finding's id (HarnessData `serviceOfFinding`). */
+  serviceOfFinding?: HarnessData["serviceOfFinding"] | undefined;
 }
 export const modeOf = (capture: SundayCapture | null, fictional: boolean): HarnessData["mode"] =>
   fictional ? "fictional" : capture?.kind === "recording" ? "recording" : "live";
@@ -228,6 +232,8 @@ export function buildHarnessData(s: AppSnapshot, refresh?: HarnessData["refresh"
     ...(connected && refresh ? { refresh } : {}),
     ...(s.source ? { source: s.source } : {}),
     ...(s.serviceOfTeam ? { serviceOfTeam: s.serviceOfTeam } : {}),
+    ...(s.services ? { services: s.services } : {}),
+    ...(s.serviceOfFinding ? { serviceOfFinding: s.serviceOfFinding } : {}),
   };
 }
 
@@ -915,17 +921,18 @@ export function localAnswer(harness: Harness, local: LocalAnswer, first: string[
  * would be (its counts), then every open decision on the service's page in the page's own order (`decisionsLeftOut`:
  * findings that need a decision, background checks kept on this Mac, room overlaps and follow-ups without an owner),
  * written here from the same check. Deterministic, never the AI's ids, never ranking anyone. Null when the task read no
- * overview.
+ * overview. `scope`: the services the question named (Harness.scope): only their decisions.
  */
-export async function overviewAnswer(harness: Harness, outcome: TaskOutcome, signal: AbortSignal): Promise<{ answer: ShownAnswer; evidence: ToolEnvelope[] } | null> {
+export async function overviewAnswer(harness: Harness, outcome: TaskOutcome, signal: AbortSignal, scope: readonly string[] = []): Promise<{ answer: ShownAnswer; evidence: ToolEnvelope[] } | null> {
   const overview = [...outcome.evidence].reverse().find(e => e.tool === "sunday.overview");
   const fact = (overview?.payload as { fact?: unknown } | null | undefined)?.fact;
   if (!overview || typeof fact !== "string") return null;
   const day = harness.data.brief?.day ?? null;
   const summary = answerText({ answer: "facts", facts: [fact], draft: null });
   const counts = composeAnswer(summary, [overview], day).paragraphs;
+  // Nothing open is said for the services the question named, never for the whole check (review B, F5).
   const left = await decisionsLeftOut(harness.tools, summary, [overview], signal,
-    { head: onPage(day ?? SUNDAY_WORDS), none: NOTHING_OPEN });
+    { head: onPage(day ?? SUNDAY_WORDS), none: scope.length ? nothingOpenAt(scope.map(s => harness.session.service(s))) : NOTHING_OPEN }, scope);
   const mode = harness.data.mode;
   const evidence = [overview, ...left.evidence];
   return { evidence: left.evidence, answer: {
@@ -997,7 +1004,10 @@ export async function askOzzie(harness: Harness, typed: string, options: {
   // On a church system that ties no team to its roles (Breeze), who could help, who is scheduled, who hasn't answered,
   // and a note to someone who hasn't: answered here from who is on each role, nothing sent (round 5). Before the kids
   // answer: Breeze has no teams to mark as kids teams, so that answer would be a dead end there (review of round 5, L6).
-  const roster = rosterQuestion(typed, harness.data);
+  // A question naming a watched service goes to the AI with that service's label, whose lookups keep to it: the answers
+  // written here without the AI don't (review A, L4).
+  const named = prepared.asked.services.size > 0;
+  const roster = named ? null : rosterQuestion(typed, harness.data);
   if (roster?.kind === "note") {
     const note = await rosterNote(harness.tools, roster, typed, signal);
     if (signal.aborted) return { state: "cancelled", text: askFailureText("cancelled") };
@@ -1009,7 +1019,7 @@ export async function askOzzie(harness: Harness, typed: string, options: {
       : shown };
   }
   if (roster) { const asked = { kind: roster.kind, roles: roster.roles }; return here(() => rosterAnswer(harness.tools, asked, signal)); }
-  const kids = kidsQuestion(typed, harness.data);
+  const kids = named ? null : kidsQuestion(typed, harness.data);
   if (kids) return here(() => kidsAnswer(harness.tools, kids, signal));
   const observer = options.recorder?.task("ask", ASK_SKILL);
   const result = await harness.ask(typed, { ...(options.signal ? { signal: options.signal } : {}), ...(observer ? { onEvent: observer.onEvent } : {}) });
@@ -1020,17 +1030,18 @@ export async function askOzzie(harness: Harness, typed: string, options: {
     const shown = shownAnswer(harness, outcome, options.skills.get(ASK_SKILL), options.sender ?? "");
     if (shown.end) options.recorder?.ended(result.task.id, shown.end);
     // No silent omission: the open decisions the answer left out, in fixed words, with their sources.
-    const left = isDecisionQuestion(typed) && !signal.aborted ? await decisionsLeftOut(harness.tools, outcome.answer, outcome.evidence, signal) : null;
+    // A question naming a watched service: only that service's decisions (its task's scope, tools.ts).
+    const left = isDecisionQuestion(typed) && !signal.aborted ? await decisionsLeftOut(harness.tools, outcome.answer, outcome.evidence, signal, undefined, harness.scope(result.task)) : null;
     const added = left !== null && left.paragraphs.length > 0;
     // "Nothing in this check needs a decision" counts only what the AI read; it is never said above decisions added here.
-    const own = shown.body.split("\n\n").filter(p => p && !(added && p === NOTHING_TO_DECIDE));
+    const own = shown.body.split("\n\n").filter(p => p && !(added && isNothingToDecide(p)));
     // What Ozzie can do instead, for the system the church uses: never what it just said it can't (round 5); "the services
     // it watches" while more than one is.
     const body = [...own, ...(added ? left.paragraphs.map(p => left.fill(harness.restore(p))) : []), ...(shown.notCovered && !added ? [canDoFor(harness.data) ?? canDoInstead(harness.data.brief?.day)] : [])].join("\n\n");
     const mode = harness.data.mode;
     // How many people a role needs is said under an answer about coverage, and under any answer that says nothing needs
     // a decision (round 5: it led a "who could cover" one; review of round 5, H1: never "nothing needs a decision" alone).
-    const coverage = asksAboutCoverage(typed) || own.includes(NOTHING_TO_DECIDE) ? systemGaps(harness.data, outcome.evidence) : [];
+    const coverage = asksAboutCoverage(typed) || own.some(isNothingToDecide) ? systemGaps(harness.data, outcome.evidence) : [];
     return { state: "answered", answer: {
       ...shown, body, ...(coverage.length ? { gaps: [...new Set([...shown.gaps, ...coverage])] } : {}),
       ...(added ? {
@@ -1045,7 +1056,7 @@ export async function askOzzie(harness: Harness, typed: string, options: {
   // AI on this Mac chose more facts than an answer holds for a decision question (measured 2026-11-18: a larger church's
   // overview, 27 ids): Ozzie writes the answer itself from the overview the task read, and says so. Only then.
   if (options.local && native === "too-many-facts" && outcome.code === "fidelity" && isDecisionQuestion(typed)) {
-    const own = await overviewAnswer(harness, outcome, signal);
+    const own = await overviewAnswer(harness, outcome, signal, harness.scope(result.task));
     if (signal.aborted) return { state: "cancelled", text: askFailureText("cancelled") };
     if (own) {
       options.recorder?.answeredHere(own.evidence);
