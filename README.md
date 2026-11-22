@@ -9,6 +9,9 @@ nobody has said yes to and, with Planning Center, a room booked twice or a follo
 no one assigned.
 It can draft a note for you to send yourself. People decide, and people go.
 
+**Watch the 4-minute demo:** <https://youtu.be/LO74aGRZjwA> (also on [ozzie.church](https://ozzie.church)).
+A signed, notarized build for Mac is at [ozzie.church/download](https://ozzie.church/download).
+
 **Status:** early build from the AI for Church Hackathon 2026. It runs on
 macOS on Apple Silicon. Builds you make from this repository are not signed or
 notarized. Expect rough edges.
