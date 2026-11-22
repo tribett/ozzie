@@ -18,9 +18,9 @@ import { captureRooms, sundayOperations } from "../../../core/src/operations-cap
 import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { CHECKING_LINE, PageControls, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { addService, alsoWatched, movedOn, readDay, removeService, type AlsoWatched, type ServiceChoice } from "./watched-services.js";
-import { askServices, fromPartKey, partKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
+import { askServices, findingServices, fromPartKey, partKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
 import { ServicesPage } from "./services-page.js";
-import { serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
+import { FindingServicesContext, serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
 import { WatchedServices } from "./watch-another.js";
 import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
@@ -1115,6 +1115,12 @@ export function App() {
     alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief, name: p.service.name })),
     fictional ? [] : also.filter(s => !alsoParts.some(p => p.service.serviceTypeId === s.serviceTypeId)).map(s => s.name)) : undefined,
   [brief, offPc, alsoParts, also, fictional, settings.planId]);
+  // Today's Thursday brief and spoken briefing say which service a part of the check that couldn't be checked is at, as Ask
+  // does, by a name a person would recognise (services-merge.ts findingServices); undefined with one service. Never sent.
+  const findingServiceNames = useMemo(() => brief && !offPc ? findingServices({ brief, name: watchedDay.get(settings.planId)?.service ?? null },
+    alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief, name: p.service.name })),
+    fictional ? [] : also.filter(s => !alsoParts.some(p => p.service.serviceTypeId === s.serviceTypeId)).map(s => s.name)) : undefined,
+  [brief, offPc, alsoParts, also, fictional, settings.planId]);
   // Native's own check refuses any request that still holds one of those names (name_guard.rs `service_named`): told
   // when the page starts (so a page loaded again never leaves native an older list) and whenever they change, held in
   // memory only; with one service it holds none. Kept as told only once native took it, and tried again up to three
@@ -1607,7 +1613,7 @@ export function App() {
       parts={[{ key: "main", date: brief?.plan.date ?? planDate(watchedDay.get(settings.planId)?.sort_date ?? null), dayText: day.date, node: main }, ...otherParts]} watch={pcWatch} />;
   return <DayProvider value={day}><SystemWordsContext.Provider value={onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null)}><ListsSystemName.Provider value={words.name}>
     {/* Teams named with their service while more than one is watched (team-labels.ts): Church rules and Church lists. */}
-    <TeamServicesContext.Provider value={serviceOfTeam}><ListsTeamServices.Provider value={listsTeamServices}>
+    <TeamServicesContext.Provider value={serviceOfTeam}><FindingServicesContext.Provider value={findingServiceNames}><ListsTeamServices.Provider value={listsTeamServices}>
     <ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
       <aside ref={side} className={`side${menu ? " is-menu" : ""}`}>
@@ -1812,5 +1818,5 @@ export function App() {
           here: { checked: Boolean(genesisShown.capture), chips: genesisQuestions(genesisShown.view) } } : {})}
         {...(onSystem || onGenesis ? { jobsNotHere: { parse: plans.parse, text: words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true) } } : { plans })} />
     </div>
-  </div></ChooseAiContext.Provider></ListsTeamServices.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
+  </div></ChooseAiContext.Provider></ListsTeamServices.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
 }

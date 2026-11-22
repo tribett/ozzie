@@ -314,7 +314,7 @@ export function SystemService({ connection, onConnection, list, read, result, da
       if (text) { setPhase({ at: "problem", text, during: "list" }); return; }
       const c = conn.current;
       if (c.service_id) { readNow(c); return; }
-      const pick = pickService(r.choices, listedToday(system));
+      const pick = pickService(r.choices, listedToday(system, nowMs));
       if (!pick) { setPhase({ at: "none" }); return; }
       const first = pick.choice;
       if (pick.sameDay > 1) setPicked({ id: first.id, sameDay: pick.sameDay, because: pick.because });
@@ -480,6 +480,6 @@ export function SystemFirstRun({ state, onState, start, read, result, day, aiOff
     <p className="fr-connected-t">{FIRST_RUN.connectedTo(connection.church_name ?? "your church")}</p>
     <p className="fr-small">{name} accepted the key. Ozzie keeps it in this Mac's Keychain.</p></div></div> : undefined;
   return <SystemService connection={connection} onConnection={next => onState({ ...state, connection: next })}
-    list={() => bridge.choices(system, connection.church_id, listedToday(system))} read={read} result={result} day={day} aiOffered={aiOffered || !renderAi} nowMs={nowMs} banner={banner} refusal={refusal}
+    list={() => bridge.choices(system, connection.church_id, listedToday(system, nowMs))} read={read} result={result} day={day} aiOffered={aiOffered || !renderAi} nowMs={nowMs} banner={banner} refusal={refusal}
     onNext={to => { if (to === "ai") { setAt("ai"); return; } onLeave(to); }} />;
 }

@@ -193,6 +193,26 @@ export const roleWithService = (role: string, service: string | null | undefined
 export const serviceOfTeam = (team: string | undefined, services: TeamServices | undefined): string | null =>
   team !== undefined && services && Object.hasOwn(services, team) ? services[team]?.trim() || null : null;
 /**
+ * Each finding's service by its own name, by the finding's id in the merged brief, while more than one service is watched
+ * (desktop services-merge.ts findingServices): only a name a person would recognise as that one service. For a finding with
+ * no role to say its service with (a part of the check that couldn't be checked). Undefined with one service. Local only,
+ * like every name a check read.
+ */
+export type FindingServices = Readonly<Record<string, string>>;
+/** A finding's service (FindingServices), or null when none is said. */
+export const findingService = (id: string, services: FindingServices | undefined): string | null =>
+  services && Object.hasOwn(services, id) ? services[id]?.trim() || null : null;
+/**
+ * A part of the check whose only reasons are facts about roles (`role_facts`), said as roles, never as a read that failed
+ * (polish 2026-11-21): "One role couldn't be checked", "2 roles couldn't be checked". With its service, while more than one
+ * service is watched, it opens with that service as Ask says it (harness compose.ts `unverified`): "At Youth Night, one
+ * role couldn't be checked".
+ */
+export const rolesUnchecked = (roles: number, service?: string | null): string => {
+  const count = roles === 1 ? "one role" : `${roles} roles`;
+  return service ? `At ${service}, ${count} couldn't be checked` : `${count.charAt(0).toUpperCase()}${count.slice(1)} couldn't be checked`;
+};
+/**
  * A finding as lines that speak of every service at once say it (Today, the briefings): each role it names with its
  * team's service, while more than one service is watched. The very same finding with one service, or none known.
  */

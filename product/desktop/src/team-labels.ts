@@ -12,6 +12,13 @@ import type { PositionLabel } from "../../../core/src/sunday-capture.js";
  */
 export const TeamServicesContext = createContext<Readonly<Record<string, string>> | undefined>(undefined);
 export const useTeamServices = (): Readonly<Record<string, string>> | undefined => useContext(TeamServicesContext);
+/**
+ * Each finding's service by its id in the merged brief, by a name a person would recognise, while more than one service is
+ * watched (App passes services-merge.ts `findingServices`), for a part of the check with no role to say its service with
+ * (Thursday's brief, the spoken briefing); undefined with one service.
+ */
+export const FindingServicesContext = createContext<Readonly<Record<string, string>> | undefined>(undefined);
+export const useFindingServices = (): Readonly<Record<string, string>> | undefined => useContext(FindingServicesContext);
 
 /** A team's service, when more than one service is watched and that service's name is known. */
 export const serviceOfTeam = (team: string, services: Readonly<Record<string, string>> | undefined): string | null =>

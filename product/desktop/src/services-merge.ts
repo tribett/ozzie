@@ -9,6 +9,7 @@ import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayDecision } from "../../../core/src/sunday-decisions.js";
 import type { HarnessData } from "../../../core/src/harness/tools.js";
 import { SERVICES_PAGE, SERVICES_QUESTION, type DayWords } from "../../../core/src/service-day.js";
+import { nameable, serviceKey } from "../../../core/src/service-names.js";
 
 /** One other service watched, as its own check read it, with the leader's own decisions for it. */
 export interface OtherPart { plan_id: string; brief: SundayBrief; decisions: readonly SundayDecision[] }
@@ -130,4 +131,31 @@ export function askServices(main: { brief: SundayBrief; name: string | null }, o
     if (name) for (const f of findings(o.brief)) serviceOfFinding[`${o.plan_id}:${f.id}`] = name;
   }
   return { services, serviceOfFinding };
+}
+
+/** A weekday or month, whole or short, one or many; a clock time's "am"/"pm"; "service(s)". Not a name of its own. */
+const DAY_OR_TIME = /^(?:(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:days?)?|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|am|pm|services?)$/u;
+/**
+ * With more than one service's check joined (mergeParts): each finding's service by its id in the merged brief, for the
+ * lines that speak of every service at once about a part of the check with no role to say its service with (Thursday's
+ * brief and the spoken briefing on Today: "At Youth Night, one role couldn't be checked, …"), as Ask says it. Only a name a
+ * person would recognise as that one service, as Ask's suggested questions name one: it has a word and isn't a weekday or
+ * month alone (core service-names.ts `nameable`), and no other watched service's name reads the same (`serviceKey`, the
+ * ones not read yet included); otherwise none, and the line reads as before. Undefined with one service read, so that
+ * church reads exactly as before. Local only: never part of anything sent.
+ */
+export function findingServices(main: { brief: SundayBrief; name: string | null }, others: readonly { plan_id: string; brief: SundayBrief; name: string | null }[],
+  unread: readonly (string | null)[] = []): Record<string, string> | undefined {
+  if (!others.length) return undefined;
+  const asked = askServices(main, others, unread);
+  if (!asked) return undefined;
+  const keys = asked.services.map(s => serviceKey(s.name));
+  // "At Wednesdays, …" and "At 9:00 AM, …" read wrongly, most of all about a role tied to no time (review of 0.5.11): a
+  // name needs a word of its own besides days, months, clock times and "service"; one with a comma or an ending full
+  // stop would break the sentence. Any of these: the line reads as before.
+  const own = (name: string) => name.toLowerCase().split(/[^\p{L}]+/u).some(w => w.length > 1 && !DAY_OR_TIME.test(w));
+  const recognised = (name: string) => nameable(name) && own(name) && !/,|[.!?]\s*$/u.test(name) && keys.filter(k => k === serviceKey(name)).length === 1;
+  const out: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [id, name] of Object.entries(asked.serviceOfFinding)) if (recognised(name)) out[id] = name;
+  return Object.keys(out).length ? out : undefined;
 }

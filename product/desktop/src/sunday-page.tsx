@@ -1,6 +1,6 @@
 import { onChurchClock, otherClock, timesText, titleOnlyDate } from "../../../core/src/service-day.js";
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { blockoutCounted, blockoutRoles, blockoutTime, byServiceTime, findingTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutCounted, blockoutRoles, blockoutTime, byServiceTime, findingTime, rolesUnchecked as coreRolesUnchecked, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { useSystemWords, type SystemWords } from "./church-system.js";
@@ -60,9 +60,10 @@ export const STUCK_LINE = "Ozzie couldn't check Planning Center just now.";
 export const CHECK_CONNECTION = "Check the connection";
 /**
  * A check whose only gap is facts about roles as the system lists them (core sunday-brief.ts `role_facts`): said as roles,
- * never as a read that failed (polish 2026-11-21). "One role couldn't be checked", "2 roles couldn't be checked".
+ * never as a read that failed (polish 2026-11-21). "One role couldn't be checked", "2 roles couldn't be checked". This page
+ * shows one service at a time, under its own heading, so never with its service (core `rolesUnchecked`).
  */
-export const rolesUnchecked = (roles: number) => roles === 1 ? "One role couldn't be checked" : `${roles} roles couldn't be checked`;
+export const rolesUnchecked = (roles: number) => coreRolesUnchecked(roles);
 /** That gap's facts on a brief, when that is its only gap; null otherwise. */
 export const roleFactsOf = (brief: Pick<SundayBrief, "findings"> | null | undefined) => brief?.findings.find(f => f.kind === "worth-a-look")?.role_facts ?? null;
 export const DRAFT_FOOTER = "Ozzie never sends messages. The AI sees stand-ins like [Volunteer A] instead of the names Ozzie reads from Planning Center.";

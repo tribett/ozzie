@@ -7,7 +7,8 @@
 // Mac's own voice, and `<`, `>` and `&` never reach it (no markup a voice could act on).
 import type { AttentionReport } from "./attention-import/index.js";
 import { operationsNotChecked, type SundayOperations } from "./operations-capture.js";
-import { blockoutRoles, blockoutTime, roleReasons, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "./sunday-brief.js";
+import { blockoutRoles, blockoutTime, findingService, roleReasons, rolesUnchecked, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices,
+  type Finding, type FindingServices, type SundayBrief, type TeamServices } from "./sunday-brief.js";
 import type { DecidedBrief, DecidedItem } from "./sunday-decisions.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
@@ -59,6 +60,12 @@ export interface BriefingOptions {
    * one service, which reads as before.
    */
   teamServices?: TeamServices;
+  /**
+   * With more than one service watched, each finding's service by a name a person would recognise (desktop
+   * services-merge.ts findingServices): a part of the check with no role to say it with opens with its service, as Ask
+   * says it ("At Youth Night, one role couldn't be checked, …"). Absent with one service, which reads as before.
+   */
+  findingServices?: FindingServices;
 }
 export type SectionId = "intro" | "decisions" | "looks" | "unchecked" | "times" | "close";
 export interface BriefingSection { id: SectionId; heading: string; sentences: string[] }
@@ -81,7 +88,10 @@ const clock = (iso: string, timeZone: string) => plain(new Intl.DateTimeFormat("
  * `d`: the service's day words; `name` it mid-sentence ("Wednesday", "this weekend"), never a fixed "Sunday" for a
  * service on another day (onboarding spec §5).
  */
-interface Ctx { timeZone: string; nameOf: (id: string | undefined) => string | null; d: DayWords; name: string; services?: TeamServices | undefined }
+interface Ctx {
+  timeZone: string; nameOf: (id: string | undefined) => string | null; d: DayWords; name: string; services?: TeamServices | undefined;
+  findings?: FindingServices | undefined;
+}
 const dayCtx = (d: DayWords) => ({ d, name: d.kind === "weekday" ? d.day : d.thisOne });
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /**
@@ -164,8 +174,9 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
       return f.stale || stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
         // Only facts about roles as the system lists them (sunday-brief.ts role_facts): said as roles, as the page says it.
         // One role's plain reasons are read after it; more roles' are only pointed to, so the briefing stays short (and
-        // within the voice's limit) however many roles a church leaves untimed.
-        : f.role_facts ? `${f.role_facts.roles === 1 ? "One role" : `${f.role_facts.roles} roles`} couldn't be checked, so Ozzie won't call ${ctx.name} covered.${
+        // within the voice's limit) however many roles a church leaves untimed. With more than one service watched, its
+        // service first, as Ask says it.
+        : f.role_facts ? `${rolesUnchecked(f.role_facts.roles, findingService(f.id, ctx.findings))}, so Ozzie won't call ${findingService(f.id, ctx.findings) ? "it" : ctx.name} covered.${
           f.role_facts.roles === 1 ? roleReasons(f) : " The roles and why are listed on screen."}`
         : `Part of ${ctx.d.thisOne} couldn't be checked, so Ozzie won't call ${ctx.name} covered.`;
   }
@@ -219,7 +230,7 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   const { attention, sunday } = input;
   const names = options.includeNames ? options.names ?? {} : {};
   const ctx: Ctx = {
-    timeZone: options.timeZone, ...dayCtx(sunday?.day ?? options.day ?? SUNDAY_WORDS), services: options.teamServices,
+    timeZone: options.timeZone, ...dayCtx(sunday?.day ?? options.day ?? SUNDAY_WORDS), services: options.teamServices, findings: options.findingServices,
     nameOf: id => id && Object.hasOwn(names, id) && typeof names[id] === "string" && names[id]!.trim() ? names[id]!.trim() : null,
   };
   // With more than one service watched, each role with its service: one briefing speaks of every service.
