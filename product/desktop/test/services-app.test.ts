@@ -1,12 +1,15 @@
 // More than one service watched, through the whole app (owner decision 2026-11-19): first run picks one service by itself
 // as always; "Watch another service" on the Services page adds a second; one round reads both; the Services page shows
 // each in date order with its own name and findings; the sidebar, Today and the page say the same count across both;
-// "Stop watching" says what it forgets, deletes only that service's saved checks, and the count goes back. Fictional data
-// only, on a fake native side.
+// "Stop watching" says what it forgets, deletes only that service's saved checks, and the count goes back. Another service's
+// cards offer "Looks good — I'll send it" (kept by that service's own plan, said on Today with its service) and "Ask Ozzie
+// to look at who could help" (about that service's own role, nothing named in what is sent), as the first service's do.
+// Fictional data only, on a fake native side.
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
+import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
 import { wednesdayCapture } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { pickReply, SUNDAY_MORNING, YOUTH_NIGHT } from "./onboarding-fakes.js";
 
@@ -18,10 +21,30 @@ const native = vi.hoisted(() => ({
   ownTeams: false,
   /** Changes in Planning Center turned on for the church (native `changes_status`); otherwise that call never answers. */
   changes: false,
+  /** An AI model set up on this Mac (native `model_status`), answering every step with a scripted look (`agent_step`). */
+  model: false,
+  /** Every request the scripted model received, exactly as sent. */
+  steps: [] as { messages: { role: string; content: string }[] }[],
 }));
+/** The newest result of one tool in a request (the scripted model reads only what it was given). */
+function toolResult(request: { messages: { role: string; content: string }[] }, tool: string): Record<string, unknown> | undefined {
+  return request.messages.flatMap(m => m.role === "tool" ? [JSON.parse(m.content) as { tool?: string; payload?: Record<string, unknown> }] : [])
+    .filter(x => x.tool === tool).at(-1)?.payload;
+}
+/** Who could help, as a model would look: open roles, then the first one's people, then every person listed and the role's time. */
+function lookStep(request: { messages: { role: string; content: string }[] }) {
+  const needs = toolResult(request, "sunday.open_needs"), help = toolResult(request, "sunday.who_could_help");
+  const call = (name: string, args: Record<string, unknown> = {}) => ({ content: "", tool_calls: [{ id: `call_${request.messages.length}_0`, name, arguments: JSON.stringify(args) }], finish: "tool_calls" });
+  if (!needs) return call("sunday.open_needs");
+  if (!help) return call("sunday.who_could_help", { role: (needs["needs"] as { role: string }[])[0]!.role });
+  const facts = [...(help["people"] as { fact: string }[]).map(p => p.fact), (help["times"] as { fact: string }[])[0]!.fact];
+  return { content: JSON.stringify({ answer: "facts", facts }), tool_calls: [], finish: "stop" };
+}
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string, args: Record<string, unknown> = {}) => {
     native.calls.push([command, args]);
+    // With a model set up, the task ledger takes each look (admitted, its steps, how it ended).
+    if (native.model && ["ledger_admit", "ledger_transition", "ledger_event"].includes(command)) return null;
     switch (command) {
       case "connection_status": return native.status;
       case "check_saved_connection": return native.status;
@@ -55,7 +78,14 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "background_info": return { fastSchedule: false, probe: false, tickMs: 30_000 };
       case "update_status": return null;
       case "notification_permission": return "unknown";
-      case "model_status": return { configured: false, route: "none", label: "", setup: "no-route" };
+      case "model_status": return native.model
+        ? { configured: true, route: "local", label: "AI model on this Mac (qwen3:8b)", setup: "ready", key_account: null, checked_at_ms: Date.parse("2026-11-20T15:00:00Z") }
+        : { configured: false, route: "none", label: "", setup: "no-route" };
+      case "agent_step": {
+        const request = (args as { request: { messages: { role: string; content: string }[] } }).request;
+        native.steps.push(structuredClone(request));
+        return lookStep(request);
+      }
       case "responsibility_list": throw "unavailable";
       case "set_no_ai": return { configured: false, route: "none", label: "", setup: "no-route" };
       case "own_key_providers": return [];
@@ -82,7 +112,7 @@ const CONNECTED = { state: "connected", organization: ORG, checked_at_ms: Date.p
 
 let unmount: (() => Promise<void>) | null = null;
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-11-20T15:00:00Z")); native.status = null; native.pick = null;
-  native.calls = []; native.recordings = []; native.ownTeams = false; native.changes = false; kept.clear(); });
+  native.calls = []; native.recordings = []; native.ownTeams = false; native.changes = false; native.model = false; native.steps = []; kept.clear(); });
 afterEach(async () => { await unmount?.(); unmount = null; vi.useRealTimers(); });
 
 type Mounted = { settle: (n?: number) => Promise<void>; act: (f: () => Promise<void>) => Promise<void> };
@@ -328,4 +358,152 @@ describe("the add confirmation names the service it adds to, the first one too (
     // Each Add asked native code for its own plan only.
     expect(native.calls.filter(([c]) => c === "change_prepare").map(([, a]) => a.plan)).toEqual(["92902197", "92902197", "94000001"]);
   }, 120_000);
+});
+
+describe("another service's cards: the leader's own mark and the AI look, each about its own service (owner decision 2026-11-19; feature audit 2026-11-22, gap 2)", () => {
+  const inside = (n: Node) => all(n as unknown as { childNodes: unknown[] });
+  /** One service's part of the Services page, by its heading. */
+  const partOf = (name: string): Node => {
+    const part = nodes().find(n => n.tagName === "SECTION" && (n.getAttribute?.("class") ?? "").split(" ").includes("service-part")
+      && inside(n).some(c => c.tagName === "H2" && c.textContent === name));
+    if (!part) throw new Error(`no part "${name}" in: ${dom.seen().slice(0, 900)}`);
+    return part;
+  };
+  /** The page itself, with one service watched (no parts). */
+  const page = () => dom.root as unknown as Node;
+  /** The open Greeter role's card in one part (or the page). */
+  const greeterCard = (where: Node): Node => {
+    const card = inside(where).find(n => n.tagName === "ARTICLE" && inside(n).some(c => c.tagName === "H3" && c.textContent.startsWith("Greeter still needs")));
+    if (!card) throw new Error(`no Greeter card in: ${where.textContent.slice(0, 900)}`);
+    return card;
+  };
+  const buttonIn = (n: Node, label: string) => inside(n).find(c => c.tagName === "BUTTON" && c.textContent === label) ?? null;
+  async function pressIn(app: Mounted, n: Node, label: string) {
+    const b = buttonIn(n, label);
+    if (!b) throw new Error(`no button "${label}" in: ${n.textContent.slice(0, 900)}`);
+    await app.act(async () => { dom.press(b as unknown as Parameters<typeof dom.press>[0]); await tick(); });
+    await app.settle();
+  }
+  /** Shows the Greeter card's people in one part (or the page), unless they are shown already. */
+  async function showPeople(app: Mounted, where: () => Node) {
+    if (buttonIn(greeterCard(where()), "See who could help")) await pressIn(app, greeterCard(where()), "See who could help");
+    expect(buttonIn(greeterCard(where()), "Hide people")).not.toBeNull();
+  }
+  /** The page's own words, read once App is loaded (the app's modules read this Mac's storage as they load). */
+  const words = () => import("../src/sunday-page.js");
+  /** Shows the Greeter card's people, opens a note to the first of them (Riley, with no overlap found), and marks it. */
+  async function markRiley(app: Mounted, where: () => Node) {
+    const { LOOKS_GOOD } = await words();
+    await showPeople(app, where);
+    if (!greeterCard(where()).textContent.includes("To Riley Thornbury")) await pressIn(app, greeterCard(where()), "Prepare a note");
+    expect(greeterCard(where()).textContent).toContain("To Riley Thornbury");
+    await pressIn(app, greeterCard(where()), LOOKS_GOOD);
+  }
+  /** The mark's words, on the day it is made on this Mac's clock. */
+  const said = (role: string) => `On ${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} you said you'd ask Riley about ${role}.`;
+  const marksKept = () => (JSON.parse(kept.get("ozzie.asked.v1") ?? '{"marks":[]}') as { marks: { plan_id: string }[] }).marks.map(m => m.plan_id).sort();
+  async function watchYouth(app: Mounted) {
+    native.pick = pickReply(SUNDAY_MORNING, YOUTH_NIGHT);
+    await press(app, "Watch another service");
+    await waitFor(app, "Watch Youth Night");
+    await press(app, "Watch Youth Night");
+    await youthRead(app);
+  }
+  /** Lets time pass until Youth Night's part shows its own Greeter card. */
+  async function youthShown(app: Mounted) {
+    const { act } = await import("react");
+    const shown = () => { try { greeterCard(partOf("Youth Night")); return true; } catch { return false; } };
+    for (let i = 0; i < 40 && !shown(); i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await app.settle(5); }
+    greeterCard(partOf("Youth Night"));
+  }
+
+  it("Looks good — I'll send it on Youth Night's card marks Youth Night's role only, Today says each with its service, and one service reads as before", async () => {
+    native.ownTeams = true;
+    const app = await oneService();
+    await go(app, "Services");
+    // One service: the mark on the card and on Today as before, with no service named.
+    await markRiley(app, page);
+    expect(greeterCard(page()).textContent).toContain(said("Greeter"));
+    expect(marksKept()).toEqual(["92902197"]);
+    await go(app, "Today");
+    expect(dom.seen()).toContain(said("Greeter"));
+    expect(dom.seen()).not.toMatch(/Greeter \(|Greeter —/u);
+    await go(app, "Services");
+    await watchYouth(app);
+    await youthShown(app);
+    // The first service's mark stays on its own card; Youth Night's Greeter (the same role, the same people) has none.
+    expect(partOf("Sunday Morning").textContent).toContain(said("Greeter"));
+    expect(partOf("Youth Night").textContent).not.toContain("you said you'd ask");
+    // Youth Night's card offers the mark too, kept by Youth Night's own plan.
+    await markRiley(app, () => partOf("Youth Night"));
+    expect(greeterCard(partOf("Youth Night")).textContent).toContain(said("Greeter"));
+    expect(marksKept()).toEqual(["92902197", "94000001"]);
+    // Today says both, each role with its service.
+    await go(app, "Today");
+    expect(dom.seen()).toContain(said("Greeter (Sunday Morning)"));
+    expect(dom.seen()).toContain(said("Greeter (Youth Night)"));
+    // A later check of both keeps both (nothing changed for Riley).
+    await go(app, "Services");
+    const before = checked().length;
+    await press(app, "Check Planning Center now");
+    const { act } = await import("react");
+    for (let i = 0; i < 40 && !checked().slice(before).includes("94000001"); i++) { await act(async () => { await vi.advanceTimersByTimeAsync(500); }); await app.settle(5); }
+    expect(checked().slice(before)).toEqual(["92902197", "94000001"]);
+    await app.settle();
+    expect(marksKept()).toEqual(["92902197", "94000001"]);
+    expect(partOf("Youth Night").textContent).toContain(said("Greeter"));
+    // Undo on Youth Night's card takes only that one away.
+    await pressIn(app, greeterCard(partOf("Youth Night")), "Undo");
+    expect(partOf("Youth Night").textContent).not.toContain("you said you'd ask");
+    expect(partOf("Sunday Morning").textContent).toContain(said("Greeter"));
+    expect(marksKept()).toEqual(["92902197"]);
+    // Marked again, then Stop watching: Youth Night's marks are forgotten with its decisions; the first service's stay.
+    await markRiley(app, () => partOf("Youth Night"));
+    expect(marksKept()).toEqual(["92902197", "94000001"]);
+    await press(app, "Stop watching");
+    await press(app, "Yes, stop watching it");
+    await app.settle();
+    expect(marksKept()).toEqual(["92902197"]);
+    await go(app, "Today");
+    expect(dom.seen()).toContain(said("Greeter"));
+    expect(dom.seen()).not.toMatch(/Greeter \(|Greeter —/u);
+  }, 180_000);
+
+  it("Ask Ozzie to look at who could help on Youth Night's card looks at Youth Night's own Greeter, and no role's, person's or service's name is sent", async () => {
+    native.ownTeams = true;
+    let app = await oneService();
+    await go(app, "Services");
+    await watchYouth(app);
+    // An AI model set up on this Mac; Ozzie opened again reads it.
+    native.model = true;
+    await unmount!();
+    app = await launch();
+    await go(app, "Services");
+    await press(app, "Check Planning Center now");
+    await youthShown(app);
+    const { LOOK_BUTTON, LOOK_TITLE } = await words();
+    // The first service's card offers the look as before; Youth Night's card offers it too.
+    await showPeople(app, () => partOf("Sunday Morning"));
+    expect(buttonIn(greeterCard(partOf("Sunday Morning")), LOOK_BUTTON)).not.toBeNull();
+    await showPeople(app, () => partOf("Youth Night"));
+    await pressIn(app, greeterCard(partOf("Youth Night")), LOOK_BUTTON);
+    await waitFor(app, LOOK_TITLE);
+    // Youth Night's card shows what the AI found, about Youth Night's Greeter on its own day; the first service's has nothing.
+    const card = greeterCard(partOf("Youth Night")).textContent;
+    expect(card).toContain(LOOK_TITLE);
+    expect(card).toMatch(/Greeter at 9:30 AM on November 25 still needs/u);
+    expect(card).not.toContain("November 22");
+    expect(partOf("Sunday Morning").textContent).not.toContain(LOOK_TITLE);
+    // Every request: Youth Night's role at its own time, and no name of a role, a person, a service or a plan in any of them.
+    expect(native.steps.length).toBeGreaterThanOrEqual(3);
+    const help = toolResult(native.steps.at(-1)!, "sunday.who_could_help")!;
+    expect((help["times"] as { time: { starts_at: string } }[]).map(t => t.time.starts_at)).toEqual([expect.stringMatching(/^2026-11-25T09:30/u)]);
+    expect(JSON.stringify(help)).not.toContain("2026-11-22");
+    const sent = JSON.stringify(native.steps);
+    const roles = buildSundayBrief(nov22Capture(), { sundayLeads: [], checkInAfterSundaysInARow: 3 }, nov22Capture().completed_at).positions.map(p => p.name.trim());
+    expect(roles).toContain("Greeter");
+    for (const role of roles) expect(sent, role).not.toContain(role);
+    for (const name of Object.values(nov22Capture().names)) for (const word of name.split(/\s+/u)) expect(sent, word).not.toContain(word);
+    for (const named of ["Sunday Morning", "Youth Night", "Ozzie Demo — Main Sunday (fictional)", "Youth Night (fictional)"]) expect(sent, named).not.toContain(named);
+  }, 180_000);
 });

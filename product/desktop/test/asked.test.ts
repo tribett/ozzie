@@ -12,6 +12,7 @@ import { FirstRun } from "../src/setup-flow.js";
 import { TodayPage } from "../src/today-page.js";
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sunday.js";
+import { wednesdayCapture } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { ALL, code, imports, names as namesCommand, NATIVE_COMMANDS, OFF_THE_PAGE_APIS, reach, source } from "../../../core/test/stays-on-this-mac-imports.js";
 import { text } from "./harness-fakes.js";
 
@@ -63,12 +64,41 @@ describe("a mark is the leader's, by ids, and lasts only while the plan stays as
     expect(askedMemory(store, () => "2026-11-16").all()).toEqual([mark]);
   });
 
+  it("with several services watched, is kept by its own service's plan: never on another service's role of the same name, and forgotten when that service stops being watched", () => {
+    // The second service: the fictional plan on a Wednesday, of its own service type, with the same roles and people. Its
+    // teams keep the first service's ids here, the hardest case: the very same finding key and person on both plans.
+    const youth = live({ ...wednesdayCapture(), service_type_id: "1700", plan_id: "94000001" });
+    const youthGreeter = greeterOf(youth);
+    expect(youthGreeter.key).toBe(greeter.key);
+    const store = memoryStore();
+    const marks = askedMemory(store, () => "2026-11-16");
+    const there = askedMark(youth, youthGreeter, riley, AT)!;
+    expect(there.plan_id).toBe("94000001");
+    marks.add(there);
+    // Youth Night's mark holds for Youth Night only, even with the same finding key and the same person.
+    expect(holding(marks.all(), youth)).toEqual([there]);
+    expect(holding(marks.all(), brief)).toEqual([]);
+    const here = askedMark(brief, greeter, riley, AT)!;
+    marks.add(here);
+    expect(holding(marks.all(), brief)).toEqual([here]);
+    // A live check of one service settles its own marks only.
+    expect(marks.settle({ ...youth, findings: [] })).toEqual([here]);
+    marks.add(there);
+    // Stop watching Youth Night: its marks go with its decisions; the first service's stay.
+    expect(marks.forget(["94000001"])).toEqual([here]);
+    expect(askedMemory(store, () => "2026-11-16").all()).toEqual([here]);
+    expect(marks.forget([])).toEqual([here]);
+  });
+
   it("says it quietly with the first name read on this Mac", () => {
     const mark = askedMark(brief, greeter, riley, AT)!;
     // The day it was said on this Mac's clock ("Mon, Nov 16" here; Tuesday on a Mac in Tokyo).
     const day = new Date(AT).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
     expect(askedText(mark, nov22Capture().names, "Greeter")).toBe(`On ${day} you said you'd ask ${nov22Capture().names[riley]!.split(" ")[0]} about Greeter.`);
     expect(askedText(mark, {}, null)).toBe(`On ${day} you said you'd ask this person.`);
+    expect(askedText({ ...mark, facts: JSON.stringify(["needs-people", "no-overlap", false]) }, {}, "Greeter")).toBe(`On ${day} you said you'd ask this person about Greeter.`);
+    // A note to a team's leader whose name wasn't read (found in 0.6.0's click-through).
+    expect(askedText({ ...mark, facts: JSON.stringify(["needs-people", "leader", false]) }, {}, "Greeter")).toBe(`On ${day} you said you'd ask the team's leader about Greeter.`);
   });
 });
 

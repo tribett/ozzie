@@ -6,9 +6,13 @@
 //
 // A mark lasts while that person's place in that finding stays as it was when the leader made it: once the plan changes
 // for them (they accept, decline or are scheduled elsewhere, the role is filled, the finding is gone) or the Sunday has
-// passed, it is dropped. Only App.tsx imports this module, and it hands the Sunday page and Today the words to show and
-// Undo through their props (sunday-page.tsx `AskedSlot`); nothing that builds a model request, a notice, the copy for
-// other AI apps or Siri imports it (product/desktop/test/asked.test.ts). Pure apart from the small store it is given.
+// passed, it is dropped. With several services watched (owner decision 2026-11-19), each service's marks are its own
+// plan's: a mark holds only for the plan it was made on, so one service's never shows on another's role of the same name;
+// each service's live check settles its own; Stop watching a service forgets its marks with its decisions.
+//
+// Only App.tsx imports this module, and it hands the Sunday page and Today the words to show and Undo through their props
+// (sunday-page.tsx `AskedSlot`); nothing that builds a model request, a notice, the copy for other AI apps or Siri imports
+// it (product/desktop/test/asked.test.ts). Pure apart from the small store it is given.
 import type { Finding, SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { KeyValueStore } from "./proactive.js";
 
@@ -64,9 +68,10 @@ export function holding(marks: readonly AskedMark[], brief: Pick<SundayBrief, "p
 }
 
 /** "On Mon, Nov 16 you said you'd ask Riley about Greeter.": the first name, from the names read on this Mac. */
-export function askedText(mark: Pick<AskedMark, "at" | "person_id">, names: Readonly<Record<string, string>>, role: string | null): string {
+export function askedText(mark: Pick<AskedMark, "at" | "person_id"> & Partial<Pick<AskedMark, "facts">>, names: Readonly<Record<string, string>>, role: string | null): string {
   const full = Object.hasOwn(names, mark.person_id) ? names[mark.person_id]?.trim() : "";
-  const first = full ? full.split(/\s+/u)[0]! : "this person";
+  // A team's leader who isn't on the plan has no name read on this Mac: said as the note's own To line says it.
+  const first = full ? full.split(/\s+/u)[0]! : mark.facts?.includes('"leader"') ? "the team's leader" : "this person";
   const d = new Date(mark.at);
   const day = Number.isNaN(d.getTime()) ? "earlier" : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   return `On ${day} you said you'd ask ${first}${role ? ` about ${role}` : ""}.`;
@@ -96,6 +101,12 @@ export function askedMemory(store: KeyValueStore, today: () => string) {
       const all = read();
       const kept = new Set(holding(all, brief));
       const next = all.filter(m => m.plan_id !== brief.plan.id || kept.has(m));
+      return next.length === all.length ? all : write(next);
+    },
+    /** A service no longer watched (Stop watching): the marks for its plans go with its decisions; every other plan's stay. */
+    forget(plans: readonly string[]): AskedMark[] {
+      const all = read();
+      const next = all.filter(m => !plans.includes(m.plan_id));
       return next.length === all.length ? all : write(next);
     },
   };

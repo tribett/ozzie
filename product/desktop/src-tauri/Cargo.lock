@@ -2598,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "ozzie-desktop"
-version = "0.5.11"
+version = "0.6.0"
 dependencies = [
  "libc",
  "objc2",

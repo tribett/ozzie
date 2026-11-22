@@ -848,6 +848,23 @@ export function oneRole(data: HarnessData, finding: Finding): HarnessData {
 }
 
 /**
+ * What the who-could-help procedure reads on a second or later watched service's card (owner decision 2026-11-19): that
+ * service's own check, brief and decisions alone, as a church watching only that service would have them, never the
+ * check every service is joined in (services-merge.ts). So the look is about that service's role even when another
+ * service has a role of the same name with the same people (each service type's teams are its own, and ids can repeat
+ * across plans), its times and day are that service's, its reads, check time and completeness are that service's own, and
+ * nothing of another service, its name included, is read: a request for it is built exactly as for a church with one
+ * service. No rooms, follow-ups or group meetings (that card's service has none shown), and nothing to check again from
+ * here (the procedure lists no such step; a check of every service is Check now's). lookAtWhoCouldHelp then keeps the
+ * card's own finding (oneRole), as for the first service, whose look is unchanged.
+ */
+export function otherServiceData(part: { capture: SundayCapture; brief: SundayBrief; decisions: readonly SundayDecision[] },
+  app: Pick<AppSnapshot, "rules" | "status" | "configured" | "now">): HarnessData {
+  return buildHarnessData({ capture: part.capture, fictional: false, rules: app.rules, decisions: part.decisions, status: app.status, configured: app.configured,
+    now: app.now, brief: part.brief, operations: null, fictionalImport: false });
+}
+
+/**
  * The who-could-help procedure, run through the harness for one open role at one time (`make` builds the app's harness
  * over the data it is given). The card never presents some people as the AI's pick (review H, M3): it lists everyone the
  * check listed for that finding, as the fixed list shows them (alphabetical within the same closed labels), and marks

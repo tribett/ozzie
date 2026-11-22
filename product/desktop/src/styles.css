@@ -465,6 +465,8 @@ body { background: #FAF6EE; }
 /* "Looks good — I'll send it" (audit item 18): the leader's own mark, quiet, with Undo beside it. */
 .oz .asked-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 4px 0 0; color: var(--ink-2); }
 .oz .asked-line .ic { color: var(--accent); margin-top: 0; }
+/* The words stay beside the tick and wrap inside their own box (seen in 0.6.0: a long line dropped under the tick). */
+.oz .asked-line > span { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 30px); }
 .oz .asked-offer { flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .oz .draft-unsigned { margin-top: 4px; }
 .oz .draft-unsigned .row { flex-wrap: wrap; gap: 8px; align-items: center; }
