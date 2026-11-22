@@ -614,3 +614,54 @@ describe("on AI on this Mac, choosing or downloading never changes the AI in use
     expect(changes()).toEqual([]);
   }, 60_000);
 });
+
+// Ask at the default window (accessibility audit S1, WCAG 2.4.11): it docks beside the page from 1280 CSS pixels (the
+// default window), so nothing is hidden under it; narrower (a smaller window, or larger text), it lies over the page,
+// and the sidebar and the page are inert while it's open so the keyboard can't reach what it hides.
+describe("Ask over the page, or beside it", () => {
+  const askPanel = () => nodes().find(n => n.getAttribute?.("id") === "ask-panel")!;
+  const sideAndMain = () => [tagged("ASIDE"), tagged("MAIN")].map(n => n.getAttribute?.("inert") ?? null);
+  /** The window's width, as the page's CSS sees it: only Ask's docking width is asked about here. */
+  const windowWide = (wide: boolean) => Object.assign(globalThis.window as object, {
+    matchMedia: (q: string) => ({ matches: q === "(min-width: 1280px)" ? wide : false, addEventListener() {}, removeEventListener() {} }),
+  });
+  afterEach(() => { delete (globalThis.window as { matchMedia?: unknown }).matchMedia; });
+
+  it("narrower than 1280px: while Ask is open the sidebar and the page are inert; closed, they are back", async () => {
+    windowWide(false);
+    const app = await launch();
+    expect(sideAndMain()).toEqual([null, null]);
+    await pressOn(app, all(tagged("ASIDE")).find(n => n.tagName === "BUTTON" && n.textContent === "Ask Ozzie"), "the sidebar's Ask Ozzie");
+    expect(askPanel().getAttribute?.("hidden")).toBeNull();
+    expect(sideAndMain()).toEqual(["", ""]);
+    await pressOn(app, all(askPanel()).find(n => n.tagName === "BUTTON" && n.getAttribute?.("aria-label") === "Close Ask Ozzie"), "Close Ask Ozzie");
+    expect(sideAndMain()).toEqual([null, null]);
+    // The page it makes unusable is dimmed, and a click on the dimmed page closes Ask (review of 0.6.1).
+    const shade = () => nodes().find(n => n.getAttribute?.("class") === "ask-shade");
+    expect(shade()).toBeUndefined();
+    await pressOn(app, all(tagged("ASIDE")).find(n => n.tagName === "BUTTON" && n.textContent === "Ask Ozzie"), "the sidebar's Ask Ozzie");
+    expect(shade()).toBeDefined();
+    await pressOn(app, shade(), "the dimmed page");
+    expect(askPanel().getAttribute?.("hidden")).not.toBeNull();
+    expect(sideAndMain()).toEqual([null, null]);
+    expect(shade()).toBeUndefined();
+  }, 60_000);
+
+  it("from 1280px (the default window): Ask docks beside the page, and the page stays in use", async () => {
+    windowWide(true);
+    const app = await launch();
+    await pressOn(app, all(tagged("ASIDE")).find(n => n.tagName === "BUTTON" && n.textContent === "Ask Ozzie"), "the sidebar's Ask Ozzie");
+    expect(askPanel().getAttribute?.("hidden")).toBeNull();
+    expect(sideAndMain()).toEqual([null, null]);
+    expect(nodes().find(n => n.getAttribute?.("class") === "ask-shade")).toBeUndefined();
+    const { readFileSync } = await import("node:fs");
+    const app_ = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    const conf = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8")) as { app: { windows: { width: number; minWidth: number }[] } };
+    const hearth = readFileSync(new URL("../src/hearth.css", import.meta.url), "utf8");
+    const side = Number(/--w-side:(\d+)px/u.exec(hearth)![1]);
+    // The width is the sidebar, Ask's 380px column and the page's width in the smallest window; the default window docks.
+    expect(app_).toContain("export const ASK_DOCKS_AT = 1280;");
+    expect(1280).toBe(side + 380 + (conf.app.windows[0]!.minWidth - side));
+    expect(conf.app.windows[0]!.width).toBeGreaterThanOrEqual(1280);
+  }, 60_000);
+});

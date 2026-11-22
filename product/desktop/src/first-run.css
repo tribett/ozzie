@@ -76,6 +76,10 @@
 .oz .fr-service { width: 100%; min-height: 64px; text-align: left; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 12px 16px;
   background: var(--surface); border: 1.5px solid var(--control); border-radius: 12px; cursor: pointer; font: inherit; color: var(--ink); }
 .oz .fr-service:hover { border-color: var(--accent); background: var(--accent-tint); }
+/* The service chosen: a tick beside its name and a 2px accent edge, not only a fill (accessibility audit M9). */
+.oz .fr-service[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--accent-tint); padding: 11.5px 15.5px; }
+.oz .fr-service-t { display: inline-flex; align-items: center; gap: 6px; }
+.oz .fr-service-t .ic { color: var(--accent-ink); }
 .oz .fr-service-t { font-weight: 700; font-size: var(--t-md); }
 .oz .fr-service-d { font-size: var(--t-sm); color: var(--ink-2); }
 .oz .fr-service[disabled] { cursor: default; opacity: .75; }

@@ -27,7 +27,7 @@
 .oz .ask-panel .ask-quick .chip { flex: 0 1 auto; max-width: 100%; white-space: normal; text-align: left; }
 .oz .ask-panel .ask-earlier { display: flex; flex-direction: column; gap: 4px; }
 .oz .ask-panel .ask-earlier .list { gap: 2px; }
-.oz .ask-panel .ask-reopen { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 32px; padding: 6px 8px; overflow-wrap: anywhere; }
+.oz .ask-panel .ask-reopen { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: var(--h-btn-sm); padding: 6px 8px; overflow-wrap: anywhere; }
 .oz .ask-panel .ask-about { font-size: var(--t-sm); }
 .oz .ask-panel .ask-about > .small, .oz .ask-panel .ask-about > p { margin-top: 6px; }
 .oz .ask-panel .ask-voice { margin: -8px 16px 12px; }
@@ -57,3 +57,6 @@
 .oz .ai-look-card .find-top { margin-bottom: 0; }
 .oz .ai-look-card .ask-how { align-self: flex-start; }
 .oz .ai-look-note p + p { margin-top: 4px; }
+
+/* ---- Ask Ozzie: why the question box takes nothing yet, above it (accessibility audit S5) ------------------------- */
+.oz .ask-panel .ask-unavailable { margin: 0 0 4px; }

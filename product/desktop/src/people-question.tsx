@@ -10,6 +10,7 @@
 // them together. Nothing here reads an address: native fills in To when the note opens (draft-actions.tsx).
 import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./icons.js";
+import { useModal } from "./modal.js";
 import { promise } from "./promises.js";
 import { connection, granted, moreOf, type ConnectionStatus } from "./connection.js";
 import "./finish.css";
@@ -89,10 +90,13 @@ export function PeopleQuestion({ name, onAddressed, onWithout, onClose, access =
   const [phase, setPhase] = useState<"ask" | "waiting" | "checking">("ask");
   const [end, setEnd] = useState<PeopleEnd | null>(null);
   const title = useRef<HTMLHeadingElement>(null);
+  const sheet = useRef<HTMLDivElement>(null);
   const alive = useRef(true);
   // Each Allow is one attempt; Cancel or a new Allow ends the one before, so its waiting loop stops.
   const attempt = useRef(0);
-  useEffect(() => { title.current?.focus(); return () => { alive.current = false; }; }, []);
+  // Focus starts on its title; the page under it is inert while it is open, and focus returns where it was (audit S2).
+  useModal(sheet, title);
+  useEffect(() => () => { alive.current = false; }, []);
   const waiting = phase !== "ask";
 
   const allow = async () => {
@@ -125,7 +129,7 @@ export function PeopleQuestion({ name, onAddressed, onWithout, onClose, access =
   const cancel = () => { attempt.current++; setPhase("ask"); setEnd("cancelled"); void access.cancel().catch(() => undefined); };
 
   return <div className="people-scrim">
-    <div className="people-sheet" role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} aria-describedby={`${id}-b`}
+    <div className="people-sheet" role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} aria-describedby={`${id}-b`} ref={sheet}
       // Escape closes the sheet, never a sign-in in progress (spec §0.1): while waiting, Cancel is the way out.
       onKeyDown={e => { if (e.key === "Escape" && !waiting) { e.stopPropagation(); onClose(); } }}>
       <h2 id={`${id}-t`} className="h3" tabIndex={-1} ref={title}>{PEOPLE_TITLE}</h2>

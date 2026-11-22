@@ -31,6 +31,7 @@ import { ProcedureBody } from "./procedure-text.js";
 import { zoneLabel } from "./proactive-page.js";
 import { DayProvider, SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
 import { DayName, dayName } from "./day-phrases.js";
+import { useAnnounce } from "./announce.js";
 import {
   LOOK_DRAFT, LOOK_FAILED, LOOK_NOT_COVERED, LOOK_NOT_LOOKED, LOOK_NOTE, LOOK_NOTHING, lookShortened, type AskTurn, type Look, type PeopleLabel,
 } from "./harness-bridge.js";
@@ -382,8 +383,10 @@ type Opener = (key: string) => (el: HTMLButtonElement | null) => void;
  * 2026-11-19: under the whole list it was off screen and the button seemed to do nothing). Hidden, the list stays in
  * the page, so a note being written there is kept until the people are shown again.
  */
-function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null, openPc = null, changes = null, busy = false }: {
+function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null, openPc = null, changes = null, busy = false, onUndone }: {
   finding: Finding; names: Names; onNote: (person: string) => void; opener: Opener; hidden: boolean;
+  /** A mark's Undo on a row: where the keyboard goes as the mark goes (the card's title). */
+  onUndone?: (() => void) | undefined;
   /** The open note, for the person it's to (one at a time per card). */
   note: { person: string; draft: ReactNode } | null;
   asked?: AskedSlot | null | undefined; openPc?: OpenPlanningCenter | null | undefined;
@@ -395,11 +398,14 @@ function PeopleList({ finding, names, note, onNote, opener, hidden, asked = null
     const id = x.person.person_id, open = note?.person === id;
     return <Fragment key={id}>
       <PersonRow listed={x} names={names}
+        // Whose note, for VoiceOver's list of buttons, where every row's read the same (audit M1): the visible words first,
+        // then the name, as "Open … in Planning Center" on the same row says it.
         action={x.canDraft && <button type="button" className="btn btn-secondary btn-sm push" aria-expanded={open} ref={opener(`person:${id}`)}
+          aria-label={`${open ? closeLabel(PREPARE_NOTE) : PREPARE_NOTE} to ${nameOf(names, id)}`}
           onClick={() => onNote(id)}>{open ? closeLabel(PREPARE_NOTE) : PREPARE_NOTE}</button>}>
         {openPc && <div className="person-pc"><OpenInPlanningCenter open={openPc} page="person" id={id} label={OPEN_PERSON} name={nameOf(names, id)} /></div>}
         {/* A mark shows once: in their open note, which follows this row, else here. */}
-        {!open && asked?.lines.filter(l => l.key === finding.key && l.person_id === id).map(l => <AskedNote key={l.key + l.person_id} line={l} />)}
+        {!open && asked?.lines.filter(l => l.key === finding.key && l.person_id === id).map(l => <AskedNote key={l.key + l.person_id} line={l} onUndone={onUndone} />)}
         {/* The leader's own click on one person, never a pick: the list's grouping and order stay as they are. */}
         {changes && isPersonId(id) && changes.row({ finding, person: id, full: nameOf(names, id), label: x.label, left: x.left, busy })}
       </PersonRow>
@@ -499,10 +505,27 @@ function AiLook({ finding, names, look }: { finding: Finding; names: Names; look
   </div>;
 }
 
-/** "On Mon, Nov 16 you said you'd ask Riley about Greeter." with Undo: quiet, on the person's row, the card and Today. */
-export function AskedNote({ line }: { line: AskedLine }) {
-  return <p className="small asked-line"><Icon name="check" small /><span>{line.text}</span>
-    <button type="button" className="btn btn-quiet btn-sm" onClick={line.undo}>Undo</button></p>;
+/**
+ * A card's status ("Needs a decision", "Worth a look"), said as the end of its heading too, so VoiceOver's heading
+ * navigation doesn't skip the app's main distinction (accessibility audit M2). The badge keeps its place on screen and is
+ * hidden from VoiceOver, so the words are said once.
+ */
+export const HeadStatus = ({ words }: { words: string }) => <span className="sr-only">{` ${words}.`}</span>;
+
+/** What the app's status line says as a mark is made, and taken back (accessibility audit S4). */
+export const MARKED = `Marked “${LOOKS_GOOD}”. Undo is next to it.`;
+export const UNMARKED = `Taken back: “${LOOKS_GOOD}”.`;
+/**
+ * "On Mon, Nov 16 you said you'd ask Riley about Greeter." with Undo: quiet, on the person's row, the card and Today.
+ * Just made in a note (`focusOnMount`), it takes the keyboard, since the button that made it is gone; Undo says so, and
+ * `onUndone` puts the keyboard where it goes next, since this line goes too (accessibility audit S3, S4).
+ */
+export function AskedNote({ line, focusOnMount = false, onUndone }: { line: AskedLine; focusOnMount?: boolean; onUndone?: (() => void) | undefined }) {
+  const announce = useAnnounce();
+  const here = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => { if (focusOnMount) here.current?.focus(); }, []);
+  return <p className="small asked-line" ref={here} {...(focusOnMount ? { tabIndex: -1 } : {})}><Icon name="check" small /><span>{line.text}</span>
+    <button type="button" className="btn btn-quiet btn-sm" onClick={() => { onUndone?.(); line.undo(); announce(UNMARKED); }}>Undo</button></p>;
 }
 
 const REWORD_LABEL: Record<Rewording, string> = { warmer: "Warmer", shorter: "Shorter", casual: "More casual", formal: "More formal" };
@@ -575,10 +598,17 @@ export function DraftBox({ label, to, addressee = null, body, onBody, onClose, f
   open?: OpenDraft | undefined; openTo?: OpenDraftTo | undefined;
 }) {
   const { say } = useSystemWords();
+  const announce = useAnnounce();
   const [editing, setEditing] = useState(startEditing);
   const [copied, setCopied] = useState(false);
   const editId = useId();
   const box = useRef<HTMLDivElement>(null);
+  // "Looks good — I'll send it" is replaced by the mark it made, and the mark's Undo by the button again: the keyboard
+  // follows each (accessibility audit S3, S4).
+  const [marking, setMarking] = useState(false);
+  const offer = useRef<HTMLButtonElement>(null);
+  const [offerAgain, setOfferAgain] = useState(false);
+  useEffect(() => { if (offerAgain && offer.current) { offer.current.focus(); setOfferAgain(false); } }, [offerAgain, mark?.line]);
   // Only as it appears: a note that stays open never takes the focus back.
   useLayoutEffect(() => { if (show && box.current) show(box.current); }, []);
   // The name goes into the words shown (DraftActions keeps it on this Mac, as Settings' Your name for notes).
@@ -598,8 +628,9 @@ export function DraftBox({ label, to, addressee = null, body, onBody, onClose, f
         {copied ? "Copied — send it yourself" : "Copy draft"}</button>}
       after={<button type="button" className="btn btn-secondary" onClick={() => setEditing(!editing)}>{editing ? "Done changing" : "Change the wording"}</button>} />
     {/* The leader's own mark, a separate click after checking it: opening the note, addressed or not, never makes one. */}
-    {mark && (mark.line ? <AskedNote line={mark.line} />
-      : <div className="find-next asked-offer"><button type="button" className="btn btn-secondary" aria-describedby={`${editId}-looks`} onClick={mark.onMark}>{LOOKS_GOOD}</button>
+    {mark && (mark.line ? <AskedNote line={mark.line} focusOnMount={marking} onUndone={() => { setMarking(false); setOfferAgain(true); }} />
+      : <div className="find-next asked-offer"><button type="button" ref={offer} className="btn btn-secondary" aria-describedby={`${editId}-looks`}
+        onClick={() => { setMarking(true); mark.onMark(); announce(MARKED); }}>{LOOKS_GOOD}</button>
         <span id={`${editId}-looks`} className="small">{say(LOOKS_GOOD_HELP)}</span></div>)}
     {children}
     <p className="small">{footer}</p>
@@ -762,7 +793,7 @@ export interface SundayChanges {
 }
 
 function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDecide, whoCouldHelp, feedback = null, occurrence, beside, people = null, asked = null,
-  openPc = null, planId = null, titleRef, pane, changes = null, busy = false }: {
+  openPc = null, planId = null, titleRef: keepTitle, pane, changes = null, busy = false }: {
   item: DecidedItem; names: Names; checkedAt: string | null; sender: string; sunday: string | null; canReword: boolean; people?: PeopleAccess | null | undefined;
   asked?: AskedSlot | null | undefined;
   /** The page pane App scrolls, so a note opened by its button is brought into view by scrolling only it. */
@@ -823,10 +854,15 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
     setLeaderFor(leader); setDraftFor(null); setPressed(`leader:${leader}`);
   };
   const remind = () => { if (reminding) setReminding(false); else { setReminding(true); setPressed("reminder"); } };
+  // The card's title, which takes the keyboard when the control pressed goes away (Never mind, a mark's Undo; audit S3).
+  const titleEl = useRef<HTMLHeadingElement | null>(null);
+  const titleRef = (el: HTMLHeadingElement | null) => { titleEl.current = el; keepTitle?.(el); };
+  const toTitle = () => titleEl.current?.focus();
   const decision = finding.tone === "decision";
+  const tagWords = item.state === "reopened" ? "This needs attention again" : decision ? "Needs a decision" : "Worth a look";
   const tag = item.state === "reopened"
-    ? <span className="badge b-attn"><Icon name="flag" small />This needs attention again</span>
-    : <span className={`badge ${decision ? "b-attn" : "b-look"}`}><Icon name={decision ? "flag" : "eye"} small />{decision ? "Needs a decision" : "Worth a look"}</span>;
+    ? <span className="badge b-attn" aria-hidden="true"><Icon name="flag" small />{tagWords}</span>
+    : <span className={`badge ${decision ? "b-attn" : "b-look"}`} aria-hidden="true"><Icon name={decision ? "flag" : "eye"} small />{tagWords}</span>;
   const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval, d, untimed, zone)}</span> : null;
   let title: string, body: string | null = null;
   switch (finding.kind) {
@@ -889,7 +925,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   }
   // For this Sunday only (under More choices): an open role covered another way, or not needed.
   const sundayOnly: DecisionChoice[] = finding.kind === "needs-people" ? ["covered-outside", "not-needed"] : [];
-  const decisionForm = choosing && <DecisionForm key={choosing} choice={choosing} onCancel={() => setChoosing(null)}
+  const decisionForm = choosing && <DecisionForm key={choosing} choice={choosing} onCancel={() => { toTitle(); setChoosing(null); }}
     onSave={reason => { onDecide(finding, choosing, reason, item.decision); setChoosing(null); }} />;
   const pcPlan = openPc && planId && !finding.source ? <OpenInPlanningCenter open={openPc} page="plan" id={planId} label={OPEN_PLAN} /> : null;
   const main = (finding.kind === "needs-people" && (hasPeople || canEscalate(finding))) || finding.kind === "lead-missing" || canRemind(finding);
@@ -898,7 +934,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
     onClose={closed(`person:${draftFor}`, () => setDraftFor(null))} people={people} mark={markFor(asked, finding, draftFor)} show={show(`person:${draftFor}`)} />;
   return <article className={`find${finding.tone === "look" && item.state === "open" ? " is-look" : ""}${item.state === "reopened" ? " is-reopened" : ""}`}>
     <div className="find-top">{tag}{where}</div>
-    <h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}</h3>
+    <h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}<HeadStatus words={tagWords} /></h3>
     {finding.role_facts && <ul className="list role-facts">{finding.role_facts.reasons.map(r => <li key={r}><Icon name="question" small />{r}</li>)}</ul>}
     {body && <p className="find-body">{body}</p>}
     {item.state === "reopened" && item.decision && <div className="panel-warn reopen" role="note">
@@ -949,21 +985,26 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
           written stays, hidden with the list. */}
       {open && rechecking}
       {hasPeople && (!rechecking || underRow) && <PeopleList finding={finding} names={names} hidden={!open || Boolean(rechecking)} note={underRow && draftFor ? { person: draftFor, draft: personNote } : null} onNote={notePerson}
-        opener={opener} asked={asked} openPc={openPc} changes={changes} busy={busy} />}
+        opener={opener} asked={asked} openPc={openPc} changes={changes} busy={busy} onUndone={toTitle} />}
       {hasPeople && open && !rechecking && whoCouldHelp && <AiLook finding={finding} names={names} look={whoCouldHelp} />}
     </>}
     {/* A mark shows once: in the note open for that person, else on their row in the people shown, else here on the card. */}
-    {asked?.lines.filter(l => l.key === finding.key && !onRow(l.person_id) && !inOpenNote(l.person_id)).map(l => <AskedNote key={l.person_id} line={l} />)}
+    {asked?.lines.filter(l => l.key === finding.key && !onRow(l.person_id) && !inOpenNote(l.person_id)).map(l => <AskedNote key={l.person_id} line={l} onUndone={toTitle} />)}
     {beside?.({ kind: finding.kind, ...(finding.position ? { team_id: finding.position.team_id, position_id: finding.position.id, name: finding.position.name } : {}) })}
     <Why finding={finding} checkedAt={checkedAt} />
   </article>;
 }
 
 
+/** What the app's status line says as a decision moves a card, and as Undo or removing a note moves it back (audit S4). */
+export const decidedLine = (d: DayWords) => `Saved for ${d.thisOne} only. It's now under Resolved by you.`;
+export const BACK_IN_LIST = "Brought back to the list.";
+export const NOTE_REMOVED = "Your note is removed.";
+export const DECISION_REMOVED = "Your decision is removed.";
 // The leader's own decision changed nothing in Planning Center (true whether or not Ozzie can add people there).
 const NO_LEAD_TEXT = "Planning Center still shows no confirmed lead; your decision here didn't change anything there.";
 
-function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedAt: string | null; onUndo: () => void }) {
+function ResolvedCard({ item, checkedAt, onUndo, titleRef }: { item: DecidedItem; checkedAt: string | null; onUndo: () => void; titleRef?: ((el: HTMLElement | null) => void) | undefined }) {
   const d = item.decision!, f = item.finding;
   const words = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
   const w = useSystemWords();
@@ -971,7 +1012,7 @@ function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedA
   return <article className="find is-resolved">
     <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — {words.thisOne} only</span>
       {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words, untimed, zone)}</span>}</div>
-    <h3 className="find-title">{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
+    <h3 className="find-title" tabIndex={-1} ref={titleRef}>{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
     <p className="find-quote">“{d.reason}”</p>
     <p className="find-body">You decided this {time(d.decided_at)}. {f.kind === "needs-people" ? w.remaining(f.remaining ?? 0) : w.system === "planning-center" ? NO_LEAD_TEXT : w.say("Planning Center still shows no confirmed lead; Ozzie hasn't changed anything there.")}</p>
     {d.earlier.length > 0 && <ul className="list earlier">{d.earlier.map(e => <li key={e.decided_at + e.reason}><Icon name="history" small />
@@ -1086,9 +1127,9 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
         : "Planning Center doesn't show clearly whether these two bookings were worked out.",
     ];
     return <article className={`find${confirmed ? "" : " is-look"}`} key={f.finding_id}>
-      <div className="find-top"><span className={`badge ${confirmed ? "b-attn" : "b-look"}`}><Icon name={confirmed ? "flag" : "eye"} small />{f.label}</span>
+      <div className="find-top"><span className={`badge ${confirmed ? "b-attn" : "b-look"}`} aria-hidden="true"><Icon name={confirmed ? "flag" : "eye"} small />{f.label}</span>
         <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap, words, untimed, zone)}</span></div>
-      <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap, zone)}.</h3>
+      <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap, zone)}.<HeadStatus words={f.label} /></h3>
       {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original, zone)}) and {label(b.booking_id, "another booking")} ({span(b.original, zone)}) overlap
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
       <div className="find-next"><span className="find-next-l">Next step</span><span>{nextStep(f)}</span></div>
@@ -1097,9 +1138,9 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     </article>;
   };
   const followUp = (f: FollowUpFinding) => <article className="find" key={f.finding_id}>
-    <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />{f.label}</span>
+    <div className="find-top"><span className="badge b-attn" aria-hidden="true"><Icon name="flag" small />{f.label}</span>
       <span className="find-where">{label(f.workflow_id, "A follow-up")}</span></div>
-    <h3 className="find-title">“{label(f.step_id, "A follow-up step")}” has no owner. It was due {churchTime(f.due_at, zone)}.</h3>
+    <h3 className="find-title">“{label(f.step_id, "A follow-up step")}” has no owner. It was due {churchTime(f.due_at, zone)}.<HeadStatus words={f.label} /></h3>
     <div className="find-next"><span className="find-next-l">Next step</span><span>{nextStep(f)}</span></div>
     <FeedbackChoices target={followUpTarget(f, occurrence, labels)} feedback={feedback} />
     <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${churchTime(f.due_at, zone)}, has passed.`]}
@@ -1109,8 +1150,8 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     <h2 className="h3" tabIndex={-1} ref={titleRef}>Rooms and follow-ups</h2>
     {result?.findings.map(f => f.kind === "room-overlap" ? room(f) : followUp(f))}
     {uncertainties.length > 0 && <article className="find is-look">
-      <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span></div>
-      <h3 className="find-title">Some room or follow-up details couldn't be confirmed.</h3>
+      <div className="find-top"><span className="badge b-look" aria-hidden="true"><Icon name="eye" small />Worth a look</span></div>
+      <h3 className="find-title">Some room or follow-up details couldn't be confirmed.<HeadStatus words="Worth a look" /></h3>
       <ul className="list unread">{[...new Set(uncertainties.map(u => uncertaintyText[u.code] ?? "Part of the room and follow-up check couldn't be read."))]
         .map(t => <li key={t}><Icon name="question" small />{t}</li>)}</ul>
       <OpsWhy evidence={result?.checked_scopes ?? []} defaultOpen={whyOpen} reads={[...readsFor({ kind: "rooms" }), ...readsFor({ kind: "follow-ups" })]}
@@ -1133,9 +1174,9 @@ function GroupMeetingCard({ item, names, defaultOpen = false, feedback = null, o
     "This is a schedule fact. Which one they go to is theirs to decide.",
   ];
   return <article className="find is-look">
-    <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
+    <div className="find-top"><span className="badge b-look" aria-hidden="true"><Icon name="eye" small />Worth a look</span>
       {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval, words, untimed, zone)}</span>}</div>
-    <h3 className="find-title">{nameOf(names, item.person_id)} has a group meeting at the same time.</h3>
+    <h3 className="find-title">{nameOf(names, item.person_id)} has a group meeting at the same time.<HeadStatus words="Worth a look" /></h3>
     <p className="find-body">Their group meets {item.meetings.map(m => span(m, zone)).join(" and ")}, while they're {serving}.</p>
     <FeedbackChoices target={groupTarget(item, occurrence)} feedback={feedback} />
     <div className="find-src">
@@ -1184,15 +1225,32 @@ export function Refused({ onSettings }: { onSettings?: (() => void) | undefined 
  * on the one-service page under its question, and with several services (services-page.tsx) once above them all.
  */
 export function PageControls(props: Pick<Parameters<typeof SundayPage>[0], "brief" | "busy" | "connected" | "configured" | "hasRecording" | "onCheck" | "onRecording"
-  | "onExample" | "onLaterExample" | "checking" | "stuck" | "adding" | "onSetUp" | "onSettings" | "problem" | "refused">) {
+  | "onExample" | "onLaterExample" | "checking" | "stuck" | "adding" | "onSetUp" | "onSettings" | "problem" | "refused"> & {
+  /** What the page now says needs a decision ("2 things need a decision and 1 is worth a look."), said when a check the leader started ends. */
+  summary?: string | undefined;
+}) {
   const { brief } = props;
   const w = useSystemWords();
+  const announce = useAnnounce();
   const stamp = useMemo(() => brief ? time(brief.checked_at ?? brief.completed_at) : null, [brief]);
+  // Check now stays focusable while it checks (marked unavailable, never disabled, so the keyboard isn't dropped), and the
+  // check it started is said when it ends: when, and what now needs a decision (accessibility audit S3e, S4). A check
+  // that fails says so by its own alert below.
+  const started = useRef(false);
+  const wasBusy = useRef(props.busy);
+  useEffect(() => {
+    if (wasBusy.current && !props.busy && started.current) {
+      started.current = false;
+      if (!props.problem && stamp) announce([`Checked ${stamp}.`, props.summary].filter(Boolean).join(" "));
+    }
+    wasBusy.current = props.busy;
+  }, [props.busy]);
   return <>
     {/* Always says what this is: a live read, the saved copy of a check, or the fictional example. */}
     {brief && <p className="checkline evidence"><Icon name="check" small />{brief.mode === "fictional" ? "Fictional example data" : brief.mode === "recording" ? w.savedCopy : w.liveRead} · {brief.sources.reads} reads · {stamp}{brief.sources.failed.length ? ` · ${brief.sources.failed.length} didn't complete` : ""}</p>}
     <div className="row" role="group" aria-label="What this page shows: a live check, the last saved check or the fictional example">
-      <button type="button" className="btn btn-primary" disabled={props.busy || !props.connected || !props.configured} onClick={props.onCheck}>
+      <button type="button" className="btn btn-primary" disabled={!props.connected || !props.configured} aria-disabled={props.busy || undefined}
+        onClick={() => { if (props.busy) return; started.current = true; props.onCheck(); }}>
         {props.busy ? <><Icon name="spinner" small spin />{w.checking}</> : w.checkNow}</button>
       {props.hasRecording && <button type="button" className="btn btn-secondary" disabled={props.busy} onClick={props.onRecording}>Show the last saved check</button>}
       {!brief && <button type="button" className="btn btn-quiet" onClick={props.onExample}>See a fictional example</button>}
@@ -1308,6 +1366,7 @@ export function SundayPage(props: {
   changes?: SundayChanges | null | undefined;
 }) {
   const { brief, names, decisions, onDecisions } = props;
+  const announce = useAnnounce();
   // The check's own day: with several services watched each part's cards say their own service's day ("For this Wednesday
   // only", "Not needed this Wednesday"), whatever day is around the page (polish 2026-11-21). A brief built by hand has none.
   const around = useDay();
@@ -1351,6 +1410,12 @@ export function SundayPage(props: {
   const groups = timed && timed.some(g => g.items.length > 0) ? timed : null;
   const resolved = view ? view.items.filter(i => i.state === "resolved") : [];
   const history = view?.history ?? [];
+  // What needs a decision, as the lede says it and as a check the leader started is said when it ends.
+  const countsText = !brief ? "" : roster ? `${rosterSummary(roster)} ${
+    counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `
+      : counts.looks ? `${counts.looks} ${counts.looks === 1 ? "thing is" : "things are"} worth a look. ` : ""}`
+    : brief.status === "checked-scope-clear" ? "Everything Ozzie checked is covered. " :
+    `${counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision` : incomplete ? "Nothing in what was read needs a decision" : "Nothing needs a decision"}${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `;
   // Opened from Today at one card: move there once it's laid out, with its people (and their Prepare a note) open.
   const titles = useRef(new Map<string, HTMLElement>());
   const titleRef = (key: string) => (el: HTMLElement | null) => { if (el) titles.current.set(key, el); else titles.current.delete(key); };
@@ -1360,8 +1425,26 @@ export function SundayPage(props: {
     if (title) showTitle(title, props.pane?.current ?? null);
     props.onFocused?.();
   }, [props.focus, brief]);
-  const onDecide = (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) =>
+  // A decision moves its card to Resolved by you, and Undo moves it back: the keyboard follows the card's title (or, when
+  // the card is gone, the heading it was under), and the app's status line says where it went (accessibility audit S3f–g, S4).
+  const [focusTo, setFocusTo] = useState<string | null>(null);
+  const resolvedHead = useRef<HTMLHeadingElement>(null);
+  const openHead = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!focusTo) return;
+    setFocusTo(null);
+    // Without scrolling: a decision made with the mouse leaves the leader where they were in the list (review of 0.6.1).
+    (titles.current.get(focusTo) ?? resolvedHead.current ?? openHead.current)?.focus({ preventScroll: true });
+  }, [focusTo]);
+  const onDecide = (finding: Finding, choice: DecisionChoice, reason: string, previous: SundayDecision | null) => {
     onDecisions(withDecision(decisions, decide(finding, choice, reason, new Date().toISOString(), previous)));
+    setFocusTo(`resolved:${finding.key}`);
+    announce(decidedLine(d));
+  };
+  const undo = (key: string) => { onDecisions(withoutDecision(decisions, key)); setFocusTo(key); announce(BACK_IN_LIST); };
+  const removeNote = (h: DecisionHistory) => {
+    onDecisions(withoutDecision(decisions, h.decision.key)); setFocusTo("resolved-heading"); announce(h.status === "source-confirmed" ? NOTE_REMOVED : DECISION_REMOVED);
+  };
   const card = (i: DecidedItem) => brief && <FindingCard key={i.finding.key + i.state} item={i} names={names} checkedAt={brief.checked_at} sender={sender} sunday={brief.plan.date} canReword={props.canReword}
     onDecide={onDecide} whoCouldHelp={props.whoCouldHelp} asked={brief.mode === "fictional" ? null : props.asked} openPc={brief.mode === "fictional" ? null : props.openInPlanningCenter}
     planId={brief.plan.id} titleRef={titleRef(i.finding.key)} pane={props.pane} feedback={controls} occurrence={occurrence} beside={props.beside}
@@ -1382,11 +1465,7 @@ export function SundayPage(props: {
     {brief && <p className="lede">
       {brief.stale ? "This check is out of date, so it isn't a current picture. " : incomplete ? `${roleFacts ? rolesUnchecked(roleFacts.roles) : `Part of ${d.thisOne} couldn't be checked`}, so this isn't a full picture. ` : ""}
       {/* The facts first, the limit on a quieter line of its own below (round 5). */}
-      {roster ? `${rosterSummary(roster)} ${
-        counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `
-          : counts.looks ? `${counts.looks} ${counts.looks === 1 ? "thing is" : "things are"} worth a look. ` : ""}`
-        : brief.status === "checked-scope-clear" ? "Everything Ozzie checked is covered. " :
-        `${counts.decisions ? `${counts.decisions} ${counts.decisions === 1 ? "thing needs" : "things need"} a decision` : incomplete ? "Nothing in what was read needs a decision" : "Nothing needs a decision"}${counts.looks ? ` and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}. `}
+      {countsText}
       {counts.resolved > 0 && `You resolved ${counts.resolved} yourself. `}
       {/* Only the leader hides a finding ("This isn't right", "Stop flagging this"), so it says so, and where it can come back. */}
       {setAside.length > 0 && `You hid ${setAside.length === 1 ? "one finding" : `${setAside.length} findings`}: ${setAside.length === 1 ? "it's" : "they're"} under “${HIDDEN_BY_YOU}” at the end of this page, where you can bring ${setAside.length === 1 ? "it" : "them"} back. `}
@@ -1395,13 +1474,13 @@ export function SundayPage(props: {
     {!brief && (props.uncheckedLine ? <p className="lede" role="status">{props.uncheckedLine}</p>
       : part ? <p className="lede">{part.name ?? SERVICE_UNNAMED} hasn't been checked yet. Ozzie reads it with your other services.</p>
       : <p className="lede">{DayName(d)} hasn't been checked yet. Check {w.name} now, or look around the fictional example first.</p>)}
-    {!part ? <PageControls {...props} /> : <>
+    {!part ? <PageControls {...props} summary={countsText.trim()} /> : <>
       {props.problem && !props.refused && <p role="alert" className="problem">{props.problem}</p>}
       {props.problem === CHECK_REFUSED && !props.refused && <CopyForAdministrator />}
       {props.problem && props.refused && <Refused onSettings={props.onSettings} />}
     </>}
     {brief && <section className="stack" aria-labelledby={part ? `${partId}-open` : "sunday-open-title"}>
-      <h2 id={part ? `${partId}-open` : "sunday-open-title"} className="sr-only">Open for {part?.name ?? d.thisOne}</h2>
+      <h2 id={part ? `${partId}-open` : "sunday-open-title"} className="sr-only" tabIndex={-1} ref={openHead}>Open for {part?.name ?? d.thisOne}</h2>
       {notice}
       {changes?.results}
       {(groups ? lead : open).map(card)}
@@ -1417,10 +1496,10 @@ export function SundayPage(props: {
     </section>)}
     {brief && groups && props.worthALook && <section className="stack" aria-label="Also worth a look">{props.worthALook}</section>}
     {(resolved.length > 0 || history.length > 0) && <section className="stack" aria-label="Resolved by you">
-      <h2 className="h3">Resolved by you</h2>
+      <h2 className="h3" tabIndex={-1} ref={resolvedHead}>Resolved by you</h2>
       <p className="small">Your own decisions for {d.thisOne} only. They aren't coverage in {w.name}, and they come back here if something there changes.</p>
-      {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => onDecisions(withoutDecision(decisions, i.finding.key))} />)}
-      {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => onDecisions(withoutDecision(decisions, h.decision.key))} />)}
+      {resolved.map(i => <ResolvedCard key={i.finding.key} item={i} checkedAt={brief!.checked_at} onUndo={() => undo(i.finding.key)} titleRef={titleRef(`resolved:${i.finding.key}`)} />)}
+      {history.map(h => <HistoryCard key={h.decision.key} entry={h} onRemove={() => removeNote(h)} />)}
     </section>}
     {brief && brief.mode !== "fictional" && props.more}
     {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} feedback={controls} occurrence={occurrence.id} titleRef={titleRef("rooms")}

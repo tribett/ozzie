@@ -55,7 +55,8 @@ describe("every page is headed the same way: the page's name small above, then o
 
   it("Settings says what it holds, in the same voice as the other pages", () => {
     const t = text(PAGES.Settings());
-    expect(t).toMatch(/^ Settings How Ozzie is set up on this Mac Which church and service Ozzie reads, how it uses AI and tells you things, and what it keeps here\. On this page /u);
+    // Then where to make the text bigger (accessibility audit B1: View › Bigger Text), then the index.
+    expect(t).toMatch(/^ Settings How Ozzie is set up on this Mac Which church and service Ozzie reads, how it uses AI and tells you things, and what it keeps here\. To make everything bigger, press ⌘ and \+ \(Command and plus\)\. ⌘ and − makes it smaller, and ⌘ and 0 puts it back\. They are also in the View menu, and Ozzie keeps your choice\. On this page /u);
   });
 
   it("Settings puts its title where every other page does: 16px under the eyebrow, though its sections sit closer", () => {

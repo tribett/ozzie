@@ -117,7 +117,9 @@ export function OtherAiAppsSetup({ on, path, find = findHelper, add = addToClaud
           : <>
             <div className="setup-apps" role="group" aria-label={SETUP_WHICH}>
               <span className="small">{SETUP_WHICH}</span>
-              {SETUP_APPS.map(a => <button key={a.id} type="button" className="chip" aria-pressed={a.id === chosen} onClick={() => setChosen(a.id)}>{a.name}</button>)}
+              {/* The chosen app shows a tick and a thicker edge, not only a paler fill (accessibility audit M9). */}
+              {SETUP_APPS.map(a => <button key={a.id} type="button" className="chip" aria-pressed={a.id === chosen} onClick={() => setChosen(a.id)}>
+                {a.id === chosen && <Icon name="check" small />}{a.name}</button>)}
             </div>
             {/* keyed, so a "Copied" or an "opened" line never carries over to another app */}
             {current.oneClick ? <ForClaude key={current.id} app={current} path={found} add={add} /> : <ByHand key={current.id} app={current} path={found} />}

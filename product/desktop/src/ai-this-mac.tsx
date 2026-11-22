@@ -328,7 +328,7 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
     const chosen = pick?.kind === "own" && pick.app === app.app && pick.id === m.id;
     return <li key={m.id}><button type="button" className="ai-row" aria-pressed={chosen} disabled={!m.fits || checking || working}
       onClick={() => { setPick({ kind: "own", app: app.app, id: m.id }); setCheck(null); }}>
-      <span>{MAC.row(m.id, m.bytes)}</span>
+      {chosen && <Icon name="check" small />}<span>{MAC.row(m.id, m.bytes)}</span>
       {m.recommended && m.fits && <span className="ai-tag">{MAC.recommended}</span>}
       {!m.fits && <span className="ai-tag ai-tag-muted">{MAC.tooBig}</span>}
     </button></li>;
@@ -393,7 +393,7 @@ export function ThisMacScreen({ onBack, onModel, onDone, done, onKey, onNone }: 
         const chosen = pick?.kind === "catalogue" && pick.id === m.id;
         return <li key={m.id}><button type="button" className="ai-row" aria-pressed={chosen} disabled={!selectable(m) || checking || working}
           onClick={() => { setPick({ kind: "catalogue", id: m.id }); setCheck(null); setRefused(null); setRemoved(null); }}>
-          <span>{MAC.catalogueRow(m.size, m.bytes)}</span>
+          {chosen && <Icon name="check" small />}<span>{MAC.catalogueRow(m.size, m.bytes)}</span>
           {m.recommended && m.offered && m.fits && <span className="ai-tag">{MAC.recommended}</span>}
           {m.downloaded && <span className="ai-tag ai-tag-muted">{MAC.onThisMac}</span>}
           {!m.offered && <span className="ai-tag ai-tag-muted">{MAC.notOffered}</span>}

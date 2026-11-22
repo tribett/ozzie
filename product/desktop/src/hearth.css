@@ -110,7 +110,7 @@
 /* Forgetting or deleting something on this Mac: set apart by its words' colour and border, never a red fill. */
 .btn-forget{background:transparent;color:var(--danger);border-color:var(--danger)}
 .btn-forget:hover{background:var(--danger-tint)}
-.btn.is-disabled,.btn[disabled]{background:var(--stone-tint);color:var(--ink-3);border-color:var(--line);cursor:not-allowed}
+.btn.is-disabled,.btn[disabled],.btn[aria-disabled="true"]{background:var(--stone-tint);color:var(--ink-3);border-color:var(--line);cursor:not-allowed}
 .btn-busy{background:var(--stone-tint);color:var(--ink-2);border-color:var(--line)}
 .ibtn{width:44px;height:44px;border-radius:50%;border:1px solid transparent;background:transparent;color:var(--ink-2);display:grid;place-items:center;cursor:pointer}
 .ibtn:hover{background:var(--stone-tint)}

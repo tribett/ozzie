@@ -13,7 +13,7 @@
 // lives in memory in church-sources.ts; Ozzie's own tests check that nothing which sends anything imports it or this
 // page, and that they use none of the ways off the page the test names (core/test/sources/stays-on-this-mac.test.ts; a
 // check on Ozzie's own code, not a sandbox).
-import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 import { MAX_HITS, occurrenceOf, pointerState, searchNotes, sectionName, titleCount, type NoteRange, type Notes, type NoteSection } from "../../../core/src/sources/notes.js";
 import { MAX_LABEL, NOTE_FINDING_KINDS, type NoteAttachment, type NotesSource } from "../../../core/src/sources/types.js";
@@ -205,15 +205,31 @@ function AttachChoice({ title, occurrence, of, attachments, teams, onChange }: {
   </div>;
 }
 
-function Confirm({ question, yes, no, onYes, onNo }: { question: string; yes: string; no: string; onYes: () => void; onNo: () => void }) {
+/**
+ * A question before something is removed, in place of the button that asked it (Church lists, both pages). It takes the
+ * keyboard as it appears, so it is read before either answer (accessibility audit S3j); its "Keep" answer gives the
+ * keyboard back to that button through `useBackTo`.
+ */
+export function Confirm({ question, yes, no, onYes, onNo }: { question: string; yes: string; no: string; onYes: () => void; onNo: () => void }) {
   const id = useId();
+  const ask = useRef<HTMLParagraphElement>(null);
+  // Without scrolling: it appears where its button was, in view (this page moves only its own pane, showInPane).
+  useEffect(() => { ask.current?.focus({ preventScroll: true }); }, []);
   return <div className="decide" role="group" aria-labelledby={id}>
-    <p id={id} className="find-body">{question}</p>
+    <p id={id} className="find-body" tabIndex={-1} ref={ask}>{question}</p>
     <div className="find-next">
       <button type="button" className="btn btn-primary btn-sm" onClick={onYes}>{yes}</button>
       <button type="button" className="btn btn-quiet btn-sm" onClick={onNo}>{no}</button>
     </div>
   </div>;
+}
+
+/** The button a Confirm replaced, and the way to give it the keyboard again once it is back ("Keep them"). */
+export function useBackTo(): [RefObject<HTMLButtonElement | null>, () => void] {
+  const button = useRef<HTMLButtonElement>(null);
+  const [back, setBack] = useState(false);
+  useEffect(() => { if (back) { button.current?.focus({ preventScroll: true }); setBack(false); } }, [back]);
+  return [button, () => setBack(true)];
 }
 
 function NotesCard({ source, read, positions, sources, reading, focused }: {
@@ -226,6 +242,7 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
   const [query, setQuery] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [removeButton, backToRemove] = useBackTo();
   const [rereading, setRereading] = useState(false);
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set(focused === null ? [] : [focused]));
   const [shownCount, setShownCount] = useState(() => Math.max(SHOWN_SECTIONS, (focused ?? -1) + 1));
@@ -313,9 +330,9 @@ function NotesCard({ source, read, positions, sources, reading, focused }: {
       </div>}
     </>}
     {problem && <p role="alert" className="problem">{problem}</p>}
-    {!removing && <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={() => setRemoving(true)}>{REMOVE_NOTES}</button></div>}
+    {!removing && <div className="find-next"><button type="button" ref={removeButton} className="btn btn-quiet btn-sm" onClick={() => setRemoving(true)}>{REMOVE_NOTES}</button></div>}
     {removing && <Confirm question={removeNotesConfirm(source.label)} yes="Yes, remove them" no="Keep them"
-      onYes={() => { setRemoving(false); void sources.remove(source.id).then(setProblem); }} onNo={() => setRemoving(false)} />}
+      onYes={() => { setRemoving(false); void sources.remove(source.id).then(setProblem); }} onNo={() => { setRemoving(false); backToRemove(); }} />}
   </section>;
 }
 

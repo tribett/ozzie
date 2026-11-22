@@ -69,7 +69,10 @@ describe("Ask Ozzie panel", () => {
     const running = panel({ initialTurns: [{ id: 1, question: "Who could cover Greeter?", state: "asking" }] });
     expect(running).toMatch(/<button type="button"[^>]*>Cancel this question<\/button>/);
     expect(running).toContain("Reading what Ozzie already has");
-    expect(running).toMatch(/<textarea[^>]*disabled=""/);
+    // The box takes nothing while it runs, but stays focusable so the keyboard isn't dropped (accessibility audit S3a):
+    // marked unavailable and read-only, never disabled.
+    expect(running).toMatch(/<textarea[^>]*aria-disabled="true" readOnly=""/);
+    expect(running).not.toMatch(/<textarea[^>]*\sdisabled=""/);
     expect(panel()).not.toContain("Cancel this question");
   });
 

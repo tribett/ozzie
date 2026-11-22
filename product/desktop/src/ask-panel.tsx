@@ -12,7 +12,7 @@
 // the same language as a finding (the question, Ozzie's sentences, where the facts came from and when, and "See how
 // this works" with the steps), not a thread of chat bubbles. Earlier questions this session stay as a short list of
 // cards to reopen. Once there is an answer, the two notes about Ask fold away so the answer stays in view at any zoom.
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import "./ask-panel.css";
 import { MAX_QUESTION_CHARS, onDayPage, suggestedQuestions, type ChipServices } from "../../../core/src/ask.js";
 import { kidsWording } from "../../../core/src/harness/compose.js";
@@ -236,16 +236,20 @@ function cardBadge(turn: Turn): { label: string; tone: string } {
 }
 
 /** One question and Ozzie's reply, as a card. A plan is its own card already, under the words that asked for it. */
-export function AskCard({ turn, page, onOpen, plans }: { turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined }) {
+export function AskCard({ turn, page, onOpen, plans, headRef }: {
+  turn: Turn; page?: string | undefined; onOpen: (page: Page) => void; plans?: PlanHooks | undefined;
+  /** The card's question, so a reopened card can take the keyboard there (AskPanel). */
+  headRef?: RefObject<HTMLElement | null> | undefined;
+}) {
   const titleId = `ask-q-${turn.id}`;
   if (turn.state === "plan") return <section className="ask-plan" aria-labelledby={titleId}>
-    <p id={titleId} className="small ask-asked">You asked: “{turn.question}”</p>
+    <p id={titleId} className="small ask-asked" ref={headRef as RefObject<HTMLParagraphElement | null> | undefined}>You asked: “{turn.question}”</p>
     <TurnBody turn={turn} page={page} onOpen={onOpen} plans={plans} />
   </section>;
   const badge = cardBadge(turn);
   return <article className="find ask-card" aria-labelledby={titleId}>
     <div className="find-top"><span className={`badge ${badge.tone}`}>{badge.label}</span><span className="find-where">Ask Ozzie</span></div>
-    <h3 id={titleId} className="find-title ask-q">{turn.question}</h3>
+    <h3 id={titleId} className="find-title ask-q" ref={headRef as RefObject<HTMLHeadingElement | null> | undefined}>{turn.question}</h3>
     <TurnBody turn={turn} page={page} onOpen={onOpen} plans={plans} />
   </article>;
 }
@@ -329,6 +333,9 @@ export function settledRoles(brief: SundayBrief, decisions: readonly SundayDecis
   return new Set([...applyDecisions(brief, decisions).items.filter(i => i.state === "resolved").map(i => i.finding.key), ...filled]);
 }
 
+/** Said beside the question box while nothing can be asked yet (Ozzie is still loading what it answers with). */
+export const ASK_UNAVAILABLE = "Ask Ozzie isn't available yet.";
+
 export function AskPanel(props: {
   open: boolean; onClose: () => void;
   /** Null until Ozzie's procedures are loaded. */
@@ -398,6 +405,9 @@ export function AskPanel(props: {
   const running = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  // An earlier question reopened: its button leaves the list, so the keyboard goes to the reopened card's question.
+  const [focusShown, setFocusShown] = useState(false);
   // The card on show: the newest question's unless the leader reopened an earlier one.
   const [shownId, setShownId] = useState<number | null>(null);
   const current = turns.find(t => t.id === shownId) ?? turns.at(-1);
@@ -405,6 +415,13 @@ export function AskPanel(props: {
   useEffect(() => { if (props.open) inputRef.current?.focus(); }, [props.open]);
   // Keep the card on show in view, at its top.
   useEffect(() => { cardRef.current?.scrollIntoView?.({ block: "start" }); }, [current?.id, current?.state]);
+  const shownHead = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!focusShown) return;
+    setFocusShown(false);
+    const head = shownHead.current;
+    if (head) { head.tabIndex = -1; head.focus(); }
+  }, [focusShown, current?.id]);
   // A question still running when the panel goes away is stopped.
   useEffect(() => () => running.current?.abort(), []);
   // Each time Ask opens: can this Mac listen? (Checking never asks the person anything.)
@@ -422,6 +439,15 @@ export function AskPanel(props: {
   const canType = ready || Boolean(props.plans) || Boolean(props.ask);
   const micUsable = canType && !busy && voiceStatus?.status === "ready";
   const update = (id: number, turn: AskTurn) => setTurns(all => all.map(t => t.id === id ? { id, question: t.question, ...(t.several ? { several: true } : {}), ...turn } as Turn : t));
+  /**
+   * The keyboard back in the question box (audit S3a–d), when it was in this panel or nowhere: a pressed suggestion, Ask
+   * button or Cancel goes away as a question runs or ends, and WebKit would drop the focus to the page's body (where
+   * Escape no longer closes Ask). Never taken from the page. The answer itself is said by the status line at the end.
+   */
+  const backToBox = () => {
+    const at = document.activeElement;
+    if (!at || at.tagName === "BODY" || !document.contains(at) || panelRef.current?.contains(at)) inputRef.current?.focus();
+  };
 
   /** The microphone button and ⌘⇧L: start listening, or finish. The words only fill the box. */
   const toggleVoice = async () => {
@@ -455,6 +481,7 @@ export function AskPanel(props: {
       setInput("");
       setShownId(id);
       setTurns(all => [...all, { id, question, ...(several ? { several: true } : {}), ...turn }]);
+      backToBox();
     };
     // Answered here from what was read (Genesis): what to take on and "What can you do?" keep their own answers. A card
     // asked about by count ("How many times was the visitor card filled in?") is a Genesis form, not the cards page.
@@ -480,9 +507,11 @@ export function AskPanel(props: {
     setShownId(id);
     setTurns(all => [...all, { id, question, ...(several ? { several: true } : {}), state: "asking" }]);
     setBusy(true);
+    // While it runs the box stays focusable (marked unavailable and taking no typing, never disabled), so the keyboard waits there.
+    backToBox();
     try { update(id, await props.ask(typed, controller.signal)); }
     catch { update(id, { state: "problem", code: null, text: ASK_FAILURES.unfinished }); }
-    finally { if (running.current === controller) running.current = null; setBusy(false); }
+    finally { if (running.current === controller) running.current = null; setBusy(false); backToBox(); }
   };
 
   const chips = !canType || busy || listening !== "no" ? [] : props.here ? (props.here.checked ? [...props.here.chips] : [HELP_CHIP])
@@ -500,7 +529,7 @@ export function AskPanel(props: {
     <p className="small ask-note"><Icon name="lock" small />{props.answerHere ? "Ozzie answers Genesis questions on this Mac from what it read. Nothing is sent to an AI." : words.say(ASK_NOTE)}</p>
     {answered && voiceAbout && <p className="small">{voiceAbout}</p>}
   </>;
-  return <ChooseAiContext.Provider value={closeThenChoose}><aside id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
+  return <ChooseAiContext.Provider value={closeThenChoose}><aside ref={panelRef} id="ask-panel" className="convo ask-panel" aria-label="Ask Ozzie" hidden={!props.open}
     onKeyDown={e => {
       if (e.key === "Escape") props.onClose();
       else if (isVoiceShortcut(e)) { e.preventDefault(); void toggleVoice(); }
@@ -527,21 +556,24 @@ export function AskPanel(props: {
       {brief?.mode === "fictional" && <p className="banner dashed"><Icon name="info" small />Fictional example. Answers use invented data.</p>}
       {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />A saved copy of a check from {time(brief.completed_at)}. Not a current check.</p>}
       {brief && !answered && <BasedOn text={basedOnBrief(brief)} />}
-      {current && <AnswerServices.Provider value={current.several ? MANY_SERVICES : null}><div ref={cardRef} className="ask-current"><AskCard turn={current} page={props.page} onOpen={props.onOpen} plans={props.plans} /></div></AnswerServices.Provider>}
+      {current && <AnswerServices.Provider value={current.several ? MANY_SERVICES : null}><div ref={cardRef} className="ask-current"><AskCard turn={current} page={props.page} onOpen={props.onOpen} plans={props.plans} headRef={shownHead} /></div></AnswerServices.Provider>}
       {earlier.length > 0 && <section className="ask-earlier" aria-labelledby="ask-earlier-h">
         <h3 id="ask-earlier-h" className="small bold">Earlier questions</h3>
         <ul className="list">{earlier.map(t => <li key={t.id}>
-          <button type="button" className="btn btn-quiet btn-sm ask-reopen" onClick={() => setShownId(t.id)}><Icon name="history" small />{t.question}</button></li>)}</ul>
+          <button type="button" className="btn btn-quiet btn-sm ask-reopen" onClick={() => { setShownId(t.id); setFocusShown(true); }}><Icon name="history" small />{t.question}</button></li>)}</ul>
       </section>}
       {chips.length > 0 && <div className="quick ask-quick" aria-label="Suggested questions">{chips.map(c => <button key={c} type="button" className="chip" onClick={() => { void ask(c); }}>{c}</button>)}</div>}
       {answered && <details className="listen-more ask-about"><summary><Icon name="chev" small />{ASK_ABOUT}</summary>{notes}</details>}
     </div>
     <form className="composer" onSubmit={e => { e.preventDefault(); void ask(input); }}>
       <label htmlFor="ask-input" className="sr-only">Your question</label>
-      <textarea id="ask-input" ref={inputRef} className="ask-input" rows={2} maxLength={MAX_QUESTION_CHARS} value={input} disabled={!canType || busy}
-        readOnly={listening !== "no"}
+      {/* Why the box takes nothing yet, in words beside it, not only as its faint hint (accessibility audit S5). */}
+      {!canType && <p id="ask-unavailable" className="small ask-unavailable">{ASK_UNAVAILABLE}</p>}
+      <textarea id="ask-input" ref={inputRef} className="ask-input" rows={2} maxLength={MAX_QUESTION_CHARS} value={input} disabled={!canType}
+        aria-describedby={canType ? undefined : "ask-unavailable"}
+        aria-disabled={busy || undefined} readOnly={listening !== "no" || busy}
         placeholder={listening !== "no" ? "Listening…" : ready ? `Ask about ${SERVICES}…` : props.plans ? "Ask Ozzie to keep an eye on something…"
-          : canType ? "Ask what Ozzie can do…" : "Ask Ozzie isn't available yet"}
+          : canType ? "Ask what Ozzie can do…" : undefined}
         onChange={e => { setInput(e.target.value); setVoiceNote(null); }}
         onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(input); } }} />
       <div className="composer-row"><span className="small">{input.length ? `${input.length}/${MAX_QUESTION_CHARS}` : ""}</span><span className="spacer" />

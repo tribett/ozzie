@@ -4,6 +4,7 @@
 // promises.ts only.
 import { useEffect, useRef, type ReactNode } from "react";
 import { Icon } from "./icons.js";
+import { useModal } from "./modal.js";
 import { allPromises, firstScreenPromises, promise } from "./promises.js";
 import type { Failure } from "./first-run-state.js";
 import "./first-run.css";
@@ -85,18 +86,21 @@ export function StepHead({ step, titleRef, children }: { step: string | null; ti
   </>;
 }
 
-/** A sheet over the page: Escape or its own button closes it; focus starts on its title and returns where it was. */
+/**
+ * A sheet over the page: Escape or its own button closes it; focus starts on its title, the page under it is inert while
+ * it is open (accessibility audit S2), and focus returns where it was.
+ */
 export function Sheet({ title, onClose, children, labelId }: { title: string; onClose: () => void; children: ReactNode; labelId: string }) {
   const heading = useRef<HTMLHeadingElement>(null);
+  const sheet = useRef<HTMLDivElement>(null);
+  useModal(sheet, heading);
   useEffect(() => {
-    const before = typeof document === "undefined" ? null : document.activeElement as HTMLElement | null;
-    heading.current?.focus();
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
     document.addEventListener("keydown", key);
-    return () => { document.removeEventListener("keydown", key); before?.focus?.(); };
+    return () => { document.removeEventListener("keydown", key); };
   }, [onClose]);
   return <div className="fr-sheet-back" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-    <div className="fr-sheet" role="dialog" aria-modal="true" aria-labelledby={labelId}>
+    <div className="fr-sheet" role="dialog" aria-modal="true" aria-labelledby={labelId} ref={sheet}>
       <h2 id={labelId} className="fr-sheet-title" tabIndex={-1} ref={heading}>{title}</h2>
       {children}
     </div>

@@ -460,7 +460,7 @@ function ChooseDifferent({ bridge, current, zone, onClose, onChoose, onAddress }
   return <Sheet title={SERVICE.sheetTitle} onClose={onClose} labelId="fr-different-title">
     {several && <ul className="fr-services">{pick!.services.filter(s => s.next).map(s => <li key={s.id}>
       <button type="button" className="fr-service" aria-pressed={service?.id === s.id} onClick={() => setService(s)}>
-        <span className="fr-service-t">{nameOf(s)}</span><span className="fr-service-d">{planLine(s.next!, pz)}</span></button></li>)}</ul>}
+        <span className="fr-service-t">{service?.id === s.id && <Icon name="check" small />}{nameOf(s)}</span><span className="fr-service-d">{planLine(s.next!, pz)}</span></button></li>)}</ul>}
     {plans === null ? <p className="fr-note" role="status"><Icon name="spinner" small spin /> Reading the next plans…</p>
       : <ul className="fr-plans">{plans.map(p => <li key={p.id}>
         <span>{[planWhen(p, pz), timesText(p, pz), p.title].filter(Boolean).join(" · ")}</span>

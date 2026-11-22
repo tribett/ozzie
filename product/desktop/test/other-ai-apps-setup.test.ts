@@ -87,7 +87,9 @@ describe("ready-made setup for each app", () => {
   it("offers every app in the list, Claude chosen first", () => {
     const html = render({ on: true, path: HELPER });
     expect(prose(html)).toContain(SETUP_WHICH);
-    for (const app of SETUP_APPS) expect(html).toContain(`aria-pressed="${app.id === "claude"}">${app.name}</button>`);
+    // The chosen app shows a tick before its name (accessibility audit M9); the others, their name alone.
+    const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    for (const app of SETUP_APPS) expect(html).toMatch(new RegExp(`aria-pressed="${app.id === "claude"}">${app.id === "claude" ? "<svg [^>]*aria-hidden=\"true\"[^>]*>.*?</svg>" : ""}${esc(app.name)}</button>`, "u"));
     expect(prose(html)).toContain(SETUP_MOVED);
   });
 

@@ -19,7 +19,7 @@ import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision
 import { CHECKING_LINE, PageControls, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { addService, alsoWatched, movedOn, readDay, removeService, type AlsoWatched, type ServiceChoice } from "./watched-services.js";
 import { askServices, findingServices, fromPartKey, partKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
-import { ServicesPage } from "./services-page.js";
+import { acrossText, ServicesPage } from "./services-page.js";
 import { FindingServicesContext, serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
 import { WatchedServices } from "./watch-another.js";
 import { RulesPage } from "./rules-page.js";
@@ -66,6 +66,8 @@ import { useOperationsReads } from "./operations-reads.js";
 import { PhoneMoment, phoneMomentNow } from "./phone-moment.js";
 import { CheckMySetup } from "./check-setup.js";
 import { hasPassed, moveOn, WAIT_AGAIN_MS, waitingText, type WatchedPlan } from "./move-on.js";
+import { useBiggerTextKey } from "./text-size.js";
+import { Announcer } from "./announce.js";
 import { keepTitle, noticeDayOf } from "./day-phrases.js";
 import { onboarding, type ModelProgress, type NoticeDay, type OllamaHistory, type OllamaProgress } from "./onboarding-bridge.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
@@ -193,6 +195,27 @@ function useHeldWhile<T>(value: T, hold: boolean): T {
   const before = useRef(value);
   useEffect(() => { if (!hold) before.current = value; });
   return hold ? before.current : value;
+}
+
+/**
+ * The narrowest window, in CSS pixels, where Ask docks beside the page instead of lying over it (styles.css has the same
+ * width): the sidebar's 304px, Ask's 380px and the 596px the page keeps in the smallest window (900px). The default
+ * 1280-point window docks; zoomed text (View › Bigger Text) narrows the CSS width and Ask goes back over the page.
+ */
+export const ASK_DOCKS_AT = 1280;
+/** Whether Ask docks beside the page now, live (the window resized or the text size changed). Without a window, it does. */
+function useAskDocked(): boolean {
+  const query = () => typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(`(min-width: ${ASK_DOCKS_AT}px)`) : null;
+  const [docked, setDocked] = useState(() => query()?.matches ?? true);
+  useEffect(() => {
+    const q = query();
+    if (!q) return;
+    const changed = () => setDocked(q.matches);
+    changed();
+    q.addEventListener?.("change", changed);
+    return () => q.removeEventListener?.("change", changed);
+  }, []);
+  return docked;
 }
 
 /** Dark appearance follows this Mac's setting, live. Hearth's dark tokens apply under `.oz.dark`. */
@@ -1488,9 +1511,32 @@ export function App() {
   // "Keep an eye on Sunday" in Ask becomes a plan to confirm: read here, with no model.
   const plans: PlanHooks = { parse: typed => parseRequest(typed, new Date().toISOString(), scheduleZone, { sunday: chosenSunday }), context: planContext, actions: planActions };
   const dark = useDarkAppearance();
-  // Closing Ask puts keyboard focus back on the button that opens it, rather than nowhere.
+  // ⌘+ makes everything bigger, as View › Bigger Text (⌘=) does (text-size.ts; accessibility audit B1).
+  useBiggerTextKey();
+  // Closing Ask puts keyboard focus back on the button that opens it, rather than nowhere: once the sidebar is no longer
+  // inert under it (below), so after the close has drawn, and only when nothing on the page took it meanwhile (Ask's
+  // "Choose how Ozzie uses AI" opens the AI screens, whose title takes it).
   const askEntry = useRef<HTMLButtonElement>(null);
-  const closeAsk = () => { setAskOpen(false); askEntry.current?.focus(); };
+  const askClosing = useRef(false);
+  const closeAsk = () => { askClosing.current = true; setAskOpen(false); };
+  useEffect(() => {
+    if (askOpen || !askClosing.current) return;
+    askClosing.current = false;
+    const at = document.activeElement;
+    if (!(at && at.tagName !== "BODY" && (side.current?.contains(at) || mainRef.current?.contains(at)))) askEntry.current?.focus();
+  }, [askOpen]);
+  // Narrower than ASK_DOCKS_AT, Ask lies over the page (over the whole window under 760px): while it's open the sidebar and
+  // the page under it are inert, so Tab, Full Keyboard Access and VoiceOver can't reach controls it hides (accessibility
+  // audit S1, WCAG 2.4.11). Escape or its close button closes it. Docked, the page beside it stays in use.
+  const askDocked = useAskDocked();
+  const askCovers = askOpen && !askDocked;
+  // Escape closes it wherever the keyboard is (a click on the dimmed page leaves it on nothing).
+  useEffect(() => {
+    if (!askCovers) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) closeAsk(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [askCovers]);
   // A narrow window (or large text) shows the pages under Menu in a bar across the top, named as in the sidebar.
   const [menu, setMenu] = useState(false);
   // The AI screens over the page, from the sidebar's AI line and from every place that needs AI when none works (Ask,
@@ -1643,14 +1689,16 @@ export function App() {
     : <ServicesPage counts={open} controls={<PageControls brief={harnessBrief} busy={busy} connected={connected} configured={configured} hasRecording={Boolean(latest)}
         onCheck={() => { void check(); }} onRecording={() => { if (latest) void act(() => sundaySource.loadRecording(org, latest.path_id)); }} onExample={showExample}
         checking={checkingSaved && !connected} stuck={checkStuck ? checkConnection : null} adding={addingAccess || reconnecting} onSetUp={() => openSetup()}
-        onSettings={() => setPage("connection")} problem={problem} refused={refused} />}
+        onSettings={() => setPage("connection")} problem={problem} refused={refused} summary={open ? acrossText(open, 1 + otherParts.length) : undefined} />}
       parts={[{ key: "main", date: brief?.plan.date ?? planDate(watchedDay.get(settings.planId)?.sort_date ?? null), dayText: day.date, node: main }, ...otherParts]} watch={pcWatch} />;
   return <DayProvider value={day}><SystemWordsContext.Provider value={onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null)}><ListsSystemName.Provider value={words.name}>
     {/* Teams named with their service while more than one is watched (team-labels.ts): Church rules and Church lists. */}
     <TeamServicesContext.Provider value={serviceOfTeam}><FindingServicesContext.Provider value={findingServiceNames}><ListsTeamServices.Provider value={listsTeamServices}>
     <ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
+    {/* One polite status line for the whole app, outside the shell (accessibility audit S4): announce.tsx. */}
+    <Announcer>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
-      <aside ref={side} className={`side${menu ? " is-menu" : ""}`}>
+      <aside ref={side} className={`side${menu ? " is-menu" : ""}`} inert={askCovers}>
         <div className="brand"><img className="logo" src="/ozzie.svg" alt="Ozzie by FlockConnect" /></div>
         <button type="button" ref={menuButton} className="btn btn-secondary side-menu" aria-expanded={menu} aria-controls="side-nav"
           onClick={() => setMenu(!menu)}><Icon name="menu" />Menu</button>
@@ -1678,7 +1726,7 @@ export function App() {
         {askShown && <button type="button" ref={askEntry} className="btn btn-secondary ask-entry" aria-expanded={askOpen} aria-controls="ask-panel"
           onClick={() => { setMenu(false); setAskOpen(!askOpen); }}><AskIcon /><span className="nav-label">Ask Ozzie</span></button>}
       </aside>
-      <main className="main" ref={mainRef}>
+      <main className="main" ref={mainRef} inert={askCovers}>
         {showSetup && choosing && <ChooseSystem onChoose={to => { sys.setState({ ...sys.state, main: to }); setSetupKey(k => k + 1); setSetup("first"); }}
           onExample={() => { setupMemo.set({ exampleSeen: true }); leaveSetup("sunday"); showExample(); }} />}
         {showSetup && !choosing && onSystem && <SystemFirstRun key={setupKey} state={sys.state} onState={sys.setState} start={setup === "service" ? "service" : "connect"}
@@ -1845,6 +1893,9 @@ export function App() {
             noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null} /></div>}
       </main>
       {quitAsk && <QuitQuestion ask={{ ...quitAsk, checks: checksNow }} undo={changes.undoable.length ? quitUndo(changes.undoable) : null} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
+      {/* Over the page, Ask dims what it makes unusable; a click there or Escape closes it (review of 0.6.1: the page
+          looked usable and didn't answer the mouse). */}
+      {askCovers && <div className="ask-shade" aria-hidden="true" onClick={closeAsk} />}
       <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} settled={chipSettled} chipFindings={chipFindings} modelReady={modelReady} onOpen={setPage}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : onGenesis ? (sys.state.genesis ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),
@@ -1852,5 +1903,6 @@ export function App() {
           here: { checked: Boolean(genesisShown.capture), chips: genesisQuestions(genesisShown.view) } } : {})}
         {...(onSystem || onGenesis ? { jobsNotHere: { parse: plans.parse, text: words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true) } } : { plans })} />
     </div>
+    </Announcer>
   </div></ChooseAiContext.Provider></ListsTeamServices.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
 }

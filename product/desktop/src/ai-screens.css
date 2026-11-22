@@ -41,6 +41,8 @@
   border-radius: 10px; border: 1.5px solid var(--control); background: var(--surface); color: var(--ink); cursor: pointer; font: 500 var(--t-md)/1.35 var(--f-ui); }
 .oz .ai-row:hover { background: var(--stone-tint); }
 .oz .ai-row[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--accent-tint); color: var(--accent-ink); }
+/* The chosen row's tick (accessibility audit M9): the state is a shape too, not only an edge and a fill. */
+.oz .ai-row > .ic { flex: none; }
 .oz .ai-row:disabled { cursor: default; background: var(--sunken); color: var(--ink-3); border-color: var(--line); }
 /* The person's own models, under the three Ozzie can set up. */
 .oz .ai-sub { font-weight: 600; color: var(--ink); }

@@ -62,6 +62,8 @@ mod planning_center_pages;
 mod shortcuts;
 // New versions of Ozzie from the public release, installed only on the person's click.
 mod updater;
+// View › Bigger Text, Smaller Text and Actual Size: the page's zoom, kept across launches (accessibility audit B1).
+mod text_size;
 /// Where saved connections live in this Mac's Keychain, per organization: `local:<organization>`.
 const WORKSPACE_PREFIX: &str = "local:";
 /// Ozzie's own Public (PKCE) Planning Center registration, "Ozzie for Mac", built in at compile
@@ -1827,6 +1829,7 @@ fn main() {
         .manage(church_systems::ChurchSystems::default())
         .manage(local_tools::LocalTools::default())
         .manage(shortcuts::OpenedPage::default())
+        .manage(text_size::TextSize::default())
         .manage(Smoke {
             enabled: smoke,
             ready: AtomicBool::new(false),
@@ -1854,6 +1857,7 @@ fn main() {
             changes::setup(app.handle());
             updater::setup(app);
             phone_notice::setup(app);
+            text_size::setup(app);
             always_on::setup(app)?;
             Ok(())
         })
@@ -2020,9 +2024,13 @@ fn main() {
             updater::update_status,
             updater::update_check,
             updater::update_set_automatic,
-            updater::update_install
+            updater::update_install,
+            text_size::text_size_step
         ])
-        .on_page_load(|window, _| always_on::on_page_load(window))
+        .on_page_load(|window, _| {
+            text_size::on_page_load(window);
+            always_on::on_page_load(window);
+        })
         .build(tauri::generate_context!())
         .expect("native consumer failed to start");
     if smoke {

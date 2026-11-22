@@ -19,6 +19,7 @@ import { AutostartToggle } from "./responsibility-views.js";
 import { eyeLine, keepTitle, SERVICES, Services } from "./day-phrases.js";
 import { promise } from "./promises.js";
 import { useSystemWords } from "./church-system.js";
+import { TEXT_SIZE_NOTE } from "./text-size.js";
 
 /** How Planning Center words a connection at sign-in (spec §6), said beside the promise. */
 export const CONNECTION_WORDING = "Planning Center's page may say Ozzie could also make changes. That's how Planning Center words every connection.";
@@ -266,6 +267,8 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
     <p className="eyebrow">Settings</p>
     <h1 className="h1">How Ozzie is set up on this Mac</h1>
     <p className="lede">Which church and service Ozzie reads, how it uses AI and tells you things, and what it keeps here.</p>
+    {/* Text size (accessibility audit B1): where the View menu's Bigger Text is, said where people look for it. */}
+    <p className="small text-size-note">{TEXT_SIZE_NOTE}</p>
     <SettingsIndex sections={shown ? candidates.filter(s => shown.includes(s.id)) : candidates} onGo={go} />
 
     {system ? <div className="settings-slot" tabIndex={-1} role="group" aria-labelledby="pco-title" ref={at("pco-title")}>{system}</div>

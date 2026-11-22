@@ -18,7 +18,7 @@ import { CELLS_CUT, GUESSED_LETTERS, readFrom, ROWS_CUT, SAME_NAME, SOURCE_PROBL
 import { plainLine } from "../../../core/src/sources/text.js";
 import { useChurchSources, type ChurchSources, type SourceRead } from "./church-sources.js";
 import { LINK_TITLE, LinkForm } from "./church-link-form.js";
-import { ListsSystemName, ListsTeamServices, sayFor, teamNames } from "./church-notes.js";
+import { Confirm, ListsSystemName, ListsTeamServices, sayFor, teamNames, useBackTo } from "./church-notes.js";
 import { ChurchNotes } from "./church-notes.js";
 import { Icon } from "./icons.js";
 import "./church-lists.css";
@@ -203,23 +203,13 @@ const ListTable = memo(function ListTable({ sheet, label }: { sheet: Sheet; labe
   </div>;
 });
 
-function Confirm({ question, yes, no, onYes, onNo }: { question: string; yes: string; no: string; onYes: () => void; onNo: () => void }) {
-  const id = useId();
-  return <div className="decide" role="group" aria-labelledby={id}>
-    <p id={id} className="find-body">{question}</p>
-    <div className="find-next">
-      <button type="button" className="btn btn-primary btn-sm" onClick={onYes}>{yes}</button>
-      <button type="button" className="btn btn-quiet btn-sm" onClick={onNo}>{no}</button>
-    </div>
-  </div>;
-}
-
 function ListCard({ source, read, positions, sources, reading }: {
   source: SheetSource; read: SourceRead | undefined; positions: readonly PositionLabel[]; sources: ChurchSources; reading: boolean;
 }) {
   const [name, setName] = useState(source.label);
   const [problem, setProblem] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [removeButton, backToRemove] = useBackTo();
   const [rereading, setRereading] = useState(false);
   const id = useId();
   const system = useContext(ListsSystemName);
@@ -283,9 +273,9 @@ function ListCard({ source, read, positions, sources, reading }: {
       <ListTable sheet={sheet} label={source.label} />
     </>}
     {problem && <p role="alert" className="problem">{problem}</p>}
-    {!removing && <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={() => setRemoving(true)}>{REMOVE_LIST}</button></div>}
+    {!removing && <div className="find-next"><button type="button" ref={removeButton} className="btn btn-quiet btn-sm" onClick={() => setRemoving(true)}>{REMOVE_LIST}</button></div>}
     {removing && <Confirm question={link ? removeLinkConfirm(source.label) : removeConfirm(source.label)} yes="Yes, remove it" no="Keep it"
-      onYes={() => { setRemoving(false); void sources.remove(source.id).then(setProblem); }} onNo={() => setRemoving(false)} />}
+      onYes={() => { setRemoving(false); void sources.remove(source.id).then(setProblem); }} onNo={() => { setRemoving(false); backToRemove(); }} />}
   </section>;
 }
 
@@ -296,10 +286,11 @@ function ForgetAll({ sources, onDone }: {
   onDone: (problem: string | null) => void;
 }) {
   const [confirm, setConfirm] = useState(false);
+  const [forgetButton, backToForget] = useBackTo();
   return <div>
-    {!confirm && <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(true)}>{FORGET_ALL}</button></div>}
+    {!confirm && <div className="find-next"><button type="button" ref={forgetButton} className="btn btn-quiet btn-sm" onClick={() => setConfirm(true)}>{FORGET_ALL}</button></div>}
     {confirm && <Confirm question={FORGET_CONFIRM} yes="Yes, forget them all" no="Keep them"
-      onYes={() => { setConfirm(false); void sources.forgetAll().then(onDone); }} onNo={() => setConfirm(false)} />}
+      onYes={() => { setConfirm(false); void sources.forgetAll().then(onDone); }} onNo={() => { setConfirm(false); backToForget(); }} />}
   </div>;
 }
 
@@ -307,11 +298,12 @@ function ForgetAll({ sources, onDone }: {
 function ForgetLinks({ sources }: { sources: ChurchSources }) {
   const [confirm, setConfirm] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [forgetButton, backToForget] = useBackTo();
   return <div className="find">
     <p className="find-body">{SOURCE_PROBLEMS["links-unreadable"]}</p>
-    {!confirm && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => setConfirm(true)}>{FORGET_LINKS}</button></div>}
+    {!confirm && <div className="find-next"><button type="button" ref={forgetButton} className="btn btn-secondary btn-sm" onClick={() => setConfirm(true)}>{FORGET_LINKS}</button></div>}
     {confirm && <Confirm question={FORGET_LINKS_CONFIRM} yes="Yes, forget them all" no="Keep them"
-      onYes={() => { setConfirm(false); void sources.forgetLinks().then(setProblem); }} onNo={() => setConfirm(false)} />}
+      onYes={() => { setConfirm(false); void sources.forgetLinks().then(setProblem); }} onNo={() => { setConfirm(false); backToForget(); }} />}
     {problem && <p role="alert" className="problem">{problem}</p>}
   </div>;
 }

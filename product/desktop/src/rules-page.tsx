@@ -57,6 +57,9 @@ export const SYSTEM_RULES = (w: SystemWords) => w.system === "genesis"
   ? "With Genesis, Ozzie checks no service: Genesis doesn't share volunteer schedules. It shows the events coming up, how many attended the ones that have ended, your groups, and how many times each form was filled in. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from Genesis."
   : `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
 
+/** Under Scheduled leads: what an empty team box means. */
+export const LEAD_EMPTY_HELP = "Leave a team's box empty if that team doesn't need a scheduled lead.";
+
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
 export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null, procedureDay }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
@@ -126,11 +129,13 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
       {/* Neutral before a church has said what it uses (polish 2026-11-21); Planning Center's own words once it has. */}
       <p className="find-body">{w.say(`If a team should always have a scheduled lead on ${dayName(d)}, choose the lead's position from the team's positions, or type its name as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.`)}</p>
       {teams.length === 0 && <p className="small">Check {SERVICES} first to see their teams.</p>}
+      {/* What an empty box means, said once and tied to every team's box (it was only the boxes' faint hint; audit S5). */}
+      {teams.length > 0 && <p className="small" id="lead-empty-help">{LEAD_EMPTY_HELP}</p>}
       {teams.map(([team, positionNames]) => <div className="rule-team" key={team}>
         <div className="row rule-row">
           <label htmlFor={`lead-${team}`}>{teamLabel(positionNames.join(", "), team, services)}</label>
           {/* The team's position names from the last check, offered as choices; typing another name still works. */}
-          <input id={`lead-${team}`} list={`lead-options-${team}`} autoComplete="off" value={typed[team] ?? leadFor(team)} placeholder="No scheduled lead required"
+          <input id={`lead-${team}`} list={`lead-options-${team}`} autoComplete="off" value={typed[team] ?? leadFor(team)} aria-describedby="lead-empty-help"
             onChange={e => setLead(team, e.target.value)} />
           <datalist id={`lead-options-${team}`}>{[...new Set(positionNames)].sort((a, b) => a.localeCompare(b)).map(n => <option key={n} value={n} />)}</datalist>
         </div>

@@ -224,7 +224,7 @@ describe("Sunday's decisions show once", () => {
     const page = text(html);
     const attention = page.slice(page.indexOf("Needs your attention"), page.indexOf("Ready to review"));
     // Names are filled in on this Mac from the check on screen; the stored write-up holds only the id.
-    expect(attention).toMatch(new RegExp(`Sunday has 2 things to decide\\. Ozzie checked your services at ${new Date(FRI).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}: For Sunday November 22, this check found 2 items that need a decision and 2 worth a look\\. Avery Brightwater hasn't accepted Greeter yet\\. Based on: Planning Center Services, checked Fri, Nov 20, 9:00 AM See how this works Greeter: `, "u"));
+    expect(attention).toMatch(new RegExp(`Sunday has 2 things to decide\\. Needs a decision\\. Ozzie checked your services at ${new Date(FRI).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}: For Sunday November 22, this check found 2 items that need a decision and 2 worth a look\\. Avery Brightwater hasn't accepted Greeter yet\\. Based on: Planning Center Services, checked Fri, Nov 20, 9:00 AM See how this works Greeter: `, "u"));
     expect(attention).toMatch(/Ozzie noticed this at .+ while keeping an eye on your services\. Notes ready Ozzie has a note ready for these on the Services page\. Nothing has been sent\. Open Services/u);
     expect(html).not.toContain("Read Ozzie&#x27;s write-up");
     // No extra item: the write-up is on the card it belongs to.
@@ -233,7 +233,7 @@ describe("Sunday's decisions show once", () => {
     // AI help set up but no write-up this run: one quiet line says why, and the fixed decisions are as before.
     const spent = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
       watch: watchWith(writeup("keep-found", { none: true, why: "spent" })) })));
-    expect(spent).toMatch(/Sunday has 2 things to decide\. No write-up this time: AI help has reached its limit for now\. This card shows what Ozzie's own check of Planning Center found\. Greeter: /u);
+    expect(spent).toMatch(/Sunday has 2 things to decide\. Needs a decision\. No write-up this time: AI help has reached its limit for now\. This card shows what Ozzie's own check of Planning Center found\. Greeter: /u);
     const bare = page.replace(/Ozzie checked your services at .+? See how this works /u, "");
     // One run's own limit is not the allowance (review G).
     const ranPast = text(renderToStaticMarkup(React.createElement(TodayPage, { brief, names, onSunday: () => {}, now: FRI, zone: ET, store: memoryStore(),
@@ -596,7 +596,8 @@ describe("Today names the decisions (audit item 17)", () => {
   it("the Sunday page moves to the card Today asked for by its own title element, scrolling only the page pane", async () => {
     const { readFileSync } = await import("node:fs");
     const page = readFileSync(new URL("../src/sunday-page.tsx", import.meta.url), "utf8");
-    expect(page).toContain('<h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}</h3>');
+    // Its heading ends with the card's status, unseen, for heading navigation (accessibility audit M2).
+    expect(page).toContain('<h3 className="find-title" tabIndex={-1} ref={titleRef}>{title}<HeadStatus words={tagWords} /></h3>');
     expect(page).toContain("titleRef={titleRef(i.finding.key)}");
     // Never by searching the page, and never scrollIntoView (it scrolls the whole window).
     expect(page).not.toMatch(/scrollIntoView\(|getElementById|querySelector|\.closest\(/u);

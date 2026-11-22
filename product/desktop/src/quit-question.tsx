@@ -7,6 +7,7 @@
 // Closing the window instead keeps Ozzie running in the menu bar.
 import { useEffect, useRef } from "react";
 import { Icon } from "./icons.js";
+import { useModal } from "./modal.js";
 import { quitting } from "./background.js";
 import type { Readiness } from "./proactive.js";
 
@@ -50,11 +51,13 @@ export function quitWords({ cards, checks }: QuitAsk, undo: string | null = null
 
 export function QuitQuestion({ ask, onQuit, onKeep, undo = null }: { ask: QuitAsk; onQuit: () => void; onKeep: () => void; undo?: string | null }) {
   const keep = useRef<HTMLButtonElement>(null);
-  // Keeping Ozzie running is where focus starts: the safe answer.
-  useEffect(() => { keep.current?.focus(); }, []);
+  const question = useRef<HTMLDivElement>(null);
+  // Keeping Ozzie running is where focus starts: the safe answer. The window under it is inert while it is open, and
+  // "Keep Ozzie running" gives focus back to where it was (accessibility audit S2).
+  useModal(question, keep);
   const words = quitWords(ask, undo);
   return <div className="quit-scrim">
-    <div className="quit-question" role="alertdialog" aria-modal="true" aria-labelledby="quit-title" aria-describedby="quit-body"
+    <div className="quit-question" role="alertdialog" aria-modal="true" aria-labelledby="quit-title" aria-describedby="quit-body" ref={question}
       onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); onKeep(); } }}>
       <h2 id="quit-title" className="h3"><Icon name="info" small /> {words.title}</h2>
       <div id="quit-body" className="stack-tight">{words.lines.map(l => <p key={l}>{l}</p>)}</div>

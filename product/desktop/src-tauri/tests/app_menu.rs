@@ -64,12 +64,27 @@ fn main() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("the app builds with Ozzie's menu");
 
-    // Ozzie's own items: exactly one, "Quit Ozzie", with the id always_on sends to the question.
+    // Ozzie's own items: "Quit Ozzie", with the id always_on sends to the question, and View's three text size items
+    // (accessibility audit B1), with the ids always_on sends to text_size.rs.
     let mut own = Vec::new();
     own_items(app.menu().expect("the app menu").items().unwrap(), &mut own);
     assert_eq!(
         own,
-        vec![(app_menu::QUIT_ID.to_owned(), app_menu::QUIT_TEXT.to_owned())]
+        vec![
+            (app_menu::QUIT_ID.to_owned(), app_menu::QUIT_TEXT.to_owned()),
+            (
+                app_menu::BIGGER_ID.to_owned(),
+                app_menu::BIGGER_TEXT.to_owned()
+            ),
+            (
+                app_menu::SMALLER_ID.to_owned(),
+                app_menu::SMALLER_TEXT.to_owned()
+            ),
+            (
+                app_menu::ACTUAL_ID.to_owned(),
+                app_menu::ACTUAL_TEXT.to_owned()
+            ),
+        ]
     );
 
     // What AppKit holds as the main menu.
@@ -95,6 +110,18 @@ fn main() {
     assert_eq!(command_q.len(), 1, "one item has Command-Q");
     assert_eq!(command_q[0].title, app_menu::QUIT_TEXT);
     assert_eq!(command_q[0].action, "customAction:");
+    // Bigger Text is Command-=, Smaller Text Command-minus and Actual Size Command-0, each a menu event and the only
+    // item with its key (Command-+ is the page's: text-size.ts).
+    for (title, key) in [
+        (app_menu::BIGGER_TEXT, "="),
+        (app_menu::SMALLER_TEXT, "-"),
+        (app_menu::ACTUAL_TEXT, "0"),
+    ] {
+        let with_key: Vec<&Item> = items.iter().filter(|i| i.command && i.key == key).collect();
+        assert_eq!(with_key.len(), 1, "one item has Command-{key}");
+        assert_eq!(with_key[0].title, title);
+        assert_eq!(with_key[0].action, "customAction:");
+    }
     // The rest of the default menu is still there.
     for action in [
         "hide:",

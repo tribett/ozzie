@@ -24,12 +24,13 @@ import { FindingFeedback, useFeedback, type FeedbackControls, type FeedbackSourc
 import { BriefingPreview, briefingPreviewTimes, SundayReadyBrief } from "./sunday-ready.js";
 import type { CalendarRead } from "../../../core/src/calendar/events.js";
 import { CalendarGroup } from "./calendar-today.js";
-import { AskedNote, CHECK_CONNECTION, CHECKING_LINE, STUCK_LINE, type AskedLine } from "./sunday-page.js";
+import { AskedNote, CHECK_CONNECTION, CHECKING_LINE, HeadStatus, STUCK_LINE, type AskedLine } from "./sunday-page.js";
 import { useDay, type DayWords } from "./day-words.js";
 import { DayName, dayName, eyeLine, OPEN_SERVICES, pageRef, SERVICES } from "./day-phrases.js";
 import { SERVICES_PAGE } from "../../../core/src/service-day.js";
 import { promise } from "./promises.js";
 import { systemWords, useSystemWords, type SystemWords } from "./church-system.js";
+import { useAnnounce } from "./announce.js";
 
 /** Keeping watch, for Today: it comes to the person here first. */
 export interface TodayWatch {
@@ -66,11 +67,11 @@ function EmailCard({ finding, sources, titleId, age, feedback = null, children }
   const event = sources.find(s => !isMessage(s) && finding.source_ids.includes(s.id)) as CalendarEvent | undefined;
   return <article className="find" aria-labelledby={titleId}>
     <div className="find-top">
-      <span className="badge b-attn"><Icon name="flag" small />Needs a decision</span>
+      <span className="badge b-attn" aria-hidden="true"><Icon name="flag" small />Needs a decision</span>
       {event && <span className="find-where">{event.title} · {clock(event.start_at, tz)} tonight · {event.location}</span>}
       {age && <span className="find-age">{age}</span>}
     </div>
-    <h3 id={titleId} className="find-title">{finding.title}</h3>
+    <h3 id={titleId} className="find-title">{finding.title}<HeadStatus words="Needs a decision" /></h3>
     <p className="find-body">{finding.statement} {finding.why_now}</p>
     <p className="find-quote">{finding.communication}</p>
     <div className="find-next"><span className="find-next-l">Next step</span><span>{finding.next_step}</span></div>
@@ -229,7 +230,8 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   const memory = useMemo(() => todayMemory(store), [store]);
   const [setAside, setSetAside] = useState(() => memory.setAside());
   const [firstSeen, setFirstSeen] = useState(() => memory.firstSeen());
-  const [announcement, setAnnouncement] = useState("");
+  // Said by the app's one status line (announce.tsx), which Today's own line became (accessibility audit S4).
+  const setAnnouncement = useAnnounce();
   const headings = useRef<Partial<Record<GroupId, HTMLHeadingElement | null>>>({});
   const [focusGroup, setFocusGroup] = useState<GroupId | null>(null);
 
@@ -308,10 +310,10 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
         const changes = s.noticed ? noticedChanges(s.noticed, names, words) : [];
         const notes = s.noticed ? pageNotes(s.noticed) : 0;
         return <article key={item.id} className="find" aria-labelledby={titleId}>
-          <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />Needs a decision</span>
+          <div className="find-top"><span className="badge b-attn" aria-hidden="true"><Icon name="flag" small />Needs a decision</span>
             {s.noticed?.overnight && <span className="badge b-muted"><Icon name="clock" small />Overnight</span>}
             <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
-          <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, null, services > 1)}</h3>
+          <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, null, services > 1)}<HeadStatus words="Needs a decision" /></h3>
           {/* Keep Sunday covered's write-up of its run leads the card, or says quietly why there is none (audit item 6). */}
           {s.noticed && <WriteUpBlock item={s.noticed} writeup={s.writeup} names={names} now={now} />}
           {named && named.named.length > 0 && <ul className="list today-decisions">{named.named.map((l, i) => <li key={l.key}>
@@ -323,16 +325,16 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           {s.noticed && <p className="find-body">Ozzie noticed this at {whenText(s.noticed.at, now)} while keeping an eye on {SERVICES}.</p>}
           {changes.length > 0 && <ul className="list">{changes.map(c => <li key={c}><Icon name="dot" small />{c}</li>)}</ul>}
           {notes > 0 && <p className="today-notes"><span className="badge b-ok"><Icon name="check" small />Notes ready</span><span>{notesReadyText(notes)}</span></p>}
-          {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}
+          {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} onUndone={() => setFocusGroup(GROUP_OF[item.state])} />)}</div>}
           <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
           {later}
         </article>;
       }
       // A church system that doesn't share how many people each role needs: what is known, and what needs a look.
       case "roster": return roster && <article key={item.id} className="find" aria-labelledby={titleId}>
-        <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
+        <div className="find-top"><span className="badge b-look" aria-hidden="true"><Icon name="eye" small />Worth a look</span>
           <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>
-        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, roster, services > 1)}</h3>
+        <h3 id={titleId} className="find-title">{itemTitle(item, now, words, w, roster, services > 1)}<HeadStatus words="Worth a look" /></h3>
         <ul className="list today-decisions">{rosterNeedsYou(roster).map(r => <li key={r.position_id}><span>{needsYouLine(r, names)}</span></li>)}</ul>
         <p className="find-body">{brief?.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether {words.thisOne} is covered.</p>
         <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" aria-describedby={titleId} onClick={onSunday}>{OPEN_SERVICES}</button></div>
@@ -414,7 +416,7 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
     <span>{roster ? `On ${dayName(words)}, ${lowerFirst(rosterSummary(roster))} ${brief.source ?? w.name} doesn't share how many people each role needs, so Ozzie can't say whether ${words.thisOne} is covered.`
       : services > 1 ? "Nothing in your services needs a decision." : `Nothing on ${dayName(words)} needs a decision.`}</span><button type="button" className="btn btn-quiet btn-sm" onClick={onSunday}>{OPEN_SERVICES}</button></p>
     {/* With no Sunday card, what the leader said they'd send is said here instead. */}
-    {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} />)}</div>}</>;
+    {asked.length > 0 && <div className="stack-tight">{asked.map(l => <AskedNote key={l.key + l.person_id} line={l} onUndone={() => setFocusGroup("attention")} />)}</div>}</>;
   const progressMore = watch && <div className="today-more">
     <button type="button" className="btn btn-quiet btn-sm" onClick={watch.onAutomatic}>
       {grouped.progress.some(i => i.subject.type === "watching") ? "Change what Ozzie keeps an eye on" : "See what Ozzie can keep an eye on"}</button></div>;
@@ -430,7 +432,6 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
       {checking && <span role="status" aria-live="polite">{CHECKING_LINE}</span>}
       {!checking && stuck && <><span role="status" aria-live="polite">{STUCK_LINE} </span>
         <button type="button" className="btn btn-quiet btn-sm" onClick={stuck}>{CHECK_CONNECTION}</button></>}</p>}
-    <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
     {finish}
     {moment}
     {startQuestion && !example && <section className="find today-start" aria-labelledby="today-start-t">

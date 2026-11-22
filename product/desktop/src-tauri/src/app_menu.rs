@@ -2,6 +2,9 @@
 //! the app at once with no question. "Quit Ozzie" here has Command-Q and the same id as the menu bar icon's "Quit
 //! Ozzie", so both go through always_on's `request_quit`: it asks first when visitor cards are open or checks are on.
 //!
+//! The View menu also has Bigger Text, Smaller Text and Actual Size (accessibility audit B1): their clicks go to
+//! text_size.rs through the same one handler, which zooms the page natively.
+//!
 //! There is deliberately no terminate hook: logging out, restarting or shutting down this Mac, and Quit from the
 //! Dock, end Ozzie without asking, so Ozzie never holds up the Mac.
 //!
@@ -19,6 +22,19 @@ pub const QUIT_TEXT: &str = "Quit Ozzie";
 /// Command-Q on a Mac.
 pub const QUIT_KEYS: &str = "CmdOrCtrl+Q";
 
+/// View › Bigger Text, Smaller Text and Actual Size: ids always_on sends to text_size.rs, words and keys as on a Mac.
+pub const BIGGER_ID: &str = "text-bigger";
+pub const BIGGER_TEXT: &str = "Bigger Text";
+/// Command-= (the key that has + on it, without Shift). A menu item has one key: Command-+ itself (Shift held, or a +
+/// key of its own) is heard by the page and asks for the same step (text-size.ts).
+pub const BIGGER_KEYS: &str = "CmdOrCtrl+Equal";
+pub const SMALLER_ID: &str = "text-smaller";
+pub const SMALLER_TEXT: &str = "Smaller Text";
+pub const SMALLER_KEYS: &str = "CmdOrCtrl+Minus";
+pub const ACTUAL_ID: &str = "text-actual";
+pub const ACTUAL_TEXT: &str = "Actual Size";
+pub const ACTUAL_KEYS: &str = "CmdOrCtrl+0";
+
 /// Installs the app menu in place of the framework's default (macOS) and `on_click` as the one handler for every
 /// menu's clicks, this menu's and the menu bar icon's (Tauri gives each handler all of them, so there must be exactly
 /// one). always_on::manage calls it once; nothing else in the app sets a menu or a menu handler (review F, L-7).
@@ -31,7 +47,8 @@ pub fn install<R: Runtime, F: Fn(&AppHandle<R>, MenuEvent) + Send + Sync + 'stat
     builder.on_menu_event(on_click)
 }
 
-/// The app menu: Ozzie (About, Services, Hide, Hide Others, Show All, Quit Ozzie), File, Edit, View, Window, Help.
+/// The app menu: Ozzie (About, Services, Hide, Hide Others, Show All, Quit Ozzie), File, Edit, View (Bigger Text,
+/// Smaller Text, Actual Size, Full Screen), Window, Help.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let info = app.package_info();
     let config = app.config();
@@ -83,7 +100,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         app,
         "View",
         true,
-        &[&PredefinedMenuItem::fullscreen(app, None)?],
+        &[
+            &MenuItem::with_id(app, BIGGER_ID, BIGGER_TEXT, true, Some(BIGGER_KEYS))?,
+            &MenuItem::with_id(app, SMALLER_ID, SMALLER_TEXT, true, Some(SMALLER_KEYS))?,
+            &MenuItem::with_id(app, ACTUAL_ID, ACTUAL_TEXT, true, Some(ACTUAL_KEYS))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::fullscreen(app, None)?,
+        ],
     )?;
     let window = Submenu::with_id_and_items(
         app,

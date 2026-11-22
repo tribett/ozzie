@@ -373,19 +373,25 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .build(app)?;
     Ok(())
 }
-/// What a menu item does: the menu bar icon's three, and the app menu's "Quit Ozzie" (Command-Q), which shares the
-/// menu bar's id. Every other app menu item is the system's own (Hide, Copy, Close Window...) and never comes here.
+/// What a menu item does: the menu bar icon's three, the app menu's "Quit Ozzie" (Command-Q), which shares the menu
+/// bar's id, and View's Bigger Text, Smaller Text and Actual Size (text_size.rs). Every other app menu item is the
+/// system's own (Hide, Copy, Close Window...) and never comes here.
 #[derive(Debug, PartialEq, Eq)]
 enum MenuAction {
     Open,
     Pause,
     Quit,
+    Text(crate::text_size::Change),
 }
 fn menu_action(id: &str) -> Option<MenuAction> {
+    use crate::text_size::Change;
     match id {
         "open" => Some(MenuAction::Open),
         "pause" => Some(MenuAction::Pause),
         crate::app_menu::QUIT_ID => Some(MenuAction::Quit),
+        crate::app_menu::BIGGER_ID => Some(MenuAction::Text(Change::Bigger)),
+        crate::app_menu::SMALLER_ID => Some(MenuAction::Text(Change::Smaller)),
+        crate::app_menu::ACTUAL_ID => Some(MenuAction::Text(Change::Actual)),
         _ => None,
     }
 }
@@ -397,6 +403,7 @@ fn on_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::men
         Some(MenuAction::Open) => show_main(app),
         Some(MenuAction::Pause) => toggle_pause_from_menu(app),
         Some(MenuAction::Quit) => request_quit(app),
+        Some(MenuAction::Text(change)) => crate::text_size::change(app, change),
         None => {}
     }
 }
@@ -1266,6 +1273,20 @@ mod tests {
         );
         assert_eq!(menu_action("open"), Some(MenuAction::Open));
         assert_eq!(menu_action("pause"), Some(MenuAction::Pause));
+        // View's text size items (accessibility audit B1) go to text_size.rs, one step each.
+        use crate::text_size::Change;
+        assert_eq!(
+            menu_action(crate::app_menu::BIGGER_ID),
+            Some(MenuAction::Text(Change::Bigger))
+        );
+        assert_eq!(
+            menu_action(crate::app_menu::SMALLER_ID),
+            Some(MenuAction::Text(Change::Smaller))
+        );
+        assert_eq!(
+            menu_action(crate::app_menu::ACTUAL_ID),
+            Some(MenuAction::Text(Change::Actual))
+        );
         // The system's own items (Hide, Copy, Close Window...) and anything unknown do nothing here.
         assert_eq!(menu_action("terminate"), None);
         assert_eq!(menu_action(""), None);

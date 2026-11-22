@@ -3,6 +3,7 @@
 // "Check my setup", and the "What the AI sees" sheet built from the real request for the fictional example church.
 import { createContext, useContext, useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import { Icon } from "./icons.js";
+import { useModal } from "./modal.js";
 import { AI, CHOICE } from "./ai-words.js";
 import type { OnboardingBridge } from "./onboarding-bridge.js";
 import { buildRewordRequest, templateDraft } from "../../../core/src/draft-request.js";
@@ -35,17 +36,17 @@ export function Screen({ eyebrow, title, children }: { eyebrow?: string | undefi
   </section>;
 }
 
-/** A sheet over the window. Escape (from anywhere inside it) or its own button closes it; focus starts on its title. */
+/**
+ * A sheet over the window. Escape (from anywhere inside it) or its own button closes it; focus starts on its title, the
+ * page under it is inert while it is open (accessibility audit S2), and focus returns where it was.
+ */
 export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const id = useId();
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
-    const before = typeof document === "undefined" ? null : document.activeElement as HTMLElement | null;
-    heading.current?.focus();
-    return () => { before?.focus?.(); };
-  }, []);
+  const sheet = useRef<HTMLDivElement>(null);
+  useModal(sheet, heading);
   return <div className="ai-sheet-back">
-    <div className="ai-sheet" role="dialog" aria-modal="true" aria-labelledby={id}
+    <div className="ai-sheet" role="dialog" aria-modal="true" aria-labelledby={id} ref={sheet}
       onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
       <h2 id={id} className="ai-sheet-title" tabIndex={-1} ref={heading}>{title}</h2>
       {children}

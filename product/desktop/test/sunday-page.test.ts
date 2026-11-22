@@ -144,8 +144,9 @@ describe("Sunday page", () => {
     const t = text(html);
     const reason = "Lyrics isn't tied to a service time in Planning Center, so Ozzie can't tell when it serves. Set the role's time in Planning Center to have it checked.";
     // Title, then the plain reasons (not only under Why I flagged this), then what Ozzie won't call covered.
-    expect(t).toContain(`One role couldn't be checked. ${reason} Ozzie couldn't tell from Planning Center who said yes for Lyrics, or when they serve. Ozzie won't call Sunday covered until that role can be checked.`);
-    expect(html).toMatch(/<h3 class="find-title"[^>]*>One role couldn(?:&#x27;|')t be checked\.<\/h3><ul class="list role-facts"><li>/u);
+    // The heading ends with the card's status for heading navigation (accessibility audit M2): " Worth a look.", unseen.
+    expect(t).toContain(`One role couldn't be checked. Worth a look. ${reason} Ozzie couldn't tell from Planning Center who said yes for Lyrics, or when they serve. Ozzie won't call Sunday covered until that role can be checked.`);
+    expect(html).toMatch(/<h3 class="find-title"[^>]*>One role couldn(?:&#x27;|')t be checked\.<span class="sr-only"> Worth a look\.<\/span><\/h3><ul class="list role-facts"><li>/u);
     expect(t).toContain("One role couldn't be checked, so this isn't a full picture.");
     // Nothing implies a read failed, or that checking again would help.
     expect(t).not.toContain("Part of this Sunday couldn't be checked");
@@ -155,7 +156,7 @@ describe("Sunday page", () => {
     // A read that truly failed keeps its own words.
     c.reads = c.reads.map(r => r.collection === "person_blockouts" ? { ...r, outcome: "timeout" as const } : r);
     const failed = text(page(brief(c)));
-    expect(failed).toContain("Part of this Sunday couldn't be checked. Ozzie won't call Sunday covered until every part is read.");
+    expect(failed).toContain("Part of this Sunday couldn't be checked. Worth a look. Ozzie won't call Sunday covered until every part is read.");
     expect(failed).toContain("Part of this Sunday couldn't be checked, so this isn't a full picture.");
     expect(failed).not.toContain("One role couldn't be checked");
   });
@@ -267,7 +268,8 @@ describe("one count for what the page shows, and what it is showing", () => {
     // Two open roles and the follow-up without an owner need a decision; the pending request, the streak, the unconfirmed room
     // overlap, the card saying why it can't be confirmed and the group meeting are worth a look.
     expect(t).toContain("3 things need a decision and 5 are worth a look.");
-    const tags = (h: string, tone: string) => h.match(new RegExp(`<div class="find-top"><span class="badge ${tone}">`, "gu"))?.length ?? 0;
+    // Each card's badge, shown and hidden from VoiceOver, which hears it as the end of the card's heading (audit M2).
+    const tags = (h: string, tone: string) => h.match(new RegExp(`<div class="find-top"><span class="badge ${tone}" aria-hidden="true">`, "gu"))?.length ?? 0;
     expect([tags(html, "b-attn"), tags(html, "b-look")]).toEqual([3, 5]);
     // A room the Church rules say isn't shared: its overlap needs a decision too.
     const ruled = page(brief(), [], fictionalOperations());
@@ -340,7 +342,7 @@ describe("one count for what the page shows, and what it is showing", () => {
     expect(t).not.toContain("Everything Ozzie checked is covered.");
     expect(t).toContain("Nothing needs a decision and 1 is worth a look.");
     const card = html.split(/<article class="find/u).slice(1).find(x => x.includes("has a blockout"))!;
-    expect(card).toContain('<span class="badge b-look">');
+    expect(card).toContain('<span class="badge b-look" aria-hidden="true">');
     const shown = text(card);
     expect(shown).toContain("Worth a look");
     expect(shown).toMatch(/Avery Brightwater is scheduled for Greeter at \d{1,2}:30\s?[AP]M and has a blockout in Planning Center at that time\./u);

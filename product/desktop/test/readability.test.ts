@@ -224,8 +224,9 @@ describe("readable text, targets and zoom in the CSS (audit item 22)", () => {
     const narrow = styles.slice(styles.search(/@media \(max-width: 760px\) \{\s*\.oz \.shell, /u));
     expect(narrow).toMatch(/\.oz \.side-menu \{ display: inline-flex; \}/u);
     expect(narrow).toMatch(/\.oz \.side\.is-menu \.nav \{ display: grid;/u);
-    // Ask docks beside the page only when the page keeps about 650px; otherwise it lies over the page.
-    expect(styles).toMatch(/@media \(min-width: 1300px\) \{\s*\.oz \.shell\.shell-ask \{ grid-template-columns: var\(--w-side\) minmax\(0,1fr\) 380px; \}/u);
+    // Ask docks beside the page whenever the page keeps the 596px it has in the smallest window (900px), the default
+    // 1280-point window included, so nothing is hidden under it (accessibility audit S1); narrower, it lies over the page.
+    expect(styles).toMatch(/@media \(min-width: 1280px\) \{\s*\.oz \.shell\.shell-ask \{ grid-template-columns: var\(--w-side\) minmax\(0,1fr\) 380px; \}/u);
   });
 
   it("a narrow window keeps the sidebar's two lines: under Menu with the pages, and the church in use in the bar (review F, L-6)", () => {

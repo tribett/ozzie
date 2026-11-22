@@ -241,10 +241,21 @@ invented people). No church data is shown.
   phone through ntfy.sh, a free service Ozzie doesn't run. See
   [A notice on your phone](#a-notice-on-your-phone) for exactly what leaves
   the Mac and who can see it.
-- **Readable.** Body text is 16 px and click areas are at least 44 px; the
-  sidebar keeps its words at every width (below 760 px it becomes a bar with
-  Menu); Ozzie honours the Mac's Increase contrast, Reduce motion and Reduce
-  transparency settings. It has not been tested with VoiceOver.
+- **Readable.** Body text is 16 px; help and other secondary text is 15 px,
+  and labels and badges are 14 px. The only smaller text is inside first run's
+  drawing of Planning Center's sign-in page, which has a text description.
+  View › Bigger Text (⌘+ or ⌘=), Smaller Text (⌘−) and Actual Size (⌘0) make
+  everything bigger or smaller, from 80% to 200%, and Ozzie keeps the choice.
+  Buttons are 44 px tall; smaller-looking buttons, chips and the microphone
+  take clicks over at least 44 px. The sidebar keeps its words at every width:
+  below 760 px (a narrow window, or larger text) it becomes a bar with Menu.
+  Ozzie honours the Mac's Increase contrast, Reduce motion and Reduce
+  transparency settings.
+- **Keyboard and VoiceOver.** Names, status lines, where the keyboard goes
+  after an action, and keeping Tab inside a question over the page were
+  reviewed against WCAG 2.2 AA in the code (2026-11-22), and automated tests
+  check them in a simulated page. Ozzie has not yet been tested with VoiceOver
+  or Full Keyboard Access in the running app.
 - **Works without a connection.** "See the fictional example" shows the app
   with an invented church, marked "Example church, not real." on every page,
   with "Leave the example". A Today that isn't connected shows no invented

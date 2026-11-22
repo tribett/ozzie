@@ -17,6 +17,7 @@ import { followUpFor, possibleMatches, readLines, reviewedList, sameNameCards, s
 import { CardReviewController } from "../../src/card-review/controller.js";
 import { browserImages } from "../../src/card-review/browser.js";
 import { Icon } from "./icons.js";
+import { useAnnounce } from "./announce.js";
 
 /** `unclearLines`: the lines of `text` (from 0) the reader couldn't read clearly. */
 export type CardTextResult = { status: "read"; text: string; unclearLines: number[] } | { status: "not-available" };
@@ -513,6 +514,13 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
   askingToDiscard?: boolean;
 }) {
   const [discarding, setDiscarding] = useState(askingToDiscard);
+  // "Discard these cards?" takes the keyboard as it appears in place of the button pressed, so it is read before either
+  // answer, and Keep gives the keyboard back to that button (accessibility audit S3h).
+  const discardAsk = useRef<HTMLParagraphElement>(null);
+  const discardButton = useRef<HTMLButtonElement>(null);
+  const [backToDiscard, setBackToDiscard] = useState(false);
+  useEffect(() => { if (discarding) discardAsk.current?.focus(); }, [discarding]);
+  useEffect(() => { if (backToDiscard) { discardButton.current?.focus(); setBackToDiscard(false); } }, [backToDiscard]);
   let cards: CardView[] = [];
   controller.render(view => { cards = [...view.cards]; });
   const status = controller.status;
@@ -576,12 +584,12 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
 
     {open && <footer className="cards-end">
       {active && <button type="button" className="btn btn-primary" disabled={!allChecked || reading > 0} onClick={onCopy}>Copy the reviewed list</button>}
-      {!discarding && <button type="button" className="btn btn-secondary" onClick={() => active ? setDiscarding(true) : onDiscard()}>Discard these cards</button>}
+      {!discarding && <button type="button" ref={discardButton} className="btn btn-secondary" onClick={() => active ? setDiscarding(true) : onDiscard()}>Discard these cards</button>}
       {discarding && <div className="decide" role="group" aria-labelledby="cards-discard-q">
-        <p id="cards-discard-q" className="find-body">{DISCARD_ASK(cards.length)}</p>
+        <p id="cards-discard-q" className="find-body" tabIndex={-1} ref={discardAsk}>{DISCARD_ASK(cards.length)}</p>
         <div className="find-next">
           <button type="button" className="btn btn-primary btn-sm" onClick={() => { setDiscarding(false); onDiscard(); }}>Yes, discard {cards.length === 1 ? "it" : "them"}</button>
-          <button type="button" className="btn btn-quiet btn-sm" onClick={() => setDiscarding(false)}>Keep {cards.length === 1 ? "it" : "them"}</button>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={() => { setDiscarding(false); setBackToDiscard(true); }}>Keep {cards.length === 1 ? "it" : "them"}</button>
         </div>
       </div>}
       {active && !allChecked && <span className="small">Check every card against its photo before copying.</span>}
@@ -597,6 +605,7 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
 }) {
   const [large, setLarge] = useState(false);
   const { say } = useSystemWords();
+  const announce = useAnnounce();
   const busy = state === "waiting" || state === "reading";
   const name = card.fields.name.text.trim();
   const matches = name ? possibleMatches(name, people).map(id => people[id]!) : [];
@@ -690,7 +699,10 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
         <p className="small">{say("Ozzie won't call, text or email anyone. This goes in the list you copy; nothing is added to Planning Center.")}</p>
       </section>}
       <div className="cr-actions">
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy || card.reviewed} onClick={() => { checkCard(controller, ticket, card); }}>
+        {/* Once checked it stays focusable (marked unavailable, never disabled), so the keyboard isn't dropped, and the app's
+            status line says so (accessibility audit S3i, S4). */}
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy} aria-disabled={card.reviewed || undefined}
+          onClick={() => { if (!card.reviewed && checkCard(controller, ticket, card) === "ok") announce(`${card.label} checked.`); }}>
           {card.reviewed ? "Checked" : unclear ? "Looks right — keep the unclear parts marked" : empty ? "Looks right — empty fields are blank on the card" : "Looks right — I checked this card"}</button>
         <button type="button" className="btn btn-quiet btn-sm" onClick={() => { if (controller.remove(ticket, card.id) === "ok") onRemoved(card.id); }}>
           Remove this card<span className="sr-only"> ({card.label})</span></button>
