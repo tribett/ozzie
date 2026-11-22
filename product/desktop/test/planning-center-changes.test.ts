@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string, args?: Record<string, unknown>) => { native.calls.push({ command, args }); return native.answer(command, args); }),
 }));
 import { installFakeDom } from "./fake-dom.js";
+import { inZone, inZoneAsync, onZone } from "./zone.js";
 import { HIDDEN_WORDS, text } from "./harness-fakes.js";
 import {
   ACTIVITY_LEDE_ON, addButton, BACKGROUND_CHECKS, backgroundFact, CHECKING, changes, CONFIRM_EXPIRED, confirmChecked, confirmPlace, confirmPlaceBack, confirmTitle, confirmUndo,
@@ -483,7 +484,9 @@ describe("the flow, one change at a time", () => {
     await m.act(async () => { m.root.unmount(); });
   });
 
-  it("asks, shows the confirmation (focus on its title), sends only the yes, says what happened, waits for the new check, and takes them off again", async () => {
+  // On a Mac on the church's own clock (New York), so the add's time from its record reads 10:15 AM on both; on another
+  // clock it follows the Mac (the describe "on a Mac on another clock than the church's").
+  it("asks, shows the confirmation (focus on its title), sends only the yes, says what happened, waits for the new check, and takes them off again", () => inZoneAsync("America/New_York", async () => {
     let arrive!: (ok: boolean) => void;
     const m = await mount(answers({ ...on,
       change_prepare: () => proposal(),
@@ -524,7 +527,7 @@ describe("the flow, one change at a time", () => {
     expect(m.afterWrite).toHaveBeenCalledTimes(2);
     await m.act(async () => { arrive(true); m.root.render("check-3"); });
     await m.act(async () => { m.root.unmount(); });
-  });
+  }));
 
   it("when the new check doesn't come, the role says so plainly and offers no Add button", async () => {
     const m = await mount(answers({ ...on, change_prepare: () => proposal(), change_confirm: () => ({ result: "made", record: record() }) }), [], () => Promise.resolve(false));
@@ -1129,12 +1132,14 @@ describe("review Y: What happened whatever the sign-in's state, answers from bef
 });
 
 describe("the result card after a take-off says only what is true now (live test)", () => {
+  // A Mac on the church's own clock (New York); on another one, the add and the take-off follow this Mac (below).
+  onZone("America/New_York");
   const ADDED = "2026-11-20T19:03:00.000Z", OFF = "2026-11-20T19:04:00.000Z";
   const PAST = "You added Riley to Greeter as unconfirmed at 2:03 PM.";
   const MADE = outcomeSentence({ result: "made", record: record() }, said);
   const card = (over: Partial<ChangeResult>): ChangeResult => ({ id: 1, ask: greeterAsk, plan: "92902197", day: "2026-11-22", sentence: MADE, tone: "made", row: "88001", undo: "done",
     addedAt: ADDED, answer: null, offAt: null, ...over });
-  /** The result card as the Sunday page draws it (church zone America/New_York): its badge and its lines. */
+  /** The result card as the Sunday page draws it (church and Mac both on New York's clock): its badge and its lines. */
   const drawn = (r: ChangeResult) => {
     const html = renderToStaticMarkup(React.createElement(SundayPage, { ...pageProps(briefAs("live")), changes: slot(control({ results: [r] })) }));
     const article = html.slice(html.indexOf('<article class="find change-result'), html.indexOf("</article>") + "</article>".length);
@@ -1201,6 +1206,24 @@ describe("the result card after a take-off says only what is true now (live test
       expect(d.all, a!.result).not.toContain(`Riley is on ${PLAN_WORDS}`);
       expect(d.all.includes(`Riley is on ${PLAN_WORDS}`) && d.all.includes(`off ${PLAN_WORDS}`), a!.result).toBe(false);
     }
+  });
+});
+
+describe("on a Mac on another clock than the church's, when the leader added and took off is this Mac's time", () => {
+  const ADDED = "2026-11-20T19:03:00.000Z", OFF = "2026-11-20T19:04:00.000Z";
+  const card: ChangeResult = { id: 1, ask: greeterAsk, plan: "92902197", day: "2026-11-22", sentence: outcomeSentence({ result: "made", record: record() }, said),
+    tone: "made", row: "88001", undo: "done", addedAt: ADDED, answer: { result: "removed" }, offAt: OFF };
+  const lines = (zone: string) => inZone(zone, () => {
+    const html = renderToStaticMarkup(React.createElement(SundayPage, { ...pageProps(briefAs("live")), changes: slot(control({ results: [card] })) }));
+    return text(html.slice(html.indexOf('<article class="find change-result'), html.indexOf("</article>", html.indexOf('<article class="find change-result'))));
+  });
+
+  it("as What happened says the same change, while the role's time on the page stays the church's", () => {
+    // The church is in New York (slot zone); the same instants on CI's clock and on Tokyo's.
+    expect(lines("UTC")).toContain("You added Riley to Greeter at 7:03 PM and took Riley off again at 7:04 PM.");
+    expect(lines("Asia/Tokyo")).toContain("You added Riley to Greeter at 4:03 AM and took Riley off again at 4:04 AM.");
+    const page = inZone("UTC", () => text(renderToStaticMarkup(React.createElement(SundayPage, { ...pageProps(briefAs("live")), changes: slot(control({ results: [card] })) }))));
+    expect(page).toContain("Greeter · Sunday, November 22 at 9:30 AM");
   });
 });
 

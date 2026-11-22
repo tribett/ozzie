@@ -25,8 +25,9 @@ export const readyTitle = (d: DayWords) => `Ready for ${dayName(d)}`;
 /**
  * One line per open finding, in the Sunday page's words. A kind without its own line reads its first fact. `services`:
  * with more than one service watched, each team's service, so every role is said with it ("Greeter (Youth Night)").
+ * `zone`: the church's time zone, so a role's time is on the church's clock, as the Sunday page says it.
  */
-export function sundayReadyLine(found: Finding, names: Names, d: DayWords = SUNDAY_WORDS, services?: TeamServices): string {
+export function sundayReadyLine(found: Finding, names: Names, d: DayWords = SUNDAY_WORDS, services?: TeamServices, zone: string | null = null): string {
   const f = withServices(found, services);
   const pos = f.position?.name ?? "A role";
   switch (f.kind) {
@@ -39,7 +40,7 @@ export function sundayReadyLine(found: Finding, names: Names, d: DayWords = SUND
     case "lead-unverified": return `The scheduled lead for ${pos} couldn't be confirmed.`;
     // The kids rules read as on the Sunday page: which team, which time, and (on this Mac only) who.
     // In the service's own day words (it said "this Sunday" for every service), or none once said with its own service.
-    case "too-few-confirmed": return fewConfirmedTitle(f, d, Boolean(serviceOfTeam(f.position?.team_id, services)));
+    case "too-few-confirmed": return fewConfirmedTitle(f, d, Boolean(serviceOfTeam(f.position?.team_id, services)), zone);
     case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
     case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} at ${blockoutTime(f) ? "that time" : "those times"}. ${f.source ?? "Planning Center"} still counts them.`;
     case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
@@ -86,8 +87,8 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
     : <p className="small">{counts.decisions ? `${counts.decisions === 1 ? "One thing needs" : `${counts.decisions} things need`} a decision` : "Nothing needs a decision"}
       {counts.looks ? `, and ${counts.looks} ${counts.looks === 1 ? "is" : "are"} worth a look` : ""}.
       {counts.resolved ? ` You resolved ${counts.resolved} yourself.` : ""}{setAside ? ` ${setAside} hidden by you.` : ""}</p>}
-    {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names, d, services)))}</>}
-    {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names, d, services)))}</>}
+    {decide.length > 0 && <><p className="small bold">Needs a decision</p>{list(decide.map(i => sundayReadyLine(i.finding, names, d, services, brief.time_zone)))}</>}
+    {looks.length > 0 && <><p className="small bold">Worth a look</p>{list(looks.map(i => sundayReadyLine(i.finding, names, d, services, brief.time_zone)))}</>}
     {others.length > 0 && <><p className="small bold">Rooms, follow-ups and group meetings</p>{list(others)}</>}
     {unchecked.length > 0 && <><p className="small bold">What I didn't check</p>{list(unchecked)}</>}
     <p className="small">{brief.mode === "recording" ? "From the saved copy of a check made" : `Read from ${brief.source ?? "Planning Center"}`} {time(brief.checked_at ?? brief.completed_at)}.</p>

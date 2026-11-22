@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 import { installFakeDom } from "./fake-dom.js";
+import { inZone } from "./zone.js";
 import {
   addressLabel, churchSystemStore, CONNECT, connectProblem, HOST_SENTENCE, keyGoesTo, readChurchSystem, readProblemText, SystemWordsContext, systemWords,
   type ChurchSystemState, type Connected, type SystemConnection,
@@ -336,10 +337,34 @@ describe("the service's page on another system", () => {
   });
 
   it("names the plan's own title beside its date only when it adds something (round 3)", () => {
-    const titled = (title: string) => { const c = b1Capture({ labels: { ...b1Capture().labels, service: title } }); return page("b1", resultOf(c).brief, c.names); };
+    // Drawn on a Mac on the church's own clock (Chicago), so the date line names no zone; on another clock it does, after
+    // the time (the next test).
+    const titled = (title: string) => { const c = b1Capture({ labels: { ...b1Capture().labels, service: title } }); return inZone("America/Chicago", () => page("b1", resultOf(c).brief, c.names)); };
     expect(titled("Sunday Gathering")).toContain("Sunday, November 22 · 9:00 AM · Sunday Gathering");
     expect(titled("Sunday Nov 22")).not.toContain("Sunday Nov 22");
     expect(titled("Sunday Nov 22")).toContain("Sunday, November 22");
+  });
+
+  it("on any Mac clock, the service's and its roles' times are the church's, and another clock is told which zone that is (0.5.4 used the Mac's on the cards)", () => {
+    const b1 = b1Capture(), breeze = breezeCapture(), untimed = breezeUntimedCapture();
+    for (const zone of ["America/Chicago", "America/New_York", "UTC", "Asia/Tokyo"]) {
+      const at = (system: "b1" | "breeze", r: ReturnType<typeof resultOf>, names: Record<string, string>) => inZone(zone, () => page(system, r.brief, names));
+      // B1 Church, its zone confirmed (Chicago): every role at 9:00 AM, the zone named off Chicago's clock.
+      const confirmed = at("b1", resultOf(b1), b1.names);
+      expect(confirmed, zone).toContain(`Sunday, November 22 · 9:00 AM${zone === "America/Chicago" ? "" : " Central Time (Chicago)"} · Sunday Gathering`);
+      for (const role of ["Vocals", "Guitar", "Greeter"]) expect(confirmed, zone).toContain(`${role} · Sunday, November 22 at 9:00 AM`);
+      // Still waiting for the leader to confirm it: no role time is said, and the date line's time names the zone B1
+      // gave, the one the time zone question asks about.
+      const waiting = at("b1", resultOf(b1, null), b1.names);
+      expect(waiting, zone).toContain(`Sunday, November 22 · 9:00 AM${zone === "America/Chicago" ? "" : " Central Time (Chicago)"} · Sunday Gathering`);
+      expect(waiting, zone).not.toMatch(/ · Sunday, November 2\d at /u);
+      // Breeze with a time (New York's 10:30 AM), and with none: never a time, never a zone.
+      expect(at("breeze", resultOf(breeze, null), breeze.names), zone).toContain(`Sunday, November 22 · 10:30 AM${zone === "America/New_York" ? "" : " Eastern Time (New York)"} Are your services covered?`);
+      const day = at("breeze", resultOf(untimed, null), untimed.names);
+      expect(day, zone).toContain(" Sunday, November 22 · Event Location limit Are your services covered?");
+      expect(day, zone).toContain("Greeter · this Sunday");
+      expect(day, zone).not.toMatch(/ · Sunday, November 2\d at /u);
+    }
   });
 
   it("Breeze: a request it doesn't report is unknown, and no team is claimed", () => {

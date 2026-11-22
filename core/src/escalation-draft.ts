@@ -6,8 +6,11 @@
 import type { Finding } from "./sunday-brief.js";
 import { serviceOn } from "./draft-request.js";
 
-/** `sunday`: the church-local date (YYYY-MM-DD) of the service checked, on whatever day it is, named when the service time wasn't read. */
-export interface EscalationContext { finding: Finding; leader_id: string; sunday?: string | null }
+/**
+ * `sunday`: the church-local date (YYYY-MM-DD) of the service checked, on whatever day it is, named when the service time
+ * wasn't read. `zone`: the church's time zone, so the service time is on the church's clock (serviceOn).
+ */
+export interface EscalationContext { finding: Finding; leader_id: string; sunday?: string | null; zone?: string | null }
 export interface EscalationDraft { readonly kind: "no-one-clear" | "lead-missing"; readonly text: string; readonly role: string }
 
 /** Nobody on the team is clear (no suggestion and no possible conflict), or a required lead is missing, and Planning Center lists a leader. */
@@ -21,7 +24,7 @@ export function canEscalate(finding: Finding): boolean {
 export function escalationDraft(ctx: EscalationContext): EscalationDraft {
   const { finding } = ctx;
   // The service's own date, never "this week" or "this Sunday": the note may go out weeks before it.
-  const on = serviceOn(finding, ctx.sunday);
+  const on = serviceOn(finding, ctx.sunday, ctx.zone);
   if (!canEscalate(finding) || !finding.leaders!.includes(ctx.leader_id)) throw new Error("Ozzie can only prepare this note for a leader Planning Center lists for this team.");
   const role = finding.position!.name;
   if (finding.kind === "lead-missing") return Object.freeze({

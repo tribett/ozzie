@@ -2,7 +2,7 @@
 // Saturday night or Wednesday, so nothing may call its service "Sunday" unless it is on a Sunday. Pure: no clock, no I/O.
 // The day comes from the plan's service times in the church's time zone; before a check has read them, from the plan's
 // `sort_date` (Planning Center's local wall-clock time with a misleading `Z`, church-time.ts).
-import { isTimeZone, localDate, planDate } from "./church-time.js";
+import { isTimeZone, localDate, offsetAt, planDate } from "./church-time.js";
 
 export interface ServiceDayPlan {
   /** Planning Center's local wall-clock date and time of the plan; never an instant. */
@@ -123,9 +123,23 @@ export function dayWords(plan: ServiceDayPlan | null, zone: string | null): DayW
     date: `${longDate(first)} to ${longDate(last)}`, thisOne: "these services" };
 }
 
+/**
+ * Which clock a time from the church's system is said on: the church's zone when this Mac knows it, else this Mac's (no
+ * option). Every time that says when something happens at church (a service, a role, a booking, a group meeting) uses
+ * it, as a service's heading does; a time that says when Ozzie or the person did something stays on this Mac's clock.
+ */
+export const onChurchClock = (zone: string | null | undefined): { timeZone?: string } => zone && isTimeZone(zone) ? { timeZone: zone } : {};
 /** "9:30 AM" on the church's clock, or this Mac's when the church's zone isn't known. */
 export function clockAt(iso: string, zone: string | null): string {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...(zone && isTimeZone(zone) ? { timeZone: zone } : {}) });
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
+}
+/**
+ * Whether this Mac's clock (`mac`, its zone) reads any of `times` differently from the church's: a heading that names
+ * them then says whose clock they are on. False when the church's zone isn't known (they are then on this Mac's clock).
+ */
+export function otherClock(times: readonly string[], zone: string | null | undefined, mac: string): boolean {
+  if (!zone || !isTimeZone(zone) || !isTimeZone(mac)) return false;
+  return times.some(t => { const at = Date.parse(t); return Number.isFinite(at) && offsetAt(at, zone) !== offsetAt(at, mac); });
 }
 const andList = (items: readonly string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
 /** The distinct service-time starts, earliest first (as instants, so the same time written two ways counts once). */
@@ -141,7 +155,7 @@ export function sortedTimes(times: readonly string[]): string[] {
 export function timeLabel(iso: string, times: readonly string[], zone: string | null): string {
   const days = new Set(times.map(t => zone && isTimeZone(zone) ? localDate(t, zone) : new Date(t).toDateString()));
   if (days.size <= 1) return clockAt(iso, zone);
-  const weekday = new Date(iso).toLocaleDateString("en-US", { weekday: "long", ...(zone && isTimeZone(zone) ? { timeZone: zone } : {}) });
+  const weekday = new Date(iso).toLocaleDateString("en-US", { weekday: "long", ...onChurchClock(zone) });
   return `${weekday} ${clockAt(iso, zone)}`;
 }
 /** A plan's service times in one phrase: "9:30 AM and 11:00 AM", "Saturday 5:00 PM and Sunday 9:30 AM"; null when none. */

@@ -11,7 +11,8 @@ import { RulesPage } from "../src/rules-page.js";
 import { sundayReadyLine } from "../src/sunday-ready.js";
 import { buildSundayBrief, teamLeaders, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
-import { nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
+import { FICTIONAL_ZONE, nov22Capture, nov22LaterCapture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
+import { inZone, onZone } from "./zone.js";
 import { fictionalOperations, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { decide, type SundayDecision } from "../../../core/src/sunday-decisions.js";
@@ -356,6 +357,8 @@ describe("one count for what the page shows, and what it is showing", () => {
 });
 
 describe("the plan's own title is beside its date, never glued to the count (click-through, 2026-11-19)", () => {
+  // A Mac on the church's own clock, so the eyebrow names no zone (one that isn't is in church-clock.test.ts).
+  onZone(FICTIONAL_ZONE);
   const live = buildSundayBrief(nov22Capture(), rules, nov22Capture().completed_at);
   const head = (html: string) => /^<div class="col"><p class="eyebrow">(.*?)<\/p><h1 class="h1">([^<]+)<\/h1>/u.exec(html);
   const lede = (html: string) => text(/<p class="lede">(.*?)<\/p>/u.exec(html)![1]!).trim();
@@ -497,7 +500,8 @@ describe("Church rules page", () => {
 
 describe("one service with two service times: each time is its own section (owner decision 2026-11-19)", () => {
   const two = brief(twoTimes());
-  const html = page(two);
+  // Drawn on a Mac on the church's own clock, so the eyebrow names no zone (church-clock.test.ts has one that isn't).
+  const html = inZone(two.time_zone!, () => page(two));
   const t = text(html);
   const at = (s: string) => t.indexOf(s);
 
@@ -536,7 +540,6 @@ describe("several services' cards say every role's time the same way (coordinato
     canReword: false, decisions: [], onDecisions: () => undefined, operations: null, onCheck: () => undefined, onRecording: () => undefined, onExample: () => undefined,
     ...(part ? { part: { name: "Youth Night", waiting: null, opsWith: "Sunday Morning" } } : {}),
   }))));
-  const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
   it("beside another service, a role with no time of its own says its service's date, never the plan's one time as if it were the role's", () => {
     // 0.5.3: "Greeter · Wednesday, November 25 at 7:00 PM" sat beside "Greeter isn't tied to a service time in Planning
@@ -546,10 +549,11 @@ describe("several services' cards say every role's time the same way (coordinato
     expect(t).toContain(`${role} · Wednesday, November 25 `);
     expect(t).not.toContain(`${role} · Wednesday, November 25 at`);
     expect(t).not.toContain(`${role} · this Wednesday`);
-    // The part's own line gives the service's time in the church's time zone, whatever zone this machine is in.
-    expect(t).toMatch(/Wednesday, November 25 · \d{1,2}:\d{2} [AP]M/u);
-    // A timed role still says its own date and time.
-    expect(show(wed, true)).toContain(`${role} · Wednesday, November 25 at ${clock(wed.findings[at]!.position!.interval!.starts_at)}`);
+    // The part's own line gives the service's time on the church's clock (9:30 AM in New York), whatever zone this Mac
+    // is in; a Mac on another clock also has the zone named after it (church-clock.test.ts).
+    expect(t).toContain("Wednesday, November 25 · 9:30 AM");
+    // A timed role still says its own date and time, on the same clock as that line (CI, in UTC, said 2:30 PM here).
+    expect(show(wed, true)).toContain(`${role} · Wednesday, November 25 at 9:30 AM`);
   });
 
   it("with more than one service time it says the date alone, and one service's own page keeps its day's words", () => {

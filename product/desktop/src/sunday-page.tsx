@@ -1,4 +1,4 @@
-import { timesText, titleOnlyDate } from "../../../core/src/service-day.js";
+import { onChurchClock, otherClock, timesText, titleOnlyDate } from "../../../core/src/service-day.js";
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { blockoutCounted, blockoutRoles, blockoutTime, byServiceTime, findingTime, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
@@ -28,6 +28,7 @@ import { NOT_OPENED, OPEN_PERSON, OPEN_PLAN, type PlanningCenterPage } from "./p
 import { activityLabel, TaskAccount } from "./activity-page.js";
 import { aiText, procedureTitle } from "./harness-words.js";
 import { ProcedureBody } from "./procedure-text.js";
+import { zoneLabel } from "./proactive-page.js";
 import { DayProvider, SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
 import { DayName, dayName } from "./day-phrases.js";
 import {
@@ -94,8 +95,20 @@ export function addresseeFor(person: string | undefined, names: Names, people: P
   const name = Object.hasOwn(names, person) && names[person] ? names[person] : "this person";
   return { person, name, peopleGranted: Boolean(people?.granted), onAddPeople: people?.onAdd };
 }
+/** When Ozzie or the person did something (checked, decided, saved): on this Mac's clock. */
 const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+/**
+ * When something happens at church (a service, a role, a booking, a group meeting, a follow-up's due date): on the
+ * church's clock, as the service's own heading says its times (service-day.ts onChurchClock); this Mac's only when the
+ * church's zone isn't known. They differed when this Mac wasn't on the church's zone (CI, in UTC: "9:30 AM" in the
+ * heading, "Nursery · Wednesday, November 25 at 2:30 PM" on its card).
+ */
+const clock = (iso: string, zone: string | null) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
+const churchTime = (iso: string, zone: string | null) =>
+  new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
+/** The church's time zone of the check on this page (SundayPage gives it); null outside a page, so this Mac's clock. */
+const ChurchZone = createContext<string | null>(null);
+const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 /** When a card's time is: its service time, or the watched service by its real day ("this Wednesday") when it has none. */
 /**
  * With several services on one page, a role with no serving time of its own is said by its service's date ("Wednesday,
@@ -104,8 +117,8 @@ const clock = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hou
  * service time" (0.5.3). Null: the day's own words, as one service's page.
  */
 const UntimedWhen = createContext<string | null>(null);
-const when = (i: ServingInterval | null, d: DayWords, untimed: string | null = null) =>
-  i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} at ${clock(i.starts_at)}` : untimed ?? d.thisOne;
+const when = (i: ServingInterval | null, d: DayWords, untimed: string | null, zone: string | null) =>
+  i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", ...onChurchClock(zone) })} at ${clock(i.starts_at, zone)}` : untimed ?? d.thisOne;
 const plainReasons: [RegExp, string][] = [
   [/^Recorded team membership.*/, "On this team in Planning Center. No blockout or other schedule overlaps this time."],
   [/^Possible conflict: source records an unanswered sent request\./, "Has an unanswered request for another role at this time."],
@@ -499,7 +512,8 @@ export function Draft({ finding, person, names, sender, sunday, canReword, onClo
   show?: ShowNote | undefined;
 }) {
   const { say } = useSystemWords();
-  const ctx = { finding, person_id: person, sunday };
+  const zone = useContext(ChurchZone);
+  const ctx = { finding, person_id: person, sunday, zone };
   const [version, setVersion] = useState<PlaceholderDraft>(() => templateDraft(ctx, names));
   const [body, setBody] = useState(() => restoreDraft(version, ctx, names, sender));
   const [edited, setEdited] = useState(false);
@@ -596,7 +610,8 @@ export function LeaderNote({ finding, leader, names, sender, sunday = null, onCl
   finding: Finding; leader: string; names: Names; sender: string; sunday?: string | null; onClose: () => void; people?: PeopleAccess | null; mark?: NoteMark;
   show?: ShowNote | undefined;
 }) {
-  const ctx = { finding, leader_id: leader, sunday };
+  const zone = useContext(ChurchZone);
+  const ctx = { finding, leader_id: leader, sunday, zone };
   const [body, setBody] = useState(() => restoreEscalation(escalationDraft(ctx), ctx, names, sender));
   return <DraftBox label="Draft note to the team's leader" to={Object.hasOwn(names, leader) && names[leader] ? `${names[leader]} (team leader in Planning Center)` : "the team's leader in Planning Center"}
     addressee={addresseeFor(leader, names, people)} body={body} onBody={setBody} onClose={onClose} mark={mark} show={show}
@@ -610,8 +625,9 @@ export function ReminderNote({ finding, names, sender, sunday = null, onClose, p
   sunday?: string | null;
   show?: ShowNote | undefined;
 }) {
-  // The plan's own date when the role has no service time, never a fixed day (review H4).
-  const [body, setBody] = useState(() => restoreReminder(reminderDraft(finding, sunday), finding, names, sender));
+  // The plan's own date when the role has no service time, never a fixed day (review H4); a service time on the church's clock.
+  const zone = useContext(ChurchZone);
+  const [body, setBody] = useState(() => restoreReminder(reminderDraft(finding, sunday, zone), finding, names, sender));
   return <DraftBox label="Draft reminder" to={nameOf(names, finding.person_id)} addressee={addresseeFor(finding.person_id, names, people)} body={body} onBody={setBody} onClose={onClose} mark={mark}
     show={show} footer="Ozzie never sends messages. This note was written on this Mac; nothing in it went to an AI." />;
 }
@@ -692,9 +708,10 @@ export function showNote(note: HTMLElement, pane: HTMLElement | null, still = re
 /**
  * "Only 1 confirmed person in Nursery at 9:30 AM." Services has no age: people, never "adults". `dayless`: the team is
  * already said with its own service (several services watched), so a time it doesn't have isn't every service's day words.
+ * `zone`: the church's time zone, so the time is on the church's clock (this Mac's when it isn't known).
  */
-export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS, dayless = false): string {
-  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? ` at ${clock(f.position!.interval.starts_at)}` : dayless ? "" : ` ${d.thisOne}`;
+export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS, dayless = false, zone: string | null = null): string {
+  const c = f.confirmed?.length ?? 0, at = f.position!.interval ? ` at ${clock(f.position!.interval.starts_at, zone)}` : dayless ? "" : ` ${d.thisOne}`;
   return c === 0 ? `No confirmed people in ${f.position!.name}${at}.` : `Only ${count(c, "confirmed person", "confirmed people")} in ${f.position!.name}${at}.`;
 }
 /** Pending is never confirmed, and an unsent request is never called asked. */
@@ -762,7 +779,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   changes?: SundayChanges | null | undefined; busy?: boolean;
 }) {
   const { finding } = item;
-  const d = useDay(), untimed = useContext(UntimedWhen);
+  const d = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
   const w = useSystemWords();
   const CHOICE_TEXT = choiceText(d, w.name);
   const target = briefTarget(finding, occurrence.id, occurrence.label);
@@ -809,7 +826,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
   const tag = item.state === "reopened"
     ? <span className="badge b-attn"><Icon name="flag" small />This needs attention again</span>
     : <span className={`badge ${decision ? "b-attn" : "b-look"}`}><Icon name={decision ? "flag" : "eye"} small />{decision ? "Needs a decision" : "Worth a look"}</span>;
-  const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval, d, untimed)}</span> : null;
+  const where = finding.position ? <span className="find-where">{finding.position.name} · {when(finding.position.interval, d, untimed, zone)}</span> : null;
   let title: string, body: string | null = null;
   switch (finding.kind) {
     case "needs-people":
@@ -839,18 +856,18 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
       body = "Planning Center has someone scheduled to lead, but their answer or serving time couldn't be confirmed, so Ozzie isn't counting it as covered.";
       break;
     case "too-few-confirmed":
-      title = fewConfirmedTitle(finding, d);
+      title = fewConfirmedTitle(finding, d, false, zone);
       body = fewConfirmedBody(finding);
       break;
     case "background-check":
       title = backgroundTitle(nameOf(names, finding.person_id), finding.check, d);
-      body = `Scheduled for ${finding.position!.name} ${finding.position!.interval ? `at ${clock(finding.position!.interval.starts_at)}` : d.thisOne}. Your Church rules ask for a current background check before serving with kids.${
+      body = `Scheduled for ${finding.position!.name} ${finding.position!.interval ? `at ${clock(finding.position!.interval.starts_at, zone)}` : d.thisOne}. Your Church rules ask for a current background check before serving with kids.${
         finding.tone === "look" && finding.check === "none-current" ? " Planning Center showed no current background checks for anyone on your kids teams; your Planning Center login may not be able to see them." : ""}`;
       break;
     case "blockout": {
       // Planning Center's own count stands: they're still counted, so no role reads as open (sunday-brief.ts).
       const one = blockoutTime(finding), many = (finding.serving?.length ?? 0) > 1;
-      title = `${nameOf(names, finding.person_id)} is scheduled for ${blockoutRoles(finding)}${one ? ` at ${clock(one.starts_at)}` : ""} and has a blockout in ${w.name} at ${one ? "that time" : "those times"}.`;
+      title = `${nameOf(names, finding.person_id)} is scheduled for ${blockoutRoles(finding)}${one ? ` at ${clock(one.starts_at, zone)}` : ""} and has a blockout in ${w.name} at ${one ? "that time" : "those times"}.`;
       body = `${w.name} still counts them as ${blockoutCounted(finding)}, so ${many ? "they aren't open spots" : "it isn't an open spot"}. Only they can say whether they'll be there.`;
       break;
     }
@@ -947,12 +964,12 @@ const NO_LEAD_TEXT = "Planning Center still shows no confirmed lead; your decisi
 
 function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedAt: string | null; onUndo: () => void }) {
   const d = item.decision!, f = item.finding;
-  const words = useDay(), untimed = useContext(UntimedWhen);
+  const words = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
   const w = useSystemWords();
   const CHOICE_TEXT = choiceText(words, w.name);
   return <article className="find is-resolved">
     <div className="find-top"><span className="badge b-you"><Icon name="user" small />Resolved by you — {words.thisOne} only</span>
-      {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words, untimed)}</span>}</div>
+      {f.position && <span className="find-where">{f.position.name} · {when(f.position.interval, words, untimed, zone)}</span>}</div>
     <h3 className="find-title">{CHOICE_TEXT[d.choice].done(d.subject.name)}</h3>
     <p className="find-quote">“{d.reason}”</p>
     <p className="find-body">You decided this {time(d.decided_at)}. {f.kind === "needs-people" ? w.remaining(f.remaining ?? 0) : w.system === "planning-center" ? NO_LEAD_TEXT : w.say("Planning Center still shows no confirmed lead; Ozzie hasn't changed anything there.")}</p>
@@ -965,10 +982,10 @@ function ResolvedCard({ item, checkedAt, onUndo }: { item: DecidedItem; checkedA
 
 function HistoryCard({ entry, onRemove }: { entry: DecisionHistory; onRemove: () => void }) {
   const d = entry.decision;
-  const words = useDay(), untimed = useContext(UntimedWhen);
+  const words = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
   const w = useSystemWords();
   const CHOICE_TEXT = choiceText(words, w.name);
-  const where = <span className="find-where">{d.subject.name} · {when(d.subject.interval, words, untimed)}</span>;
+  const where = <span className="find-where">{d.subject.name} · {when(d.subject.interval, words, untimed, zone)}</span>;
   if (entry.status === "source-confirmed") return <article className="find is-resolved">
     <div className="find-top"><span className="badge b-ok"><Icon name="check" small />Confirmed in {w.name}</span>{where}</div>
     <h3 className="find-title">{d.kind === "lead-missing" ? `${w.name} now shows a confirmed lead for ${d.subject.name}.` : `${d.subject.name} is now filled in ${w.name}.`}</h3>
@@ -989,7 +1006,7 @@ function HistoryCard({ entry, onRemove }: { entry: DecisionHistory; onRemove: ()
   </article>;
 }
 
-const span = (i: { starts_at: string; ends_at: string }) => `${clock(i.starts_at)}–${clock(i.ends_at)}`;
+const span = (i: { starts_at: string; ends_at: string }, zone: string | null) => `${clock(i.starts_at, zone)}–${clock(i.ends_at, zone)}`;
 const uncertaintyText: Partial<Record<string, string>> = {
   "unknown-rule": "A room isn't set as not shared in Church rules, so overlaps there can't be confirmed.",
   "unknown-booking": "A booking's status or time couldn't be read.",
@@ -1042,7 +1059,7 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
   feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const { labels, result } = operations;
-  const words = useDay(), untimed = useContext(UntimedWhen);
+  const words = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
   if (operations.stale) return <section className="stack" aria-label="Rooms and follow-ups">
     <h2 className="h3">Rooms and follow-ups</h2>
     <article className="find is-look">
@@ -1063,15 +1080,15 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     const why = [
       ...(f.rule?.exclusive ? [`Your Church rules say ${label(f.resource_id, "this room")} isn't shared${f.rule.additional_setup_minutes ? ` and needs ${f.rule.additional_setup_minutes} minutes of setup` : ""}.`]
         : ["No Church rule says this room isn't shared, so this overlap can't be confirmed."]),
-      ...f.bookings.map(x => `The calendar shows ${label(x.booking_id, "a booking")} as ${x.status}, ${span(x.original)}.`),
+      ...f.bookings.map(x => `The calendar shows ${label(x.booking_id, "a booking")} as ${x.status}, ${span(x.original, zone)}.`),
       f.resolution?.state === "unresolved" ? "Planning Center Calendar lists these two bookings as a conflict that hasn't been resolved."
         : "Planning Center doesn't show clearly whether these two bookings were worked out.",
     ];
     return <article className={`find${confirmed ? "" : " is-look"}`} key={f.finding_id}>
       <div className="find-top"><span className={`badge ${confirmed ? "b-attn" : "b-look"}`}><Icon name={confirmed ? "flag" : "eye"} small />{f.label}</span>
-        <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap, words, untimed)}</span></div>
-      <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap)}.</h3>
-      {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original)}) and {label(b.booking_id, "another booking")} ({span(b.original)}) overlap
+        <span className="find-where">{label(f.resource_id, "A room")} · {when(f.overlap, words, untimed, zone)}</span></div>
+      <h3 className="find-title">{label(f.resource_id, "A room")} has overlapping bookings from {span(f.overlap, zone)}.</h3>
+      {a && b && <p className="find-body">{label(a.booking_id, "One booking")} ({span(a.original, zone)}) and {label(b.booking_id, "another booking")} ({span(b.original, zone)}) overlap
         {f.additional_setup_minutes ? `, counting the ${f.additional_setup_minutes} minutes of setup your Church rules set for this room` : ""}.</p>}
       <div className="find-next"><span className="find-next-l">Next step</span><span>{nextStep(f)}</span></div>
       <FeedbackChoices target={roomTarget(f, occurrence, labels)} feedback={feedback} />
@@ -1081,10 +1098,10 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
   const followUp = (f: FollowUpFinding) => <article className="find" key={f.finding_id}>
     <div className="find-top"><span className="badge b-attn"><Icon name="flag" small />{f.label}</span>
       <span className="find-where">{label(f.workflow_id, "A follow-up")}</span></div>
-    <h3 className="find-title">“{label(f.step_id, "A follow-up step")}” has no owner. It was due {time(f.due_at)}.</h3>
+    <h3 className="find-title">“{label(f.step_id, "A follow-up step")}” has no owner. It was due {churchTime(f.due_at, zone)}.</h3>
     <div className="find-next"><span className="find-next-l">Next step</span><span>{nextStep(f)}</span></div>
     <FeedbackChoices target={followUpTarget(f, occurrence, labels)} feedback={feedback} />
-    <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${time(f.due_at)}, has passed.`]}
+    <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${churchTime(f.due_at, zone)}, has passed.`]}
       reads={readsFor({ kind: "follow-ups" })} defaultOpen={whyOpen} />
   </article>;
   return <section className="stack" aria-label="Rooms and follow-ups">
@@ -1106,19 +1123,19 @@ function GroupMeetingCard({ item, names, defaultOpen = false, feedback = null, o
   item: GroupMeeting; names: Names; defaultOpen?: boolean; feedback?: FeedbackControls | null; occurrence?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const words = useDay(), untimed = useContext(UntimedWhen);
+  const words = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
   const roles = [...new Set(item.serving.map(s => s.position ?? "their role"))].join(", ");
   const serving = [...new Set(item.serving.map(s => `${s.status} for ${s.position ?? "a role"}`))].join(" and ");
   const why = [
-    ...item.meetings.map(m => `Planning Center Groups lists them in a group that meets ${span(m)} ${words.thisOne}.`),
-    ...item.serving.map(s => `Planning Center Services has them ${s.status} for ${s.position ?? "a role"}, ${span(s.interval)}.`),
+    ...item.meetings.map(m => `Planning Center Groups lists them in a group that meets ${span(m, zone)} ${words.thisOne}.`),
+    ...item.serving.map(s => `Planning Center Services has them ${s.status} for ${s.position ?? "a role"}, ${span(s.interval, zone)}.`),
     "This is a schedule fact. Which one they go to is theirs to decide.",
   ];
   return <article className="find is-look">
     <div className="find-top"><span className="badge b-look"><Icon name="eye" small />Worth a look</span>
-      {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval, words, untimed)}</span>}</div>
+      {item.serving[0] && <span className="find-where">{roles} · {when(item.serving[0].interval, words, untimed, zone)}</span>}</div>
     <h3 className="find-title">{nameOf(names, item.person_id)} has a group meeting at the same time.</h3>
-    <p className="find-body">Their group meets {item.meetings.map(span).join(" and ")}, while they're {serving}.</p>
+    <p className="find-body">Their group meets {item.meetings.map(m => span(m, zone)).join(" and ")}, while they're {serving}.</p>
     <FeedbackChoices target={groupTarget(item, occurrence)} feedback={feedback} />
     <div className="find-src">
       <button type="button" className="btn btn-quiet btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}><Icon name="info" small /> Why I flagged this</button>
@@ -1308,6 +1325,10 @@ export function SundayPage(props: {
   // clock ("Sunday, November 22 · 9:30 AM and 11:00 AM"), then its own title.
   const dateText = brief?.day?.date ?? brief?.plan.dates ?? d.date ?? DayName(d);
   const timeText = brief ? timesText(brief.times ?? [], brief.time_zone) : null;
+  // Whose clock those are, only when this Mac's reads them differently: "9:30 AM Eastern Time (New York)", the zone named
+  // as Keeping watch and Settings name it (proactive-page.tsx zoneLabel). The cards' role, room, group and follow-up
+  // times are on that clock too; when Ozzie checked and when the leader decided or added someone stay on this Mac's.
+  const zoneText = timeText && brief?.time_zone && otherClock(brief.times ?? [], brief.time_zone, macZone()) ? ` ${zoneLabel(brief.time_zone)}` : "";
   const setAside = [...(brief?.hidden ?? []).map(h => h.entry), ...(props.operations?.hidden ?? []).map(h => h.entry)];
   const view = useMemo(() => brief ? applyDecisions(brief, decisions) : null, [brief, decisions]);
   // Everything the page shows, counted as items: Services, rooms, follow-ups and group meetings (the sidebar and Today use the same count).
@@ -1348,10 +1369,11 @@ export function SundayPage(props: {
   const partId = useId();
   const Root = part ? "section" : "div";
   const untimed = part && d.date ? d.date : null;
-  return <DayProvider value={d}><UntimedWhen.Provider value={untimed}><Root className={part ? "stack service-part" : "col"} {...(part ? { "aria-labelledby": partId } : {})}>
+  return <DayProvider value={d}><UntimedWhen.Provider value={untimed}><ChurchZone.Provider value={brief?.time_zone ?? null}>
+    <Root className={part ? "stack service-part" : "col"} {...(part ? { "aria-labelledby": partId } : {})}>
     {/* The plan's own title from Planning Center, after its date as the plan picker shows it (click-through, 2026-11-19:
         added to the lede, it read as a sentence of its own). In its own case, and wrapped whole when long. */}
-    <p className="eyebrow">{dateText}{timeText && ` · ${timeText}`}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
+    <p className="eyebrow">{dateText}{timeText && ` · ${timeText}${zoneText}`}{planTitle && <> · <span className="eyebrow-plan">{planTitle}</span></>}</p>
     {part ? <h2 id={partId} className="h2">{part.name ?? SERVICE_UNNAMED}</h2> : <h1 className="h1">{d.question}</h1>}
     {part?.waiting && <p className="small" role="status">{part.waiting}</p>}
     {brief?.mode === "recording" && <p className="banner dashed"><Icon name="clock" small />Saved copy of the check from {time(brief.completed_at)}. This is not a current check.</p>}
@@ -1414,5 +1436,5 @@ export function SundayPage(props: {
         <ul className="list">{brief.not_checked_more!.map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul></details>}
     </section>}
     {brief && props.last}
-  </Root></UntimedWhen.Provider></DayProvider>;
+  </Root></ChurchZone.Provider></UntimedWhen.Provider></DayProvider>;
 }

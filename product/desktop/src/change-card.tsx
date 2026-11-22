@@ -277,7 +277,7 @@ export function servicesLabel(times: readonly { starts_at: string }[], zone: str
   if (!at.length) return null;
   return at.length === 1 ? at[0]! : `${at.slice(0, -1).join(", ")} and ${at.at(-1)}`;
 }
-/** The time of the leader's own clock, as "Checked at" says it. */
+/** The time on the leader's own clock, as "Checked at" says it, and when they added or took someone off. */
 export const checkedClock = (iso: string) => clock(iso);
 
 /** Which people on an open role's list a change is offered for: those with no overlap found, or worth a look. */
@@ -454,10 +454,11 @@ export function ChangeResults({ slot }: { slot: ChangeSlot }) {
     {here.map(r => {
       const name = firstName(r.ask.full);
       // Once a take-off has an answer, only what is true now (the add in the past, then the answer); while another try is
-      // under way, only the add in the past.
-      const now = r.answer ? afterUndo(r.answer, said(r.ask, r.day), r.addedAt ? clock(r.addedAt, slot.zone) : null,
-        clock(r.offAt ?? new Date().toISOString(), slot.zone)) : { lines: [r.sentence], tone: r.tone };
-      const shown = r.answer && r.undo === "working" ? [addedPast(name, r.ask.role, r.addedAt ? clock(r.addedAt, slot.zone) : null)] : now.lines;
+      // under way, only the add in the past. When the leader added and took off is on this Mac's clock, as What happened
+      // says the same change (the role's own time stays on the church's).
+      const now = r.answer ? afterUndo(r.answer, said(r.ask, r.day), r.addedAt ? checkedClock(r.addedAt) : null,
+        checkedClock(r.offAt ?? new Date().toISOString())) : { lines: [r.sentence], tone: r.tone };
+      const shown = r.answer && r.undo === "working" ? [addedPast(name, r.ask.role, r.addedAt ? checkedClock(r.addedAt) : null)] : now.lines;
       const badge = BADGE[now.tone];
       return <article key={r.id} className={`find change-result${now.tone === "look" ? " is-look" : ""}`}>
         <div className="find-top"><span className={`badge ${badge.cls}`}><Icon name={badge.icon} small />{badge.text}</span><span className="find-where">{r.ask.role}</span></div>

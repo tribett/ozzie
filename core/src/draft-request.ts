@@ -8,12 +8,16 @@
 // background-check wording, which never goes to a model), the whole position name is replaced with
 // [Role]. Names are put back on this Mac only.
 import { backgroundWording, newerCharacter, OZZIES_OWN } from "./harness/background-wording.js";
+import { onChurchClock } from "./service-day.js";
 import type { Finding } from "./sunday-brief.js";
 
 export const REWORDINGS = { warmer: "Make it warmer.", shorter: "Make it shorter.", casual: "Make it more casual.", formal: "Make it a little more formal." } as const;
 export type Rewording = keyof typeof REWORDINGS;
-/** `sunday`: the church-local date (YYYY-MM-DD) of the service checked, on whatever day it is, named when the service time wasn't read. */
-export interface DraftContext { finding: Finding; person_id: string; sunday?: string | null }
+/**
+ * `sunday`: the church-local date (YYYY-MM-DD) of the service checked, on whatever day it is, named when the service time
+ * wasn't read. `zone`: the church's time zone, so the service time is on the church's clock (serviceOn).
+ */
+export interface DraftContext { finding: Finding; person_id: string; sunday?: string | null; zone?: string | null }
 export interface DraftModelRequest { system: string; user: string; max_tokens: number }
 /** Text in placeholder form that this module produced. Leader-typed text cannot become one. */
 export interface PlaceholderDraft { readonly text: string; readonly role: { readonly sent: string; readonly original: string } }
@@ -83,7 +87,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 export function serviceOn(finding: Finding, date?: string | null, zone?: string | null): string {
   const interval = finding.position?.interval;
   // `zone`: the church's own, where the caller has it (review of round 5, L7); else this Mac's, as before.
-  if (interval) return `on ${new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", ...(zone ? { timeZone: zone } : {}) })}`;
+  if (interval) return `on ${new Date(interval.starts_at).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", ...onChurchClock(zone) })}`;
   const day = date && DATE.test(date) ? new Date(`${date}T12:00:00Z`) : null;
   return day && !Number.isNaN(day.getTime()) ? `on ${day.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}` : "at the next service";
 }
@@ -120,7 +124,7 @@ export function templateDraft(ctx: DraftContext, names: Record<string, string>):
   return mint([
     "Hi [Volunteer A],",
     // The service's own date, never "this week" or "this Sunday": the note may go out weeks before it.
-    `We still need one more person for ${role} ${serviceOn(ctx.finding, ctx.sunday)}. Would you be able to help?`,
+    `We still need one more person for ${role} ${serviceOn(ctx.finding, ctx.sunday, ctx.zone)}. Would you be able to help?`,
     "It's completely fine to say no. Just let me know either way so we can plan.",
     "Thank you,\n[Your name]",
   ].join("\n\n"), { sent: role, original });

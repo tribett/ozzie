@@ -225,20 +225,26 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
     if (on) writeFileSync(join(folder, SHORTCUTS_ON_FILE), "", { mode: 0o600 });
     return { home: h, folder };
   }
-  /** What the actions' code says for `home`; nothing on stderr, and an empty environment, so HOME can't be what it reads. */
+  /**
+   * What the actions' code says for `home`; nothing on stderr, and an empty environment, so HOME can't be what it reads.
+   * Only TZ is handed on when this run sets it: a check time is said on this Mac's clock (TimeZone.current), and the
+   * answers below are worked out in this process's zone, so a run with TZ=UTC compares the same clock (the native code
+   * otherwise reads the Mac's own zone, and the two disagreed by its offset).
+   */
   function check(h: string, what = "sunday"): string {
-    const result = spawnSync(CHECK, [what, h], { env: {}, timeout: 20_000 });
+    const result = spawnSync(CHECK, [what, h], { env: { ...SAME_ZONE }, timeout: 20_000 });
     expect(result.status, result.stderr.toString()).toBe(0);
     expect(result.stderr.toString()).toBe("");
     return result.stdout.toString("utf8").replace(/\n$/u, "");
   }
   function helper(h: string): string | null {
     if (!helperCurrent) return null;
-    const result = spawnSync(HELPER, ["sunday"], { env: { HOME: h }, timeout: 20_000 });
+    const result = spawnSync(HELPER, ["sunday"], { env: { HOME: h, ...SAME_ZONE }, timeout: 20_000 });
     expect(result.status, result.stderr.toString()).toBe(0);
     return result.stdout.toString("utf8").replace(/\n$/u, "");
   }
   const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const SAME_ZONE: Record<string, string> = process.env.TZ ? { TZ: process.env.TZ } : {};
   /** The fictional Sunday's overview as native writes it: checked five minutes ago for a Sunday a week away, or (`current` false) at the fixture's own time. */
   async function copy(current = true): Promise<string> {
     const data = harnessData({ mode: "live", now: FRESH });

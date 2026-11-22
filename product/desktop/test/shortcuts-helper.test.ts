@@ -45,8 +45,14 @@ function home(on: boolean): { home: string; folder: string } {
   return { home: h, folder };
 }
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+/**
+ * The helper reads no environment but HOME; TZ is handed on only when this run sets it, because its check time is said
+ * on this Mac's clock (TimeZone.current) and the answers it is compared with are worked out in this process's zone. A run
+ * with TZ=UTC otherwise compared UTC with the Mac's own zone.
+ */
+const SAME_ZONE: Record<string, string> = process.env.TZ ? { TZ: process.env.TZ } : {};
 function run(h: string, args: string[] = ["sunday"]): string {
-  const result = spawnSync(HELPER, args, { env: { HOME: h }, timeout: 20_000 });
+  const result = spawnSync(HELPER, args, { env: { HOME: h, ...SAME_ZONE }, timeout: 20_000 });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr.toString()).toBe(0);
   expect(result.stderr.toString()).toBe("");

@@ -78,12 +78,15 @@ export function Problem({ text, children, calm = false }: { text: string; childr
   </div>;
 }
 
-/** The real rewording request for the fictional example church, as the AI would get it (spec S8b "See exactly what is sent"). */
+/**
+ * The real rewording request for the fictional example church, as the AI would get it (spec S8b "See exactly what is
+ * sent"): its service time on the church's clock, as the Services page writes the note.
+ */
 export function exampleRequest() {
   const capture = nov22Capture();
-  const finding = buildSundayBrief(capture, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, capture.completed_at, true)
-    .findings.find(f => f.kind === "needs-people" && f.position);
-  return finding ? buildRewordRequest(templateDraft({ finding, person_id: "example" }, capture.names), "warmer", capture.names) : null;
+  const brief = buildSundayBrief(capture, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, capture.completed_at, true);
+  const finding = brief.findings.find(f => f.kind === "needs-people" && f.position);
+  return finding ? buildRewordRequest(templateDraft({ finding, person_id: "example", zone: brief.time_zone }, capture.names), "warmer", capture.names) : null;
 }
 export function SentSheet({ onClose }: { onClose: () => void }) {
   const request = useMemo(exampleRequest, []);
