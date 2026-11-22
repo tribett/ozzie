@@ -3,14 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
-import { createProactive, notifySundayAttention, proactiveReadiness, verifiedSundayCheck, verifySavedOnLaunch, type KeyValueStore, type ProactiveContext, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
+import { createProactive, notifySundayAttention, proactiveReadiness, sundayDigest, verifiedSundayCheck, verifySavedOnLaunch, type KeyValueStore, type ProactiveContext, type ProactiveDeps, type ProactiveHooks } from "../src/proactive.js";
 import { sundayProblem, type Settings } from "../src/sunday-source.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import { nov22Capture, PEOPLE, TEAMS } from "../../../core/src/fictional-sunday.js";
 import { BACKGROUND_CHECKS } from "../../../core/src/kids-rules.js";
 import { describeChange } from "../../../core/src/sunday-changes.js";
 import type { SundayCapture, SundayRules } from "../../../core/src/sunday-capture.js";
-import { wednesdayCapture } from "../../../core/test/fixtures/service-days/wednesday.js";
+import { wednesdayCapture, wednesdayWithOperations } from "../../../core/test/fixtures/service-days/wednesday.js";
+import { FICTIONAL_ROOM, withFictionalOperations } from "../../../core/src/fictional-operations.js";
+import { urgencyEntry } from "../../../core/src/finding-feedback.js";
+import { roomsHolders } from "../src/services-merge.js";
 
 const settings: Settings = { clientId: "fictional-client", organization: "1001", serviceTypeId: "1500", planId: "92902197" };
 const status = (state: ConnectionStatus["state"]): ConnectionStatus => ({ state, organization: "1001", checked_at_ms: null, source: "", problem: null });
@@ -803,3 +806,162 @@ describe("several services watched: one round reads each (owner decision 2026-11
   });
 });
 
+
+// 0.7.0: another service's own rooms and group meetings are compared and told as its part of the Services page shows
+// them; the church's follow-ups and a shared day's rooms stay with one service, so nothing is told twice. Which service
+// holds a day's rooms is the page's own choice (services-merge.ts roomsHolders over every service's latest check), given
+// to the round as App gives it (ProactiveContext `holdsRooms`).
+describe("several services: each one's own rooms are compared and told, a shared day's once (0.7.0)", () => {
+  const MAIN = "92902197", B = "93000001", C = "93000002";
+  const room = (c: SundayCapture) => c.reads.find(r => r.collection === "calendar_resource_bookings")!;
+  // A room that isn't shared (so an overlap needs a decision), and room overlaps told right away.
+  const told: SundayRules = { ...rules, rooms: [{ room_id: FICTIONAL_ROOM, exclusive: true, setup_minutes: 30 }],
+    feedback: [urgencyEntry({ kind: "room-overlap", tone: "decision" }, "right-away", "2026-11-19T12:00:00Z")] };
+  type Plan = "booked" | "empty" | "fail" | "rooms-fail" | "new-clash";
+  /**
+   * The first service on Sunday and others (`plans`: plan id → its day); each round's state per plan by `state`. `legacy`:
+   * rounds compared as 0.6.1 did (another service's check without its rooms and group meetings), for the upgrade.
+   */
+  function round(plans: Record<string, "sunday" | "wednesday">, state: (plan: string, n: number) => Plan = () => "booked") {
+    let now = "2026-11-20T15:00:00Z", n = 0, legacy = false;
+    const latest: Record<string, SundayCapture> = {};
+    const others = Object.keys(plans).filter(p => p !== MAIN);
+    let task = 0;
+    const check = vi.fn(async (ctx: ProactiveContext, _onStatus: unknown, _trigger: unknown, _source: unknown, onTask?: (id: string) => void) => {
+      onTask?.(`task-${++task}`);
+      const plan = ctx.settings.planId, st = state(plan, n);
+      if (st === "fail") throw "provider-failure";
+      const base = () => {
+        const c = plans[plan] === "sunday" ? withFictionalOperations(nov22Capture()) : wednesdayWithOperations();
+        return plan === MAIN ? c : { ...c, service_type_id: `2${plan.slice(-3)}`, plan_id: plan };
+      };
+      return captureAt(now, c => {
+        if (st === "empty") (room(c).body as { data: unknown[] }).data = [];
+        if (st === "rooms-fail") { room(c).outcome = "timeout"; delete room(c).body; }
+        // Two more of the day's bookings now overlap (16:00-16:30 moved to 13:30-14:15 on the church's clock).
+        if (st === "new-clash") ((room(c).body as { data: { id: string; attributes: Record<string, unknown> }[] }).data.find(b => b.id === "41000004")!).attributes.starts_at
+          = plans[plan] === "sunday" ? "2026-11-22T18:30:00Z" : "2026-11-25T18:30:00Z";
+        // Planning Center's own words for the day differ by service; the church-local date is the same (review L6).
+        if (plan === C) (c.reads.find(r => r.collection === "plan")!.body!.data as { attributes: Record<string, unknown> }).attributes.dates = "Wed Nov 25";
+      }, base);
+    });
+    const parts: Record<string, unknown[]> = {};
+    const digest = vi.fn((c: SundayCapture, ctx: ProactiveContext, at: string, part?: Parameters<typeof sundayDigest>[3]) => {
+      (parts[c.plan_id] ??= []).push(part);
+      // 0.6.1 compared another service's check with no rooms or group meetings at all.
+      return legacy && part ? (r => r && { ...r, ops: null })(sundayDigest(c, ctx, at)) : sundayDigest(c, ctx, at, part);
+    });
+    const notify = vi.fn(async () => {});
+    const found = vi.fn();
+    const store = memoryStore();
+    const deps: ProactiveDeps = { store, now: () => now, timeZone: () => ZONE, check, notify, digest, found, problem: sundayProblem, timers: { setInterval: () => 0, clearInterval: () => {} } };
+    // As App asks it: every service's latest check, in watch order, the one just read in its place, at the round's clock.
+    const holdsRooms = (c: SundayCapture, at: string) => {
+      const checks = [MAIN, ...others].map(p => p === c.plan_id ? c : latest[p] ?? null);
+      const i = checks.indexOf(c);
+      return roomsHolders(checks, told, at)[i] === i;
+    };
+    const context: ProactiveContext = { settings, rules: told, status: status("connected"), also: others.map(p => ({ serviceTypeId: `2${p.slice(-3)}`, planId: p })), holdsRooms };
+    const keep = (c: SundayCapture) => { latest[c.plan_id] = c; };
+    const hooks: ProactiveHooks = { context: () => context, onStatus: () => {}, onCapture: keep, onAlsoCapture: keep, onAlsoFailure: () => {}, onChanges: vi.fn() };
+    let p = createProactive(deps);
+    const history = (plan: string) => p.view().history.filter(e => e.plan_id === plan && e.kind === "changes");
+    return { get p() { return p; }, store, notify, found, parts, history, legacy: (on: boolean) => { legacy = on; },
+      next: async () => { n++; now = new Date(Date.parse(now) + 3_600_000).toISOString(); await p.tick(); },
+      launch: async () => { p.start(hooks); await p.tick(); },
+      /** Ozzie quit and opened again: a new controller over what this Mac kept. */
+      restart: () => { p.stop(); p = createProactive(deps); p.start(hooks); } };
+  }
+
+  it("a new room clash on the other service's own day is told, with its own day, once", async () => {
+    const h = round({ [MAIN]: "sunday", [B]: "wednesday" }, (plan, n) => plan === B && n === 0 ? "empty" : "booked");
+    await h.launch();
+    expect(h.notify).not.toHaveBeenCalled();
+    await h.next();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledWith({ day: "wednesday" });
+    // Its own rooms and group meetings, never the church's follow-ups.
+    expect(h.parts[B]).toEqual([{ followUps: false }, { followUps: false }]);
+    expect(h.history(B)[0]!.changes!.map(c => c.kind === "finding-new" ? c.finding?.kind : c.kind)).toEqual(["room-overlap"]);
+  });
+
+  it("on the first service's own day, the shared clash is the first service's alone: told once, for it", async () => {
+    const h = round({ [MAIN]: "sunday", [B]: "sunday" }, (_plan, n) => n === 0 ? "empty" : "booked");
+    await h.launch();
+    await h.next();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledWith({ day: "sunday" });
+    expect(h.parts[B]).toEqual([{ followUps: false, rooms: false }, { followUps: false, rooms: false }]);
+    expect(h.history(B)).toEqual([]);
+    expect(h.history(MAIN)[0]!.changes!.map(c => c.kind === "finding-new" ? c.finding?.kind : c.kind)).toContain("room-overlap");
+  });
+
+  it("review M1: two others on one Wednesday, the first of them failing every other round: the unchanged clash is never told again", async () => {
+    // Round 0: everything read, the clash already there (a baseline). B's whole check fails in rounds 1 and 3.
+    const h = round({ [MAIN]: "sunday", [B]: "wednesday", [C]: "wednesday" }, (plan, n) => plan === B && n % 2 === 1 ? "fail" : "booked");
+    await h.launch();
+    for (let i = 0; i < 4; i++) await h.next();
+    expect(h.notify).not.toHaveBeenCalled();
+    // Wednesday's rooms go to C while B's last check is out of date, and back to B when it reads again: the clash is the
+    // same throughout, so nothing is told or listed as changed for either.
+    expect(h.parts[C]!.map(x => (x as { rooms?: boolean }).rooms !== false)).toEqual([false, true, false, true, false]);
+    expect(h.history(C)).toEqual([]);
+    expect(h.history(B)).toEqual([]);
+  });
+
+  it("review M1 (second pass): a service whose check keeps failing never hides its day: a new clash there is told while it fails", async () => {
+    const h = round({ [MAIN]: "sunday", [B]: "wednesday", [C]: "wednesday" }, (plan, n) => plan === B && n > 0 ? "fail" : plan === C && n >= 3 ? "new-clash" : "booked");
+    await h.launch();
+    await h.next(); await h.next();
+    expect(h.notify).not.toHaveBeenCalled();
+    // From round 1, C's current full read shows Wednesday's rooms; in round 3 two more of its bookings overlap: told, once.
+    await h.next();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+    expect(h.notify).toHaveBeenCalledWith({ day: "wednesday" });
+    await h.next();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("review L2: what a day showed is kept across a restart, so the day moving after one isn't told", async () => {
+    const h = round({ [MAIN]: "sunday", [B]: "wednesday", [C]: "wednesday" }, (plan, n) => plan === B && n === 2 ? "rooms-fail" : "booked");
+    await h.launch();
+    await h.next();
+    h.restart();
+    // After the restart, B's check comes back without its rooms before C's is read: C's full read shows the same clash.
+    await h.next();
+    expect(h.parts[C]!.at(-1)).toEqual({ followUps: false });
+    expect(h.notify).not.toHaveBeenCalled();
+    // What is kept: room-overlap keys by church and date, ids only.
+    const kept = JSON.parse(h.store.get("ozzie.proactive.sundays.v1")!) as { days?: Record<string, string[]> };
+    expect(Object.keys(kept.days!).sort()).toEqual(["1001\u00002026-11-22", "1001\u00002026-11-25"]);
+    for (const keys of Object.values(kept.days!)) for (const k of keys) expect(k).toMatch(/^\["room","room\d+","booking\d+","booking\d+"\]$/u);
+  });
+
+  it("review L3: the earlier service's own room read fails: the later one's full read shows the day, and the clash isn't told again", async () => {
+    const h = round({ [MAIN]: "sunday", [B]: "wednesday", [C]: "wednesday" }, (plan, n) => plan === B && n === 1 ? "rooms-fail" : "booked");
+    await h.launch();
+    await h.next();
+    // Round 1: B's check came back without its rooms, so C's full read holds Wednesday's; the clash was known from B.
+    expect(h.parts[C]!.at(-1)).toEqual({ followUps: false });
+    expect(h.parts[B]!.at(-1)).toEqual({ followUps: false, rooms: false });
+    await h.next();
+    expect(h.parts[B]!.at(-1)).toEqual({ followUps: false });
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("review L5: the first round after the upgrade adds the other service's rooms and group meetings quietly; a later new one is told", async () => {
+    const h = round({ [MAIN]: "sunday", [B]: "wednesday" }, (plan, n) => plan === B && n < 3 ? "empty" : "booked");
+    h.legacy(true);
+    await h.launch();
+    await h.next();
+    h.legacy(false);
+    // The first round compared with its rooms and group meetings: B's group meeting was there all along.
+    await h.next();
+    expect(h.found).toHaveBeenLastCalledWith(expect.any(String), "nothing-new");
+    expect(h.history(B)).toEqual([]);
+    expect(h.notify).not.toHaveBeenCalled();
+    // Then a room clash that wasn't there: told.
+    await h.next();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+  });
+});

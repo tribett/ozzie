@@ -323,10 +323,12 @@ const more = (n: number) => n === 1 ? "1 more person needed" : `${n} more people
  * team are clear for that time. Counts and role names only: never a person's name, never ranked or scored. Rooms and
  * follow-ups that need a decision are named by what they are. `named` is at most DECISIONS_NAMED; `more` the rest.
  * `services`: with more than one service watched, each team's service, so every role is said with it ("Greeter (Youth
- * Night)"), and a role with no time of its own isn't given every service's day words ("your services").
+ * Night)"), and a role with no time of its own isn't given every service's day words ("your services"). `rooms`: with more
+ * than one service watched, each service's confirmed room overlaps on a line of its own, opened with its service when it
+ * has a name to say ("At Youth Night, a room has …"), its key the card it opens; in place of `ops.rooms`.
  */
 export function decisionLines(items: readonly Decided[], ops: { rooms: number; followUps: number }, zone: string, d: DayWords = SUNDAY_WORDS,
-  services?: TeamServices): { named: DecisionLine[]; more: number } {
+  services?: TeamServices, rooms?: readonly { key: string; service: string | null; count: number }[]): { named: DecisionLine[]; more: number } {
   const z = zoneOr(zone);
   const at = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: z });
   const lines: DecisionLine[] = items.filter(i => i.state !== "resolved" && i.finding.tone === "decision").map(({ finding: f }) => {
@@ -355,7 +357,11 @@ export function decisionLines(items: readonly Decided[], ops: { rooms: number; f
     }
   });
   // Rooms and follow-ups are named together, each line standing for as many decisions as it counts.
-  if (ops.rooms) lines.push({ key: "rooms", text: ops.rooms === 1 ? "A room has overlapping bookings to review." : `${ops.rooms} room booking overlaps to review.`, people: false, count: ops.rooms });
+  for (const r of rooms ?? [{ key: "rooms", service: null, count: ops.rooms }]) {
+    if (!r.count) continue;
+    const text = r.count === 1 ? "A room has overlapping bookings to review." : `${r.count} room booking overlaps to review.`;
+    lines.push({ key: r.key, text: r.service ? `At ${r.service}, ${text.charAt(0).toLowerCase()}${text.slice(1)}` : text, people: false, count: r.count });
+  }
   if (ops.followUps) lines.push({ key: "follow-ups", text: ops.followUps === 1 ? "A follow-up has no owner and is past due." : `${ops.followUps} follow-ups have no owner and are past due.`, people: false, count: ops.followUps });
   const named = lines.slice(0, DECISIONS_NAMED);
   const total = lines.reduce((n, l) => n + (l.count ?? 1), 0);

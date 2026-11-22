@@ -19,6 +19,17 @@ import {
 export interface OperationsOptions {
   /** The evaluation clock for a live check. A recording is always evaluated as of its completion. Default: completed_at. */
   now?: string;
+  /**
+   * `false` for another watched service than the first (owner decision 2026-11-19): follow-ups belong to the church, not
+   * to a service, so they stay with the first service and are left out here altogether (no finding, line or "nothing
+   * found"), never shown or counted twice. Default: included.
+   */
+  followUps?: boolean;
+  /**
+   * `false` for a service on the same church-local day as one watched before it: a room check covers the whole day, so
+   * that day's room bookings are the earlier service's and are left out here altogether. Default: included.
+   */
+  rooms?: boolean;
 }
 /** Someone scheduled on this plan whose group meets while they serve. A schedule fact, "Worth a look". */
 export interface GroupMeeting {
@@ -50,6 +61,18 @@ export interface SundayOperations {
   /** Findings the person's Church rules set aside, by kind and stable key, and which entry did. Absent when none. */
   hidden?: { kind: string; key: string; entry: StopEntry | CorrectionEntry }[];
 }
+
+/**
+ * One other watched service's own rooms and group meetings (0.7.0: from its own check, never the church's follow-ups,
+ * and no rooms on a day an earlier service holds), with its name as the lines that speak of every service say it, or null
+ * (then its lines read with no service). Local only, like every name a check read.
+ */
+export interface ServiceOperations { plan_id: string; service: string | null; operations: SundayOperations | null }
+/**
+ * With more than one service watched: the first service's name (its rooms, group meetings and the church's follow-ups
+ * stay the `operations` they always were) and each other service's own. Absent with one service.
+ */
+export interface AlsoOperations { first: string | null; also: readonly ServiceOperations[] }
 
 type State = "ok" | "not-requested" | "denied" | "truncated" | "timeout" | "failed" | "missing" | "window";
 const REASON: Record<Exclude<State, "ok">, string> = {
@@ -472,17 +495,53 @@ function merge(results: OperationsResult[]): OperationsResult | null {
     checked_scopes: results.flatMap(r => r.checked_scopes).sort((a, b) => compare(a.scope_id, b.scope_id)) };
 }
 
+/**
+ * The church-local date of the capture's plan (Services' sort_date is the church's wall-clock time), the day its room check
+ * covers; null when the plan wasn't read or has no date. Two services' checks on the same date check the same day's rooms.
+ */
+export function capturePlanDate(capture: SundayCapture): string | null {
+  const plan = asRows(capture.reads.find(r => r.collection === "plan" && r.outcome === "ok")?.body?.data)[0];
+  return planDate(plan ? attr(plan, "sort_date") : undefined);
+}
+/** "Rooms, follow-ups and group meetings", or the parts of it this check holds. */
+const partsText = (parts: readonly string[]) => {
+  const text = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)!}` : parts[0] ?? "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
+
+/** Each evaluated check whose own day's rooms were read and checked in full (roomsReadComplete). Never part of the result. */
+const ROOMS_READ = new WeakMap<SundayOperations, true>();
+/**
+ * Whether this check read its plan's church-local day of room bookings in full and checked them (no part off, refused,
+ * partial, unreadable or unevaluated), judged as of the check itself.
+ */
+export function roomsReadComplete(capture: SundayCapture, rules: SundayRules): boolean {
+  const ops = sundayOperations({ ...capture, kind: "recording" }, rules, { followUps: false });
+  return ops !== null && ROOMS_READ.has(ops);
+}
+/**
+ * How this check read its day's room bookings, for which watched service shows that day's rooms (desktop
+ * services-merge.ts roomsHolders): "current" read in full and a live check still current at `now`; "old" read in full
+ * but out of date by now (or a saved copy); null not read in full.
+ */
+export function roomsRead(capture: SundayCapture, rules: SundayRules, now: string = capture.completed_at): "current" | "old" | null {
+  if (!roomsReadComplete(capture, rules)) return null;
+  return capture.kind === "live" && sundayOperations(capture, rules, { now, followUps: false })?.stale === false ? "current" : "old";
+}
+
 /** Rooms, follow-ups and group meetings for this Sunday; null when the capture has no operations reads at all. */
 export function sundayOperations(capture: SundayCapture, rules: SundayRules, options: OperationsOptions = {}): SundayOperations | null {
   if (!capture.reads.some(isOperationsRead)) return null;
+  const withRooms = options.rooms !== false, withFollowUps = options.followUps !== false;
+  // What this check holds, in the words its lines say them: all three, as always, unless a part is left out (options).
+  const held = partsText([...(withRooms ? ["rooms"] : []), ...(withFollowUps ? ["follow-ups"] : []), "group meetings"]);
   const empty = { result: null, labels: {}, group_meetings: [], stale: false, clear: [], checked_at: null };
   const evaluated_at = capture.kind === "recording" ? capture.completed_at : options.now ?? capture.completed_at;
-  if (!instant(evaluated_at)) return { ...empty, not_checked: ["Rooms, follow-ups and group meetings couldn't be checked, so nothing about them is shown."] };
+  if (!instant(evaluated_at)) return { ...empty, not_checked: [`${held} couldn't be checked, so nothing about them is shown.`] };
   // The church's own zone decides its local Sunday: Services' plan sort_date is local wall-clock time, so its date is that Sunday.
   const church = churchZone(capture);
   const zone = church.zone;
-  const plan = asRows(capture.reads.find(r => r.collection === "plan" && r.outcome === "ok")?.body?.data)[0];
-  const date = planDate(plan ? attr(plan, "sort_date") : undefined);
+  const date = capturePlanDate(capture);
   const day = zone && date ? localDay(date, zone) : null;
   // Follow-ups aren't tied to a time; without the Sunday they're evaluated over a day of the check (UTC when the zone is unknown).
   const anyZone = zone ?? "UTC";
@@ -493,8 +552,10 @@ export function sundayOperations(capture: SundayCapture, rules: SundayRules, opt
     labels: {},
     reads: collection => capture.reads.filter(r => r.collection === collection),
   };
-  const rooms = roomsPart(ctx, roomRules(rules));
-  const followUps = followUpsPart(ctx);
+  // A part left out (options) is no part of this check at all: never read here, never named, never clear.
+  const left = part({ absent: true });
+  const rooms = withRooms ? roomsPart(ctx, roomRules(rules)) : left;
+  const followUps = withFollowUps ? followUpsPart(ctx) : left;
   const groups = groupsPart(ctx);
   const opsTimes = capture.reads.filter(r => isOperationsRead(r) && r.outcome !== "not-requested");
   const first = earliest(opsTimes);
@@ -505,10 +566,13 @@ export function sundayOperations(capture: SundayCapture, rules: SundayRules, opt
   else if (rooms.off) lines.push("Room bookings weren't checked. Turn this on in Settings.");
   else if (followUps.off) lines.push("Follow-ups weren't checked. Turn this on in Settings.");
   if (groups.off) lines.push(rooms.off || followUps.off ? "Group meetings weren't checked either." : "Group meetings weren't checked. Turn this on in Settings.");
-  if (rooms.absent && !rooms.off) lines.push("Room bookings weren't part of this check.");
-  if (followUps.absent && !followUps.off) lines.push("Follow-ups weren't part of this check.");
+  if (withRooms && rooms.absent && !rooms.off) lines.push("Room bookings weren't part of this check.");
+  if (withFollowUps && followUps.absent && !followUps.off) lines.push("Follow-ups weren't part of this check.");
   // An out-of-date check shows its out-of-date state only: no results, no meetings, nothing clear.
-  if (stale) return { ...empty, stale, not_checked: unique([...lines, "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown."]) };
+  // Another service's part says it without "check … out of date", which only the first service's own whole sentence may
+  // carry past the background-check wording guard (fixed/background-wording.json ozzies_own).
+  if (stale) return { ...empty, stale, not_checked: unique([...lines, withRooms && withFollowUps
+    ? "Rooms, follow-ups and group meetings: this check is out of date, so they aren't shown." : `${held} aren't shown: they were read more than 30 minutes ago.`]) };
   const needZone = [...(!rooms.off && !rooms.absent ? ["room bookings"] : []), ...(!groups.off && !groups.absent ? ["group meetings"] : [])];
   if (church.problem && needZone.length) lines.push(`${ZONE[church.problem]}, so ${needZone.join(" and ")} weren't checked.`);
 
@@ -528,7 +592,8 @@ export function sundayOperations(capture: SundayCapture, rules: SundayRules, opt
     }
     if (done) checked.push(key); else complete = false;
   }
-  if (unexplained) lines.push(`${unexplained} ${unexplained === 1 ? "part" : "parts"} of the room and follow-up check couldn't be read.`);
+  const checkOf = [...(withRooms ? ["room"] : []), ...(withFollowUps ? ["follow-up"] : [])].join(" and ");
+  if (unexplained) lines.push(`${unexplained} ${unexplained === 1 ? "part" : "parts"} of the ${checkOf} check couldn't be read.`);
   lines.push(...groups.lines);
   const result = merge(results);
   // Something set aside by the person's Church rules was still found: never a "nothing found" line.
@@ -540,12 +605,16 @@ export function sundayOperations(capture: SundayCapture, rules: SundayRules, opt
     ...kept.hidden.map(h => ({ kind: h.item.kind, key: stableFindingKey(h.item.finding_id), entry: h.entry })),
     ...meetings.hidden.map(h => ({ kind: "group-meeting", key: `group:${h.item.person_id}`, entry: h.entry })),
   ];
-  return {
+  // With a part left out (another service's check), its group meetings' reads say when it was read as well.
+  const groupReads = withRooms && withFollowUps ? [] : ["groups_person_memberships", "groups_group_events"].flatMap(ctx.reads).filter(answered);
+  const out: SundayOperations = {
     result: result && kept.hidden.length ? { ...result, findings: kept.shown } : result, labels: ctx.labels, group_meetings: meetings.shown,
     not_checked: unique(lines), stale: false,
-    clear: complete && !found ? checked : [], checked_at: earliest([...rooms.read, ...followUps.read]),
+    clear: complete && !found ? checked : [], checked_at: earliest([...rooms.read, ...followUps.read, ...groupReads]),
     ...(hidden.length ? { hidden } : {}),
   };
+  if (withRooms && checked.includes("rooms")) ROOMS_READ.set(out, true);
+  return out;
 }
 
 /** Rooms and follow-ups for this Sunday, or null when the capture has none of their reads. */

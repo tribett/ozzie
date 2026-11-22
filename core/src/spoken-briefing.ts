@@ -6,7 +6,7 @@
 // step name is ever spoken. The script never goes to an AI model; the native side speaks it with the
 // Mac's own voice, and `<`, `>` and `&` never reach it (no markup a voice could act on).
 import type { AttentionReport } from "./attention-import/index.js";
-import { operationsNotChecked, type SundayOperations } from "./operations-capture.js";
+import { operationsNotChecked, type AlsoOperations, type SundayOperations } from "./operations-capture.js";
 import { blockoutRoles, blockoutTime, findingService, roleReasons, rolesUnchecked, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices,
   type Finding, type FindingServices, type SundayBrief, type TeamServices } from "./sunday-brief.js";
 import type { DecidedBrief, DecidedItem } from "./sunday-decisions.js";
@@ -35,6 +35,13 @@ export interface BriefingInput {
    * check has none of their reads (said as not checked); undefined: not part of this briefing.
    */
   operations?: SundayOperations | null;
+  /**
+   * With more than one service watched (0.7.0): `operations` stays the first service's (with the church's follow-ups), and
+   * these are each other service's own rooms and group meetings, as each part of the Services page shows them. Every
+   * service's room and group lines then open with its service when it has a name to say ("At Youth Night, one person has
+   * a group meeting at the same time they serve."), and each is counted once. Absent with one service, which reads as before.
+   */
+  alsoOperations?: AlsoOperations;
 }
 export interface BriefingOptions {
   /** Sunday times, as the Sunday page shows them. */
@@ -184,10 +191,14 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
 
 /**
  * Rooms, follow-ups and group meetings as counts: what needs a decision and what's worth a look. Never a name. `counted`:
- * how many items those lines stand for, as the Sunday page counts them (one line can say two follow-ups).
+ * how many items those lines stand for, as the Sunday page counts them (one line can say two follow-ups). `service`: with
+ * more than one service watched, the service whose rooms and group meetings these are, which their lines open with
+ * (follow-ups are the church's and never are); `followUps` false for another service than the first, whose check holds none.
  */
-function operationsLines(ops: SundayOperations | null | undefined, d: DayWords): { decisions: string[]; looks: string[]; counted: { decisions: number; looks: number } } {
+function operationsLines(ops: SundayOperations | null | undefined, d: DayWords, service: string | null = null, followUps = true):
+  { decisions: string[]; looks: string[]; counted: { decisions: number; looks: number } } {
   if (!ops || ops.stale) return { decisions: [], looks: [], counted: { decisions: 0, looks: 0 } };
+  const at = (text: string) => service ? `At ${service}, ${lower(text)}` : text;
   const findings = ops.result?.findings ?? [];
   const unowned = findings.filter(f => f.kind === "unowned-overdue");
   const owners = unowned.length;
@@ -202,12 +213,14 @@ function operationsLines(ops: SundayOperations | null | undefined, d: DayWords):
   const plan = d.kind === "weekday" ? `${d.day}'s plan` : "the plan";
   const decisions = [
     ...(owners ? [`${owners === 1 ? "One follow-up has" : `${owners} follow-ups have`} no owner and ${owners === 1 ? "is" : "are"} past due. Choose who will handle ${owners === 1 ? "it" : "them"} in ${where}.`] : []),
-    ...(review ? [`${review === 1 ? "One room use needs" : `${review} room uses need`} review: bookings overlap in a room your Church rules say isn't shared.`] : []),
+    ...(review ? [at(`${review === 1 ? "One room use needs" : `${review} room uses need`} review: bookings overlap in a room your Church rules say isn't shared.`)] : []),
   ];
   const looks = [
-    ...(overlaps ? [overlaps === 1 ? "Two room bookings overlap, and it's worth a look." : `${overlaps} pairs of room bookings overlap, and they're worth a look.`] : []),
-    ...(unsure ? ["Some room or follow-up details couldn't be confirmed."] : []),
-    ...(meetings ? [`${meetings === 1 ? `One person on ${plan} has` : `${meetings} people on ${plan} have`} a group meeting at the same time they serve.`] : []),
+    ...(overlaps ? [at(overlaps === 1 ? "Two room bookings overlap, and it's worth a look." : `${overlaps} pairs of room bookings overlap, and they're worth a look.`)] : []),
+    ...(unsure ? [at(followUps ? "Some room or follow-up details couldn't be confirmed." : "Some room details couldn't be confirmed.")] : []),
+    // Said at its own service, the plan needs no words of its own.
+    ...(meetings ? [service ? at(`${meetings === 1 ? "One person has" : `${meetings} people have`} a group meeting at the same time they serve.`)
+      : `${meetings === 1 ? `One person on ${plan} has` : `${meetings} people on ${plan} have`} a group meeting at the same time they serve.`] : []),
   ];
   return { decisions, looks, counted: { decisions: owners + review, looks: overlaps + (unsure ? 1 : 0) + meetings } };
 }
@@ -249,7 +262,14 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   const sundayDecisions = open.filter(i => i.finding.tone === "decision")
     .map((i, n) => again(i, n === 0 && i.state !== "reopened" ? `For ${ctx.name}, ${afterFor(decision(i.finding, ctx))}` : decision(i.finding, ctx)));
   decisions.push(...sundayDecisions);
-  const operations = sunday ? operationsLines(input.operations, ctx.d) : { decisions: [], looks: [], counted: { decisions: 0, looks: 0 } };
+  // With more than one service watched, every service's own rooms and group meetings, the first service's first, each
+  // said at its service; with one, the one service's as always.
+  const also = sunday ? input.alsoOperations : undefined;
+  const parts = sunday ? [operationsLines(input.operations, ctx.d, also?.first ?? null),
+    ...(also?.also ?? []).map(o => operationsLines(o.operations, ctx.d, o.service, false))] : [];
+  const operations = parts.reduce((t, p) => ({ decisions: [...t.decisions, ...p.decisions], looks: [...t.looks, ...p.looks],
+    counted: { decisions: t.counted.decisions + p.counted.decisions, looks: t.counted.looks + p.counted.looks } }),
+  { decisions: [] as string[], looks: [] as string[], counted: { decisions: 0, looks: 0 } });
   decisions.push(...operations.decisions);
   const decisionLines = bounded(decisions, limit, n => `And ${n} more that ${n === 1 ? "needs" : "need"} a decision, listed on screen.`);
   if (resolved) decisionLines.push(ctx.d.kind === "weekday" ? `You already decided ${one(resolved, `${ctx.d.day} item`, `${ctx.d.day} items`)}, for ${ctx.d.thisOne} only.`
@@ -274,6 +294,8 @@ function compose(input: BriefingInput, options: BriefingOptions, limit: number):
   const unchecked = bounded([
     ...(sunday ? sunday.not_checked : [`${capital(ctx.name)} hasn't been checked yet.`]),
     ...(sunday && input.operations !== undefined ? input.operations ? input.operations.not_checked : operationsNotChecked(null) : []),
+    // Each other service's own lines about its rooms and group meetings, once each (two services can say the same).
+    ...[...new Set((also?.also ?? []).flatMap(o => o.operations?.not_checked ?? []))].filter(l => !input.operations?.not_checked.includes(l)),
     ...(attention ? attention.gaps : ["No email or calendar was read."]),
   ], limit, n => `And ${n} more ${n === 1 ? "thing" : "things"} Ozzie couldn't check, listed on screen.`);
   const times: string[] = [];

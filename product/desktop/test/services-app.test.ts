@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import { wednesdayCapture } from "../../../core/test/fixtures/service-days/wednesday.js";
+import { wednesdayCapture, wednesdayWithOperations } from "../../../core/test/fixtures/service-days/wednesday.js";
+import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { pickReply, SUNDAY_MORNING, YOUTH_NIGHT } from "./onboarding-fakes.js";
 
 const ORG = "1001";
@@ -25,6 +26,12 @@ const native = vi.hoisted(() => ({
   model: false,
   /** Every request the scripted model received, exactly as sent. */
   steps: [] as { messages: { role: string; content: string }[] }[],
+  /** Each check also reads rooms, follow-ups and group meetings (the fictional Calendar, People and Groups reads). */
+  operations: false,
+  /** Youth Night's plan on the first service's own Sunday, November 22, instead of Wednesday. */
+  sameDay: false,
+  /** The first service's room bookings read times out (review L3). */
+  mainRoomsFail: false,
 }));
 /** The newest result of one tool in a request (the scripted model reads only what it was given). */
 function toolResult(request: { messages: { role: string; content: string }[] }, tool: string): Record<string, unknown> | undefined {
@@ -64,8 +71,12 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "check_sunday": {
         const plan = String(args.planId);
         // The first service is the fictional Sunday; Youth Night's plan is the fictional Wednesday, of its own service type.
-        const wednesday = native.ownTeams ? JSON.parse(JSON.stringify(wednesdayCapture()).replace(/"75933(5[024])"/gu, '"86044$1"')) as ReturnType<typeof wednesdayCapture> : wednesdayCapture();
-        const base = plan === "92902197" ? nov22Capture() : { ...wednesday, service_type_id: String(args.serviceTypeId) };
+        const second = native.sameDay ? nov22Capture() : native.operations ? wednesdayWithOperations() : wednesdayCapture();
+        const youth = native.sameDay && native.operations ? withFictionalOperations(second) : second;
+        const wednesday = native.ownTeams ? JSON.parse(JSON.stringify(youth).replace(/"75933(5[024])"/gu, '"86044$1"')) as ReturnType<typeof wednesdayCapture> : youth;
+        const main = native.operations ? withFictionalOperations(nov22Capture()) : nov22Capture();
+        if (native.mainRoomsFail) for (const r of main.reads.filter(x => x.collection === "calendar_resource_bookings")) { r.outcome = "timeout"; delete r.body; }
+        const base = plan === "92902197" ? main : { ...wednesday, service_type_id: String(args.serviceTypeId) };
         const c = { ...base, plan_id: plan, completed_at: new Date().toISOString() };
         native.recordings.unshift({ organization: ORG, plan_id: plan, completed_at: c.completed_at, path_id: `sunday-${ORG}-${plan}-${Date.now()}.json` });
         return c;
@@ -112,7 +123,8 @@ const CONNECTED = { state: "connected", organization: ORG, checked_at_ms: Date.p
 
 let unmount: (() => Promise<void>) | null = null;
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-11-20T15:00:00Z")); native.status = null; native.pick = null;
-  native.calls = []; native.recordings = []; native.ownTeams = false; native.changes = false; native.model = false; native.steps = []; kept.clear(); });
+  native.calls = []; native.recordings = []; native.ownTeams = false; native.changes = false; native.model = false; native.steps = []; native.operations = false;
+  native.sameDay = false; native.mainRoomsFail = false; kept.clear(); });
 afterEach(async () => { await unmount?.(); unmount = null; vi.useRealTimers(); });
 
 type Mounted = { settle: (n?: number) => Promise<void>; act: (f: () => Promise<void>) => Promise<void> };
@@ -275,6 +287,91 @@ describe("watching more than one service (owner decision 2026-11-19)", () => {
     // The kids question on the Services page says which service's Nursery it asks about.
     await go(app, "Services");
     expect(dom.seen()).toMatch(/Does Nursery \((?:Sunday Morning|Youth Night)\) serve with kids\?/u);
+  }, 120_000);
+
+  /** Each service's part of the page, by its heading (date order: the first service, then Youth Night). */
+  const parts = () => { const page = dom.seen(), at = page.indexOf("Youth Night", page.indexOf("Sunday Morning") + 1); return [page.slice(0, at), page.slice(at)] as const; };
+  /** One part's own "N things need a decision and M are worth a look." */
+  const own = (part: string) => {
+    const m = /(\d+|Nothing) (?:things? needs?|in what was read needs)? ?a decision(?: and (\d+) (?:is|are) worth a look)?\./u.exec(part);
+    return { decisions: m && m[1] !== "Nothing" ? Number(m[1]) : 0, looks: m?.[2] ? Number(m[2]) : 0 };
+  };
+
+  it("each service's own rooms and group meetings show on its own part, and the counts say each once (0.7.0)", async () => {
+    native.operations = true;
+    const app = await oneService();
+    await go(app, "Services");
+    const single = dom.seen();
+    // One service: the rooms and follow-ups section as always.
+    expect(single).toContain("Rooms and follow-ups");
+    native.pick = pickReply(SUNDAY_MORNING, YOUTH_NIGHT);
+    await press(app, "Watch another service");
+    await waitFor(app, "Watch Youth Night");
+    await press(app, "Watch Youth Night");
+    await youthRead(app);
+    const [sunday, youth] = parts();
+    // Youth Night's own rooms (its Wednesday's room clash) and group meeting, in the first service's words.
+    expect(youth).toContain("Rooms");
+    expect(youth).not.toContain("Rooms and follow-ups");
+    expect(youth).toContain("Sanctuary (fictional) has overlapping bookings");
+    expect(youth).toContain("Wednesday, November 25 at");
+    expect(youth).toContain("has a group meeting at the same time.");
+    expect(youth).not.toContain("aren't checked for this service");
+    expect(youth).toContain("Follow-ups without an owner are shown with Sunday Morning.");
+    expect(youth).not.toContain("“Call a first-time guest” has no owner");
+    // The church's follow-up stays with Sunday Morning, once.
+    expect(sunday).toContain("“Call a first-time guest” has no owner");
+    expect(dom.seen().match(/“Call a first-time guest” has no owner/gu)).toHaveLength(1);
+    // The page's count across both is each part's own count added up, and the sidebar and Today say the same.
+    const a = own(sunday), b = own(youth);
+    expect(b.looks).toBeGreaterThan(0);
+    expect(dom.seen()).toContain(`${a.decisions + b.decisions} things need a decision across 2 services, and ${a.looks + b.looks} are worth a look.`);
+    expect(badge()).toBe(a.decisions + b.decisions);
+    await go(app, "Today");
+    expect(dom.seen()).toContain(`Your services have ${a.decisions + b.decisions} things to decide.`);
+  }, 120_000);
+
+  it("a second service on the same day: that day's room clash shows once, with the first, and is counted once (0.7.0)", async () => {
+    native.operations = true; native.sameDay = true; native.ownTeams = true;
+    const app = await oneService();
+    await go(app, "Services");
+    native.pick = pickReply(SUNDAY_MORNING, YOUTH_NIGHT);
+    await press(app, "Watch another service");
+    await waitFor(app, "Watch Youth Night");
+    await press(app, "Watch Youth Night");
+    await youthRead(app);
+    const [sunday, youth] = parts();
+    expect(sunday).toContain("Sanctuary (fictional) has overlapping bookings");
+    expect(youth).not.toContain("has overlapping bookings");
+    expect(dom.seen().match(/Sanctuary \(fictional\) has overlapping bookings/gu)).toHaveLength(1);
+    expect(youth).toContain("Room bookings for this day are shown with Sunday Morning.");
+    // Its own people's group meeting is still its own.
+    expect(youth).toContain("has a group meeting at the same time.");
+    const a = own(sunday), b = own(youth);
+    expect(dom.seen()).toContain(`${a.decisions + b.decisions} things need a decision across 2 services, and ${a.looks + b.looks} are worth a look.`);
+  }, 120_000);
+
+  it("review L3: the first service's room read failed and a same-day service's didn't: the day's clash shows with that one, once (0.7.0)", async () => {
+    native.operations = true; native.sameDay = true; native.ownTeams = true; native.mainRoomsFail = true;
+    const app = await oneService();
+    await go(app, "Services");
+    native.pick = pickReply(SUNDAY_MORNING, YOUTH_NIGHT);
+    await press(app, "Watch another service");
+    await waitFor(app, "Watch Youth Night");
+    await press(app, "Watch Youth Night");
+    await youthRead(app);
+    // Sunday Morning's part ends with the line naming Youth Night; Youth Night's own part starts after it.
+    const page = dom.seen(), line = "Room bookings for this day are shown with Youth Night.";
+    expect(page.match(new RegExp(line.replace(/[.]/gu, "\\."), "gu"))).toHaveLength(1);
+    const cut = page.indexOf(line) + line.length, sunday = page.slice(0, cut), youth = page.slice(cut);
+    expect(youth).toContain("Sanctuary (fictional) has overlapping bookings");
+    expect(dom.seen().match(/Sanctuary \(fictional\) has overlapping bookings/gu)).toHaveLength(1);
+    expect(sunday).not.toContain("Room bookings: took too long.");
+    expect(youth).not.toContain("Room bookings for this day are shown with");
+    // The church's follow-up still with Sunday Morning.
+    expect(sunday).toContain("“Call a first-time guest” has no owner");
+    const a = own(sunday), b = own(youth);
+    expect(dom.seen()).toContain(`${a.decisions + b.decisions} things need a decision across 2 services, and ${a.looks + b.looks} are worth a look.`);
   }, 120_000);
 
   it("Stop watching says what it forgets, deletes only that service's saved checks, and the count goes back", async () => {

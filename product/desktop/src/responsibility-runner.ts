@@ -38,11 +38,12 @@ import {
 import type { FailureCode, ModelStep } from "../../../core/src/harness/contract.js";
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { inQuietHours, type QuietHours } from "../../../core/src/schedule.js";
-import { buildSundayBrief, sundayShownCount } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { isOperationsRead, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { changeStillHolds, compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
-import { sundayOperations } from "../../../core/src/operations-capture.js";
+import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
+import { partKey } from "./services-merge.js";
 import {
   alwaysFor, briefTarget, changeFindingKind, feedbackOf, foundOf, keptForBriefing, routeChanges, routeFindings, stableFindingKey, type FoundKey,
 } from "../../../core/src/finding-feedback.js";
@@ -223,11 +224,14 @@ export interface RunnerContext {
    */
   decisionsFor?: (capture: SundayCapture) => readonly SundayDecision[];
   /**
-   * What the other services Ozzie watches show on the Services page now, counted as it counts them (their latest checks,
-   * read in the same round as this run's check, after the leader's decisions): Keep services covered and the morning
-   * briefing say the count across every service (owner decision 2026-11-19). Absent or null: one service.
+   * The other services Ozzie watches as the Services page shows them now, beside `capture` (this run's check of the first
+   * service): their latest checks, read in the same round, with the leader's decisions for each and each one's own rooms
+   * and group meetings; `firstRooms` false when another service on the first service's day shows that day's rooms
+   * (services-merge.ts roomsHolders). Keep services covered, the morning briefing, Watch room bookings and Group night
+   * clashes then count every service's, each once, as the page and the jobs' write-ups do (owner decision 2026-11-19,
+   * 0.7.0). Absent or null: one service.
    */
-  alsoShown?: () => { decisions: number; looks: number } | null;
+  alsoServices?: (capture: SundayCapture) => AlsoServices | null;
 }
 export interface RunnerHooks {
   context(): RunnerContext;
@@ -339,6 +343,8 @@ const KEYS = {
 const NOTICED_KEPT = 30;
 const HELD_KEPT = 30;
 const REPORTED_KEPT = 60;
+/** A room or group job's mark that it has looked at another service's plan once (kept with its reported keys; ids only). */
+const seenMark = (plan: string) => JSON.stringify(["seen", plan]);
 const WAKES_KEPT = 10;
 /** A check this recent is shared instead of reading Planning Center again. */
 export const SHARED_CHECK_MS = 2 * 60_000;
@@ -372,8 +378,19 @@ export type { FoundKey };
  * (phone-notice.ts `heldMacOnly`); absent on one held before this was kept.
  */
 interface Held { kind: NoticeKind; at: string; item: string; found?: FoundKey[]; mac_only?: boolean }
-/** `found`/`keys`: what a template reports and announces; `all`: every finding the check shows, for the briefing's kept list. */
-export interface Found { decisions: number; looks: number; findings: NonNullable<NoticedItem["findings"]>; found: FoundKey[]; keys: string[]; drafts: number; all: FoundKey[] }
+/** The other services watched, as a job counts them beside the first service's check (RunnerContext `alsoServices`). */
+export interface AlsoServices {
+  firstRooms: boolean;
+  others: readonly { plan_id: string; brief: SundayBrief; decisions: readonly SundayDecision[]; operations: SundayOperations | null }[];
+}
+/**
+ * `found`/`keys`: what a template reports and announces; `all`: every finding the check shows, for the briefing's kept
+ * list; `others`: the keys among `keys` that are each other service's own, by its plan.
+ */
+export interface Found {
+  decisions: number; looks: number; findings: NonNullable<NoticedItem["findings"]>; found: FoundKey[]; keys: string[]; drafts: number; all: FoundKey[];
+  others?: Readonly<Record<string, readonly string[]>>;
+}
 /**
  * What one fresh check shows for a template. Counts and keys (ids) only. The person's Church rules
  * already set aside what they asked Ozzie to stop flagging; notes their "Always do this" prepares count as drafts.
@@ -381,16 +398,24 @@ export interface Found { decisions: number; looks: number; findings: NonNullable
  * covered's and the morning briefing's counts are the Sunday page's own (sundayShownCount, after the leader's
  * `decisions`): rooms, follow-ups and group meetings the check read included, so "Keep Sunday covered: 2 things need a
  * decision" never sits beside a page that says 3 (review item 2). What it announces is still only what it watches: the
- * Services findings in `found`.
+ * Services findings in `found`. `also`: the other services watched (RunnerContext `alsoServices`): every count, room and
+ * group meeting is then every service's, each once, as the Services page and the job's own write-up (which reads every
+ * service's) say them; the church's follow-ups stay the first service's.
  */
-export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string, decided: readonly SundayDecision[] = []): Found {
+export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string, decided: readonly SundayDecision[] = [], also: AlsoServices | null = null): Found {
   const brief = buildSundayBrief(capture, rules, now);
-  const ops = TEMPLATES[template].needs.includes("operations") || template === "morning-briefing" ? sundayOperations(capture, rules, { now }) : null;
-  const rooms = ops?.result?.findings.filter(f => f.kind === "room-overlap") ?? [];
+  const own = also && !also.firstRooms ? { rooms: false as const } : {};
+  const ops = TEMPLATES[template].needs.includes("operations") || template === "morning-briefing" ? sundayOperations(capture, rules, { now, ...own }) : null;
+  const others = also?.others ?? [];
+  const fresh = (o: SundayOperations | null) => o && !o.stale ? o : null;
+  const roomsOf = (o: SundayOperations | null) => (o?.result?.findings ?? []).filter(f => f.kind === "room-overlap");
+  const rooms = [...roomsOf(ops), ...others.flatMap(o => roomsOf(fresh(o.operations)))];
   const confirmedRooms = rooms.filter(f => f.certainty === "confirmed").length, uncertainRooms = rooms.length - confirmedRooms;
   const roomCounts = { ...(confirmedRooms ? { rooms: confirmedRooms } : {}), ...(uncertainRooms ? { rooms_uncertain: uncertainRooms } : {}) };
   const followUps = ops?.result?.findings.filter(f => f.kind === "unowned-overdue") ?? [];
-  const groups = ops?.group_meetings ?? [];
+  // Each other service's group meetings under keys of its own (services-merge.ts partKey), so one person's two never meet.
+  const groups = [...(ops?.group_meetings ?? []).map(g => ({ g, key: `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}` })),
+    ...others.flatMap(o => (fresh(o.operations)?.group_meetings ?? []).map(g => ({ g, key: partKey(o.plan_id, `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`) })))];
   const decisions = brief.findings.filter(f => f.tone === "decision");
   const entries = feedbackOf(rules);
   const always = brief.findings.filter(f => alwaysFor(entries, briefTarget(f, capture.plan_id))).length;
@@ -398,20 +423,27 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
   const roomKeys = rooms.map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: f.certainty === "confirmed" ? "decision" : "look" }));
   const followUpKeys = followUps.map((f): FoundKey => ({ key: stableFindingKey(f.finding_id), kind: f.kind, tone: "decision" }));
   const decisionKeys = decisions.map((f): FoundKey => ({ key: f.key, kind: f.kind, tone: f.tone }));
-  const keyed = (found: FoundKey[]) => ({ found, keys: found.map(f => f.key), all: foundOf(brief, ops) });
+  // Kept for the briefing counts every service's findings too (each other's under its own keys).
+  const keyed = (found: FoundKey[]) => ({ found, keys: found.map(f => f.key),
+    all: [...foundOf(brief, ops), ...others.flatMap(o => foundOf(o.brief, o.operations).map(f => ({ ...f, key: partKey(o.plan_id, f.key) })))] });
+  // Which of a room or group job's keys are each other service's own, so a job's first look at a service is a baseline.
+  const ownKeys = (keys: (o: AlsoServices["others"][number]) => string[]) => others.length ? { others: Object.fromEntries(others.map(o => [o.plan_id, keys(o)])) } : {};
   switch (template) {
-    case "watch-room-bookings": return { decisions: 0, looks: 0, findings: roomCounts, ...keyed(roomKeys), drafts: 0 };
+    case "watch-room-bookings": return { decisions: 0, looks: 0, findings: roomCounts, ...keyed(roomKeys), drafts: 0,
+      ...ownKeys(o => roomsOf(fresh(o.operations)).map(f => stableFindingKey(f.finding_id))) };
     case "follow-ups-without-owner": return { decisions: 0, looks: 0, findings: { follow_ups: followUps.length }, ...keyed(followUpKeys), drafts: 0 };
     case "group-night-clashes": return {
       decisions: 0, looks: groups.length, findings: { groups: groups.length }, drafts: 0,
-      ...keyed(groups.map((g): FoundKey => ({ key: `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`, kind: "group-meeting", tone: "look" }))),
+      ...keyed(groups.map(({ key }): FoundKey => ({ key, kind: "group-meeting", tone: "look" }))),
+      ...ownKeys(o => (fresh(o.operations)?.group_meetings ?? []).map(g => partKey(o.plan_id, `${g.person_id}:${g.meetings[0]?.starts_at ?? ""}`))),
     };
     // The morning briefing's run line says the Sunday page's count too (polish pass): its rooms, follow-ups and group
     // meetings are in it, so they aren't listed beside it again.
     case "morning-briefing":
     default: {
-      const shown = sundayShownCount(applyDecisions(brief, decided), ops ?? sundayOperations(capture, rules, { now }));
-      return { decisions: shown.decisions, looks: shown.looks, findings: {}, ...keyed(decisionKeys), drafts };
+      const shown = sundayShownCount(applyDecisions(brief, decided), ops ?? sundayOperations(capture, rules, { now, ...own }));
+      const more = others.map(o => sundayShownCount(applyDecisions(o.brief, o.decisions), o.operations));
+      return { decisions: more.reduce((n, c) => n + c.decisions, shown.decisions), looks: more.reduce((n, c) => n + c.looks, shown.looks), findings: {}, ...keyed(decisionKeys), drafts };
     }
   }
 }
@@ -617,7 +649,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     if (changed.length) return { kinds: changed.map(changeKind) };
     // New findings: still there in a newer check that read what this job reads; otherwise as its own check found them.
     const answers = newer && (!TEMPLATES[item.template].needs.includes("operations") || newer.reads.some(isOperationsRead));
-    const still = answers ? findingsFor(item.template, newer, ctx.rules, newer.completed_at).found.filter(f => h.found!.some(x => x.key === f.key)) : h.found;
+    const still = answers ? findingsFor(item.template, newer, ctx.rules, newer.completed_at, [], ctx.alsoServices?.(newer) ?? null).found.filter(f => h.found!.some(x => x.key === f.key)) : h.found;
     const notify = routeFindings(still, entries).notify;
     return notify.length ? { kinds: still.filter(f => notify.includes(f.key)).map(f => f.kind) } : null;
   }
@@ -786,10 +818,8 @@ export function createRunner(deps: RunnerDeps): Runner {
       try { capture = await guard(check(trigger)); }
       catch (error) { if (error === CANCELLED) throw error; return await fail(checkFailure(error)); }
       const now = deps.now();
-      const own = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? []);
-      // Keep services covered and the morning briefing count every service watched, as the Services page does.
-      const more = r.template === "keep-sunday-covered" || r.template === "morning-briefing" ? ctx.alsoShown?.() ?? null : null;
-      const found = more ? { ...own, decisions: own.decisions + more.decisions, looks: own.looks + more.looks } : own;
+      // Every service watched, as the Services page shows them (and the job's write-up reads them).
+      const found = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? [], ctx.alsoServices?.(capture) ?? null);
       // What changed since this responsibility last looked at the same Sunday.
       let changes: SundayChange[] = [];
       let memory = stateOf(r.id).memory;
@@ -799,7 +829,12 @@ export function createRunner(deps: RunnerDeps): Runner {
         memory = compared.memory;
       }
       const reported = new Set(stateOf(r.id).reported);
-      const newKeys = found.keys.filter(k => !reported.has(k));
+      // Another service this job looks at for the first time (newly watched, moved on to its next plan, or the first run
+      // since each service's own rooms and group meetings were counted): what it shows now is a baseline, as the notices
+      // take a service's first check, kept as already reported without a notice; anything new after this is told. Its
+      // mark (`["seen", plan]`) is kept with the reported keys.
+      const baseline = new Set(Object.entries(found.others ?? {}).filter(([plan]) => !reported.has(seenMark(plan))).flatMap(([, keys]) => keys));
+      const newKeys = found.keys.filter(k => !reported.has(k) && !baseline.has(k));
       // The person's Church rules on notices: "Put this in the briefing" keeps a kind out of them; "Always
       // tell me right away" marks it urgent; what they asked Ozzie to stop flagging is left out altogether.
       const entries = feedbackOf(ctx.rules);
@@ -819,7 +854,8 @@ export function createRunner(deps: RunnerDeps): Runner {
         changes: listed, drafts, ...(briefing && includesSundayReady(now, zoneOf(r)) ? { sunday_ready: true } : {}),
         ...(forBriefing.length ? { kept: forBriefing } : {}),
       });
-      saved[r.id] = { ...stateOf(r.id), failures: 0, retry_at: null, memory, reported: [...new Set([...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
+      saved[r.id] = { ...stateOf(r.id), failures: 0, retry_at: null, memory,
+        reported: [...new Set([...Object.keys(found.others ?? {}).map(seenMark), ...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
       if (briefing) {
         const n = foldIntoBriefing(item);
         if (n) patch(item.id, { overnight_count: n });

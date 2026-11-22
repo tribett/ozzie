@@ -16,11 +16,12 @@ import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sun
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import { captureRooms, sundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
-import { CHECKING_LINE, PageControls, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
+import { CHECKING_LINE, PageControls, SERVICE_UNNAMED, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { addService, alsoWatched, movedOn, readDay, removeService, type AlsoWatched, type ServiceChoice } from "./watched-services.js";
-import { askServices, findingServices, fromPartKey, partKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
+import { alsoOperations, askServices, findingServices, firstRoomsWith, fromPartKey, harnessOperations, roomsHolders, partKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, otherOperations, teamServices,
+  withOthers, type OtherPart } from "./services-merge.js";
 import { acrossText, ServicesPage } from "./services-page.js";
-import { FindingServicesContext, serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
+import { AlsoOperationsContext, FindingServicesContext, serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
 import { WatchedServices } from "./watch-another.js";
 import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
@@ -280,6 +281,8 @@ export function App() {
   // The same, for checks and jobs that read them between renders (the round's hook keeps the captures here first).
   const alsoNow = useRef({ also, captures: alsoCaptures as Readonly<Record<string, SundayCapture>> });
   alsoNow.current.also = also;
+  /** The first service's latest live check, kept as soon as a round reads it, for which service shows a day's rooms. */
+  const mainNow = useRef<SundayCapture | null>(null);
   const [fictional, setFictional] = useState(false);
   const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
   const [busy, setBusy] = useState(false);
@@ -536,6 +539,9 @@ export function App() {
   // A church on B1 Church or Breeze has no Planning Center check on screen: a saved one from before a switch is never
   // shown beside its own (rooms, check-ins, names on visitor cards, what is shared with other apps).
   const capture = offPc ? null : onScreenCapture(heldCapture, fictional, org, inUseOrg);
+  // The live check on screen, when it is the newest of the first service's plan this Mac has (never the example).
+  if (capture && !fictional && capture.kind === "live" && capture.plan_id === settings.planId
+    && (mainNow.current?.plan_id !== capture.plan_id || capture.completed_at >= mainNow.current.completed_at)) mainNow.current = capture;
   useEffect(() => {
     if (heldCapture && !fictional && inUseOrg !== undefined && heldCapture.organization !== inUseOrg) setCapture(null);
   }, [heldCapture, fictional, inUseOrg]);
@@ -547,7 +553,8 @@ export function App() {
   useEffect(refreshRecordings, [org]);
   useEffect(() => saveSettings(settings), [settings]);
   // Scheduled checks read the latest app state through refs; they never change what the person typed.
-  const current = useRef({ settings, rules, status, fictional, refreshRecordings, inUseOrg, also: [] as { serviceTypeId: string; planId: string }[] });
+  const current = useRef({ settings, rules, status, fictional, refreshRecordings, inUseOrg, also: [] as { serviceTypeId: string; planId: string }[],
+    holdsRooms: ((): boolean => true) as (c: SundayCapture, now: string) => boolean });
   // Whether the church uses another system, from what this Mac keeps (not render state), so Planning Center's scheduled
   // checks and jobs see no connection from their very first tick at launch (final review H1).
   const onSystemNow = useRef(isOtherSystem(churchSystem.get().main) || churchSystem.get().main === "genesis");
@@ -556,7 +563,16 @@ export function App() {
   // A church on another system: Planning Center's scheduled checks and jobs see no connection, so none runs (review M1).
   // The other services watched are read in the same round (Planning Center only; never beside the example).
   current.current = { settings, rules, status: offPc ? null : status, fictional, refreshRecordings, inUseOrg,
-    also: offPc || fictional ? [] : also.map(s => ({ serviceTypeId: s.serviceTypeId, planId: s.planId })) };
+    also: offPc || fictional ? [] : also.map(s => ({ serviceTypeId: s.serviceTypeId, planId: s.planId })),
+    // Which service's check compares and tells a day's rooms: the page's own choice (services-merge.ts roomsHolders) over
+    // every watched service's latest check, the one just read in its place. Always with one service.
+    holdsRooms: (c, at) => {
+      const { also: list, captures } = alsoNow.current, orgNow = current.current.settings.organization, planNow = current.current.settings.planId;
+      const latest = (s: { planId: string; serviceTypeId: string }) => { const x = captures[s.planId]; return x && x.organization === orgNow && x.service_type_id === s.serviceTypeId ? x : null; };
+      const checks = [c.plan_id === planNow ? c : mainNow.current?.plan_id === planNow ? mainNow.current : null, ...list.map(s => s.planId === c.plan_id ? c : latest(s))];
+      const i = checks.indexOf(c);
+      return i < 0 || roomsHolders(checks, current.current.rules, at)[i] === i;
+    } };
   // A live check is acted on only if it is of the church Ozzie uses now: one that finishes, or is shared, after a switch
   // is dropped by every consumer (review S2, L1).
   const belongs = (c: SundayCapture) => ofChurchInUse(c, current.current.settings.organization, current.current.inUseOrg);
@@ -580,6 +596,7 @@ export function App() {
     onCapture: (c, trigger) => {
       // Responsibilities due soon share this check rather than reading Planning Center again.
       if (belongs(c)) runner.captured(c);
+      if (belongs(c) && c.kind === "live") mainNow.current = c;
       current.current.refreshRecordings();
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
       // A scheduled check shows its result unless the person is looking at the fictional example.
@@ -653,19 +670,21 @@ export function App() {
   useEffect(() => { if ((page === "sunday" || page === "lists") && visible) void churchSources.readIfOld(); }, [page, visible, churchSources]);
   /**
    * The other services' latest checks as a count across services needs them between renders (a job's run, Ask checking
-   * again): each one's brief and the leader's decisions kept on this Mac, of the church in use only, never beside the
-   * example or for a church on another system.
+   * again): each one's brief, its own rooms and group meetings (beside `main`, the first service's check, for which
+   * service holds a day's rooms: services-merge.ts otherOperations) and the leader's decisions kept on this Mac, of the
+   * church in use only, never beside the example or for a church on another system.
    */
-  const othersNow = (at: string): { parts: OtherPart[]; captures: SundayCapture[] } => {
+  const othersNow = (at: string, main: SundayCapture | null): { parts: OtherPart[]; captures: SundayCapture[] } => {
     if (current.current.fictional || onSystemNow.current) return { parts: [], captures: [] };
     const { also: list, captures } = alsoNow.current;
     const orgNow = current.current.settings.organization, rulesNow = current.current.rules;
     const caps = list.flatMap(s => { const c = captures[s.planId]; return c && c.organization === orgNow && c.service_type_id === s.serviceTypeId ? [c] : []; });
-    return { captures: caps, parts: caps.map(c => {
+    const ops = otherOperations(main, caps, rulesNow, { now: at });
+    return { captures: caps, parts: caps.map((c, i) => {
       const b = buildSundayBrief(c, rulesNow, at);
       let d: SundayDecision[] = [];
       try { d = loadDecisions(localStorage, decisionsStorageKey(b.mode, c.organization, c.plan_id)); } catch { /* none kept */ }
-      return { plan_id: c.plan_id, brief: b, decisions: d };
+      return { plan_id: c.plan_id, brief: b, decisions: d, operations: ops[i]?.operations ?? null, roomsWith: ops[i]?.roomsWith ?? null };
     }) };
   };
   /**
@@ -674,8 +693,9 @@ export function App() {
    */
   const mergedHarness = (c: SundayCapture, at: string, own: { rules: SundayRules; decisions: readonly SundayDecision[]; status: ConnectionStatus | null; configured: boolean },
     refresh?: HarnessData["refresh"]): HarnessData => {
-    const more = othersNow(at);
+    const more = othersNow(at, c);
     const first = buildSundayBrief(c, own.rules, at);
+    const mainRooms = firstRoomsWith(c, more.captures, own.rules, at) === null;
     const m = mergeParts({ brief: first, decisions: own.decisions }, more.parts);
     const mainName = watchedDay.get(current.current.settings.planId)?.service ?? null;
     const named = more.parts.map(p => ({ plan_id: p.plan_id, brief: p.brief, name: alsoNow.current.also.find(x => x.planId === p.plan_id)?.name ?? null }));
@@ -684,7 +704,9 @@ export function App() {
     const asked = askServices({ brief: first, name: mainName }, named,
       alsoNow.current.also.filter(x => !more.parts.some(p => p.plan_id === x.planId)).map(x => x.name));
     return buildHarnessData({ capture: mergedNames(c, more.captures), fictional: false, rules: own.rules, decisions: m.decisions, status: own.status, configured: own.configured,
-      now: at, brief: m.brief, operations: sundayOperations(c, own.rules, { now: at }), serviceOfTeam: teams, ...asked }, refresh);
+      now: at, brief: m.brief, operations: sundayOperations(c, own.rules, { now: at, ...(mainRooms ? {} : { rooms: false }) }), serviceOfTeam: teams, ...asked,
+      // Each other service's own rooms and group meetings, by its name, for a question about it (core harness tools.ts).
+      alsoOperations: harnessOperations(named.map((p, i) => ({ ...p, operations: more.parts[i]?.operations ?? null, roomsWith: more.parts[i]?.roomsWith ?? null }))) }, refresh);
   };
   const runnerState = useRef({ readiness, status, rules, decisions: [] as readonly SundayDecision[], modelReady,
     prefs: automatic.prefs, zone: macZone(), procedures, loop, workspace: "this-mac", capture, fictional, configured: false, sunday: null as string | null });
@@ -699,13 +721,12 @@ export function App() {
         // The leader's decisions about that check's Sunday, as the Sunday page applies them, so Keep Sunday covered counts
         // what the page shows (review item 2). A live check and a saved copy of the same Sunday share them.
         decisionsFor: c => { try { return loadDecisions(localStorage, decisionsStorageKey("live", c.organization, c.plan_id)); } catch { return []; } },
-        // The other services watched, counted as the Services page counts them (read in the same round as the run's check).
-        alsoShown: () => {
-          const { parts } = othersNow(new Date().toISOString());
-          return parts.length ? parts.reduce((t, p) => {
-            const c = sundayShownCount(applyDecisions(p.brief, p.decisions), null);
-            return { decisions: t.decisions + c.decisions, looks: t.looks + c.looks };
-          }, { decisions: 0, looks: 0 }) : null;
+        // The other services watched, as the Services page shows them (read in the same round as the run's check), each with
+        // its own rooms and group meetings beside the run's check of the first service, which may leave its day's rooms to one.
+        alsoServices: main => {
+          const { parts, captures } = othersNow(new Date().toISOString(), main);
+          return parts.length ? { firstRooms: firstRoomsWith(main, captures, current.current.rules, new Date().toISOString()) === null,
+            others: parts.map(p => ({ plan_id: p.plan_id, brief: p.brief, decisions: p.decisions, operations: p.operations ?? null })) } : null;
         },
       };
     },
@@ -877,9 +898,6 @@ export function App() {
     void systemProactive.checkNow("automatic").catch(() => undefined);
   }, [maySystemRefresh]);
   const [decisions, setDecisions] = useSundayDecisions(onSystem ? (fictional ? systemExample && { organization: `example:${onSystem}`, plan_id: systemExample.brief.plan.id } : sys.decisionsKey) : capture, brief);
-  // Rooms, follow-ups and group meetings from the capture's own reads, on the church's own time zone
-  // (the example's fictional church is on Eastern time). A fictional example is evaluated as of its own check.
-  const operations = useMemo(() => capture ? sundayOperations(capture, rules, fictional ? {} : { now }) : null, [capture, rules, now, fictional]);
   // Each other service watched, from its latest check while it is still watched and of the church in use, with the leader's
   // own decisions for it; never beside the example or for a church on another system.
   // Its checks, of the church in Settings and in use (a switch under way shows none of the church before it).
@@ -888,6 +906,16 @@ export function App() {
     return c && c.organization === org && (inUseOrg === undefined || c.organization === inUseOrg) && c.service_type_id === s.serviceTypeId ? [{ service: s, capture: c }] : [];
   }), [also, alsoCaptures, offPc, fictional, org, inUseOrg]);
   const alsoParts = useMemo(() => alsoShownCaptures.map(p => ({ ...p, brief: buildSundayBrief(p.capture, rules, now) })), [alsoShownCaptures, rules, now]);
+  // Each one's own rooms and group meetings, from its own check (services-merge.ts otherOperations): never the church's
+  // follow-ups (shown with the first service), and a day's rooms with the first service watched on that day.
+  const alsoOps = useMemo(() => otherOperations(capture, alsoParts.map(p => p.capture), rules, fictional ? {} : { now }), [capture, alsoParts, rules, now, fictional]);
+  // Another service on the first service's day shows that day's rooms when only its check read them in full
+  // (services-merge.ts roomsHolders); null with one service, and whenever the first service's check shows them.
+  const mainRoomsWith = useMemo(() => firstRoomsWith(capture, alsoParts.map(p => p.capture), rules, fictional ? undefined : now), [capture, alsoParts, rules, now, fictional]);
+  // Rooms, follow-ups and group meetings from the capture's own reads, on the church's own time zone
+  // (the example's fictional church is on Eastern time). A fictional example is evaluated as of its own check.
+  const operations = useMemo(() => capture ? sundayOperations(capture, rules, { ...(fictional ? {} : { now }), ...(mainRoomsWith !== null ? { rooms: false } : {}) }) : null,
+    [capture, rules, now, fictional, mainRoomsWith]);
   // Each other service's "Looks good — I'll send it" marks settle after its own live check, as the first service's do above
   // (asked.ts settle drops only that plan's marks that no longer hold).
   const liveAlso = alsoParts.filter(p => p.brief.mode === "live");
@@ -905,8 +933,9 @@ export function App() {
   }, [capture, alsoShownCaptures, rules, now, onSystem, sys.capture]);
   const alsoKeys = alsoParts.map(p => decisionsStorageKey(p.brief.mode, p.capture.organization, p.capture.plan_id));
   const [alsoDecisions, setAlsoDecisions] = useDecisionsMap(alsoKeys);
-  const others: OtherPart[] = useMemo(() => alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief,
-    decisions: alsoDecisions[decisionsStorageKey(p.brief.mode, p.capture.organization, p.capture.plan_id)] ?? [] })), [alsoParts, alsoDecisions]);
+  const others: OtherPart[] = useMemo(() => alsoParts.map((p, i) => ({ plan_id: p.capture.plan_id, brief: p.brief,
+    decisions: alsoDecisions[decisionsStorageKey(p.brief.mode, p.capture.organization, p.capture.plan_id)] ?? [], operations: alsoOps[i]?.operations ?? null })),
+  [alsoParts, alsoDecisions, alsoOps]);
   // Every service watched, as one check for what counts across them (services-merge.ts): the first service's own brief and
   // decisions when it is the only one.
   const merged = useMemo(() => brief && !offPc ? mergeParts({ brief, decisions }, others) : null, [brief, decisions, offPc, others]);
@@ -917,9 +946,10 @@ export function App() {
   const mergedDecisions = useMemo(() => mergeDecisions(decisions, alsoShownCaptures.map(p => ({ plan_id: p.capture.plan_id,
     decisions: alsoDecisions[decisionsStorageKey("live", p.capture.organization, p.capture.plan_id)] ?? [] }))), [decisions, alsoShownCaptures, alsoDecisions]);
   // One count everywhere: what the Services page shows (Services findings after decisions, plus rooms, follow-ups and group
-  // meetings), across every service watched, for the sidebar badge, Today, Ask and the page's own headline.
+  // meetings), across every service watched, each service's own rooms and group meetings once, for the sidebar badge,
+  // Today, Ask and the page's own headline.
   const mainOpen = brief ? sundayShownCount(applyDecisions(brief, decisions), operations) : null;
-  const open = merged ? sundayShownCount(applyDecisions(merged.brief, merged.decisions), operations) : mainOpen;
+  const open = merged ? withOthers(sundayShownCount(applyDecisions(merged.brief, merged.decisions), operations), others) : mainOpen;
   const connected = (status?.state === "connected" || status?.state === "stored-unchecked") && Boolean(settings.organization) && status?.organization === settings.organization;
   const configured = /^\d+$/.test(settings.serviceTypeId) && /^\d+$/.test(settings.planId);
   const latest = recordings.filter(r => r.plan_id === settings.planId).sort((a, b) => b.completed_at.localeCompare(a.completed_at))[0];
@@ -1032,7 +1062,7 @@ export function App() {
   const firstOthers = !offPc && !fictional ? also.map(s => {
     const o = others.find(x => x.plan_id === s.planId);
     return { name: s.name, when: (o?.brief.day ?? dayWords({ sort_date: s.sort_date, times: s.times }, s.zone)).date,
-      decisions: o ? sundayShownCount(applyDecisions(o.brief, o.decisions), null).decisions : null };
+      decisions: o ? sundayShownCount(applyDecisions(o.brief, o.decisions), o.operations ?? null).decisions : null };
   }) : [];
   const firstResult: ResultView | null = ofWatched && capture && mainOpen ? {
     brief: ofWatched, capture, counts: { decisions: mainOpen.decisions, looks: mainOpen.looks },
@@ -1157,6 +1187,12 @@ export function App() {
     alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief, name: p.service.name })),
     fictional ? [] : also.filter(s => !alsoParts.some(p => p.service.serviceTypeId === s.serviceTypeId)).map(s => s.name)) : undefined,
   [brief, offPc, alsoParts, also, fictional, settings.planId]);
+  // Today, Thursday's brief and the spoken briefing say each service's rooms and group meetings with its own service, by a
+  // name a person would recognise (services-merge.ts alsoOperations); undefined with one service. Never sent.
+  const alsoOpsWords = useMemo(() => brief && !offPc ? alsoOperations({ brief, name: watchedDay.get(settings.planId)?.service ?? null },
+    alsoParts.map(p => ({ plan_id: p.capture.plan_id, brief: p.brief, name: p.service.name })), alsoOps,
+    fictional ? [] : also.filter(s => !alsoParts.some(p => p.service.serviceTypeId === s.serviceTypeId)).map(s => s.name)) : undefined,
+  [brief, offPc, alsoParts, alsoOps, also, fictional, settings.planId]);
   // Native's own check refuses any request that still holds one of those names (name_guard.rs `service_named`): told
   // when the page starts (so a page loaded again never leaves native an older list) and whenever they change, held in
   // memory only; with one service it holds none. Kept as told only once native took it, and tried again up to three
@@ -1177,10 +1213,14 @@ export function App() {
   }, [watchedNames, nativeRetry]);
   // Ask's suggested questions say which service's role they mean when two services hold one of that name.
   const chipServices = useMemo(() => serviceOfTeam && merged ? { teams: serviceOfTeam, positions: rolePositions(merged.brief) } : undefined, [serviceOfTeam, merged]);
+  // Each other service's own rooms and group meetings, by its name, for a question about it and for the copies.
+  const harnessAlsoOps = useMemo(() => offPc ? undefined : harnessOperations(alsoParts.map((p, i) => ({ name: p.service.name, operations: alsoOps[i]?.operations ?? null,
+    roomsWith: alsoOps[i]?.roomsWith ?? null }))), [offPc, alsoParts, alsoOps]);
   const pcHarnessData = useMemo(() => buildHarnessData({
     capture: harnessCapture, fictional, rules, decisions: harnessDecisions, status, configured: Boolean(org && configured), now, brief: offPc ? null : harnessBrief, operations, fictionalImport,
-    serviceOfTeam, ...askedServices,
-  }, refreshForHarness), [harnessCapture, fictional, rules, harnessDecisions, status, org, configured, now, harnessBrief, operations, fictionalImport, refreshForHarness, offPc, serviceOfTeam, askedServices]);
+    serviceOfTeam, ...askedServices, alsoOperations: harnessAlsoOps,
+  }, refreshForHarness), [harnessCapture, fictional, rules, harnessDecisions, status, org, configured, now, harnessBrief, operations, fictionalImport, refreshForHarness, offPc, serviceOfTeam, askedServices,
+    harnessAlsoOps]);
   // A church on B1 Church or Breeze: Ask reads its own check (or its fictional example) through the same tools, with the
   // system named as the source; its names stay on this Mac as Planning Center's do (harness-bridge systemHarnessCapture).
   // It offers no Planning Center check again, and nothing of Calendar, People or Groups.
@@ -1641,9 +1681,9 @@ export function App() {
       watchedDay.named(s.planId, name); setWatchVersion(v => v + 1);
     }} /> : null;
   const focusFor = (planId: string) => { const f = sundayFocus ? fromPartKey(sundayFocus) : null; return f && f.plan_id === planId ? f.key : null; };
-  // Each other service's part: its latest check (or that none is read yet), its own decisions, its own problem or wait.
-  // Its rooms, follow-ups and group meetings are the first service's. Its notes' "Looks good — I'll send it" marks are its own
-  // plan's (asked.ts), and its AI look reads its own check alone (whoCouldHelpIn).
+  // Each other service's part: its latest check (or that none is read yet), its own decisions, its own problem or wait,
+  // and its own rooms and group meetings (the church's follow-ups are the first service's). Its notes' "Looks good — I'll
+  // send it" marks are its own plan's (asked.ts), and its AI look reads its own check alone (whoCouldHelpIn).
   // Each watched service's Planning Center name by its service type, for What happened's lines (review of write-back-050, L6).
   const serviceNamesById: Readonly<Record<string, string>> = Object.fromEntries([[settings.serviceTypeId, mainName], ...also.map(x => [x.serviceTypeId, x.name] as const)]
     .filter((e): e is [string, string] => Boolean(e[1])));
@@ -1662,18 +1702,23 @@ export function App() {
   const resultsElsewhere = changesOn && changes.results.some(r => !liveSlotPlans.includes(r.plan))
     ? <div className="col change-elsewhere"><ChangeResults slot={{ control: changes, zone: brief?.time_zone ?? null, openPc: openInPlanningCenter, people: peopleOk,
       plan: "", service: null, resultsHere: planOf => !liveSlotPlans.includes(planOf) }} /></div> : null;
+  // The service whose part shows a day's rooms (services-merge.ts otherOperations `roomsWith`), by its name.
+  const roomsHolder = (at: number | null | undefined): string | null => at === null || at === undefined ? null
+    : at === 0 ? mainName ?? "your first service" : alsoParts[at - 1]?.service.name ?? SERVICE_UNNAMED;
   const otherParts = servicesShown ? also.map(s => {
     const p = alsoParts.find(x => x.service.serviceTypeId === s.serviceTypeId);
+    const ops = p ? alsoOps.find(x => x.plan_id === p.capture.plan_id) : undefined;
     const words = p?.brief.day ?? dayWords({ sort_date: s.sort_date, times: s.times }, s.zone);
     const key = p ? decisionsStorageKey(p.brief.mode, p.capture.organization, p.capture.plan_id) : null;
     const decided = key ? alsoDecisions[key] ?? [] : [];
     return { key: `service:${s.serviceTypeId}`, date: p?.brief.plan.date ?? planDate(s.sort_date), dayText: words.date, node: <DayProvider value={words}>
       <SundayPage brief={p?.brief ?? null} names={p?.capture.names ?? {}} busy={busy} problem={alsoProblems[s.planId] ?? ""} sender="" connected={connected} configured
-        hasRecording={false} canReword={modelReady} decisions={decided} onDecisions={next => { if (key) setAlsoDecisions(key, next); }} operations={null}
+        hasRecording={false} canReword={modelReady} decisions={decided} onDecisions={next => { if (key) setAlsoDecisions(key, next); }} operations={ops?.operations ?? null}
         onCheck={() => { void check(); }} onRecording={() => undefined} onExample={showExample} feedback={feedback} onSettings={() => setPage("connection")}
         people={{ granted: operationsGranted(status), onAdd: () => setPage("connection") }} asked={p ? askedSlotFor(p.brief, askedLinesFor(p.brief, p.capture.names)) : null}
         whoCouldHelp={p ? whoCouldHelpIn(p, decided) : undefined} focus={focusFor(s.planId)} onFocused={() => setSundayFocus(null)}
-        openInPlanningCenter={openInPlanningCenter} pane={mainRef} part={{ name: s.name, waiting: alsoWaiting[s.serviceTypeId] ?? null, opsWith: mainName ?? "your first service" }}
+        openInPlanningCenter={openInPlanningCenter} pane={mainRef} part={{ name: s.name, waiting: alsoWaiting[s.serviceTypeId] ?? null, opsWith: mainName ?? "your first service",
+          roomsWith: roomsHolder(ops?.roomsWith) }}
         changes={p && alsoLive(p) ? changeSlot(p.capture.plan_id, p.brief.time_zone, s.name) : null} />
     </DayProvider> };
   }) : [];
@@ -1693,7 +1738,7 @@ export function App() {
       parts={[{ key: "main", date: brief?.plan.date ?? planDate(watchedDay.get(settings.planId)?.sort_date ?? null), dayText: day.date, node: main }, ...otherParts]} watch={pcWatch} />;
   return <DayProvider value={day}><SystemWordsContext.Provider value={onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null)}><ListsSystemName.Provider value={words.name}>
     {/* Teams named with their service while more than one is watched (team-labels.ts): Church rules and Church lists. */}
-    <TeamServicesContext.Provider value={serviceOfTeam}><FindingServicesContext.Provider value={findingServiceNames}><ListsTeamServices.Provider value={listsTeamServices}>
+    <TeamServicesContext.Provider value={serviceOfTeam}><FindingServicesContext.Provider value={findingServiceNames}><AlsoOperationsContext.Provider value={alsoOpsWords}><ListsTeamServices.Provider value={listsTeamServices}>
     <ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
     {/* One polite status line for the whole app, outside the shell (accessibility audit S4): announce.tsx. */}
     <Announcer>
@@ -1796,7 +1841,8 @@ export function App() {
         {page === "sunday" && onGenesis && <GenesisPage capture={genesisShown.capture} view={genesisShown.view} busy={genesis.busy} problem={fictional ? "" : genesis.problem}
           onCheck={() => { void genesis.read("manual"); }} fictional={fictional} connected={Boolean(sys.state.genesis?.zone)} onSetUp={() => openSetup("first")} />}
         {page === "sunday" && !onGenesis && resultsElsewhere}
-        {page === "sunday" && !onGenesis && servicesPage(<SundayPage brief={brief} names={shownNames ?? {}} busy={systemShown ? sys.busy : busy} part={servicesShown ? { name: mainName, waiting: waitingLine } : undefined}
+        {page === "sunday" && !onGenesis && servicesPage(<SundayPage brief={brief} names={shownNames ?? {}} busy={systemShown ? sys.busy : busy}
+          part={servicesShown ? { name: mainName, waiting: waitingLine, roomsWith: roomsHolder(mainRoomsWith) } : undefined}
           problem={systemShown ? (systemAsking ? keychainAsking(words.name) : sys.problem) : servicesShown ? "" : problem} sender=""
           connected={onSystem ? systemConnected : connected} adding={!onSystem && (addingAccess || reconnecting)} configured={onSystem ? systemConfigured : configured}
           hasRecording={onSystem ? Boolean(sys.latestSaved) && !sys.saved : Boolean(latest)} canReword={modelReady} checking={!onSystem && checkingSaved && !connected}
@@ -1904,5 +1950,5 @@ export function App() {
         {...(onSystem || onGenesis ? { jobsNotHere: { parse: plans.parse, text: words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true) } } : { plans })} />
     </div>
     </Announcer>
-  </div></ChooseAiContext.Provider></ListsTeamServices.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
+  </div></ChooseAiContext.Provider></ListsTeamServices.Provider></AlsoOperationsContext.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
 }

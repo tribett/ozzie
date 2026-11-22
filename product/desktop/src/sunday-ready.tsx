@@ -14,7 +14,8 @@ import { keptLines } from "./responsibility-words.js";
 import type { NoticedItem } from "./responsibility-runner.js";
 import { SUNDAY_WORDS, useDay, type DayWords } from "./day-words.js";
 import { dayName, DayName, OPEN_SERVICES, pageRef } from "./day-phrases.js";
-import { useFindingServices, useTeamServices } from "./team-labels.js";
+import { useAlsoOperations, useFindingServices, useTeamServices } from "./team-labels.js";
+import { withOthers } from "./services-merge.js";
 
 type Names = Readonly<Record<string, string>>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
@@ -61,6 +62,9 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   const d = useDay();
   const services = useTeamServices();
   const findingNames = useFindingServices();
+  // With more than one service watched, each other service's own rooms and group meetings, as its part of the Services
+  // page shows them, said with its service; undefined with one service, which reads as before.
+  const also = useAlsoOperations();
   if (!brief) return <div className="sunday-ready panel-sunken">
     <p className="bold">{readyTitle(d)}</p>
     <p className="small">{DayName(d)} hasn't been checked yet, so this brief isn't here. Check it on {pageRef()}.</p>
@@ -69,19 +73,25 @@ export function SundayReadyBrief({ brief, decisions = [], operations = null, nam
   const open = view.items.filter(i => i.state !== "resolved");
   const decide = open.filter(i => i.finding.tone === "decision"), looks = open.filter(i => i.finding.tone === "look");
   // The Sunday page's own counts, as Today and the sidebar say them: rooms, follow-ups and group meetings included (live review 2026-11-18).
-  const counts = sundayShownCount(view, operations);
-  const current = operations?.stale ? null : operations;
-  const findings = current?.result?.findings ?? [];
-  const rooms = findings.filter(f => f.kind === "room-overlap").length, followUps = findings.filter(f => f.kind === "unowned-overdue").length;
-  const meetings = current?.group_meetings.length ?? 0;
-  const setAside = (brief.hidden?.length ?? 0) + (operations?.hidden?.length ?? 0);
-  const others = [
-    ...(rooms ? [`${rooms === 1 ? "One room booking overlap" : `${rooms} room booking overlaps`} to review.`] : []),
-    ...(followUps ? [`${followUps === 1 ? "One follow-up has" : `${followUps} follow-ups have`} no owner and ${followUps === 1 ? "is" : "are"} past due.`] : []),
-    ...(shownUncertainties(current?.result ?? null).length ? ["Some room or follow-up details couldn't be confirmed."] : []),
-    ...(meetings ? [`${meetings === 1 ? "One person has" : `${meetings} people have`} a group meeting while they serve.`] : []),
-  ];
-  const unchecked = [...brief.not_checked, ...(operations?.not_checked ?? [])];
+  const counts = withOthers(sundayShownCount(view, operations), also?.also ?? []);
+  /** One service's rooms, follow-ups and group meetings; with more than one watched, its rooms and group meetings at its service. */
+  const lines = (ops: SundayOperations | null, service: string | null, withFollowUps: boolean) => {
+    const current = ops?.stale ? null : ops;
+    const findings = current?.result?.findings ?? [];
+    const rooms = findings.filter(f => f.kind === "room-overlap").length, followUps = findings.filter(f => f.kind === "unowned-overdue").length;
+    const meetings = current?.group_meetings.length ?? 0;
+    const at = (text: string) => service ? `At ${service}, ${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
+    return [
+      ...(rooms ? [at(`${rooms === 1 ? "One room booking overlap" : `${rooms} room booking overlaps`} to review.`)] : []),
+      ...(followUps ? [`${followUps === 1 ? "One follow-up has" : `${followUps} follow-ups have`} no owner and ${followUps === 1 ? "is" : "are"} past due.`] : []),
+      ...(shownUncertainties(current?.result ?? null).length ? [at(withFollowUps ? "Some room or follow-up details couldn't be confirmed." : "Some room details couldn't be confirmed.")] : []),
+      ...(meetings ? [at(`${meetings === 1 ? "One person has" : `${meetings} people have`} a group meeting while they serve.`)] : []),
+    ];
+  };
+  const setAside = (brief.hidden?.length ?? 0) + (operations?.hidden?.length ?? 0) + (also?.also ?? []).reduce((n, o) => n + (o.operations?.hidden?.length ?? 0), 0);
+  const others = [...lines(operations, also?.first ?? null, true), ...(also?.also ?? []).flatMap(o => lines(o.operations, o.service, false))];
+  const unchecked = also ? [...new Set([...brief.not_checked, ...(operations?.not_checked ?? []), ...also.also.flatMap(o => o.operations?.not_checked ?? [])])]
+    : [...brief.not_checked, ...(operations?.not_checked ?? [])];
   const list = (lines: string[]) => <ul className="list">{lines.map(l => <li key={l}><Icon name="dot" small />{l}</li>)}</ul>;
   return <section className="sunday-ready" aria-label={readyTitle(d)}>
     {/* Several services at once (services-merge.ts MANY_SERVICES): no one plan's date is said for all of them. */}

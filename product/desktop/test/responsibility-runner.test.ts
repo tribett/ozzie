@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("
 import { defaultPlan, MIN_GAP_MS, RETRY_MS, RUN_TIMEOUT_MS, TEMPLATES, type Plan, type Responsibility, type RunRow, untilLifetime } from "../../../core/src/harness/responsibilities.js";
 import { DEFAULT_QUIET_HOURS } from "../../../core/src/schedule.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
+import { wednesdayWithOperations } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { FICTIONAL_ROOM, withFictionalOperations } from "../../../core/src/fictional-operations.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import type { SundayChange } from "../../../core/src/sunday-changes.js";
@@ -234,6 +235,21 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(noticedTitle(d.runner.view().noticed[0]!, FRI)).toBe("Keep services covered: 2 things need a decision.");
   });
 
+  it("Keep services covered adds the other services as their parts count them, beside this run's own check of the first (0.7.0)", async () => {
+    // App's hook gives each other service's latest check, decisions and own rooms and group meetings beside the capture it
+    // is given (which service holds a shared day's rooms depends on the first service's check), so it is handed this run's.
+    const seen: string[] = [];
+    const y = { ...wednesdayWithOperations(), service_type_id: "1700", plan_id: "94000001" };
+    const other = { plan_id: y.plan_id, brief: buildSundayBrief(y, CONTEXT_RULES, FRI), decisions: [], operations: sundayOperations(y, CONTEXT_RULES, { now: FRI, followUps: false }) };
+    const h = setup({ alsoServices: c => { seen.push(c.completed_at); return { firstRooms: true, others: [other] }; } });
+    await h.start(sunday());
+    const c = captureAt(FRI), own = sundayShownCount(applyDecisions(buildSundayBrief(c, CONTEXT_RULES, FRI), []), sundayOperations(c, CONTEXT_RULES, { now: FRI }));
+    const more = sundayShownCount(applyDecisions(other.brief, []), other.operations);
+    expect(seen).toEqual([c.completed_at]);
+    expect(more.looks).toBeGreaterThan(0);
+    expect(h.runner.view().noticed[0]).toMatchObject({ decisions: own.decisions + more.decisions, looks: own.looks + more.looks });
+  });
+
   it("the morning briefing's run line says the Sunday page's count too, never Services alone beside its follow-ups (polish pass)", async () => {
     const page = (decisions: readonly SundayDecision[]) => {
       const c = captureAt(FRI);
@@ -373,6 +389,47 @@ describe("a responsibility, from confirmation to what Ozzie noticed", () => {
     expect(item).toMatchObject({ kind: "found", findings: { rooms: 1 } });
     expect(noticedTitle(item, FRI)).toBe("Watch room bookings: 1 room booking overlap needs review.");
     expect(noticedBadge(item)).toEqual({ label: "Needs a decision", tone: "attn" });
+  });
+
+  it("second-pass review L3: a service a room or group job looks at for the first time is a baseline; a later new clash there is told", async () => {
+    const notShared = { sundayLeads: [], checkInAfterSundaysInARow: 3, rooms: [{ room_id: FICTIONAL_ROOM, exclusive: true, setup_minutes: 30 }] };
+    // Youth Night's own Wednesday: its own bookings (one clash), then two more of them overlapping.
+    const youth = (more = false) => {
+      const c = { ...JSON.parse(JSON.stringify(wednesdayWithOperations()).replace(/"4100000(\d)"/gu, '"4200000$1"')) as SundayCapture, service_type_id: "1700", plan_id: "94000001" };
+      if (more) {
+        ((c.reads.find(r => r.collection === "calendar_resource_bookings")!.body!.data as { id: string; attributes: Record<string, unknown> }[])
+          .find(b => b.id === "42000004")!).attributes.starts_at = "2026-11-25T18:30:00Z";
+        // Calendar lists the new pair as a conflict nobody has worked out, as it does the first.
+        for (const r of c.reads.filter(x => x.collection === "calendar_conflicts" && (x.event_id === "23167937" || x.event_id === "23167940"))) {
+          (r.body as { data: unknown[] }).data = [{ type: "Conflict", id: "7010002", attributes: { resolved_at: null },
+            relationships: { resource: { data: { type: "Resource", id: FICTIONAL_ROOM } }, winner: { data: null } } }];
+        }
+      }
+      return { plan_id: c.plan_id, brief: buildSundayBrief(c, notShared, c.completed_at), decisions: [], operations: sundayOperations(c, notShared, { followUps: false }) };
+    };
+    for (const template of ["watch-room-bookings", "group-night-clashes"] as const) {
+      // Before Youth Night is watched (or before each service's own rooms and group meetings were counted): the first
+      // service only.
+      let other: ReturnType<typeof youth> | null = null;
+      const h = setup({ granted: ["services", "operations"], rules: notShared, alsoServices: () => other ? { firstRooms: true, others: [other] } : null });
+      await h.start({ ...defaultPlan(template, FRI, ET), schedule: { time: "09:00", weekdays: [4], on_change: false } });
+      const runs = () => h.runner.view().noticed.filter(i => i.responsibility_id && i.kind === "found");
+      h.notify.mockClear();
+      // Youth Night now counted, its clash and group meeting already there: on the card, with no notice.
+      other = youth();
+      h.set("2026-11-26T14:00:00.000Z");
+      await h.runner.tick();
+      expect(h.notify, template).not.toHaveBeenCalledWith("needs-decision");
+      const seen = runs()[0]!.findings!;
+      expect(template === "watch-room-bookings" ? seen.rooms : seen.groups, template).toBe(2);
+      if (template === "group-night-clashes") continue;
+      // A week later two more of its bookings overlap: told.
+      other = youth(true);
+      h.set("2026-12-03T14:00:00.000Z");
+      await h.runner.tick();
+      expect(h.notify).toHaveBeenCalledWith("needs-decision");
+      expect(runs()[0]!.findings!.rooms).toBe(3);
+    }
   });
 
   it("does nothing while everything is paused, doesn't call those times missed, and reports a limit once", async () => {

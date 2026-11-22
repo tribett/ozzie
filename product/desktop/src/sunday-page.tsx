@@ -1089,8 +1089,13 @@ export const hasOperationsSection = (operations: SundayOperations | null): opera
  * "nothing found" line appears only when the operations check says every part was fully read, and
  * names only those parts, with the time Planning Center was read (never a Church-rules time).
  */
-export function OperationsSection({ operations, whyOpen = false, feedback = null, occurrence = "", checkedAt = null, titleRef }: {
+export function OperationsSection({ operations, whyOpen = false, feedback = null, occurrence = "", checkedAt = null, titleRef, followUps = true }: {
   operations: SundayOperations;
+  /**
+   * False for another service than the first (0.7.0): its own rooms only, under "Rooms", with words that never speak of
+   * follow-ups (the church's, shown with the first service). Default: rooms and follow-ups, as always.
+   */
+  followUps?: boolean;
   /** The section title's element, so Today can open Sunday at rooms and follow-ups. */
   titleRef?: ((el: HTMLElement | null) => void) | undefined;
   /** When the Sunday check behind these was read (an out-of-date one has no rooms time of its own). */
@@ -1102,14 +1107,17 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
 }) {
   const { labels, result } = operations;
   const words = useDay(), untimed = useContext(UntimedWhen), zone = useContext(ChurchZone);
-  if (operations.stale) return <section className="stack" aria-label="Rooms and follow-ups">
-    <h2 className="h3">Rooms and follow-ups</h2>
+  const heading = followUps ? "Rooms and follow-ups" : "Rooms";
+  const reads = followUps ? [...readsFor({ kind: "rooms" }), ...readsFor({ kind: "follow-ups" })] : readsFor({ kind: "rooms" });
+  if (operations.stale) return <section className="stack" aria-label={heading}>
+    <h2 className="h3">{heading}</h2>
     <article className="find is-look">
       <div className="find-top"><span className="badge b-look"><Icon name="clock" small />Out of date</span></div>
-      <h3 className="find-title">Rooms, follow-ups and group meetings aren't shown.</h3>
+      <h3 className="find-title">{followUps ? "Rooms, follow-ups and group meetings aren't shown." : "Rooms and group meetings aren't shown."}</h3>
       <p className="find-body">This check was read more than 30 minutes ago, so Ozzie doesn't treat it as current. Check Planning Center again to see them.</p>
-      <SourceWhy sources={["Planning Center"]} at={checkedAt} defaultOpen={whyOpen} reads={[...readsFor({ kind: "rooms" }), ...readsFor({ kind: "follow-ups" })]}
-        why={["This check was read more than 30 minutes ago, so Ozzie doesn't treat its rooms, follow-ups or group meetings as current.", "Anything changed in Planning Center since then isn't shown."]} />
+      <SourceWhy sources={["Planning Center"]} at={checkedAt} defaultOpen={whyOpen} reads={reads}
+        why={[followUps ? "This check was read more than 30 minutes ago, so Ozzie doesn't treat its rooms, follow-ups or group meetings as current."
+          : "This check was read more than 30 minutes ago, so Ozzie doesn't treat its rooms or group meetings as current.", "Anything changed in Planning Center since then isn't shown."]} />
     </article>
   </section>;
   const label = (id: string, fallback: string) => (Object.hasOwn(labels, id) && labels[id]) || fallback;
@@ -1146,15 +1154,15 @@ export function OperationsSection({ operations, whyOpen = false, feedback = null
     <OpsWhy evidence={f.evidence} why={["This follow-up is active and ready on its current step.", "No one is assigned to it, and it isn't snoozed.", `Its due date, ${churchTime(f.due_at, zone)}, has passed.`]}
       reads={readsFor({ kind: "follow-ups" })} defaultOpen={whyOpen} />
   </article>;
-  return <section className="stack" aria-label="Rooms and follow-ups">
-    <h2 className="h3" tabIndex={-1} ref={titleRef}>Rooms and follow-ups</h2>
+  return <section className="stack" aria-label={heading}>
+    <h2 className="h3" tabIndex={-1} ref={titleRef}>{heading}</h2>
     {result?.findings.map(f => f.kind === "room-overlap" ? room(f) : followUp(f))}
     {uncertainties.length > 0 && <article className="find is-look">
       <div className="find-top"><span className="badge b-look" aria-hidden="true"><Icon name="eye" small />Worth a look</span></div>
-      <h3 className="find-title">Some room or follow-up details couldn't be confirmed.<HeadStatus words="Worth a look" /></h3>
-      <ul className="list unread">{[...new Set(uncertainties.map(u => uncertaintyText[u.code] ?? "Part of the room and follow-up check couldn't be read."))]
+      <h3 className="find-title">{followUps ? "Some room or follow-up details couldn't be confirmed." : "Some room details couldn't be confirmed."}<HeadStatus words="Worth a look" /></h3>
+      <ul className="list unread">{[...new Set(uncertainties.map(u => uncertaintyText[u.code] ?? (followUps ? "Part of the room and follow-up check couldn't be read." : "Part of the room check couldn't be read.")))]
         .map(t => <li key={t}><Icon name="question" small />{t}</li>)}</ul>
-      <OpsWhy evidence={result?.checked_scopes ?? []} defaultOpen={whyOpen} reads={[...readsFor({ kind: "rooms" }), ...readsFor({ kind: "follow-ups" })]}
+      <OpsWhy evidence={result?.checked_scopes ?? []} defaultOpen={whyOpen} reads={reads}
         why={["Ozzie doesn't treat something it couldn't confirm as clear, so it asks a person to look.", "Nothing about it changed in Planning Center."]} />
     </article>}
     {clear && <p className="small">{clear}{operations.checked_at ? ` (checked ${time(operations.checked_at)})` : ""}.</p>}
@@ -1280,18 +1288,31 @@ export interface ServicePartHead {
   /** No next plan of it yet (move-on.ts waitingText), said under its name. */
   waiting?: string | null;
   /**
-   * Another service than the first: its rooms and group meetings aren't checked (only the first service's are), and the
-   * church's follow-ups are shown with the first one; What I didn't check says so, with that one's name.
+   * Another service than the first, by the first one's name: the church's follow-ups (church-wide) are shown with the first
+   * service, and What I didn't check says so. Its own rooms and group meetings show here, as `operations` (0.7.0).
    */
   opsWith?: string | null;
+  /**
+   * Another service on the same church-local day shows that day's room bookings, by its name (services-merge.ts
+   * roomsHolders: the first on that day whose check read them in full), and What I didn't check says so. Null: this
+   * service's rooms are its own. The first service's part can carry it too.
+   */
+  roomsWith?: string | null;
 }
 /** A service Planning Center gives no name. */
 export const SERVICE_UNNAMED = "Your service";
 /**
- * What I didn't check, for another service than the first: its rooms and its people's group meetings aren't checked, and
- * the church's follow-ups (church-wide) are shown with the first service.
+ * What I didn't check, for another service than the first whose check read nothing of Calendar, People or Groups (made
+ * before those reads existed): its rooms and group meetings weren't checked, and the church's follow-ups are shown with the first service.
  */
 export const opsWithLine = (first: string) => `Room bookings and group meetings aren't checked for this service. Follow-ups without an owner are shown with ${first}.`;
+/** What I didn't check, for another service than the first: the church's follow-ups (church-wide) are shown with the first service. */
+export const followUpsWithLine = (first: string) => `Follow-ups without an owner are shown with ${first}.`;
+/** What I didn't check, for a service whose day's room bookings another service on the same day shows (roomsHolders). */
+export const roomsWithLine = (holder: string) => `Room bookings for this day are shown with ${holder}.`;
+/** What I didn't check for another service than the first: its own rooms and group meetings' lines, then where the rest is shown. */
+export const otherServiceNotChecked = (operations: SundayOperations | null, part: Pick<ServicePartHead, "opsWith" | "roomsWith"> & { opsWith: string }): string[] =>
+  operations ? [...operations.not_checked, ...(part.roomsWith ? [roomsWithLine(part.roomsWith)] : []), followUpsWithLine(part.opsWith)] : [opsWithLine(part.opsWith)];
 
 export function SundayPage(props: {
   brief: SundayBrief | null; names: Names; busy: boolean; problem: string; sender: string;
@@ -1503,14 +1524,15 @@ export function SundayPage(props: {
     </section>}
     {brief && brief.mode !== "fictional" && props.more}
     {brief && hasOperationsSection(props.operations) && <OperationsSection operations={props.operations} feedback={controls} occurrence={occurrence.id} titleRef={titleRef("rooms")}
-      checkedAt={brief.checked_at ?? brief.completed_at} />}
+      checkedAt={brief.checked_at ?? brief.completed_at} {...(part?.opsWith ? { followUps: false } : {})} />}
     {brief && props.operations && props.operations.group_meetings.length > 0 && <GroupMeetings items={props.operations.group_meetings} names={names}
       feedback={controls} occurrence={occurrence.id} />}
     {brief && props.church}
     {brief && <SetAside entries={setAside} feedback={controls} />}
     {brief && <section className="notchecked" aria-label="What I didn't check">
       <h2 className="h3">What I didn't check</h2>
-      <ul className="list">{[...brief.not_checked, ...(part?.opsWith ? [opsWithLine(part.opsWith)] : props.operations ? props.operations.not_checked : w.extras || brief.mode === "fictional" ? operationsNotChecked(null) : [])].map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul>
+      <ul className="list">{[...brief.not_checked, ...(part?.opsWith ? otherServiceNotChecked(props.operations, { opsWith: part.opsWith, roomsWith: part.roomsWith ?? null })
+        : props.operations ? [...props.operations.not_checked, ...(part?.roomsWith ? [roomsWithLine(part.roomsWith)] : [])] : w.extras || brief.mode === "fictional" ? operationsNotChecked(null) : [])].map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul>
       {/* A church system's rarer limits: true, folded, so the list above holds what a pastor acts on (round 5). */}
       {(brief.not_checked_more?.length ?? 0) > 0 && <details className="listen-more"><summary><Icon name="chev" small />More that Ozzie can't see in {source}</summary>
         <ul className="list">{brief.not_checked_more!.map(n => <li key={n}><Icon name="dot" small />{n}</li>)}</ul></details>}

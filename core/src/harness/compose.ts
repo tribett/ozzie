@@ -1042,7 +1042,7 @@ function keysOf(f: Fact): string[] {
  * need a decision and weren't settled by the leader, background checks (which never reach the AI, so never its answer),
  * room overlaps confirmed by a Church rule, and follow-ups without an owner; then how many findings Church rules set
  * aside. Empty when the answer said them all and nothing is set aside. `scope`: the services the question named (tools.ts):
- * only their decisions, from an overview read for them; rooms and follow-ups belong to no one service and aren't added.
+ * only their decisions, from an overview read for them, and their own rooms; the church's follow-ups only with the first.
  */
 export async function decisionsLeftOut(tools: HarnessTools, answer: string, evidence: readonly ToolEnvelope[], signal: AbortSignal,
   framing?: { head: string; none: string | null }, scope: Scope = []): Promise<LocalAnswer> {
@@ -1059,9 +1059,9 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
   const onDay = saidBy(chosen.filter(isLead).map(f => f.payload), day);
   const read = reader(tools, signal, scope);
   const overview = await read("sunday.overview");
-  // Rooms and follow-ups are the first service's, as its page shows them (tools.ts opsInScope).
-  const ops = tools.opsInScope(scope);
-  const rooms = ops ? await read("rooms.conflicts") : null, followUps = ops ? await read("followups.unowned") : null;
+  // The church's follow-ups are the first service's, as its page shows them (tools.ts opsInScope); each service's own rooms
+  // go with a task for it (tools.ts roomsInScope).
+  const rooms = tools.roomsInScope(scope) ? await read("rooms.conflicts") : null, followUps = tools.opsInScope(scope) ? await read("followups.unowned") : null;
   out.evidence = [overview, rooms, followUps].filter((e): e is ToolEnvelope => e !== null);
   const settled = new Set(applyDecisions(brief, decisions).items.filter(i => i.decision && i.state !== "reopened").map(i => i.finding.id));
   // Each finding's own row, by its place in the overview even when rows were left out for length (tools.ts rowAt).

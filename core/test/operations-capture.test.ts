@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureRooms, operationsFromCapture, operationsNotChecked, sundayOperations, type OperationsOptions } from "../src/operations-capture.js";
+import { capturePlanDate, captureRooms, operationsFromCapture, operationsNotChecked, roomsReadComplete, sundayOperations, type OperationsOptions } from "../src/operations-capture.js";
 import {
   FICTIONAL_CARDS, FICTIONAL_GROUP, FICTIONAL_ROOM, FICTIONAL_STEP, FICTIONAL_TIME_ZONE, FICTIONAL_WINDOW, FICTIONAL_WORKFLOW,
   fictionalOperations, withFictionalOperations, withFictionalOperationsOff,
@@ -8,6 +8,7 @@ import { CHECKED, nov22Capture, PEOPLE } from "../src/fictional-sunday.js";
 import { buildSundayBrief } from "../src/sunday-brief.js";
 import type { SundayCapture, SundayRead, SundayRules } from "../src/sunday-capture.js";
 import type { RoomFinding } from "../src/operations-findings/index.js";
+import { backgroundWording } from "../src/harness/background-wording.js";
 
 // Fictional fixed data only (see fictional-operations.ts). Evaluated in the fictional church's zone,
 // which the capture's own Services Organization read gives.
@@ -304,5 +305,87 @@ describe("rooms, follow-ups and group meetings from the capture", () => {
     expect(operationsNotChecked({ ...result, unchecked_scope_ids: ["hall-rule"] })).toEqual(["1 part of the room and follow-up check couldn't be read."]);
     expect(operationsNotChecked({ ...result, status: "unverified", binding: null, findings: [], uncertainties: [{ code: "invalid-input", scope_id: null, subject_id: null, label: "Worth a look" }] }))
       .toEqual(["Rooms and follow-ups couldn't be checked, so nothing about them is shown."]);
+  });
+});
+
+// Another watched service than the first (owner decision 2026-11-19): its own rooms and group meetings, never the
+// church's follow-ups (they stay with the first service), and no rooms at all when an earlier service is on its day.
+describe("another service's rooms and group meetings", () => {
+  const roomsOnly = (c = capture(), rules = none, o: OperationsOptions = {}) => ops(c, rules, { followUps: false, ...o });
+  it("one service: leaving the options at their defaults is exactly what it always was", () => {
+    for (const c of [capture(), notRequested(), nov22Capture()]) {
+      expect(sundayOperations(c, sanctuary, { followUps: true, rooms: true })).toEqual(sundayOperations(c, sanctuary));
+      expect(sundayOperations(c, sanctuary, { now: "2026-11-20T16:00:00Z", followUps: true, rooms: true })).toEqual(sundayOperations(c, sanctuary, { now: "2026-11-20T16:00:00Z" }));
+    }
+  });
+
+  it("without follow-ups: the same room overlap and group meeting, and nothing of the church's follow-ups anywhere", () => {
+    const all = ops(capture(), sanctuary), own = roomsOnly(capture(), sanctuary);
+    expect(own.result!.findings.map(f => [f.kind, f.label])).toEqual([["room-overlap", "Room use needs review"]]);
+    expect(own.result!.findings[0]).toEqual(all.result!.findings.find(f => f.kind === "room-overlap"));
+    expect(own.group_meetings).toEqual(all.group_meetings);
+    expect(own.labels).toEqual({ [room]: "Sanctuary (fictional)" });
+    expect(JSON.stringify(own.result)).not.toMatch(/workflow|step|card/u);
+    expect(own.not_checked).toEqual([]);
+    expect(own.checked_at).toBe(all.checked_at);
+    // Nothing found and every room read: "nothing found" names rooms only, never follow-ups.
+    const quiet = edit(capture(), "calendar_resource_bookings", r => { (r.body as { data: unknown[] }).data = []; });
+    expect(roomsOnly(quiet).clear).toEqual(["rooms"]);
+    expect(ops(quiet).clear).toEqual([]);
+    // A follow-up read that failed is no line of this service's.
+    const failed = edit(capture(), "people_workflow_ready_cards", r => { r.outcome = "denied"; delete r.body; });
+    expect(roomsOnly(failed).not_checked).toEqual([]);
+    expect(ops(failed).not_checked).toEqual(["Follow-ups in 1 workflow: Planning Center didn't allow it."]);
+  });
+
+  it("without rooms too (an earlier service holds that day's rooms): group meetings only, nothing clear, read when its groups were", () => {
+    const o = roomsOnly(capture(), sanctuary, { rooms: false });
+    expect(o).toMatchObject({ result: null, labels: {}, stale: false, clear: [], checked_at: CHECKED, not_checked: [] });
+    expect(o.group_meetings).toEqual(ops().group_meetings);
+    // Its group events refused: the memberships it did read still say when.
+    expect(roomsOnly(edit(capture(), "groups_group_events", r => { r.outcome = "denied"; delete r.body; }), sanctuary, { rooms: false })
+      .checked_at).toBe(CHECKED);
+  });
+
+  it("whether a check read its own day's rooms in full: never for a part refused, partial or unreadable, whatever the clock says", () => {
+    expect(roomsReadComplete(capture(), sanctuary)).toBe(true);
+    // A live check out of date by now is still the check it was (whether it is out of date never moves a day's rooms).
+    const live = { ...capture(), kind: "live" as const };
+    expect(ops(live, sanctuary, { now: "2026-11-21T15:00:00Z" }).stale).toBe(true);
+    expect(roomsReadComplete(live, sanctuary)).toBe(true);
+    expect(roomsReadComplete(edit(capture(), "calendar_resource_bookings", r => { r.outcome = "timeout"; delete r.body; }), sanctuary)).toBe(false);
+    expect(roomsReadComplete(edit(capture(), "calendar_resource_bookings", r => { r.outcome = "truncated"; }), sanctuary)).toBe(false);
+    expect(roomsReadComplete(edit(capture(), "calendar_conflicts", r => { if (r.event_id === "23167837") { r.outcome = "denied"; delete r.body; } }), sanctuary)).toBe(false);
+    expect(roomsReadComplete(notRequested(), sanctuary)).toBe(false);
+    expect(roomsReadComplete(nov22Capture(), sanctuary)).toBe(false);
+    // No booking that day, read in full: complete.
+    expect(roomsReadComplete(edit(capture(), "calendar_resource_bookings", r => { (r.body as { data: unknown[] }).data = []; }), sanctuary)).toBe(true);
+  });
+
+  it("its own words where a part is off, out of date or unreadable", () => {
+    expect(roomsOnly(notRequested()).not_checked).toEqual(["Room bookings weren't checked. Turn this on in Settings.", "Group meetings weren't checked either."]);
+    expect(roomsOnly(notRequested(), none, { rooms: false }).not_checked).toEqual(["Group meetings weren't checked. Turn this on in Settings."]);
+    expect(roomsOnly(capture(), none, { now: "2026-11-20T16:00:00Z" }).not_checked).toEqual(["Rooms and group meetings aren't shown: they were read more than 30 minutes ago."]);
+    expect(roomsOnly(capture(), none, { now: "2026-11-20T16:00:00Z", rooms: false }).not_checked).toEqual(["Group meetings aren't shown: they were read more than 30 minutes ago."]);
+    expect(roomsOnly({ ...capture(), kind: "recording", completed_at: "not a time" }).not_checked).toEqual(["Rooms and group meetings couldn't be checked, so nothing about them is shown."]);
+    const unreadPair = edit(capture(), "calendar_conflicts", r => { if (r.event_id === "23167837") { r.outcome = "denied"; delete r.body; } });
+    expect(roomsOnly(unreadPair, sanctuary).not_checked).toEqual([RESOLUTION]);
+  });
+
+  it("no line of another service's part trips the background-check wording guard (only the first service's own sentence is set aside)", () => {
+    const lines = [
+      ...roomsOnly(notRequested()).not_checked, ...roomsOnly(notRequested(), none, { rooms: false }).not_checked,
+      ...roomsOnly(capture(), none, { now: "2026-11-20T16:00:00Z" }).not_checked, ...roomsOnly(capture(), none, { now: "2026-11-20T16:00:00Z", rooms: false }).not_checked,
+      ...roomsOnly({ ...capture(), kind: "recording", completed_at: "not a time" }).not_checked,
+      ...roomsOnly(edit(capture(), "calendar_conflicts", r => { if (r.event_id === "23167837") { r.outcome = "denied"; delete r.body; } }), sanctuary).not_checked,
+      ...roomsOnly(edit(capture(), "calendar_resource_bookings", r => { r.outcome = "timeout"; delete r.body; })).not_checked,
+    ];
+    expect(lines.length).toBeGreaterThan(6);
+    for (const line of lines) expect(backgroundWording(line), line).toBe(false);
+  });
+
+  it("the plan's church-local date: the day its room check covers", () => {
+    expect(capturePlanDate(capture())).toBe("2026-11-22");
+    expect(capturePlanDate(edit(capture(), "plan", r => { r.outcome = "failed"; delete r.body; }))).toBeNull();
   });
 });

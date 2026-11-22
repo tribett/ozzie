@@ -7,7 +7,7 @@ import { sundayOperations } from "../src/operations-capture.js";
 import { buildSundayBrief, needKey, sundayShownCount, type Finding, type SundayBrief } from "../src/sunday-brief.js";
 import { applyDecisions, decide } from "../src/sunday-decisions.js";
 import { buildSpokenBriefing, MAX_SPOKEN_CHARS, MAX_SPOKEN_SECONDS, SPOKEN_WORDS_PER_MINUTE } from "../src/spoken-briefing.js";
-import { wednesdayCapture, wednesdayWords } from "./fixtures/service-days/wednesday.js";
+import { wednesdayCapture, wednesdayWithOperations, wednesdayWords } from "./fixtures/service-days/wednesday.js";
 
 const rules = { sundayLeads: [{ team_id: TEAMS.nursery, lead_position: "Nursery lead" }], checkInAfterSundaysInARow: 3 };
 const capture = nov22Capture();
@@ -315,5 +315,66 @@ describe("spoken briefing: someone scheduled with a blockout", () => {
     const withIt = buildSpokenBriefing({ attention: null, sunday: brief }, { timeZone: tz });
     const looks = (s: typeof without) => Number(/and (\d+) are worth a look/u.exec(s.sections[0]!.sentences[0]!)?.[1]);
     expect(looks(withIt)).toBe(looks(without) + 1);
+  });
+});
+
+// More than one service watched (0.7.0): each service's own rooms and group meetings, said at its service and counted once.
+describe("spoken briefing: every service's own rooms and group meetings", () => {
+  const quiet = { sundayLeads: [], checkInAfterSundaysInARow: 0 };
+  const sundayOps = withFictionalOperations(nov22Capture());
+  const opsBrief = buildSundayBrief(sundayOps, quiet, sundayOps.completed_at, true);
+  const first = sundayOperations(sundayOps, quiet)!;
+  const youthOps = (rooms = true) => sundayOperations(wednesdayWithOperations(), quiet, { followUps: false, ...(rooms ? {} : { rooms: false }) })!;
+  const section = (s: ReturnType<typeof buildSpokenBriefing>, id: string) => s.sections.find(x => x.id === id)?.sentences ?? [];
+
+  it("each room and group line opens with its own service; the church's follow-ups never do; every item counted once", () => {
+    const also = { first: "Weekend Service", also: [{ plan_id: "94000001", service: "Youth Night", operations: youthOps() }] };
+    const s = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: first, alsoOperations: also }, { timeZone: tz });
+    // Sunday: 2 role decisions + a follow-up; worth a look: Lyrics pending, its overlap, its group meeting, the uncertainty
+    // row; Youth Night adds its own overlap, its uncertainty row and its group meeting.
+    expect(section(s, "intro")).toEqual(["Here is today's briefing. 3 things need a decision, and 7 are worth a look."]);
+    expect(section(s, "decisions")).toContain("One follow-up has no owner and is past due. Choose who will handle it in Planning Center People.");
+    expect(section(s, "looks")).toEqual([
+      "Someone scheduled for Lyrics hasn't accepted yet. Planning Center shows the request hasn't been sent yet.",
+      "At Weekend Service, two room bookings overlap, and it's worth a look.",
+      "At Weekend Service, some room or follow-up details couldn't be confirmed.",
+      "At Weekend Service, one person has a group meeting at the same time they serve.",
+      "And 3 more worth a look, listed on screen.",
+    ]);
+    expect(s.text).not.toMatch(/At (Weekend Service|Youth Night), one follow-up/u);
+    // With room to read them all: Youth Night's own, at Youth Night.
+    const roles = { ...opsBrief, findings: opsBrief.findings.filter(f => f.tone === "decision") };
+    const roomy = buildSpokenBriefing({ attention: null, sunday: roles, operations: sundayOperations(sundayOps, quiet, { rooms: false })!, alsoOperations: also }, { timeZone: tz });
+    expect(section(roomy, "looks")).toEqual([
+      "At Weekend Service, one person has a group meeting at the same time they serve.",
+      "At Youth Night, two room bookings overlap, and it's worth a look.",
+      "At Youth Night, some room details couldn't be confirmed.",
+      "At Youth Night, one person has a group meeting at the same time they serve.",
+    ]);
+    // No room, workflow or person name is spoken.
+    for (const name of [...Object.values(sundayOps.labels!), ...Object.values(sundayOps.names)]) expect(s.text).not.toContain(name);
+    // A name no one would recognise as one service: its lines read as before, still counted.
+    const unnamed = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: first, alsoOperations: { first: null, also: [{ ...also.also[0]!, service: null }] } }, { timeZone: tz });
+    expect(section(unnamed, "intro")).toEqual(section(s, "intro"));
+    expect(unnamed.text).toContain("Two room bookings overlap, and it's worth a look.");
+  });
+
+  it("a service on a day an earlier one holds adds its group meetings only; one read more than 30 minutes ago adds nothing but its line", () => {
+    const sameDay = { first: "Weekend Service", also: [{ plan_id: "94000001", service: "Youth Night", operations: youthOps(false) }] };
+    const s = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: first, alsoOperations: sameDay }, { timeZone: tz });
+    expect(section(s, "intro")).toEqual(["Here is today's briefing. 3 things need a decision, and 5 are worth a look."]);
+    const roles = { ...opsBrief, findings: opsBrief.findings.filter(f => f.tone === "decision") };
+    const fits = buildSpokenBriefing({ attention: null, sunday: roles, operations: first, alsoOperations: sameDay }, { timeZone: tz });
+    expect(section(fits, "looks")).toEqual([
+      "At Weekend Service, two room bookings overlap, and it's worth a look.",
+      "At Weekend Service, some room or follow-up details couldn't be confirmed.",
+      "At Weekend Service, one person has a group meeting at the same time they serve.",
+      "At Youth Night, one person has a group meeting at the same time they serve.",
+    ]);
+    const stale = sundayOperations({ ...wednesdayWithOperations(), kind: "live" }, quiet, { now: "2026-11-20T18:00:00Z", followUps: false })!;
+    const old = buildSpokenBriefing({ attention: null, sunday: opsBrief, operations: first,
+      alsoOperations: { first: "Weekend Service", also: [{ plan_id: "94000001", service: "Youth Night", operations: stale }] } }, { timeZone: tz });
+    expect(section(old, "intro")).toEqual(["Here is today's briefing. 3 things need a decision, and 4 are worth a look."]);
+    expect(section(old, "unchecked")).toContain("Rooms and group meetings aren't shown: they were read more than 30 minutes ago.");
   });
 });

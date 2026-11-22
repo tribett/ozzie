@@ -24,9 +24,10 @@
 // [Service N] label, host.ts passes that service on as the task's `scope`) reads the overview, open roles, who could help,
 // pending requests, check-ins, what wasn't checked and drafts for the services it names only, each result saying so
 // first under `service` (their labels), with those services' own reads and completeness when the app gives them, so "Is
-// [Service 1] covered?" is answered about that service alone. Rooms, follow-ups and group meetings are the first
-// service's, as its page shows them: a scoped overview holds them only when it is for the first service. Without a scope
-// every result is exactly as before.
+// [Service 1] covered?" is answered about that service alone. The church's follow-ups are the first service's, as its
+// page shows them: a scoped overview holds them only when it is for the first service. Each service's own rooms and group
+// meetings (HarnessData `alsoOperations`, 0.7.0) go with a task for that service, and every service's once without a
+// scope. Without a scope, and with one service, every result is exactly as before.
 import { hasContactDetail } from "../ask.js";
 import { serviceKey } from "../service-names.js";
 import { ToolFailure } from "../broker.js";
@@ -77,8 +78,9 @@ export interface HarnessData {
   /**
    * With more than one service watched (owner request 2026-11-21): every watched service by its own Planning Center name,
    * and whether this check holds it (`read`), so a question naming one sends its [Service N] label instead (ask.ts
-   * PrepareOptions `services`). `first` marks the first service, whose check holds the rooms, follow-ups and group
-   * meetings (reviews A round 2 N3, B round 2 N4: never by its place in the list). A read one may carry when it was read,
+   * PrepareOptions `services`). `first` marks the first service, whose check holds the church's follow-ups and its own
+   * rooms and group meetings (reviews A round 2 N3, B round 2 N4: never by its place in the list; each other service's own
+   * are `alsoOperations`). A read one may carry when it was read,
    * its own reads, failed reads, staleness and what it didn't check, which a task about it says instead of the whole
    * check's (review B, F3, F7 and round 2 N2). Local only: a service's name never reaches a model. Absent with one service.
    */
@@ -92,6 +94,15 @@ export interface HarnessData {
    * the check that couldn't be verified included. Local only. Absent with one service; then a finding's team says it.
    */
   serviceOfFinding?: Readonly<Record<string, string>>;
+  /**
+   * With more than one service watched (0.7.0): each other watched service's own rooms and group meetings, from its own
+   * check (desktop services-merge.ts otherOperations: never the church's follow-ups, which stay in `operations`), by its
+   * own name as `services` holds it, and whether it holds its church-local day's rooms (`rooms`; false when an earlier
+   * service on the same day does). Rooms are this session's labels and people its person labels, as the first service's
+   * are. A task for a service reads that one's own; one with no scope reads every service's once. Local only: a service's
+   * name never reaches a model. Absent with one service, which reads exactly as before.
+   */
+  alsoOperations?: readonly { readonly name: string; readonly operations: SundayOperations | null; readonly rooms: boolean }[];
 }
 export interface HarnessToolsOptions { now?: () => string }
 /**
@@ -265,11 +276,47 @@ export function unconfirmedSources(result: OperationsResult | null): string[] {
   return [...(found.has("room") ? [CALENDAR] : []), ...(found.has("step") ? [PEOPLE] : [])];
 }
 const UNDESCRIBED = "a part of the check Ozzie can't describe";
+/** What wasn't checked, for another service whose check read no Calendar, People or Groups at all (made before those reads). */
+const OTHER_UNREAD = "Room bookings and group meetings weren't part of this check.";
+/** What wasn't checked, for another service whose day's room bookings another service on that day shows (desktop roomsHolders). */
+const ROOMS_ELSEWHERE = "Room bookings for this service are shown in another service.";
 /** A role in a church system that ties no team to its roles (Breeze): no one is listed for it (vocabulary.json values). */
 export const NO_TEAM = "no team is tied to roles in this church system";
 const AGES = "confirmed people counted; ages not checked";
 const byLabel = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 const byId = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
+
+/** One service's rooms and group meetings as a task reads them (HarnessTools #opsParts). */
+interface OpsPart { ops: SundayOperations | null; first: boolean; rooms: boolean }
+const earliestOf = (times: readonly (string | null)[]) => times.filter((t): t is string => typeof t === "string").sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null;
+/**
+ * Several services' rooms and group meetings as one check, for the tools that read them as one (rooms.conflicts,
+ * groups.clashes): every finding, open question and meeting of each, every line once, the earliest read time, out of date
+ * when any is, and "nothing found" for rooms only when every service holding its day's rooms found none in a full read.
+ * One part alone: its own check, as it is. None held: null.
+ */
+function joinOps(parts: readonly OpsPart[]): SundayOperations | null {
+  const held = parts.filter((p): p is OpsPart & { ops: SundayOperations } => p.ops !== null);
+  if (parts.length === 1 && held.length === 1) return held[0]!.ops;
+  if (!held.length) return null;
+  const results = held.flatMap(p => p.ops.result ? [p.ops.result] : []);
+  const findings = results.flatMap(r => r.findings), uncertainties = results.flatMap(r => r.uncertainties);
+  const first = held.find(p => p.first)?.ops;
+  const roomsClear = parts.some(p => p.rooms) && parts.filter(p => p.rooms).every(p => p.ops?.clear.includes("rooms"));
+  const hidden = held.flatMap(p => p.ops.hidden ?? []);
+  return {
+    result: results.length ? { ...(results.find(r => r.binding) ?? results[0]!), findings, uncertainties,
+      status: uncertainties.length ? "unverified" : findings.length ? "findings" : "checked-scope-clear",
+      unchecked_scope_ids: results.flatMap(r => r.unchecked_scope_ids), checked_scopes: results.flatMap(r => r.checked_scopes) } : null,
+    labels: Object.assign({}, ...held.map(p => p.ops.labels)) as Record<string, string>,
+    group_meetings: held.flatMap(p => p.ops.group_meetings),
+    not_checked: [...new Set(held.flatMap(p => p.ops.not_checked))],
+    stale: held.some(p => p.ops.stale),
+    clear: [...(roomsClear ? ["rooms" as const] : []), ...(first?.clear.includes("follow-ups") ? ["follow-ups" as const] : [])],
+    checked_at: earliestOf(held.map(p => p.ops.checked_at)),
+    ...(hidden.length ? { hidden } : {}),
+  };
+}
 
 // ---- Running ----------------------------------------------------------------------------------------
 
@@ -336,9 +383,9 @@ export class HarnessTools {
       case "sunday.pending_requests": return this.#pending(scope);
       case "sunday.rule_checkins": return this.#checkins(scope);
       case "sunday.not_checked": return this.#notChecked(scope);
-      case "rooms.conflicts": return this.#rooms();
+      case "rooms.conflicts": return this.#rooms(scope);
       case "followups.unowned": return this.#followUps();
-      case "groups.clashes": return this.#groups();
+      case "groups.clashes": return this.#groups(scope);
       case "today.attention": return this.#attention();
       case "rules.current": return this.#rules();
       case "drafts.prepare_note": return this.#draft(String(args["person"]), String(args["role"]), scope);
@@ -401,10 +448,33 @@ export class HarnessTools {
     }
     return { reads: brief.sources.reads, failed: brief.sources.failed.length, stale: !!brief.stale };
   }
-  /** Whether rooms, follow-ups and group meetings go with a scope: always unscoped, and for the first service (its page shows them). */
+  /**
+   * Whether the first service's rooms, group meetings and the church's follow-ups go with a scope: always unscoped, and for
+   * the first service (its page shows them).
+   */
   opsInScope(scope: Scope): boolean {
     const first = this.#data.services?.find(s => s.first === true)?.name;
     return !scope.length || (first !== undefined && scope.some(s => serviceKey(s) === serviceKey(first)));
+  }
+  /** Whether any service's rooms or group meetings go with a scope: the first service's (opsInScope), or another named one's own. */
+  roomsInScope(scope: Scope): boolean {
+    return this.opsInScope(scope) || this.#opsParts(scope).some(p => !p.first);
+  }
+  /**
+   * Each service's rooms and group meetings a task reads, in order: the first service's (with the church's follow-ups) when
+   * the scope names it or there is none, then each other service the scope names (every one with no scope), with its own.
+   */
+  #opsParts(scope: Scope): OpsPart[] {
+    const keys = new Set(scope.map(serviceKey));
+    const also = (this.#data.alsoOperations ?? []).filter(s => !scope.length || keys.has(serviceKey(s.name)));
+    return [...(this.opsInScope(scope) ? [{ ops: this.#data.operations, first: true, rooms: true }] : []), ...also.map(s => ({ ops: s.operations, first: false, rooms: s.rooms }))];
+  }
+  /**
+   * What rooms.conflicts and groups.clashes read: the first service's check whatever the scope, as always, while no other
+   * service's own are given; with them (alsoOperations), the services the scope names, every one with no scope, as one.
+   */
+  #toolOps(scope: Scope): SundayOperations | null {
+    return this.#data.alsoOperations?.length ? joinOps(this.#opsParts(scope)) : this.#data.operations;
   }
   /** A church on B1 Church or Breeze: no team leaders, no Planning Center counts, no lead, room or kids rules of Planning Center's. */
   get #other(): boolean { return this.#data.source !== undefined; }
@@ -556,9 +626,13 @@ export class HarnessTools {
       }
       return { ...base, ...this.#decision(decided.get(f.id)) };
     });
-    // After the Services findings, so their labels are numbered as before. Rooms, follow-ups and group meetings are the
-    // first service's (opsInScope): a scoped overview for another service leaves them out.
-    const ops = this.opsInScope(scope) ? this.#operationsShown(zone) : { rows: [], decisions: 0, looks: 0 };
+    // After the Services findings, so their labels are numbered as before: the first service's rooms, group meetings and
+    // the church's follow-ups (opsInScope), then each other service's own rooms and group meetings, each as its part of the
+    // page counts them (#opsParts). A scoped overview holds only the services it names.
+    const ops = this.#opsParts(scope).reduce((t, p) => {
+      const part = this.#operationsShown(zone, p.ops);
+      return { rows: [...t.rows, ...part.rows], decisions: t.decisions + part.decisions, looks: t.looks + part.looks };
+    }, { rows: [] as Record<string, unknown>[], decisions: 0, looks: 0 });
     // Several services watched: the brief's plan is the first service's, so a scoped overview doesn't say its date.
     const sunday = scope.length && this.#data.serviceOfTeam ? NOT_KNOWN : brief.plan.date ?? NOT_KNOWN;
     return this.#servicesResult({
@@ -577,8 +651,7 @@ export class HarnessTools {
    * rule (sundayShownCount): whatever this check holds of them, never from an out-of-date check, whatever the connection
    * holds since (review of 00d38d00, item 1).
    */
-  #operationsShown(zone: string | null): { rows: Record<string, unknown>[]; decisions: number; looks: number } {
-    const ops = this.#data.operations;
+  #operationsShown(zone: string | null, ops: SundayOperations | null): { rows: Record<string, unknown>[]; decisions: number; looks: number } {
     if (!ops || ops.stale) return { rows: [], decisions: 0, looks: 0 };
     const where = ops.result?.churchTimeZone ?? zone;
     const found = ops.result?.findings ?? [];
@@ -737,10 +810,16 @@ export class HarnessTools {
     return this.#servicesResult({
       ...this.#scoped(scope), reads: own.reads, reads_not_completed: own.failed, too_old_to_treat_as_current: this.#stale(this.#checkedAt(scope), own.stale),
       services: fixed(lines),
-      // As the Sunday page's "What I didn't check" for this check, once it read them or the connection holds them.
-      ...(this.opsInScope(scope) ? {
-        rooms_follow_ups_groups: !this.#operationsSaid() ? ["Rooms, follow-ups and group meetings are not part of this connection."]
-          : ops ? fixed(ops.not_checked) : ["Rooms, follow-ups and group meetings weren't part of this check."],
+      // As the Sunday page's "What I didn't check" for this check, once it read them or the connection holds them: the first
+      // service's, then each other service's own (a scope's only), each line once.
+      ...(this.roomsInScope(scope) ? {
+        rooms_follow_ups_groups: !this.#operationsSaid() ? ["Rooms, follow-ups and group meetings are not part of this connection."] : (() => {
+          const own = this.opsInScope(scope) ? ops ? fixed(ops.not_checked) : ["Rooms, follow-ups and group meetings weren't part of this check."] : [];
+          // Another service's own: its lines, that its day's rooms are shown with another service on that day, or that its
+          // check read none of Calendar, People or Groups (both of Ozzie's own fixed sentences).
+          const others = this.#opsParts(scope).filter(p => !p.first).flatMap(p => [...(p.ops ? p.ops.not_checked : [OTHER_UNREAD]), ...(p.rooms ? [] : [ROOMS_ELSEWHERE])]);
+          return others.length ? [...new Set([...own, ...fixed(others)])] : own;
+        })(),
       } : {}),
     }, undefined, scope);
   }
@@ -751,14 +830,13 @@ export class HarnessTools {
    * Neither held by the connection nor read by this check (#operationsSaid): "denied" and nothing else. Anything unread,
    * uncertain or out of date is never "complete".
    */
-  #operations(source: string): { ops: SundayOperations | null; completeness: Completeness; zone: string | null; result: (payload: Record<string, unknown>, list?: string) => Result } {
+  #operations(source: string, ops: SundayOperations | null = this.#data.operations): { ops: SundayOperations | null; completeness: Completeness; zone: string | null; result: (payload: Record<string, unknown>, list?: string) => Result } {
     // A church on B1 Church or Breeze has no Planning Center Calendar, People or Groups: nothing is said of them, not even
     // that they weren't granted (the host never offers these tools there either).
     if (this.#other) throw new ToolFailure("denied");
     const { brief } = this.#services();
-    const ops = this.#data.operations;
     const zone = ops?.result?.churchTimeZone ?? brief.time_zone;
-    const { check_time, completeness: read } = this.#operationsRead();
+    const { check_time, completeness: read } = this.#operationsRead(ops);
     const granted = this.#operationsSaid();
     const completeness: Completeness = granted ? read : "denied";
     return {
@@ -767,9 +845,8 @@ export class HarnessTools {
     };
   }
   /** When this check read Calendar, People and Groups, and how much of them: out of date, part unread or uncertain, or all of it. */
-  #operationsRead(): { check_time: string; completeness: Completeness } {
+  #operationsRead(ops: SundayOperations | null = this.#data.operations): { check_time: string; completeness: Completeness } {
     const { brief } = this.#services();
-    const ops = this.#data.operations;
     const check_time = checkTime(ops?.checked_at ?? brief.checked_at);
     const completeness: Completeness = this.#stale(check_time) || ops?.stale ? "stale"
       : !ops || !ops.result || ops.not_checked.length || ops.result.unchecked_scope_ids.length || ops.result.uncertainties.length ? "partial" : "complete";
@@ -785,16 +862,20 @@ export class HarnessTools {
   rowSources(): RowSources | null {
     const ops = this.#data.operations, capture = this.#data.capture;
     if (!ops || ops.stale || !this.#data.brief?.checked_at || !capture) return null;
+    // With other services' own (alsoOperations): the earliest of every service's read times, and Calendar and Groups never
+    // complete while another service's part of them isn't (its own reads aren't here, so its whole part decides).
+    const all = this.#data.alsoOperations?.length ? joinOps(this.#opsParts([])) : ops;
     let read: { check_time: string; completeness: Completeness };
-    try { read = this.#operationsRead(); } catch { return null; }
+    try { read = this.#operationsRead(all); } catch { return null; }
+    const otherPartial = (this.#data.alsoOperations ?? []).some(s => s.operations && !s.operations.stale && this.#operationsRead(s.operations).completeness !== "complete");
     const of = (source: string): Completeness => read.completeness === "stale" ? "stale"
       : capture.reads.some(r => isOperationsRead(r) && READ_SOURCES.find(([re]) => re.test(r.collection))?.[1] === source && r.outcome !== "ok" && r.outcome !== "not-requested")
-        ? "partial" : "complete";
-    return { check_time: read.check_time, completeness: Object.fromEntries([CALENDAR, PEOPLE, GROUPS].map(s => [s, of(s)])), unconfirmed: unconfirmedSources(ops.result) };
+        || (otherPartial && source !== PEOPLE) ? "partial" : "complete";
+    return { check_time: read.check_time, completeness: Object.fromEntries([CALENDAR, PEOPLE, GROUPS].map(s => [s, of(s)])), unconfirmed: unconfirmedSources(all?.result ?? ops.result) };
   }
 
-  #rooms(): Result {
-    const { ops, zone, result } = this.#operations("Planning Center Calendar");
+  #rooms(scope: Scope = []): Result {
+    const { ops, zone, result } = this.#operations("Planning Center Calendar", this.#toolOps(scope));
     const findings = ops?.result?.findings.flatMap(f => f.kind === "room-overlap" ? [f] : []) ?? [];
     const worth = ops?.result?.uncertainties.filter(u => /^room/.test(u.scope_id ?? "") || /^room/.test(u.subject_id ?? "")).length ?? 0;
     const rooms = findings.map(f => ({
@@ -819,8 +900,8 @@ export class HarnessTools {
     return result({ status, follow_ups, worth_a_look: worth }, "follow_ups");
   }
 
-  #groups(): Result {
-    const { ops, completeness, zone, result } = this.#operations("Planning Center Groups");
+  #groups(scope: Scope = []): Result {
+    const { ops, completeness, zone, result } = this.#operations("Planning Center Groups", this.#toolOps(scope));
     const meetings = [...(ops?.group_meetings ?? [])].sort((a, b) => byId(a.person_id, b.person_id));
     const clashes = meetings.map(m => ({ person: this.#person(m.person_id), ...this.#meeting(m, zone), label: "Worth a look" }))
       .sort((a, b) => byLabel(a.person, b.person));

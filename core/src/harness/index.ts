@@ -44,13 +44,20 @@ function positionNames(data: HarnessData): string[] {
   for (const f of data.brief?.findings ?? []) add(f.position?.name);
   for (const l of data.rules.sundayLeads) add(l.lead_position);
   for (const m of data.operations?.group_meetings ?? []) for (const s of m.serving) add(s.position);
+  for (const o of data.alsoOperations ?? []) for (const m of o.operations?.group_meetings ?? []) for (const s of m.serving) add(s.position);
   return [...out];
 }
+/**
+ * Room, workflow and step display names by key (capture.labels `room:<id>`, operations.labels `room<id>`): the first
+ * service's check, then each other service's own rooms (HarnessData `alsoOperations`). Local only.
+ */
+const placeLabels = (data: Pick<HarnessData, "capture" | "operations" | "alsoOperations">): Record<string, string> =>
+  Object.assign({}, ...(data.alsoOperations ?? []).map(o => o.operations?.labels ?? {}), data.capture?.labels ?? {}, data.operations?.labels ?? {}) as Record<string, string>;
 type Place = { kind: "room" | "workflow" | "step" | "event"; id: string; name: string };
 /** Room, follow-up workflow and step names this check read, and the imported event titles. Local only. */
 function placeNames(data: HarnessData): Place[] {
   const out = new Map<string, Place>();
-  const labels = { ...(data.capture?.labels ?? {}), ...(data.operations?.labels ?? {}) };
+  const labels = placeLabels(data);
   for (const [key, name] of Object.entries(labels)) {
     const m = /^(room|workflow|step):?(.+)$/u.exec(key);
     if (m && typeof name === "string" && name.trim()) out.set(`${m[1]}\u0000${m[2]}`, { kind: m[1] as Place["kind"], id: m[2]!, name: name.trim() });
@@ -233,7 +240,7 @@ export class Harness {
    */
   keep(text: string): string { return this.#restore(text, keptNames(this.tools.data.capture?.names ?? {})); }
   #restore(text: string, names: Readonly<Record<string, string>>, options: { sender?: string; firstNames?: boolean } = {}): string {
-    const { capture, operations, attention, brief, serviceOfTeam } = this.tools.data;
+    const { capture, attention, brief, serviceOfTeam } = this.tools.data;
     const events = Object.fromEntries((attention?.sources ?? []).flatMap(s => "title" in s ? [[s.id, s.title]] : []));
     // Several services watched: a role is said with its service, by its team, or by its name when only one service has it.
     const roleService = serviceOfTeam ? (name: string, team?: string): string | null => {
@@ -243,7 +250,7 @@ export class Harness {
     } : undefined;
     return restoreLabels(text, this.session, {
       ...(roleService ? { roleService } : {}),
-      names, places: { ...(capture?.labels ?? {}), ...(operations?.labels ?? {}) }, events,
+      names, places: placeLabels(this.tools.data), events,
       ...(capture ? { organization: capture.organization } : {}), timeZone: brief?.time_zone ?? null, macZone: this.#macZone ?? null,
       ...(options.sender !== undefined ? { sender: options.sender } : {}), ...(options.firstNames ? { firstNames: true } : {}),
     });

@@ -203,6 +203,8 @@ export interface AppSnapshot {
   services?: HarnessData["services"] | undefined;
   /** Several services watched: each finding's service by the finding's id (HarnessData `serviceOfFinding`). */
   serviceOfFinding?: HarnessData["serviceOfFinding"] | undefined;
+  /** Several services watched: each other service's own rooms and group meetings (HarnessData `alsoOperations`). */
+  alsoOperations?: HarnessData["alsoOperations"] | undefined;
 }
 export const modeOf = (capture: SundayCapture | null, fictional: boolean): HarnessData["mode"] =>
   fictional ? "fictional" : capture?.kind === "recording" ? "recording" : "live";
@@ -234,6 +236,7 @@ export function buildHarnessData(s: AppSnapshot, refresh?: HarnessData["refresh"
     ...(s.serviceOfTeam ? { serviceOfTeam: s.serviceOfTeam } : {}),
     ...(s.services ? { services: s.services } : {}),
     ...(s.serviceOfFinding ? { serviceOfFinding: s.serviceOfFinding } : {}),
+    ...(s.alsoOperations?.length ? { alsoOperations: s.alsoOperations } : {}),
   };
 }
 

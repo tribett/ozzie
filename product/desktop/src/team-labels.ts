@@ -4,6 +4,7 @@
 // Center). Church rules, Church lists and the kids question all name teams this way (polish 2026-11-21). Local only, like
 // every name a check read.
 import { createContext, useContext } from "react";
+import type { AlsoOperations } from "../../../core/src/operations-capture.js";
 import type { PositionLabel } from "../../../core/src/sunday-capture.js";
 
 /**
@@ -36,3 +37,11 @@ export function teamNames(positions: readonly PositionLabel[], services?: Readon
   for (const p of positions) names.set(p.team_id, [...new Set([...(names.get(p.team_id) ?? []), p.name])]);
   return new Map([...names].map(([team, list]) => [team, teamLabel(list.join(", "), team, services)]));
 }
+
+/**
+ * With more than one service watched: the first service's name and each other service's own rooms and group meetings,
+ * with the names the lines that speak of every service say them by (App passes services-merge.ts `alsoOperations`), for
+ * Today, Thursday's brief and the spoken briefing; undefined with one service, which reads exactly as before.
+ */
+export const AlsoOperationsContext = createContext<AlsoOperations | undefined>(undefined);
+export const useAlsoOperations = (): AlsoOperations | undefined => useContext(AlsoOperationsContext);

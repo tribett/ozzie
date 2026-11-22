@@ -6,7 +6,8 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { evaluateAttentionImport, type AttentionFinding, type Message, type CalendarEvent } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
 import { roleWithService, rosterNeedsYou, rosterSummary, serviceOfTeam, sundayShownCount, unnumberedRoster, type Roster, type RosterRole, type SundayBrief } from "../../../core/src/sunday-brief.js";
-import { useTeamServices } from "./team-labels.js";
+import { useAlsoOperations, useTeamServices } from "./team-labels.js";
+import { partKey, withOthers } from "./services-merge.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { Icon } from "./icons.js";
@@ -218,14 +219,18 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   const input = useMemo(() => harborAttentionImport(), []);
   // Findings set aside by the person's Church rules are already out of the brief, so Sunday's count leaves them out too.
   const decided = useMemo(() => brief ? applyDecisions(brief, sundayDecisions) : null, [brief, sundayDecisions]);
+  // With more than one service watched, each other service's own rooms and group meetings (services-merge.ts), counted
+  // and said with its service as the Services page shows them; undefined with one service, which reads as before.
+  const also = useAlsoOperations();
   const spoken = useMemo(() => {
-    if (!example) return { attention: null, sunday: brief, decided, ignoredInstructions: 0, quietCount: 0, operations };
+    const more = also ? { alsoOperations: also } : {};
+    if (!example) return { attention: null, sunday: brief, decided, ignoredInstructions: 0, quietCount: 0, operations, ...more };
     if (!report.ok) return null;
     const flagged = new Set(report.findings.flatMap(f => f.source_ids));
     const ignored = input.assertions.filter(a => a.kind === "untrusted-instruction").map(a => a.message_id);
     return { attention: report, sunday: brief, decided, ignoredInstructions: ignored.length,
-      quietCount: report.sources.filter(s => !flagged.has(s.id) && !ignored.includes(s.id)).length, operations };
-  }, [report, input, brief, decided, operations, example]);
+      quietCount: report.sources.filter(s => !flagged.has(s.id) && !ignored.includes(s.id)).length, operations, ...more };
+  }, [report, input, brief, decided, operations, example, also]);
 
   const memory = useMemo(() => todayMemory(store), [store]);
   const [setAside, setSetAside] = useState(() => memory.setAside());
@@ -241,19 +246,24 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   const teamServices = useTeamServices();
   // The same count as the Sunday page's headline and the sidebar: Services, rooms and follow-ups that need a decision.
   const sunday: TodaySunday | null = useMemo(() => brief && decided ? {
-    plan_id: brief.plan.id, checked_at: brief.completed_at, decisions: sundayShownCount(decided, operations).decisions,
+    plan_id: brief.plan.id, checked_at: brief.completed_at, decisions: withOthers(sundayShownCount(decided, operations), also?.also ?? []).decisions,
     answers: [...new Set(decided.items.filter(i => i.state !== "resolved" && i.finding.notification === "sent")
       .flatMap(i => i.finding.position ? [roleWithService(i.finding.position.name, serviceOfTeam(i.finding.position.team_id, teamServices))] : []))],
     ...(roster ? { unknownNeed: { needsYou: rosterNeedsYou(roster).length > 0 } } : {}),
-  } : null, [brief, decided, operations, roster, teamServices]);
+  } : null, [brief, decided, operations, roster, teamServices, also]);
   // Each decision named on the Sunday card (audit item 17), in the Sunday page's order, and Worth a look counted apart.
   const named = useMemo(() => {
     if (!decided) return null;
-    const ops = operations && !operations.stale ? operations.result?.findings ?? [] : [];
-    const lines = decisionLines(decided.items, { rooms: ops.filter(f => f.kind === "room-overlap" && f.certainty === "confirmed").length, followUps: ops.filter(f => f.kind !== "room-overlap").length },
-      brief?.time_zone ?? zone, words, teamServices);
-    return { ...lines, looks: sundayShownCount(decided, operations).looks };
-  }, [decided, operations, brief?.time_zone, zone, words, teamServices]);
+    const found = (o: SundayOperations | null) => o && !o.stale ? o.result?.findings ?? [] : [];
+    const ops = found(operations);
+    const confirmed = (o: SundayOperations | null) => found(o).filter(f => f.kind === "room-overlap" && f.certainty === "confirmed").length;
+    // Each service's rooms on a line of its own, with its service, opening its own part of the Services page.
+    const rooms = also ? [{ key: "rooms", service: also.first, count: confirmed(operations) },
+      ...also.also.map(o => ({ key: partKey(o.plan_id, "rooms"), service: o.service, count: confirmed(o.operations) }))] : undefined;
+    const lines = decisionLines(decided.items, { rooms: confirmed(operations), followUps: ops.filter(f => f.kind !== "room-overlap").length },
+      brief?.time_zone ?? zone, words, teamServices, rooms);
+    return { ...lines, looks: withOthers(sundayShownCount(decided, operations), also?.also ?? []).looks };
+  }, [decided, operations, brief?.time_zone, zone, words, teamServices, also]);
   const toCard = onSundayCard ?? (() => onSunday());
   const items = useMemo(() => todayItems({
     now, sunday, watch: watch?.view ?? null, firstSeen, regular, notConnected: Boolean(notConnected) && !example, noService: Boolean(serviceLess) && !notConnected,

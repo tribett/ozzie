@@ -12,7 +12,8 @@ import {
 } from "../../../core/src/schedule.js";
 import { changeFindingKind, feedbackOf, foundOf, rightAwayChanges, routeChanges, stableFindingKey } from "../../../core/src/finding-feedback.js";
 import { buildSundayBrief, type SundayBrief } from "../../../core/src/sunday-brief.js";
-import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
+import { roomsReadComplete, sundayOperations, type OperationsOptions, type SundayOperations } from "../../../core/src/operations-capture.js";
+import { localDate } from "../../../core/src/church-time.js";
 import { thisMacOnly, type NoticeOptions } from "./phone-notice.js";
 import { withFormsOn } from "../../../core/src/church-reads/rules.js";
 import { noticeDayOf } from "./day-phrases.js";
@@ -135,6 +136,12 @@ export interface ProactiveContext {
    * empty: one service, exactly as before.
    */
   also?: readonly AlsoPlan[];
+  /**
+   * With more than one service watched (0.7.0): whether this check of a watched service shows its church-local day's room
+   * bookings, as the Services page decides it (services-merge.ts roomsHolders, over every watched service's latest check
+   * with this one in its place). Only that service's check compares and tells that day's rooms. Absent: always.
+   */
+  holdsRooms?: (capture: SundayCapture, now: string) => boolean;
 }
 /** One more watched service's plan, as a round reads it. */
 export interface AlsoPlan { serviceTypeId: string; planId: string }
@@ -173,12 +180,15 @@ export interface CheckDigest {
   /** Every read ended whole (or wasn't asked for): only then can a check count as having found nothing new. */
   complete: boolean;
 }
-/** Planning Center's live check, as the schedule has always compared it. */
-export function sundayDigest(capture: SundayCapture, ctx: ProactiveContext, now: string): CheckDigest | null {
+/**
+ * Planning Center's live check, as the schedule has always compared it. `part`: for another service than the first, the
+ * rooms and group meetings its part of the Services page shows (core operations-capture.ts OperationsOptions).
+ */
+export function sundayDigest(capture: SundayCapture, ctx: ProactiveContext, now: string, part: Pick<OperationsOptions, "followUps" | "rooms"> = {}): CheckDigest | null {
   if (capture.kind !== "live") return null;
   return {
     owner: capture.organization, plan_id: capture.plan_id, record: recordSundayCheck(capture, ctx.rules, now),
-    brief: buildSundayBrief(capture, ctx.rules, now), ops: sundayOperations(capture, ctx.rules, { now }),
+    brief: buildSundayBrief(capture, ctx.rules, now), ops: sundayOperations(capture, ctx.rules, { now, ...part }),
     complete: capture.reads.every(r => r.outcome === "ok" || r.outcome === "not-requested"),
   };
 }
@@ -197,8 +207,11 @@ export interface ProactiveDeps<C = SundayCapture> {
    */
   check: (ctx: ProactiveContext, onStatus: (s: ConnectionStatus) => void, trigger: RunTrigger, source?: "manual" | "automatic",
     onTask?: (taskId: string) => void) => Promise<C>;
-  /** What a finished check is compared by (CheckDigest); Planning Center's `sundayDigest` by default. */
-  digest?: (capture: C, ctx: ProactiveContext, now: string) => CheckDigest | null;
+  /**
+   * What a finished check is compared by (CheckDigest); Planning Center's `sundayDigest` by default. `part`: for another
+   * service than the first, which of its rooms and group meetings it holds (sundayDigest).
+   */
+  digest?: (capture: C, ctx: ProactiveContext, now: string, part?: Pick<OperationsOptions, "followUps" | "rooms">) => CheckDigest | null;
   /** Whether a check may start on its own now; Planning Center's `proactiveReadiness` by default. */
   ready?: (ctx: ProactiveContext) => boolean;
   /** The church whose saved checks a held notice is rechecked against; Planning Center's organization by default. */
@@ -271,6 +284,8 @@ export const SYSTEM_KEYS: ProactiveKeys = {
 const KEYS_PC = KEYS;
 const TICK_MS = 10_000;
 const HISTORY_LIMIT = 20;
+/** Days whose room clashes are kept (ProactiveController `days`): a few weeks of every watched service's days. */
+const DAYS_KEPT = 24;
 /** Each watched service's newest checks (up to four services, watched-services.ts MAX_WATCHED). */
 const SUNDAYS_KEPT = 12;
 
@@ -334,6 +349,10 @@ function shownPrint(brief: SundayBrief, ops: SundayOperations | null): string {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
+/** A room overlap's kept key (stableFindingKey of its finding id, operations-findings `["room", …]`). */
+const isRoomKey = (k: string) => k.startsWith('["room",');
+/** A kept key of a room overlap, a follow-up or a group meeting: none in what was kept of a check compared without them. */
+const isOpsKey = (k: string) => isRoomKey(k) || k.startsWith('["follow-up",') || k.startsWith("group:");
 /** The Sunday the newest kept check was of. */
 const newestOf = (sundays: Record<string, SundayCheckMemory>) =>
   Object.entries(sundays).sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at))[0]?.[0] ?? null;
@@ -348,7 +367,8 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
   let schedule = validSchedule(loaded) ? loaded : newSchedule();
   let history = read<{ version: 1; entries: HistoryEntry[] }>(deps.store, KEYS.history)?.entries ?? [];
   // A record of another shape is dropped; the next check for that Sunday becomes a fresh baseline.
-  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]>; prints?: Record<string, string>; round?: unknown }>(deps.store, KEYS.memory);
+  const remembered = read<{ version: 1; sundays: Record<string, SundayCheckMemory>; found?: Record<string, string[]>; prints?: Record<string, string>; round?: unknown;
+    days?: unknown }>(deps.store, KEYS.memory);
   let sundays = Object.fromEntries(Object.entries(remembered?.sundays ?? {})
     .filter(([, m]) => m?.latest?.version === 2 && m?.known?.version === 2));
   /** The finding keys (ids only) the newest check of each Sunday showed, so a kind told right away is told when it is new. */
@@ -363,6 +383,14 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
    * Unknown (a Mac that kept none): the newest check kept, as before.
    */
   let lastRound: string[] = Array.isArray(remembered?.round) ? remembered.round.filter((k): k is string => typeof k === "string" && Object.hasOwn(sundays, k)) : [];
+  /**
+   * With more than one service watched: each church-local day's room clashes as the service showing that day's rooms
+   * (services-merge.ts roomsHolders) last showed them in a full read, by `<church>\u0000<YYYY-MM-DD>`, so a clash a day's
+   * rooms carried from one service to another is never told as new, across a restart too. Kept with the memory as an
+   * optional `days` field (older versions ignore it): ids only, the room-overlap keys foundOf keeps, never a name.
+   */
+  let roomsOfDay: Record<string, string[]> = Object.fromEntries(Object.entries(remembered?.days && typeof remembered.days === "object" ? remembered.days as Record<string, unknown> : {})
+    .filter((e): e is [string, string[]] => Array.isArray(e[1]) && e[1].every(k => typeof k === "string" && isRoomKey(k))).slice(-DAYS_KEPT));
   /** This round so far, and whether its one notice already went: one round of checks sends at most one coverage notice. */
   let thisRound: string[] = [];
   let roundSent: { macOnly: boolean } | null = null;
@@ -370,7 +398,8 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
   const dayByPlan = new Map<string, NoticeDay>();
   /** How many checks of each other service failed in a row: only the first is put in the history. */
   const alsoFailures = new Map<string, number>();
-  const saveMemory = () => deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy, prints: printBy, round: lastRound }));
+  const saveMemory = () => deps.store.set(KEYS.memory, JSON.stringify({ version: 1, sundays, found: foundBy, prints: printBy, round: lastRound,
+    ...(Object.keys(roomsOfDay).length ? { days: roomsOfDay } : {}) }));
   let seenAt = read<string>(deps.store, KEYS.seen);
   /** While "Pause everything" is on: whether this check was paused on its own, to restore when it's lifted. */
   let beforeEverything = read<{ paused: boolean }>(deps.store, KEYS.everything);
@@ -422,11 +451,12 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
    * check right before it of another service, or nothing kept from the check before to compare what it showed with.
    */
   async function afterCapture(capture: C, trigger: RunTrigger, ctx: ProactiveContext, now: string, also = false): Promise<CheckFound | null> {
-    const read = digestOf(capture, ctx, now);
-    if (!read) return null;
-    // One of the other services watched: its Services findings only. Rooms, follow-ups and group meetings are the first
-    // service's (the Services page shows them there), so they are never compared or told twice.
-    const digest = also ? { ...read, ops: null } : read;
+    // One of the other services watched: its own rooms and group meetings, as its part of the Services page shows them
+    // (0.7.0). The church's follow-ups are the first service's, and a day's rooms are the one service's whose part shows
+    // them (ProactiveContext `holdsRooms`, the page's own choice), so neither is ever compared or told twice.
+    const holds = ctx.holdsRooms?.(capture as unknown as SundayCapture, now) ?? true;
+    const digest = digestOf(capture, ctx, now, also ? { followUps: false, ...(holds ? {} : { rooms: false }) } : holds ? undefined : { rooms: false });
+    if (!digest) return null;
     const { record, brief, ops } = digest;
     const rules = ctx.rules;
     const key = keyOf(digest.owner, digest.plan_id);
@@ -440,8 +470,30 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
     if (!also) checkedDay = day;
     dayByPlan.set(digest.plan_id, day);
     const shown = foundOf(brief, ops), print = shownPrint(brief, ops);
-    const before = prior ? foundBy[key] ?? null : null;
-    const printBefore = prior ? printBy[key] ?? null : null;
+    let before = prior ? foundBy[key] ?? null : null;
+    let printBefore = prior ? printBy[key] ?? null : null;
+    // Another service's first check since its own rooms and group meetings were compared (0.7.0): what was kept of it was
+    // compared without them, and showed exactly what this check shows apart from them. They are kept as what it showed,
+    // never told as new; a service watched for the first time is a baseline anyway, and anything new after this is told.
+    if (also && before !== null && printBefore !== null && !before.some(isOpsKey) && print !== printBefore && printBefore === shownPrint(brief, null)) {
+      before = [...before, ...shown.filter(f => f.kind === "room-overlap" || f.kind === "group-meeting").map(f => f.key)];
+      printBefore = print;
+    }
+    // A day's room clash already shown by the service showing that day's rooms before is never new here: a day's rooms move
+    // to another service on that day when one's read fails or goes out of date (services-merge.ts roomsHolders). The day is
+    // the plan's church-local date, as roomsHolders keys it. What that day last showed (`days`), or, before anything was
+    // kept for it, what each same-day service's kept check showed.
+    const date = brief.plan.date, zone = brief.time_zone;
+    const dayKey = ctx.also?.length && date ? `${record.organization}\u0000${date}` : null;
+    const sameDay = (m: SundayCheckMemory) => m.latest.organization === record.organization && m.latest.plan_starts_at !== null && zone !== null
+      && localDate(m.latest.plan_starts_at, zone) === date;
+    const dayRooms = dayKey === null ? [] : Object.hasOwn(roomsOfDay, dayKey) ? roomsOfDay[dayKey]!
+      : Object.entries(sundays).filter(([k, m]) => k !== key && sameDay(m)).flatMap(([k]) => (foundBy[k] ?? []).filter(isRoomKey));
+    // Kept only from the check showing the day's rooms, and only from a full read of them.
+    if (dayKey !== null && holds && ops && !ops.stale && roomsReadComplete(capture as unknown as SundayCapture, rules)) {
+      roomsOfDay = Object.fromEntries([...Object.entries(roomsOfDay).filter(([k]) => k !== dayKey), [dayKey, shown.filter(f => f.kind === "room-overlap").map(f => f.key)]]
+        .slice(-DAYS_KEPT));
+    }
     sundays = Object.fromEntries([...Object.entries({ ...sundays, [key]: memory })]
       .sort(([, a], [, b]) => b.latest.completed_at.localeCompare(a.latest.completed_at)).slice(0, SUNDAYS_KEPT));
     foundBy = Object.fromEntries(Object.keys(sundays).flatMap(k => k === key ? [[k, shown.map(f => f.key)]] : foundBy[k] ? [[k, foundBy[k]]] : []));
@@ -452,7 +504,7 @@ export function createProactive<C = SundayCapture>(deps: ProactiveDeps<C>): Proa
     // The person's Church rules on notices: kinds kept for the briefing, kinds told right away (a kind the Sunday
     // comparison doesn't follow is told when this check newly finds one), and what they asked Ozzie to stop
     // flagging (left out here altogether, as they are on the Sunday page).
-    const all = [...changes, ...rightAwayChanges(shown, before, entries)];
+    const all = [...changes, ...rightAwayChanges(shown, before && dayRooms.length ? [...before, ...dayRooms] : before, entries)];
     // What What happened may fold. Nothing new only when every read completed, the check right before this one was of
     // this service, nothing changed (not even what the person asked Ozzie to stop flagging), and this check shows exactly
     // what that one did: the same facts of each role and who is scheduled, and the same findings saying the same. Unsure is null.
