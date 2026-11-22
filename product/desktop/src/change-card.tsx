@@ -270,7 +270,7 @@ export interface ChangeSlot {
   resultsHere?: (plan: string) => boolean;
 }
 
-const clock = (iso: string, zone?: string | null) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...(zone ? { timeZone: zone } : {}) });
+const clock = (iso: string, zone?: string | null) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...(zone ? { timeZone: zone } : {}) });
 /** "9:30 AM", "9:30 AM and 11:00 AM", in the church's time zone when it was read; null when the plan lists no time. */
 export function servicesLabel(times: readonly { starts_at: string }[], zone: string | null): string | null {
   const at = times.map(t => clock(t.starts_at, zone));
@@ -517,7 +517,7 @@ export function ChangeHistory({ records, names, services = {} }: {
     {records && !records.length && <p className="panel-sunken">{HISTORY_NONE}</p>}
     {records && records.length > 0 && <ol className="log changes-log">{records.map((r, i) => <li key={`${r.confirmed_at}-${i}`}
       className={r.came_back === "unknown" ? "is-problem" : ""}>
-      <span className="log-t">{new Date(r.confirmed_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+      <span className="log-t">{new Date(r.confirmed_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
       <span>{historyLine(r, Object.hasOwn(names, r.person) && names[r.person] ? names[r.person]! : "a person",
         Object.hasOwn(services, r.service_type) ? services[r.service_type] ?? null : null)}</span>
     </li>)}</ol>}

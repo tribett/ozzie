@@ -17,7 +17,7 @@ import { useTeamServices } from "./team-labels.js";
 
 type Names = Readonly<Record<string, string>>;
 const nameOf = (names: Names, id: string | undefined) => (id && Object.hasOwn(names, id) && names[id]) || "Someone on the team";
-const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const time = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const people = (n: number) => n === 1 ? "one more person" : `${n} more people`;
 /** The brief's display title by the service's real day: "Ready for Wednesday", "Ready for this weekend" (spec §5.2). */
 export const readyTitle = (d: DayWords) => `Ready for ${dayName(d)}`;
@@ -112,7 +112,7 @@ export function KeptForBriefing({ item }: { item: Pick<NoticedItem, "kind" | "ke
 }
 
 const DAY_MS = 86_400_000;
-const zoned = (iso: string, zone: string, withDay = true) => new Date(iso).toLocaleString(undefined, {
+const zoned = (iso: string, zone: string, withDay = true) => new Date(iso).toLocaleString("en-US", {
   ...(withDay ? { weekday: "short", month: "short", day: "numeric" } : {}), hour: "numeric", minute: "2-digit", timeZone: zone,
 });
 

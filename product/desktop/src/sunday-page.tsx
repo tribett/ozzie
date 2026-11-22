@@ -96,16 +96,16 @@ export function addresseeFor(person: string | undefined, names: Names, people: P
   return { person, name, peopleGranted: Boolean(people?.granted), onAddPeople: people?.onAdd };
 }
 /** When Ozzie or the person did something (checked, decided, saved): on this Mac's clock. */
-const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const time = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 /**
  * When something happens at church (a service, a role, a booking, a group meeting, a follow-up's due date): on the
  * church's clock, as the service's own heading says its times (service-day.ts onChurchClock); this Mac's only when the
  * church's zone isn't known. They differed when this Mac wasn't on the church's zone (CI, in UTC: "9:30 AM" in the
  * heading, "Nursery · Wednesday, November 25 at 2:30 PM" on its card).
  */
-const clock = (iso: string, zone: string | null) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
+const clock = (iso: string, zone: string | null) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
 const churchTime = (iso: string, zone: string | null) =>
-  new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
+  new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", ...onChurchClock(zone) });
 /** The church's time zone of the check on this page (SundayPage gives it); null outside a page, so this Mac's clock. */
 const ChurchZone = createContext<string | null>(null);
 const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -118,7 +118,7 @@ const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
  */
 const UntimedWhen = createContext<string | null>(null);
 const when = (i: ServingInterval | null, d: DayWords, untimed: string | null, zone: string | null) =>
-  i ? `${new Date(i.starts_at).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", ...onChurchClock(zone) })} at ${clock(i.starts_at, zone)}` : untimed ?? d.thisOne;
+  i ? `${new Date(i.starts_at).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", ...onChurchClock(zone) })} at ${clock(i.starts_at, zone)}` : untimed ?? d.thisOne;
 const plainReasons: [RegExp, string][] = [
   [/^Recorded team membership.*/, "On this team in Planning Center. No blockout or other schedule overlaps this time."],
   [/^Possible conflict: source records an unanswered sent request\./, "Has an unanswered request for another role at this time."],

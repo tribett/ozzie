@@ -234,6 +234,11 @@ export interface CheckMySetupProps {
   autostart?: Pick<Autostart, "get"> | undefined;
   /** Puts the report on the clipboard (default: the page's clipboard). */
   copy?: ((text: string) => Promise<void>) | undefined;
+  /**
+   * This Mac's zone (tests pin one): every time on this screen is something that happened on this Mac (when Planning
+   * Center was checked, when the AI answered, the last phone test, when this screen checked), so it is on this Mac's
+   * clock, never the church's (rule since 0.5.5; polish 4).
+   */
   zone?: string | undefined; clock?: (() => number) | undefined;
 }
 

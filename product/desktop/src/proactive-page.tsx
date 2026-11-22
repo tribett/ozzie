@@ -16,10 +16,10 @@ import { useSystemWords } from "./church-system.js";
 export const useProactiveView = <C,>(p: ProactiveController<C>) => useSyncExternalStore(p.subscribe, p.view, p.view);
 
 type Names = Record<string, string>;
-const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const time = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const clock = (hhmm: string) => {
   const [h, m] = hhmm.split(":").map(Number);
-  return new Date(2000, 0, 1, h ?? 0, m ?? 0).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return new Date(2000, 0, 1, h ?? 0, m ?? 0).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 };
 const every = (minutes: number) => minutes === 60 ? "every hour" : minutes % 60 === 0 ? `every ${minutes / 60} hours` : `every ${minutes} minutes`;
 const capital = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`;

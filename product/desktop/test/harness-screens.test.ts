@@ -25,7 +25,7 @@ const ordered = PROCEDURE_ORDER.map(id => skills.get(id)!);
 const now = new Date("2026-11-20T23:00:00Z");
 const at = "2026-11-20T21:42:00Z";
 const ev = (sequence: number, type: TaskEventRow["type"], detail = ""): TaskEventRow => ({ task_id: "t", sequence, at, type, detail });
-const clock = new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+const clock = new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 // The native record's own shape (agent_tests.rs): each AI step is written twice, reserved ("1") and finished ("1 stop").
 const answered = row({ kind: "ask", state: "verified", events: [
@@ -42,7 +42,7 @@ const interrupted = row({ task_id: "00000000-0000-4000-8000-000000000004", kind:
 describe("What happened: the task ledger in plain words", () => {
   it("gives each task one line: what it was, how it ended, how much was looked at, and when", () => {
     expect(taskLine(answered, { now })).toBe(`Answered a question · checked · 3 things looked at · ${clock}`);
-    expect(taskLine(automatic, { now, trigger: "automatic" })).toBe(`Planning Center check, on its own · ${new Date("2026-11-20T21:00:00Z").toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`);
+    expect(taskLine(automatic, { now, trigger: "automatic" })).toBe(`Planning Center check, on its own · ${new Date("2026-11-20T21:00:00Z").toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`);
     expect(taskLine(automatic, { now, trigger: "manual" })).toMatch(/^Planning Center check you started · /u);
     expect(taskLine({ ...automatic, events: [...automatic.events.slice(0, 2), ev(2, "tool", "planning_center.refresh partial"), ev(3, "verified")] }, { now }))
       .toMatch(/^Planning Center check · part of it couldn't be read · /u);
@@ -74,11 +74,12 @@ describe("What happened: the task ledger in plain words", () => {
     expect(taskLine(row({ kind: "ask", state: "failed", failure: "unverified" }), { now })).toBe(`A question · Couldn't finish: something couldn't be confirmed · ${clock}`);
     expect(taskLine(row({ kind: "skill", skill_id: "room-check", state: "running" }), { now, procedures: skills })).toBe(`Room check · Still running · ${clock}`);
     // Another day shows the day too.
-    expect(taskLine(answered, { now: new Date("2026-11-23T12:00:00Z") })).toMatch(/· [A-Z][a-z]{2}, Nov 20, /u);
+    const asked = new Date(answered.events.at(-1)!.at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    expect(taskLine(answered, { now: new Date("2026-11-23T12:00:00Z") })).toContain(`· ${asked}, `);
   });
 
   it("opens each task to a short account: what started it, what Ozzie looked at, the AI, and how it ended (audit item 7)", () => {
-    const t = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const t = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
     // A question through the AI: two steps, three reads (one Ozzie doesn't allow is never named), checked, answered.
     expect(taskAccount(answered, { now })).toEqual({
       started: `You asked a question at ${clock}.`,
@@ -167,7 +168,7 @@ describe("What happened: the task ledger in plain words", () => {
     const here = new Date(2026, 10, 20, 18, 0);
     expect(dayLabel(local(20, 9), here)).toBe("Today");
     expect(dayLabel(local(19, 23), here)).toBe("Yesterday");
-    expect(dayLabel(local(17, 9), here)).toBe(new Date(2026, 10, 17).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }));
+    expect(dayLabel(local(17, 9), here)).toBe(new Date(2026, 10, 17).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }));
     const tasks = Array.from({ length: 14 }, (_, i) => row({ task_id: `00000000-0000-4000-8000-${String(100 + i).padStart(12, "0")}`, kind: "check", state: "verified",
       created_at: local(20 - Math.floor(i / 5), 17 - (i % 5)), events: [ev(0, "admitted"), ev(1, "verified")] }));
     expect(byDay(tasks, here).map(d => [d.day, d.tasks.length])).toEqual([["Today", 5], ["Yesterday", 5], [dayLabel(local(18, 9), here), 4]]);

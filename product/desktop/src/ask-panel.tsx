@@ -131,7 +131,7 @@ export const ASK_INTRO = "Ask about what Ozzie has already read. Ozzie prepares 
 export const ASK_ABOUT = "About Ask and the names Ozzie reads";
 /** Earlier questions this session, newest first: at most this many are listed. */
 export const EARLIER_SHOWN = 8;
-const time = (iso: string | null) => iso ? new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "an unknown time";
+const time = (iso: string | null) => iso ? new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "an unknown time";
 
 export function AskIcon() {
   return <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm4 5h.01M12 10h.01M15 10h.01" /></svg>;

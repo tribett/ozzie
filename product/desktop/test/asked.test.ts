@@ -65,8 +65,10 @@ describe("a mark is the leader's, by ids, and lasts only while the plan stays as
 
   it("says it quietly with the first name read on this Mac", () => {
     const mark = askedMark(brief, greeter, riley, AT)!;
-    expect(askedText(mark, nov22Capture().names, "Greeter")).toBe(`On Mon, Nov 16 you said you'd ask ${nov22Capture().names[riley]!.split(" ")[0]} about Greeter.`);
-    expect(askedText(mark, {}, null)).toBe("On Mon, Nov 16 you said you'd ask this person.");
+    // The day it was said on this Mac's clock ("Mon, Nov 16" here; Tuesday on a Mac in Tokyo).
+    const day = new Date(AT).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    expect(askedText(mark, nov22Capture().names, "Greeter")).toBe(`On ${day} you said you'd ask ${nov22Capture().names[riley]!.split(" ")[0]} about Greeter.`);
+    expect(askedText(mark, {}, null)).toBe(`On ${day} you said you'd ask this person.`);
   });
 });
 

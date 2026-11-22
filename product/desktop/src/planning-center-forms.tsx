@@ -13,7 +13,7 @@ import { loadRulesByChurch, rulesAtStake } from "./church-in-use.js";
 import { Icon } from "./icons.js";
 
 const numeric = (v: string) => /^[1-9]\d{0,31}$/.test(v);
-const at = (ms: number) => new Date(ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const at = (ms: number) => new Date(ms).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const stateCopy: Record<Exclude<ConnectionStatus["state"], "connected">, string> = {
   disconnected: "Planning Center is disconnected.", waiting: "Finish signing in in your browser. This attempt lasts five minutes.",
   // Which church, as first run says it (spec §6: never "organization" outside the fold for a copy you built yourself).

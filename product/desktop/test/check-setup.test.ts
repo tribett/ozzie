@@ -1,6 +1,7 @@
 // "Check my setup" (onboarding spec §4.3, P6): each row's verdicts and its one fix button, from native's setup_check
 // (a fake, test/onboarding-fakes.ts) or, where native can't say or hasn't the command yet, from what the page knows;
 // "Check again" reads everything again; "Copy a report" copies codes only. Fictional church only.
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -206,5 +207,24 @@ describe("the native reply is read strictly", () => {
     expect(rows.map(r => r.verdict).join(" ")).not.toMatch(/soon|great/u);
     expect(row(rows, "service").verdict).toBe("Sunday, November 22 · Sunday Morning · moves on by itself");
     expect(row(rows, "ai").verdict).toBe(UNKNOWN);
+  });
+});
+
+// Polish 4: everything this screen times happened on this Mac, so it is on this Mac's clock, never the church's.
+describe("Check my setup's times are this Mac's", () => {
+  it("every time on it follows the zone it is given, and App gives it this Mac's zone, never the church's", () => {
+    const k: SetupKnown = { ...KNOWN, aiAnsweredAtMs: AT + 120_000, phone: { on: true, lastTestMs: Date.parse("2026-11-17T05:30:00Z") } };
+    const verdicts = (zone: string) => setupRows(facts({}), k, { date: "Sunday, November 22", zone }).map(r => r.verdict).join(" | ");
+    // A Mac in Tokyo with a church in Chicago: checked and answered at Tokyo's 12:12 and 12:14 AM, the last test on Tokyo's November 17.
+    expect(verdicts("Asia/Tokyo")).toContain(`Connected to ${CHURCH} · checked 12:12 AM`);
+    expect(verdicts("Asia/Tokyo")).toContain("answered at 12:14 AM");
+    expect(verdicts("Asia/Tokyo")).toContain("On · last test November 17");
+    expect(verdicts(ZONE)).toContain("On · last test November 16");
+    // The page is given this Mac's zone (App.tsx), whatever zone the church's check reads in.
+    const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    const element = /<CheckMySetup\b[^]*?\/>/u.exec(app)![0];
+    expect(element).toMatch(/\bzone=\{macZone\(\)\}/u);
+    expect(element).not.toMatch(/time_zone/u);
+    expect(/const macZone = \(\) => Intl\.DateTimeFormat\(\)\.resolvedOptions\(\)\.timeZone;/u.test(app)).toBe(true);
   });
 });

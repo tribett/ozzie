@@ -461,13 +461,13 @@ function setAsideIn(data: HarnessData, pick: (f: Finding) => boolean): HarnessDa
   return { ...data, brief: { ...brief, findings: brief.findings.filter(f => !pick(f)),
     hidden: brief.findings.filter(pick).map(finding => ({ finding, entry: { type: "correction" } as unknown as CorrectionEntry })) } };
 }
-/** One answer written on this Mac, restored as the panel shows it. */
-async function local(typed: string, data = kidsData()) {
+/** One answer written on this Mac, restored as the panel shows it, on a Mac in `macZone` (the church's own zone unless given). */
+async function local(typed: string, data = kidsData(), macZone = "America/New_York") {
   const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
   const q = kidsQuestion(typed, data);
   if (!q) return null;
   const out = await kidsAnswer(tools, q, signal);
-  const restore = (t: string) => restoreLabels(t, tools.session, { names: data.capture!.names, organization: data.capture!.organization, timeZone: data.brief!.time_zone });
+  const restore = (t: string) => restoreLabels(t, tools.session, { names: data.capture!.names, organization: data.capture!.organization, timeZone: data.brief!.time_zone, macZone });
   return { ...out, restored: out.paragraphs.map(t => out.fill(restore(t))), tools };
 }
 
@@ -523,6 +523,40 @@ describe("kids teams and background checks, answered on this Mac without the AI"
     expect(out.evidence.map(e => e.tool)).toEqual(["sunday.overview", "sunday.open_needs"]);
     expect(out.sources.map(s => s.source)).toEqual(["Planning Center People", "Church rules on this Mac"]);
     expect(out.gaps).toEqual([]);
+  });
+
+  it("says when Ozzie checked on this Mac's clock, while the service time stays on the church's (polish 4)", async () => {
+    expect(kidsData().brief!.time_zone).toBe("America/New_York");
+    const line = async (macZone: string) => (await local("Is the nursery ready for Sunday?", kidsData(), macZone))!.restored.at(-1)!;
+    expect(await line("America/Los_Angeles")).toContain("Scheduled for Nursery volunteer at 9:30 AM on November 22. ");
+    expect(await line("America/Los_Angeles")).toContain("From Planning Center People, checked 7:00 AM on November 20.");
+    expect(await line("Asia/Tokyo")).toContain("Scheduled for Nursery volunteer at 9:30 AM on November 22. ");
+    expect(await line("Asia/Tokyo")).toContain("From Planning Center People, checked 12:00 AM on November 21.");
+    // The sentence as written keeps the time whole, marked as a check time: nothing about it is ever sent (background checks never are).
+    const tools = new HarnessTools(kidsData(), new HarnessSession(), { now: () => FRESH });
+    const written = await kidsAnswer(tools, kidsQuestion("Is the nursery ready for Sunday?", kidsData())!, signal);
+    expect(written.paragraphs.at(-1)).toMatch(/checked \{\{checked:2026-11-20T10:00-05:00\}\}\./u);
+  });
+
+  it("the fictional import's time is when Ozzie read it: this Mac's clock; the import's own event times keep the church's (polish 4)", async () => {
+    const data = harnessData();
+    const tools = new HarnessTools(data, new HarnessSession(), { now: () => FRESH });
+    const env = await tools.run("today.attention", {}, signal, "t");
+    const payload = env.payload as Record<string, unknown>;
+    // The tool result keeps its ISO time, exactly as it always was: only the sentence written on this Mac marks it.
+    expect(payload["imported_at"]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}-05:00$/u);
+    const [line] = composeAnswer(JSON.stringify({ answer: "facts", facts: [payload["fact"]] }), [env]).paragraphs;
+    expect(line).toContain(`from {{checked:${payload["imported_at"] as string}}}`);
+    const shown = (macZone: string) => restoreLabels(line!, tools.session, { names: data.capture!.names, timeZone: "America/Chicago", macZone });
+    const at = Date.parse(payload["imported_at"] as string);
+    const on = (zone: string) => {
+      const p = new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "long", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h12" }).formatToParts(at);
+      const v = (t: string) => p.find(x => x.type === t)!.value;
+      return `${v("hour")}:${v("minute")} ${v("dayPeriod")} on ${v("month")} ${v("day")}`;
+    };
+    expect(shown("Asia/Tokyo")).toContain(`import from ${on("Asia/Tokyo")},`);
+    expect(shown("America/Los_Angeles")).toContain(`import from ${on("America/Los_Angeles")},`);
+    expect(on("Asia/Tokyo")).not.toBe(on("America/Chicago"));
   });
 
   it("Any background check problems? Only background checks, across the kids teams", async () => {

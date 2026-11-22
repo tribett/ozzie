@@ -48,7 +48,7 @@ export function dayLabel(iso: string, now: Date): string {
   yesterday.setDate(now.getDate() - 1);
   if (d.toDateString() === now.toDateString()) return "Today";
   if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) });
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) });
 }
 /** Tasks newest first, in runs of the same day, each with its heading. */
 export function byDay(tasks: readonly TaskRow[], now: Date): { day: string; tasks: TaskRow[] }[] {
@@ -221,7 +221,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
     {ollama && ollama.length > 0 && <section className="stack" aria-labelledby="ollama-title">
       <h2 id="ollama-title" className="h3">{OLLAMA.historyTitle}</h2>
       <ol className="log">{[...ollama].reverse().map((o, i) => <li key={i}>
-        <span className="log-t">{new Date(o.at_ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+        <span className="log-t">{new Date(o.at_ms).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
         <span>{ollamaDoneSaid(o.end)}</span>
       </li>)}</ol>
     </section>}
@@ -229,12 +229,12 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
       {!system.check && <p className="panel-sunken">No check has run yet. Every read appears here once {SERVICES} are checked.</p>}
       {system.check && <>
-        <p className="checkline">{system.name} · started {new Date(system.check.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {system.check.reads.length} reads</p>
+        <p className="checkline">{system.name} · started {new Date(system.check.started_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {system.check.reads.length} reads</p>
         <ol className="log">{system.check.reads.map((r, i) => {
           // Cut short by design every time (B1's forms, Breeze's newest form entries): read as Ozzie reads it, no problem.
           const designed = !!system.check?.system && shortByDesign(system.check.system, r.read, r.outcome) && !!BY_DESIGN_OUTCOME[r.read];
           return <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" || designed ? "" : "is-problem"}>
-            <span className="log-t">{new Date(r.checked_at).toLocaleTimeString()}</span>
+            <span className="log-t">{new Date(r.checked_at).toLocaleTimeString("en-US")}</span>
             <span>{READ_LABELS[r.read] ?? "Another read"}</span>
             <span className="small">{designed ? BY_DESIGN_OUTCOME[r.read] : r.outcome === "not-requested" && NOT_YET_OUTCOME[r.read] ? NOT_YET_OUTCOME[r.read] : readOutcome(r.outcome, system.name)}</span>
           </li>;
@@ -245,9 +245,9 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
       {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {SERVICES} are checked, or when you open the fictional example on {pageRef()}.</p>}
       {capture && <>
-        <p className="checkline">{capture.kind === "recording" ? "Saved copy of a check" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
+        <p className="checkline">{capture.kind === "recording" ? "Saved copy of a check" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
         <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>
-          <span className="log-t">{new Date(r.checked_at).toLocaleTimeString()}</span>
+          <span className="log-t">{new Date(r.checked_at).toLocaleTimeString("en-US")}</span>
           <span>{activityLabel(r.collection)}{r.offset ? " (continued)" : ""}</span>
           <span className="small">{activityOutcome(r.outcome, notGranted)}</span>
         </li>)}</ol>

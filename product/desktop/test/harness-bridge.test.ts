@@ -11,7 +11,7 @@ import { NATIVE_TOOL_ALLOWLIST, type AgentStepReply, type AgentStepRequest, type
 import { VOCABULARY } from "../../../core/src/harness/fixed.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { Harness } from "../../../core/src/harness/index.js";
-import { HarnessSession } from "../../../core/src/harness/session.js";
+import { checkTime, HarnessSession, showTimes } from "../../../core/src/harness/session.js";
 import { nov22Capture, TEAMS, withFictionalBackgroundChecks } from "../../../core/src/fictional-sunday.js";
 import { FICTIONAL_ROOM, withFictionalOperations, withFictionalOperationsOff } from "../../../core/src/fictional-operations.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
@@ -500,6 +500,8 @@ describe("Ask answers written on this Mac", () => {
     const kept = new Map<string, string>();
     const rec = recorder(native.invoke, { triggers: { get: id => kept.get(id) as never, set: (id, t) => { kept.set(id, t); }, end: () => undefined, setEnd: () => {} } });
     const turn = await askOzzie(harness(m.model, undefined, kidsData()), "Is the nursery ready for Sunday?", { skills, recorder: rec });
+    // When Ozzie checked, on this Mac's own clock (polish 4); the service time stays on the church's.
+    const checkedOnThisMac = showTimes(checkTime(kidsData().brief!.findings.find(f => f.kind === "background-check")!.checked_at!));
     if (turn.state !== "answered") throw new Error(turn.state);
     expect(m.requests).toHaveLength(0);
     // Recorded in What happened as a question answered on this Mac: name-free, the same task record as any question (review Q L3).
@@ -516,7 +518,7 @@ describe("Ask answers written on this Mac", () => {
     expect(a.body.split("\n\n")).toEqual([
       expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 still needs 1 more person, by Planning Center's count\. Already confirmed: Blake Ashgrove\./u),
       expect.stringMatching(/^Needs a decision: Nursery volunteer at 9:30 AM on November 22 has 1 confirmed person, and your Church rules ask for at least 2\./u),
-      expect.stringMatching(/^Needs a decision: Blake Ashgrove has no current background check on file\. .* From Planning Center People, checked 10:00 AM on November 20\. Kept on this Mac; never sent to an AI\.$/u),
+      expect.stringMatching(new RegExp(`^Needs a decision: Blake Ashgrove has no current background check on file\\. .* From Planning Center People, checked ${checkedOnThisMac}\\. Kept on this Mac; never sent to an AI\\.$`, "u")),
     ]);
     expect(a.basedOn).toMatch(/^Based on: Planning Center Services and People, checked [^;]+; your Church rules$/u);
     expect(a.steps).toEqual(["Looked at the overview of the last check — all of it", "Looked at the open roles in the last check — all of it", "Looked at background checks, kept on this Mac"]);
@@ -947,7 +949,7 @@ describe("where the overview's rooms, follow-ups and group meetings come from (r
 });
 
 describe("Based on: each source and each check time said once (owner's read of 0.3.2)", () => {
-  const at = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const at = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const T = "2026-11-19T08:53:00Z", LATER = "2026-11-19T09:10:00Z";
   const read = (source: string, check_time = T) => ({ source, check_time });
   const all = ["Services", "Calendar", "Groups", "People"].map(p => read(`Planning Center ${p}`));

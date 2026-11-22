@@ -530,10 +530,19 @@ describe("a check that builds no service check, and answers not read whole (fina
   });
 });
 
+/**
+ * The same capture, read at seven minutes to the hour. When Ozzie checked is said on this Mac's clock, so the fixture's
+ * 3:00 PM UTC check is 12:00 AM on a Mac in Tokyo: a true time, and not what the midnight checks below are about (an
+ * untimed service, role or event said as midnight). Seven to the hour is never on the hour in any zone (every offset is a
+ * whole, half or three-quarter hour), so any 12:00 AM left is one said of something with no time.
+ */
+const offTheHour = <C extends { started_at: string; completed_at: string; reads: { checked_at: string }[] }>(c: C): C =>
+  ({ ...c, started_at: "2026-11-20T14:52:58Z", completed_at: "2026-11-20T14:53:04Z", reads: c.reads.map(r => ({ ...r, checked_at: "2026-11-20T14:53:00Z" })) });
+
 describe("a Breeze service, as the live test church showed it (round 4)", () => {
   const capture = breezeUntimedCapture();
-  const sunday = () => text(renderToStaticMarkup(React.createElement(SystemWordsContext.Provider, { value: systemWords("breeze") }, React.createElement(SundayPage, {
-    brief: resultOf(capture, null).brief, names: capture.names, busy: false, problem: "", sender: "Pat", connected: true, hasRecording: false, configured: true,
+  const sunday = (c = capture) => text(renderToStaticMarkup(React.createElement(SystemWordsContext.Provider, { value: systemWords("breeze") }, React.createElement(SundayPage, {
+    brief: resultOf(c, null).brief, names: c.names, busy: false, problem: "", sender: "Pat", connected: true, hasRecording: false, configured: true,
     canReword: false, decisions: [], onDecisions: none, operations: null, onCheck: none, onRecording: none, onExample: none, openInPlanningCenter: null,
   }))));
 
@@ -580,9 +589,11 @@ describe("a Breeze service, as the live test church showed it (round 4)", () => 
   });
 
   it("never prints midnight for an event with no time of day", () => {
-    const t = sunday();
-    expect(t).not.toMatch(/12:00\s?AM/u);
-    expect(t).toContain("Greeter · this Sunday");
+    for (const zone of ["America/Chicago", "Asia/Tokyo", "Pacific/Auckland", "UTC"]) {
+      const t = inZone(zone, () => sunday(offTheHour(capture)));
+      expect(t, zone).not.toMatch(/12:00\s?AM/u);
+      expect(t, zone).toContain("Greeter · this Sunday");
+    }
   });
 
   it("the first result says the same, and never calls the service covered", async () => {
@@ -614,6 +625,10 @@ describe("Also read, redesigned for every system (round 4)", () => {
     },
   });
   const list = (capture = many) => text(renderToStaticMarkup(React.createElement(SystemFactsList, { capture, zone: null })));
+  /** As `list`, read at seven to the hour (offTheHour) and shown on a Mac in each zone: an untimed event is never said as midnight. */
+  const untimedNeverMidnight = () => {
+    for (const zone of ["America/Chicago", "Asia/Tokyo", "Pacific/Auckland", "UTC"]) expect(inZone(zone, () => list(offTheHour(many))), zone).not.toMatch(/12:00\s?AM/u);
+  };
 
   it("is one folded line, with what it read in counts", () => {
     const html = renderToStaticMarkup(React.createElement(SystemFactsList, { capture: many, zone: null }));
@@ -634,7 +649,7 @@ describe("Also read, redesigned for every system (round 4)", () => {
     expect(t).not.toContain("Event 5,");
     expect(t).toContain("Show all 20");
     expect(t).toContain("Form 4: 5 entries");
-    expect(t).not.toMatch(/12:00\s?AM/u);
+    untimedNeverMidnight();
   });
 
   it("a list read cut short still lists what it read, says so once, and is counted as \"at least\" (review of round 4, L3)", () => {

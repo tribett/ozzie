@@ -17,7 +17,7 @@ import { teamLabel, useTeamServices } from "./team-labels.js";
 
 type Names = Readonly<Record<string, string>>;
 const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-const stamp = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const stamp = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 const list = (items: string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
 /** The three church reads' facts for one check; each null when its product wasn't part of the check. */

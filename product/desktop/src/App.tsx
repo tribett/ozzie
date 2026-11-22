@@ -1631,7 +1631,7 @@ export function App() {
             planDate={offPc ? undefined : (ofWatched?.plan.date ?? watchedDay.get(settings.planId)?.sort_date?.slice(0, 10)) || undefined}
             onConnect={() => { setChecking(false); openSetup(offPc || nothingChosen ? "first" : "browser"); }} onChooseService={() => { setChecking(false); openSetup("service"); }}
             onChangeAi={openAi} onOpenNotices={() => { void onboarding.openNoticeSettings().catch(() => { setChecking(false); setPage("connection"); }); }}
-            onTurnOnStart={() => answerStart(true)} onPhone={() => { setChecking(false); setPage("connection"); }} onCheckAgain={readModel} zone={brief?.time_zone ?? macZone()} />
+            onTurnOnStart={() => answerStart(true)} onPhone={() => { setChecking(false); setPage("connection"); }} onCheckAgain={readModel} zone={macZone()} />
         </div>}
         {!showSetup && !aiChoosing && !checking && !deciding && <>
         {switchQuestion && page !== "connection" && <SwitchWaiting question={switchQuestion} onOpen={() => setPage("connection")} />}

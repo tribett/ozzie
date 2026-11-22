@@ -23,7 +23,7 @@ const section = (c: SundayCapture, rules: SundayRules, o: OperationsOptions = {}
   const ops = sundayOperations(c, rules, o)!;
   return hasOperationsSection(ops) ? text(renderToStaticMarkup(React.createElement(OperationsSection, { operations: ops }))) : "";
 };
-const time = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const time = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 /** Nothing found anywhere: the lunch setup moved off the service, no unowned overdue card. */
 const quiet = () => {
   const c = capture();

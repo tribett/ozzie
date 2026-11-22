@@ -417,7 +417,7 @@ function lines(html: string): (string | { fold: string; checks: string[] })[] {
   return out;
 }
 const fold = (tasks: readonly Task[]) => ({ fold: quietChecksLine(tasks.map(t => t.row)), checks: tasks.map(t => own(t)) });
-const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+const time = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 describe("What happened folds quiet checks in a row", () => {
   it("six in a row share one line, which opens to each check exactly as it shows on its own", () => {

@@ -140,7 +140,7 @@ const NO_DECISIONS: readonly SundayDecision[] = [];
 const NO_ENTRIES: readonly FeedbackEntry[] = [];
 const NO_ASKED: readonly AskedLine[] = [];
 /** A saved check shown on Today, with the time it was made (the service page's own words for it). */
-export const savedLine = (iso: string) => `Saved copy of the check from ${new Date(iso).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.`;
+export const savedLine = (iso: string) => `Saved copy of the check from ${new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.`;
 export const START_TITLE = "Ozzie isn't set to start with this Mac";
 export const START_BODY = "Ozzie can only check Planning Center while it is running, so after this Mac restarts nothing is checked until you open it. Start Ozzie with this Mac?";
 

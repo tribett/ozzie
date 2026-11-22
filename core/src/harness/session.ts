@@ -88,6 +88,8 @@ export interface RestoreSources {
   firstNames?: boolean;
   /** The church's own zone, for showing ISO times in plain words. */
   timeZone?: string | null;
+  /** This Mac's zone, for the times that say when Ozzie checked (CHECK_TIME); this Mac's own when not given (tests pin one). */
+  macZone?: string | null;
   /**
    * With more than one service watched (owner decision 2026-11-19): the service a role is in, by the role's name and,
    * when its label names one, its team; null when that isn't one service. Its name is said after the role ("Greeter
@@ -105,20 +107,37 @@ const ISO_DATETIME = /\b(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d{
 const ISO_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b(?![T\d])/gu;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const clock = (hour: number, minute: string) => `${hour % 12 || 12}:${minute} ${hour < 12 ? "AM" : "PM"}`;
-/** "2026-11-22T09:30-05:00" → "9:30 AM on November 22" in the church's zone; "2026-11-22" → "November 22". Local only. */
-export function showTimes(text: string, timeZone?: string | null): string {
-  return text.replace(ISO_DATETIME, (whole, y: string, mo: string, d: string, h: string, mi: string, offset: string) => {
+/**
+ * A time that says when Ozzie checked or read something, in a sentence Ozzie writes on this Mac after the AI's last step
+ * (compose.ts: a background check's "checked …", the fictional import's "from …"): kept as this token until it is shown,
+ * then said on this Mac's clock, never the church's (the rule since 0.5.5: service and role times on the church's clock,
+ * Ozzie's own checks on this Mac's). Never in a tool result or anything sent: the tools and the facts keep their ISO times.
+ */
+export const CHECK_TIME = /\{\{checked:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))\}\}/gu;
+export const checkTime = (iso: string): string => `{{checked:${iso}}}`;
+/** An instant's clock and date in `zone` ("9:30 AM on November 22"), or this Mac's own zone; null for a zone this runtime doesn't know. */
+function inZone(instant: number, zone: string | undefined): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { ...(zone ? { timeZone: zone } : {}), month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(new Date(instant));
+    const part = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+    return `${clock(+part("hour"), part("minute"))} on ${MONTHS[+part("month") - 1]} ${+part("day")}`;
+  } catch { return null; }
+}
+/**
+ * "2026-11-22T09:30-05:00" → "9:30 AM on November 22" in the church's zone; "2026-11-22" → "November 22". A check time
+ * (CHECK_TIME) the same way on this Mac's clock (`macZone`, or this Mac's own zone). Local only.
+ */
+export function showTimes(text: string, timeZone?: string | null, macZone?: string | null): string {
+  return text.replace(CHECK_TIME, (_whole, iso: string) => {
+    const instant = Date.parse(iso);
+    return (Number.isNaN(instant) ? null : inZone(instant, macZone ?? undefined)) ?? iso;
+  }).replace(ISO_DATETIME, (whole, y: string, mo: string, d: string, h: string, mi: string, offset: string) => {
     const instant = Date.parse(whole);
     if (Number.isNaN(instant) || +mo < 1 || +mo > 12) return whole;
-    if (timeZone) {
-      try {
-        const parts = new Intl.DateTimeFormat("en-US", { timeZone, month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h23" })
-          .formatToParts(new Date(instant));
-        const part = (type: string) => parts.find(p => p.type === type)?.value ?? "";
-        return `${clock(+part("hour"), part("minute"))} on ${MONTHS[+part("month") - 1]} ${+part("day")}`;
-      } catch { /* not a zone this runtime knows: the time as written below */ }
-    }
-    return `${clock(+h, mi)}${offset === "Z" ? " UTC" : ""} on ${MONTHS[+mo - 1]} ${+d}`;
+    // Not a zone this runtime knows: the time as written below.
+    const zoned = timeZone ? inZone(instant, timeZone) : null;
+    return zoned ?? `${clock(+h, mi)}${offset === "Z" ? " UTC" : ""} on ${MONTHS[+mo - 1]} ${+d}`;
   }).replace(ISO_DATE, (whole, _y: string, mo: string, d: string) => +mo >= 1 && +mo <= 12 && !Number.isNaN(Date.parse(whole)) ? `${MONTHS[+mo - 1]} ${+d}` : whole);
 }
 
@@ -141,7 +160,7 @@ export const fillPeople = (text: string, names: Readonly<Record<string, string>>
 export function restoreLabels(text: string, session: HarnessSession, sources: RestoreSources): string {
   const place = (kind: string, id: string) => sources.places?.[`${kind}:${id}`] ?? sources.places?.[`${kind}${id}`];
   // Times first, so nothing a name or place holds is ever read as a time.
-  return showTimes(text, sources.timeZone).replace(/\[Your name\]/gu, () => sources.sender?.trim() || YOUR_NAME)
+  return showTimes(text, sources.timeZone, sources.macZone).replace(/\[Your name\]/gu, () => sources.sender?.trim() || YOUR_NAME)
     .replace(/\[a team member\]/gu, GENERIC.person).replace(LABEL_PATTERN, label => {
     const t = session.target(label), kind = kindOf(label)!;
     if (!t) return GENERIC[kind];

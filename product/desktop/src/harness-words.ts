@@ -414,7 +414,7 @@ export const askedInRecord = (row: Pick<TaskRow, "events">) => row.events.filter
 
 const when = (iso: string) => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "an unknown time" : d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? "an unknown time" : d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 };
 const PLANNING_CENTER = /^Planning Center /u;
 const RULES_SOURCE = "Church rules on this Mac";
@@ -517,8 +517,8 @@ const clockText = (iso: string, now: Date) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "an unknown time";
   const sameDay = d.toDateString() === now.toDateString();
-  return sameDay ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-    : d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return sameDay ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 };
 const things = (n: number) => `${n} ${n === 1 ? "thing" : "things"} looked at`;
 /** A procedure's own title (core/skills, pinned) as shown: "Sunday ready" names the service's day. */
@@ -645,6 +645,6 @@ export function quietCheck(row: TaskRow, start: TaskStart | undefined, found: Ch
  */
 export function quietChecksLine(rows: readonly Pick<TaskRow, "created_at">[], source = "Planning Center"): string {
   const at = rows.map(r => r.created_at).sort();
-  const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return `Checked ${source} ${timesText(rows.length)} on its own, ${time(at[0]!)} to ${time(at.at(-1)!)} · nothing new`;
 }

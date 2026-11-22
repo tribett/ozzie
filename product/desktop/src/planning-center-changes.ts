@@ -381,9 +381,9 @@ export const HISTORY_TITLE = "Changes you confirmed in Planning Center";
 export const HISTORY_WHO = "Each change was confirmed on this Mac and sent under the Planning Center account signed in here. For someone added, Planning Center shows that account as the scheduler.";
 export const HISTORY_NONE = "No changes yet. Each one you confirm is listed here.";
 /** "Thursday, Oct 1" from a date ("2026-10-01"), read as that calendar day. */
-const dayLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
+const dayLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
 /** "Sunday, Nov 29" (or "Wednesday, Nov 25") from the church-local date. */
-export const sundayLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
+export const sundayLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
 /** What Planning Center showed when the leader went ahead despite the advice, in the past. */
 function adviceFact(check: BackgroundCheck, first: string): string {
   const of = first === "them" ? "their" : `${first}'s`, forThem = first === "them" ? "them" : first;

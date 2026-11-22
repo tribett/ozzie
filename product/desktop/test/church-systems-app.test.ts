@@ -244,8 +244,11 @@ describe("a church that uses only Genesis (round 5)", () => {
       await app.settle();
     };
     await ask("What events are coming up?");
-    // The fixture's times carry Denver's offset; native places them in the zone given, so only the event and day are checked.
-    expect(dom.seen()).toMatch(/Sunday Service, Sun, Nov 22, \d{1,2}:00 [AP]M\./u);
+    // The fixture's times carry Denver's offset, while native places Genesis's local times in the zone given (this Mac's,
+    // chosen above with "Use …"); the fake doesn't, so the event is said at its fixed instant in that zone.
+    const given = (native.calls.find(([c]) => c === "church_system_check")![1] as { zone: string }).zone;
+    const sunday = new Date("2026-11-22T09:00:00-07:00").toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: given });
+    expect(dom.seen()).toContain(`Sunday Service, ${sunday}.`);
     await ask("Who is serving on Sunday?");
     expect(dom.seen()).toContain("Genesis doesn't share volunteer schedules, so Ozzie can't check whether a service is covered.");
     // Review of 4c3d32ac, H: a visitor card asked about by count is Genesis's form, never the cards page.
@@ -674,8 +677,12 @@ describe("a Mac set up on B1 Church, opened again", () => {
   it("Breeze, as the live test church showed it: no page prints midnight or lists what Ozzie doesn't know (round 4)", async () => {
     seed("breeze");
     const live = breezeUntimedCapture();
+    // Read at seven to the hour, before this app's clock (five past): when Ozzie checked is on this Mac's clock, and the
+    // fixture's 3:00 PM UTC is a true 12:00 AM on a Mac in Tokyo. Neither is ever on the hour in any zone, so a 12:00 AM left
+    // is one said of the untimed service or a role on it.
     native.capture = JSON.stringify(breezeUntimedCapture({ church: { id: "juniperstreet", time_zone: "America/Chicago" },
-      service: { ...live.service!, id: "88120031" } }));
+      service: { ...live.service!, id: "88120031" }, started_at: "2026-11-20T14:52:58Z", completed_at: "2026-11-20T14:53:04Z",
+      reads: live.reads.map(r => ({ ...r, checked_at: "2026-11-20T14:53:00Z" })) }));
     const app = await launch();
     await app.waitFor("Breeze: Juniper Street Church");
     const clean = (where: string) => {

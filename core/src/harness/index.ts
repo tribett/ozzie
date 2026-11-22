@@ -110,6 +110,8 @@ export interface HarnessOptions {
   serviceTypes?: readonly string[];
   /** How names are matched in questions and answers (names.ts). Defaults to the owner's "capitalized only" rule. */
   nameMode?: NameMode;
+  /** This Mac's zone, for the times in an answer that say when Ozzie checked (session.ts CHECK_TIME). Defaults to this Mac's own. */
+  macZone?: string;
   now?: () => string;
   newId?: () => string;
 }
@@ -126,6 +128,7 @@ export class Harness {
   readonly #runtime: AgentRuntime;
   readonly #now: () => string;
   readonly #newId: () => string;
+  readonly #macZone: string | undefined;
 
   constructor(options: HarnessOptions) {
     this.#workspace = options.workspace_id;
@@ -134,6 +137,7 @@ export class Harness {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? (() => globalThis.crypto.randomUUID());
     this.nameMode = options.nameMode ?? DEFAULT_NAME_MODE;
+    this.#macZone = options.macZone;
     this.session = options.session ?? new HarnessSession();
     this.tools = new HarnessTools(options.data, this.session, { now: this.#now });
     this.host = new HarnessHost({ workspace_id: options.workspace_id, tools: this.tools, skills: options.skills,
@@ -191,7 +195,10 @@ export class Harness {
 
   runSkill(skill_id: string, options: RunOptions = {}): Promise<TaskOutcome> { return this.run(this.skillTask(skill_id), options); }
 
-  /** On this Mac only: a verified answer's labels back to names and places, and its ISO times in plain words in the church's zone. */
+  /**
+   * On this Mac only: a verified answer's labels back to names and places, and its ISO times in plain words in the church's
+   * zone; a time that says when Ozzie checked (session.ts CHECK_TIME) on this Mac's clock.
+   */
   restore(text: string, options: { sender?: string; firstNames?: boolean } = {}): string {
     return this.#restore(text, this.tools.data.capture?.names ?? {}, options);
   }
@@ -212,7 +219,7 @@ export class Harness {
     return restoreLabels(text, this.session, {
       ...(roleService ? { roleService } : {}),
       names, places: { ...(capture?.labels ?? {}), ...(operations?.labels ?? {}) }, events,
-      ...(capture ? { organization: capture.organization } : {}), timeZone: brief?.time_zone ?? null,
+      ...(capture ? { organization: capture.organization } : {}), timeZone: brief?.time_zone ?? null, macZone: this.#macZone ?? null,
       ...(options.sender !== undefined ? { sender: options.sender } : {}), ...(options.firstNames ? { firstNames: true } : {}),
     });
   }

@@ -21,6 +21,7 @@ import { applyDecisions, type DecidedItem } from "../sunday-decisions.js";
 import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
+import { checkTime } from "./session.js";
 import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources } from "./tools.js";
 import { SYSTEMS } from "../church-systems/types.js";
 
@@ -120,6 +121,11 @@ const request = (v: unknown) => v === "request sent, no answer yet" ? "Planning 
   : v === "request not sent yet" ? "The request hasn't been sent yet." : "Whether the request was sent isn't known.";
 const reasons = (row: Row) => { const r = labels(row["reasons"]); return r.length ? `: ${r.join("; ")}` : ""; };
 const differs = (row: Row) => row["status_differs_by_time"] === true ? " This differs between service times." : "";
+/**
+ * A time that says when Ozzie checked or read something: marked so the app says it on this Mac's clock, while every
+ * service and role time stays on the church's (session.ts CHECK_TIME). Anything that isn't an ISO time is left as it is.
+ */
+const checkedAt = (iso: string) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(iso) ? checkTime(iso) : iso;
 const worth = (n: unknown, what: string) => typeof n === "number" && n > 0 ? ` Worth a look: ${plural(n, what, `${what}s`)} couldn't be confirmed.` : "";
 
 // The watched service in a sentence (onboarding spec §5.1, decision 18): its real day from the brief's day words
@@ -365,7 +371,8 @@ function summary(tool: string, p: Row, day: Day): string | null {
     case "today.attention": {
       const s = status === "needs a decision" ? "something needs a decision" : status === "worth a look" ? "something is worth a look" : "nothing needs attention";
       const gaps = num(p["gaps"]);
-      return `In the fictional email and calendar import${str(p["imported_at"]) && p["imported_at"] !== "not known" ? ` from ${str(p["imported_at"])!}` : ""}, ${s}.${gaps ? " Part of the import needs a closer look." : ""}`;
+      // When it was imported: a time Ozzie read something, said on this Mac's clock (session.ts CHECK_TIME).
+      return `In the fictional email and calendar import${str(p["imported_at"]) && p["imported_at"] !== "not known" ? ` from ${checkedAt(str(p["imported_at"])!)}` : ""}, ${s}.${gaps ? " Part of the import needs a closer look." : ""}`;
     }
     case "rules.current": {
       const t = p["check_in_after_sundays_in_a_row"];
@@ -710,7 +717,7 @@ export function backgroundSentence(f: Finding, person: string, role: string, zon
     ? " Planning Center showed no current background checks for anyone on your kids teams; your Planning Center login may not be able to see them." : "";
   // `tone` null: under a heading that already says it ("On the Sunday page, needing a decision:").
   return `${tone ? `${tone}: ` : ""}${what} Scheduled for ${role}${start ? ` at ${timeOf(start, said)}` : ` ${atService(day)}`}. Your Church rules ask for a current background check before serving with kids.${look}` +
-    ` From ${f.source ?? PEOPLE_SOURCE}${checked ? `, checked ${checked}` : ""}. ${KEPT_HERE}`;
+    ` From ${f.source ?? PEOPLE_SOURCE}${checked ? `, checked ${checkedAt(checked)}` : ""}. ${KEPT_HERE}`;
 }
 /** A background-check finding's sentence with kept names, and its source. */
 function kept(data: HarnessData, names: KeptNames, f: Finding, tone: string | null, said: SaidDay = NO_DAY): { text: string; source: { source: string; check_time: string } } {

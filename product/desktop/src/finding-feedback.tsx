@@ -209,7 +209,7 @@ export function FindingFeedback({ target, feedback, urgency = true, occasion: oc
 
 const day = (iso: string) => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "earlier" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  return Number.isNaN(d.getTime()) ? "earlier" : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 };
 /**
  * Church rules: everything the person told Ozzie on finding cards, visible, changeable and deletable

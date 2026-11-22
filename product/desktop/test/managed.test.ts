@@ -30,6 +30,8 @@ const button = (start: string) => all(dom.root as unknown as Node).find(b => b.t
 let unmount: (() => Promise<void>) | null = null;
 afterEach(async () => { await unmount?.(); unmount = null; native.invoke = null; });
 
+/** A time as model.ts says it ("November 14 at 7:00 AM"), on this Mac's own clock, so the test holds in any zone. */
+const macDay = (ms: number) => new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(ms));
 const account = (over: Partial<ManagedAccount> = {}): ManagedAccount => ({
   plan: "personal", allowance_steps: 300, used_steps: 120, period_ends: "2026-12-01T00:00:00.000Z",
   warning: null, checked_at_ms: Date.UTC(2026, 10, 14, 12, 0), offline: false, ...over,
@@ -75,7 +77,8 @@ describe("Ozzie's AI: usage in plain words", () => {
     // A date-only day is that calendar day, not the evening before.
     expect(resetDay(account({ period_ends: "2026-12-01" }))).toBe("December 1");
     expect(resetDay(account({ period_ends: "not a date" }))).toBeNull();
-    expect(offlineLine(account())).toMatch(/^Ozzie couldn't reach its website just now\. These numbers are from November 14/u);
+    // When ozzie.church was last reached is on this Mac's clock: noon UTC on November 14 is November 15 on a Mac in Auckland.
+    expect(offlineLine(account())).toBe(`Ozzie couldn't reach its website just now. These numbers are from ${macDay(Date.UTC(2026, 10, 14, 12, 0))}.`);
     expect(offlineLine(account({ checked_at_ms: Number.NaN }))).toBe("Ozzie couldn't reach its website just now. These numbers are from earlier.");
   });
 });
@@ -95,7 +98,7 @@ describe("Ozzie's AI in Settings (spec S10d)", () => {
     await settings(status({ account: account({ used_steps: 270, warning: "nine-tenths", offline: true }) }));
     text = dom.seen();
     expect(text).toContain("about nine tenths of this month's answers");
-    expect(text).toContain("Ozzie couldn't reach its website just now. These numbers are from November 14");
+    expect(text).toContain(`Ozzie couldn't reach its website just now. These numbers are from ${macDay(Date.UTC(2026, 10, 14, 12, 0))}.`);
     expect(text).not.toMatch(HIDDEN_WORDS);
   });
 

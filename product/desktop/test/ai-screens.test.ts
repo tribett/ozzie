@@ -1712,7 +1712,9 @@ describe("S9c: Ozzie gets Ollama itself (owner's request, 2026-11-18; decision 2
       unmount = async () => { await act(async () => { root.unmount(); }); };
       if (installed) {
         expect(seen()).toContain("Ollama, which Ozzie installed");
-        expect(seen()).toContain("Ozzie downloaded Ollama from ollama.com and put it in your Applications folder on November 18, 2026. Ollama is another company's app, with its own settings and its own updates. Ozzie doesn't remove other companies' apps.");
+        // The day it was installed on this Mac's clock (November 19 on a Mac in Tokyo).
+        const on = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric" }).format(new Date(at_ms));
+        expect(seen()).toContain(`Ozzie downloaded Ollama from ollama.com and put it in your Applications folder on ${on}. Ollama is another company's app, with its own settings and its own updates. Ozzie doesn't remove other companies' apps.`);
         expect(seen()).toContain(OLLAMA.settingsRemove);
         // It starts at login, said with the way Ollama's own FAQ gives to turn that off (live, 2026-11-19).
         expect(seen()).toContain("Ollama starts by itself whenever you sign in to this Mac. To stop that, search System Settings for Login Items and turn off Ollama under Allow in the Background.");

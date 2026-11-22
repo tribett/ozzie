@@ -33,6 +33,8 @@ async function shown(status: ModelStatus) {
   for (const how of all(dom.root as unknown as Node).filter(n => n.tagName === "DETAILS")) outsideHow = outsideHow.replace(how.textContent, "");
   return { text: dom.seen(), outsideHow, calls: fake.calls };
 }
+/** When AI on this Mac answered, as AI help says it ("November 17 at 10:14 AM"), on this Mac's own clock: holds in any zone. */
+const answeredAt = (ms: number) => new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(ms));
 const own = (setup: NonNullable<ModelStatus["setup"]>): ModelStatus => ({ configured: setup === "ready", route: "own", label: "Your AI provider at api.example.com (vendor/model-1)",
   setup, key_account: "own-provider:api.example.com", provider: null, month: { used: 3, limit: 1000, resets_on: "2026-12-01" } });
 
@@ -72,7 +74,7 @@ describe("AI settings", () => {
     const local = await shown({ configured: true, route: "local", label: "AI model on this Mac (llama3.2:latest)", setup: "ready", key_account: null, checked_at_ms: Date.UTC(2026, 10, 17, 15, 14),
       local_app: "ollama" });
     expect(local.text).toContain("AI: on this Mac (llama3.2)");
-    expect(local.text).toMatch(/Answered Ozzie's check on November 17(?:,| at) \d{1,2}:14 [AP]M\. Nothing leaves this Mac\./u);
+    expect(local.text).toContain(`Answered Ozzie's check on ${answeredAt(Date.UTC(2026, 10, 17, 15, 14))}. Nothing leaves this Mac.`);
     expect(local.text).not.toMatch(/key/iu);
     expect(local.text).not.toMatch(/LM Link/u);
   });
@@ -81,7 +83,7 @@ describe("AI settings", () => {
     const lm = (over: Partial<ModelStatus>): ModelStatus => ({ configured: true, route: "local", label: "AI model on this Mac (qwen/qwen3-8b)", setup: "ready", key_account: null,
       checked_at_ms: Date.UTC(2026, 10, 17, 15, 14), local_app: "lm-studio", ...over });
     const ready = await shown(lm({}));
-    expect(ready.text).toMatch(/Answered Ozzie's check on November 17(?:,| at) \d{1,2}:14 [AP]M\./u);
+    expect(ready.text).toContain(`Answered Ozzie's check on ${answeredAt(Date.UTC(2026, 10, 17, 15, 14))}.`);
     expect(ready.text).not.toContain("Nothing leaves this Mac");
     expect(ready.text).toContain(MAC.lmLink);
     expect(ready.text.indexOf(MAC.lmLink)).toBe(ready.text.lastIndexOf(MAC.lmLink));
