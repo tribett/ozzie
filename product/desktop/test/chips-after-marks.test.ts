@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("
 import { AskPanel, settledRoles } from "../src/ask-panel.js";
 import { filledByAdds, type ChangeResult } from "../src/change-card.js";
 import type { AskTurn } from "../src/harness-bridge.js";
-import { askServices, MANY_SERVICES, mergedNames, mergeParts, teamServices } from "../src/services-merge.js";
+import { askServices, MANY_SERVICES, mergedNames, mergeParts, partKey, teamServices } from "../src/services-merge.js";
 import { rolePositions, suggestedQuestions, type ChipServices } from "../../../core/src/ask.js";
 import { buildSundayBrief, type Finding, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { decide, type SundayDecision } from "../../../core/src/sunday-decisions.js";
@@ -147,7 +147,7 @@ describe("Ask's suggested questions after the person's own marks", () => {
     const dir = new URL("../src/", import.meta.url);
     const imports = readdirSync(dir).filter(f => /\.tsx?$/u.test(f) && /import\s*\{[^}]*\bfilledByAdds\b[^}]*\}\s*from/u.test(readFileSync(new URL(f, dir), "utf8")));
     expect(imports).toEqual(["App.tsx"]);
-    expect(readFileSync(new URL("App.tsx", dir), "utf8")).toContain("settledRoles(brief, decisions, filledByAdds(brief, changes.results))");
+    expect(readFileSync(new URL("App.tsx", dir), "utf8")).toContain("filledByAdds(brief, changes.results), ...(merged ? others.flatMap(o => filledByAdds(o.brief, changes.results).map(k => partKey(o.plan_id, k))) : [])");
   });
 
   it("the Ask panel shows them, and a question tapped is prepared as any other: labels only", async () => {
@@ -168,5 +168,53 @@ describe("Ask's suggested questions after the person's own marks", () => {
       expect(prepared.ok, chip).toBe(true);
       if (prepared.ok) expect(prepared.question, chip).not.toMatch(/Nursery|Weekend|Youth/u);
     }
+  });
+});
+
+// Found in 0.5.9: the questions were chosen from the first service's findings only, so with every role there settled
+// they fell back to a settled role instead of moving on to the next service's. App now passes every watched service's
+// findings (mergeParts), the first service's first, with the settled marks of every service.
+describe("Suggested questions across watched services", () => {
+  const every = (t: ReturnType<typeof two>, decisions: readonly SundayDecision[] = []) => {
+    const m = mergeParts({ brief: t.main, decisions }, [{ plan_id: "94000001", brief: t.other, decisions: [] }]);
+    return { brief: { ...t.ask, findings: m.brief.findings }, settled: settledRoles(m.brief, m.decisions) };
+  };
+  it("with no marks they are the first service's, exactly as before", () => {
+    const t = two(), e = every(t);
+    expect(suggestedQuestions(e.brief, t.services, e.settled)).toEqual(suggestedQuestions(t.ask, t.services, settledRoles(t.main, [])));
+  });
+  it("with every open role of the first service settled they move on to the other service's role, named with its service", () => {
+    const t = two();
+    const marks = t.main.findings.filter(f => f.kind === "needs-people").map(f => mark(f));
+    const e = every(t, marks), q = suggestedQuestions(e.brief, t.services, e.settled);
+    expect(q[0]).toBe(`Who could cover Nursery — ${YOUTH}?`);
+    expect(q.join("\n")).not.toContain(`(${WEEKEND})`);
+    // The first service alone, as 0.5.9 chose them, stayed on a settled role.
+    expect(suggestedQuestions(t.ask, t.services, settledRoles(t.main, marks))[0]).not.toContain(YOUTH);
+  });
+  it("an add through Ozzie on the other service's plan moves them on from its role too", () => {
+    const t = two(), marks = t.main.findings.filter(f => f.kind === "needs-people").map(f => mark(f));
+    const m = mergeParts({ brief: t.main, decisions: marks }, [{ plan_id: "94000001", brief: t.other, decisions: [] }]);
+    const nursery = need(t.other, "Nursery");
+    const adds = Array.from({ length: nursery.remaining as number }, () => added(nursery, t.other.plan.id, { addedAt: "2099-01-01T00:00:00Z" }));
+    const filled = filledByAdds(t.other, adds).map(k => partKey("94000001", k));
+    expect(filled).toHaveLength(1);
+    const brief = { ...t.ask, findings: m.brief.findings };
+    expect(suggestedQuestions(brief, t.services, settledRoles(m.brief, m.decisions))[0]).toContain(YOUTH);
+    // Every role settled: the first role again, as with one service.
+    expect(suggestedQuestions(brief, t.services, settledRoles(m.brief, m.decisions, filled))[0]).not.toContain(YOUTH);
+  });
+  it("a first service with nothing open: the questions are about the other service's (intended since 0.5.10)", () => {
+    const t = two(), clear = { ...t.main, findings: [] };
+    const m = mergeParts({ brief: clear, decisions: [] }, [{ plan_id: "94000001", brief: t.other, decisions: [] }]);
+    const q = suggestedQuestions({ ...clear, day: MANY_SERVICES, findings: m.brief.findings }, t.services, settledRoles(m.brief, m.decisions));
+    expect(q[0]).toMatch(/^Who could cover Nursery/u);
+    expect(q.join("\n")).not.toContain("What did you check");
+  });
+  it("App passes every service's findings and marks (source check)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain("chipFindings={chipFindings}");
+    expect(app).toContain("settledRoles(merged?.brief ?? brief, merged?.decisions ?? decisions,");
   });
 });

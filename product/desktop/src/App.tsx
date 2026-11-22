@@ -18,7 +18,7 @@ import { captureRooms, sundayOperations } from "../../../core/src/operations-cap
 import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { CHECKING_LINE, PageControls, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
 import { addService, alsoWatched, movedOn, readDay, removeService, type AlsoWatched, type ServiceChoice } from "./watched-services.js";
-import { askServices, fromPartKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
+import { askServices, fromPartKey, partKey, mergeDecisions, mergedNames, mergeParts, MANY_SERVICES, teamServices, type OtherPart } from "./services-merge.js";
 import { ServicesPage } from "./services-page.js";
 import { serviceOfTeam as serviceOfTeamFor, TeamServicesContext } from "./team-labels.js";
 import { WatchedServices } from "./watch-another.js";
@@ -1403,7 +1403,13 @@ export function App() {
   useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch }, changes.undoable.length > 0);
   // Ask's suggested questions move on from a role the person settled since the check: their own mark on the Services page,
   // or an add made through Ozzie that fills it (ask-panel.tsx settledRoles, change-card.tsx filledByAdds). Display only.
-  const chipSettled = useMemo(() => brief ? settledRoles(brief, decisions, filledByAdds(brief, changes.results)) : undefined, [brief, decisions, changes.results]);
+  const chipSettled = useMemo(() => brief ? settledRoles(merged?.brief ?? brief, merged?.decisions ?? decisions,
+    // Adds on any watched service's plan, each other service's under its own keys (mergeParts): review of 0.5.10.
+    [...filledByAdds(brief, changes.results), ...(merged ? others.flatMap(o => filledByAdds(o.brief, changes.results).map(k => partKey(o.plan_id, k))) : [])]) : undefined,
+  [brief, merged, others, decisions, changes.results]);
+  // With more than one service watched, the questions are chosen from every watched service's findings, the first service's
+  // first: once its roles are settled or covered they move on to the next service's (0.5.9 looked at the first service only).
+  const chipFindings = merged && others.length ? merged.brief.findings : undefined;
   // While a Planning Center sign-in is in the browser, checks wait so as not to cancel it, and the church in use is still
   // connected: Today says what was true before it started, never "Nothing runs yet" (review 2026-11-18).
   const shownReadiness = useHeldWhile(readiness, status?.state === "waiting" || status?.state === "checking");
@@ -1799,7 +1805,7 @@ export function App() {
             noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null} /></div>}
       </main>
       {quitAsk && <QuitQuestion ask={{ ...quitAsk, checks: checksNow }} undo={changes.undoable.length ? quitUndo(changes.undoable) : null} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
-      <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} settled={chipSettled} modelReady={modelReady} onOpen={setPage}
+      <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} settled={chipSettled} chipFindings={chipFindings} modelReady={modelReady} onOpen={setPage}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : onGenesis ? (sys.state.genesis ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),
           // What was read decides what Ask offers on Genesis, never Planning Center's check (review of e9cbd97d, M1).

@@ -374,6 +374,8 @@ export function AskPanel(props: {
   services?: ChipServices | undefined;
   /** What the person settled since the check (settledRoles): suggested questions move on to a role still open. */
   settled?: ReadonlySet<string> | undefined;
+  /** With more than one service watched: every watched service's findings, the first service's first, for the suggested questions. */
+  chipFindings?: SundayBrief["findings"] | undefined;
 }) {
   const { brief, modelReady } = props;
   // Several services watched now: a turn asked now keeps it (Turn `several`), and its answer covers them all (AnswerServices).
@@ -484,7 +486,7 @@ export function AskPanel(props: {
   };
 
   const chips = !canType || busy || listening !== "no" ? [] : props.here ? (props.here.checked ? [...props.here.chips] : [HELP_CHIP])
-    : ready ? suggestedQuestions(brief, props.services, props.settled) : [HELP_CHIP];
+    : ready ? suggestedQuestions(brief && props.chipFindings ? { ...brief, findings: props.chipFindings } : brief, props.services, props.settled) : [HELP_CHIP];
   const off = voiceOff(voiceStatus);
   const answered = turns.length > 0;
   // What speaking does, or why it's off: under the question box until there is an answer, then folded with the other
