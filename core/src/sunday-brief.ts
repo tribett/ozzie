@@ -463,6 +463,14 @@ export function buildSundayBrief(capture: SundayCapture, rules: SundayRules, now
 }
 
 /**
+ * A part of the check whose only reasons are facts about roles (`role_facts`): those reasons as the service's page shows
+ * them, each a sentence, after a space, for a line that has already said how many roles couldn't be checked. Nothing
+ * otherwise. Names resolve on this Mac only; never sent anywhere.
+ */
+export const roleReasons = (f: Pick<Finding, "role_facts">): string =>
+  f.role_facts?.reasons.length ? ` ${f.role_facts.reasons.map(r => /[.!?]$/u.test(r) ? r : `${r}.`).join(" ")}` : "";
+
+/**
  * The one service time a finding is about, as an instant: its role's serving time, a blockout's one serving time, a kids
  * team's time. Null when it names no single time (a role Planning Center lists at more than one time, a person's run of
  * weeks, a check that couldn't be completed).

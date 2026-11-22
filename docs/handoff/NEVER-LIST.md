@@ -33,6 +33,12 @@ switch them off.
    refused. Every finding carries its source and check time.
 10. Continue silently after being ignored. No auto-escalation to members,
     no nagging loops. Ignoring the brief is always safe.
+11. Let a button, link or other control that an AI described lead to a
+    change. Any change in a church system is made only from Ozzie's own
+    confirmation screen, written by Ozzie's code, after a person confirms
+    that one change. This holds on every surface: the Mac app, a phone app,
+    another AI app, and any screen format an agent can author (owner
+    decision 2026-11-22).
 
 ## Handling sensitive things it encounters
 

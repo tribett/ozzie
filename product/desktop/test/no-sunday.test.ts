@@ -340,8 +340,9 @@ describe("Ask's answers name the service's real day and page (review H4)", () =>
     // compose.ts's sentences with day words are tested in core (compose.test.ts); here, that the app passes them.
     const { readFileSync } = await import("node:fs");
     const bridge = readFileSync(new URL("../src/harness-bridge.ts", import.meta.url), "utf8");
-    expect(bridge.match(/composeAnswer\(outcome\.answer \?\? "", outcome\.evidence, harness\.data\.brief\?\.day \?\? null\)/gu)).toHaveLength(2);
-    expect(bridge).toContain("outcome.evidence, h.data.brief?.day ?? null).paragraphs");
+    // With what only this Mac knows passed too (a part of the check's plain reasons, compose.ts OnThisMac).
+    expect(bridge.match(/composeAnswer\(outcome\.answer \?\? "", outcome\.evidence, harness\.data\.brief\?\.day \?\? null, harness\.tools\)/gu)).toHaveLength(2);
+    expect(bridge).toContain("outcome.evidence, h.data.brief?.day ?? null, h.tools)");
     expect(bridge).not.toMatch(/composeAnswer\([^)]*outcome\.evidence\)/u);
   });
 

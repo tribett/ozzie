@@ -36,7 +36,7 @@ import {
 } from "./proactive.js";
 import { desktopSystemProactive, systemReady } from "./system-watch.js";
 import { ProactivePage, useProactiveView } from "./proactive-page.js";
-import { AskIcon, AskPanel, type AskFn, type PlanHooks } from "./ask-panel.js";
+import { AskIcon, AskPanel, settledRoles, type AskFn, type PlanHooks } from "./ask-panel.js";
 import { rolePositions } from "../../../core/src/ask.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { HarnessData } from "../../../core/src/harness/index.js";
@@ -104,7 +104,7 @@ import { choiceLine, ChooseSystem, listedToday, soonest, SystemFirstRun, systemF
 import { GenesisAlsoRead, OtherSystems, SystemFactsList, SystemSettings } from "./system-settings.js";
 import { ListsSystemName, ListsTeamServices } from "./church-notes.js";
 import { refusalLine, SystemNotices } from "./system-pages.js";
-import { ChangeHistory, ChangeResults, ChangesSwitch, sundayChanges, useChanges } from "./change-card.js";
+import { ChangeHistory, ChangeResults, ChangesSwitch, filledByAdds, sundayChanges, useChanges } from "./change-card.js";
 import { ACTIVITY_LEDE_ON, quitUndo, SETTINGS_BANNER_ON, SIDEBAR_ON } from "./planning-center-changes.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
@@ -1401,6 +1401,9 @@ export function App() {
   // own line about checks follows whether checks are really on.
   const checksNow = checksOn({ readiness, schedule: automatic.schedule, watch });
   useQuitGuard(openCards, { readiness, schedule: automatic.schedule, watch }, changes.undoable.length > 0);
+  // Ask's suggested questions move on from a role the person settled since the check: their own mark on the Services page,
+  // or an add made through Ozzie that fills it (ask-panel.tsx settledRoles, change-card.tsx filledByAdds). Display only.
+  const chipSettled = useMemo(() => brief ? settledRoles(brief, decisions, filledByAdds(brief, changes.results)) : undefined, [brief, decisions, changes.results]);
   // While a Planning Center sign-in is in the browser, checks wait so as not to cancel it, and the church in use is still
   // connected: Today says what was true before it started, never "Nothing runs yet" (review 2026-11-18).
   const shownReadiness = useHeldWhile(readiness, status?.state === "waiting" || status?.state === "checking");
@@ -1796,7 +1799,7 @@ export function App() {
             noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null} /></div>}
       </main>
       {quitAsk && <QuitQuestion ask={{ ...quitAsk, checks: checksNow }} undo={changes.undoable.length ? quitUndo(changes.undoable) : null} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
-      <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} modelReady={modelReady} onOpen={setPage}
+      <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} settled={chipSettled} modelReady={modelReady} onOpen={setPage}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : onGenesis ? (sys.state.genesis ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),
           // What was read decides what Ask offers on Genesis, never Planning Center's check (review of e9cbd97d, M1).

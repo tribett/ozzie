@@ -1183,11 +1183,15 @@ export const rolePositions = (brief: Pick<SundayBrief, "positions" | "findings">
 // With `services` (more than one service watched), a role that teams of two or more of them hold is said with its
 // finding's service, as answers say it ("Greeter (Weekend Service)"); asking it sends the role's label and that service's
 // own [Service N] label, never the service's name (PrepareOptions `services`), and the answer is about that service only.
+// `settled`: the keys of findings the person has settled since the check (their own mark on the Services page, an add
+// made through Ozzie that fills the role): a role's questions move on to the next one still open, and come back to the
+// first when none is (0.5.7 kept suggesting a role the person had marked covered). Display only: with none, the
+// questions are exactly as before.
 /** Up to four questions that fit what was read. Local text; asking one still goes through prepareAsk,
  *  which sends each position as its [Role N] label like the facts. The note it suggests is one Ozzie's drafting
  *  tool can prepare: to someone the check listed for a role that still needs people (structured answers show only
  *  that tool's draft, never one the AI writes). */
-export function suggestedQuestions(brief: SundayBrief | null, services?: ChipServices): string[] {
+export function suggestedQuestions(brief: SundayBrief | null, services?: ChipServices, settled?: ReadonlySet<string>): string[] {
   if (!brief) return [];
   const day = brief.day ?? SUNDAY_WORDS;
   // One day or weekend as it is said ("this Sunday"); services spread over days with "for" ("for your services").
@@ -1201,9 +1205,15 @@ export function suggestedQuestions(brief: SundayBrief | null, services?: ChipSer
     if (!name || !services || !service || !nameable(service)) return name;
     return new Set(holding(name).flatMap(p => serviceKey(serviceOfTeam(p.team_id, services.teams) ?? "") || [])).size > 1 ? roleWithService(name, service) : name;
   };
+  // The first finding that fits on a role the person hasn't settled since (a role's pending request is on the same role);
+  // then one they haven't settled; with none, the first that fits.
+  const at = (f: Finding) => f.position ? `${f.position.team_id}\u0000${spaced(f.position.name)}` : null;
+  const settledRoles = new Set(brief.findings.flatMap(f => settled?.has(f.key) ? at(f) ?? [] : []));
+  const first = (fits: (f: Finding) => boolean) => brief.findings.find(f => fits(f) && !settled?.has(f.key) && !settledRoles.has(at(f) ?? ""))
+    ?? brief.findings.find(f => fits(f) && !settled?.has(f.key)) ?? brief.findings.find(fits);
   // A church system that ties no team to its roles (Breeze) lists no one who could cover: neither question is offered.
-  const open = brief.findings.find(f => f.kind === "needs-people" && role(f) && !(brief.source && !f.people));
-  const flagged = brief.findings.find(f => role(f));
+  const open = first(f => f.kind === "needs-people" && Boolean(role(f)) && !(brief.source && !f.people));
+  const flagged = first(f => Boolean(role(f)));
   // A church system that ties no team to its roles (Breeze): what works there, each answered on this Mac from who is on
   // each role (compose.ts rosterQuestion, round 5). The note names no one: it is to whoever hasn't answered for a role.
   // The same test as Ask's own answers (compose.ts rosterQuestion): what the system is, and who is on each role.

@@ -6,8 +6,10 @@
 // App hands these to the pages only while the switch is on for the church in use and the check on screen is a live
 // one; without them every page is exactly as it is with changes off. Nothing here is offered to a model, a notice,
 // Siri or the copy for other AI apps (stays-on-this-Mac proofs, product/desktop/test/planning-center-changes.test.ts).
+// The one thing App takes from here for Ask: the keys of the check's own findings that adds made this session fill
+// (`filledByAdds`), so its suggested questions move on from those roles; display only, no change, name or record.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import type { Finding } from "../../../core/src/sunday-brief.js";
+import type { Finding, SundayBrief } from "../../../core/src/sunday-brief.js";
 import { Icon } from "./icons.js";
 import { NOT_OPENED, OPEN_PLAN, type PlanningCenterPage } from "./planning-center-pages.js";
 import {
@@ -81,6 +83,25 @@ export interface ChangesControl {
   loadHistory(): void;
   /** Counts each write that went out, so What happened reads its records again. */
   writes: number;
+}
+
+/**
+ * The open roles that adds made this session fill while the check on screen doesn't show them yet (made after it was
+ * read, on its plan, and not taken off again), by finding key: so Ask's suggested questions move on from them (App,
+ * ask-panel.tsx settledRoles). Keys of the check's own findings only; nothing about a change goes anywhere else.
+ */
+export function filledByAdds(brief: Pick<SundayBrief, "plan" | "checked_at" | "findings">,
+  results: readonly Pick<ChangeResult, "ask" | "plan" | "tone" | "addedAt" | "answer">[]): string[] {
+  const read = brief.checked_at ? Date.parse(brief.checked_at) : NaN;
+  const added = new Map<string, number>();
+  for (const r of results) {
+    // Taken off again, or already gone: the place is open again. Any other answer to a take-off leaves the add standing.
+    const stands = r.tone === "made" && r.answer?.result !== "removed" && r.answer?.result !== "already-gone";
+    const unseen = r.addedAt === null || Number.isNaN(read) || Date.parse(r.addedAt) > read;
+    if (stands && unseen && r.plan === brief.plan.id) added.set(r.ask.key, (added.get(r.ask.key) ?? 0) + 1);
+  }
+  return brief.findings.filter(f => f.kind === "needs-people" && typeof f.remaining === "number" && f.remaining > 0 && (added.get(f.key) ?? 0) >= f.remaining)
+    .map(f => f.key);
 }
 
 /** Who, which role and, once Planning Center was read for it, which plan: "the Youth Night plan for Wednesday, Nov 25". */

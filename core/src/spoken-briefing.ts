@@ -7,7 +7,7 @@
 // Mac's own voice, and `<`, `>` and `&` never reach it (no markup a voice could act on).
 import type { AttentionReport } from "./attention-import/index.js";
 import { operationsNotChecked, type SundayOperations } from "./operations-capture.js";
-import { blockoutRoles, blockoutTime, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "./sunday-brief.js";
+import { blockoutRoles, blockoutTime, roleReasons, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "./sunday-brief.js";
 import type { DecidedBrief, DecidedItem } from "./sunday-decisions.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
 
@@ -163,7 +163,10 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
     default:
       return f.stale || stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
         // Only facts about roles as the system lists them (sunday-brief.ts role_facts): said as roles, as the page says it.
-        : f.role_facts ? `${f.role_facts.roles === 1 ? "One role" : `${f.role_facts.roles} roles`} couldn't be checked, so Ozzie won't call ${ctx.name} covered.`
+        // One role's plain reasons are read after it; more roles' are only pointed to, so the briefing stays short (and
+        // within the voice's limit) however many roles a church leaves untimed.
+        : f.role_facts ? `${f.role_facts.roles === 1 ? "One role" : `${f.role_facts.roles} roles`} couldn't be checked, so Ozzie won't call ${ctx.name} covered.${
+          f.role_facts.roles === 1 ? roleReasons(f) : " The roles and why are listed on screen."}`
         : `Part of ${ctx.d.thisOne} couldn't be checked, so Ozzie won't call ${ctx.name} covered.`;
   }
 }

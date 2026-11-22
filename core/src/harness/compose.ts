@@ -22,7 +22,7 @@ import { namesACheck } from "./background-wording.js";
 import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
 import { checkTime } from "./session.js";
-import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources, type Scope } from "./tools.js";
+import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources, type Scope, type UnverifiedPart } from "./tools.js";
 import { SYSTEMS } from "../church-systems/types.js";
 
 export interface ComposedAnswer {
@@ -31,7 +31,14 @@ export interface ComposedAnswer {
   paragraphs: string[];
   /** The drafting tool's own text, in placeholder form, or null. */
   draft: string | null;
+  /** Puts in what only this Mac knows (`OnThisMac`), after the app's restore: `fill(harness.restore(p))`. */
+  fill: (shown: string) => string;
 }
+/**
+ * What an answer written on this Mac may look up there (HarnessTools): what a part of the check that couldn't be verified
+ * is about. Absent for the copy for other AI apps (core/mcp/render.ts), which says only what its tool results hold.
+ */
+export interface OnThisMac { unverifiedPart(envelope: ToolEnvelope, row: Record<string, unknown>): UnverifiedPart | null }
 
 type Row = Record<string, unknown>;
 interface Fact { id: number; tool: string; list: string | null; row: Row; payload: Row; envelope: number }
@@ -173,8 +180,35 @@ const overviewCounts = (d: number, w: number) => {
       : "this check found nothing that needs a decision or is worth a look";
 };
 
+/** The overview's kind for a part of the check that couldn't be verified (tools.ts KIND, vocabulary.json). */
+const UNVERIFIED = "part of the check couldn't be verified";
+/** For one of the overview's rows: what this Mac knows about it (OnThisMac), and the labels that hold those words until `fill`. */
+interface Here { part: UnverifiedPart | null; kept: KeptNames }
+/**
+ * A part of the check that couldn't be verified. Only facts about roles as the church system lists them, with every read
+ * complete and current (sunday-brief.ts role_facts): said as the service's page says them, how many roles and each plain
+ * reason, its role named on this Mac (polish 2026-11-21), never as reads that didn't complete. Other reasons of its own,
+ * with every read of its own service complete: the page's own reasons, even when another service's reads didn't all
+ * complete. Reads that didn't complete: how many, as before. Otherwise never a count of none (0.5.7 said "0 Planning
+ * Center reads didn't complete"): that it is out of date, or only that part couldn't be verified.
+ */
+function unverified(row: Row, here: Here | null): string {
+  const n = num(row["reads_not_completed"]) ?? 0, old = row["too_old_to_treat_as_current"] === true;
+  const part = here?.part ?? null, keep = (s: string) => here!.kept.part(s);
+  const at = part?.service ? `At ${keep(part.service)}, ` : "";
+  const reasons = part?.reasons.length ? ` ${keep(part.reasons.map(sentence).join(" "))}` : "";
+  if (part?.roles) {
+    const roles = part.roles === 1 ? "one role" : `${part.roles} roles`;
+    return `${at}${at ? roles : capital(roles)} couldn't be checked.${reasons}`;
+  }
+  if (reasons) return `${at}${at ? "part" : "Part"} of this check couldn't be verified.${reasons}`;
+  if (n > 0) return `Part of this check couldn't be verified: ${plural(n, "Planning Center read", "Planning Center reads")} didn't complete.${old ? " The check is also too old to treat as current." : ""}`;
+  if (old) return "Part of this check couldn't be verified: the check is too old to treat as current.";
+  return `${at}${at ? "part" : "Part"} of this check couldn't be verified.`;
+}
+
 /** A finding in the overview or the open roles, by its kind. */
-function finding(row: Row, said: SaidDay = NO_DAY, day: Day = null): string | null {
+function finding(row: Row, said: SaidDay = NO_DAY, day: Day = null, here: Here | null = null): string | null {
   const role = str(row["role"]) ?? "A role", person = str(row["person"]) ?? "Someone";
   switch (row["kind"]) {
     case "needs people": return needsLine(row, said, day);
@@ -197,10 +231,7 @@ function finding(row: Row, said: SaidDay = NO_DAY, day: Day = null): string | nu
       return `${person} is scheduled for ${list(serving.map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"], said)}`)) || "a role"}` +
         ` and has a blockout in Planning Center at ${times > 1 ? "those times" : "that time"}. Planning Center still counts them, so ${serving.length > 1 ? "they aren't open spots" : "it isn't an open spot"}.`;
     }
-    case "part of the check couldn't be verified": {
-      const n = num(row["reads_not_completed"]) ?? 0;
-      return `Part of this check couldn't be verified: ${plural(n, "Planning Center read", "Planning Center reads")} didn't complete.${row["too_old_to_treat_as_current"] === true ? " The check is also too old to treat as current." : ""}`;
-    }
+    case UNVERIFIED: return unverified(row, here);
     // Rooms, follow-ups and group meetings in the overview (tools.ts #operationsShown), as their own tools say them.
     case OVERVIEW_ROOM: return `${str(row["room"]) ?? "A room"} has bookings that overlap ${fromTo(row["overlap"], said)}.`;
     case OVERVIEW_FOLLOW_UP: return followUp(row);
@@ -227,7 +258,7 @@ const DECIDE = "Needs a decision", LOOK = "Worth a look";
 /** One of the overview's rows in the Sunday page's tone: "Resolved by you" once the leader decided it, as the overview no longer counts it. */
 const toneOfRow = (row: Row) => settled(row) ? RESOLVED : row["tone"] === "needs a decision" ? DECIDE : LOOK;
 /** One of the overview's rows without its tone, which the answer says once for its group (composeAnswer). */
-const overviewRow = (row: Row, day: Day, said: SaidDay = NO_DAY) => { const text = finding(row, said, day); return text ? `${text}${decided(row, day)}` : null; };
+const overviewRow = (row: Row, day: Day, said: SaidDay = NO_DAY, here: Here | null = null) => { const text = finding(row, said, day, here); return text ? `${text}${decided(row, day)}` : null; };
 
 /** The church systems other than Planning Center a Services tool's source may name (tools.ts HarnessData `source`). */
 const OTHER_SYSTEMS: ReadonlySet<string> = new Set(Object.values(SYSTEMS).map(s => s.name));
@@ -242,7 +273,7 @@ const inSystem = (text: string, system: string | null) => system ? text.replace(
 const noTeam = (role: string, system: string | null) => `${system ?? "This church system"} doesn't tie a team to each role, so Ozzie can't suggest who could help with ${role}.`;
 
 /** The sentence for one fact: a row of one of a tool's FACT_LISTS, or the payload itself (`list` null). */
-function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY, system: string | null = null): string | null {
+function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY, system: string | null = null, here: Here | null = null): string | null {
   const { tool, list: key, row, payload } = f;
   const role = str(row["role"]) ?? "this role", person = str(row["person"]) ?? "Someone";
   if (key === null) {
@@ -251,7 +282,7 @@ function sentenceFor(f: Fact, day: Day, said: SaidDay = NO_DAY, system: string |
   }
   switch (`${tool} ${key}`) {
     case "sunday.overview findings": {
-      const text = overviewRow(row, day, said);
+      const text = overviewRow(row, day, said, here);
       return text ? `${toneOfRow(row)}: ${text}` : null;
     }
     case "sunday.open_needs needs": {
@@ -399,9 +430,14 @@ function summary(tool: string, p: Row, day: Day): string | null {
       return [t === "off" ? "Your Church rules don't suggest check-ins." : `Your Church rules suggest a check-in after ${typeof t === "number" ? t : "several"} weeks in a row.`,
         leads.length ? `They ask for a ${lead} for ${list(leads)}.` : `They don't ask for a ${lead}.`, ...rooms].join(" ");
     }
-    case "planning_center.refresh":
-      return status === "checked again" ? `Ozzie checked Planning Center again: ${plural(num(p["reads"]) ?? 0, "read", "reads")}, ${num(p["reads_not_completed"]) ?? 0} didn't complete.`
-        : "The last Planning Center check is current, so Ozzie didn't need to check again.";
+    case "planning_center.refresh": {
+      if (status !== "checked again") return "The last Planning Center check is current, so Ozzie didn't need to check again.";
+      // Never "0 didn't complete" (0.5.7): reads that didn't complete are counted only when there are some.
+      const reads = num(p["reads"]) ?? 0, failed = num(p["reads_not_completed"]) ?? 0;
+      return failed ? `Ozzie checked Planning Center again: ${plural(reads, "read", "reads")}, ${failed} didn't complete.`
+        : reads > 1 ? `Ozzie checked Planning Center again: all ${reads} reads completed.` : reads === 1 ? "Ozzie checked Planning Center again: its one read completed."
+          : "Ozzie checked Planning Center again.";
+    }
     case "drafts.prepare_note": return "No draft was prepared, because that person isn't listed for an open need of this role.";
     default: return null;
   }
@@ -507,11 +543,17 @@ function grouped(rows: readonly { tone: string; text: string }[], lead: Row | nu
   return tones.flatMap(t => [...(plain ? [] : [`${t}:`]), ...rows.filter(r => r.tone === t).map(r => r.text)]);
 }
 
-/** Ozzie's lines for the chosen facts, in Ozzie's order, and the notes said after them. */
-function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[], day: Day): { lines: string[]; after: string[] } {
+/**
+ * Ozzie's lines for the chosen facts, in Ozzie's order, the notes said after them, and what puts in the words only this
+ * Mac knows (`local`, held as labels of their own until then; nothing to put in without it).
+ */
+function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[], day: Day, local: OnThisMac | null = null): { lines: string[]; after: string[]; fill: (shown: string) => string } {
   const system = otherSystemOf(evidence);
   const all = factsIn(evidence);
   const picked = facts.flatMap(id => all.get(id) ?? []);
+  const onMac = new KeptNames();
+  const here = (f: Fact): Here | null => local && f.tool === "sunday.overview" && f.list === "findings" && f.row["kind"] === UNVERIFIED
+    ? { part: local.unverifiedPart(evidence[f.envelope]!, f.row), kept: onMac } : null;
   // A room or follow-up chosen both from the overview and from its own tool is said once, in its own tool's fuller words.
   const ownRows = new Set(picked.filter(f => f.tool !== "sunday.overview" && f.list !== null).flatMap(keysOf));
   const chosen = byTeam(ordered(picked.filter(f => !(f.tool === "sunday.overview" && f.list === "findings"
@@ -520,7 +562,7 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
   // what is said once; what is shown can leave out what the answer already said.
   const rendered = chosen.flatMap(f => {
     if (repeatsRows(f, chosen)) return [];
-    const key = sentenceFor(f, day, NO_DAY, system);
+    const key = sentenceFor(f, day, NO_DAY, system, here(f));
     return key ? [{ f, key }] : [];
   });
   // Two tools can describe the same need: a sentence said in full at the start of a longer one (or said twice) is
@@ -545,7 +587,7 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
   const blocks = new Map<number, { tone: string; text: string }[]>();
   kept.forEach((r, i) => {
     if (r.f.tool === "sunday.overview" && r.f.list === "findings") {
-      const text = overviewRow(r.f.row, day, said(i));
+      const text = overviewRow(r.f.row, day, said(i), here(r.f));
       if (!text) return;
       if (!blocks.has(r.f.envelope)) { blocks.set(r.f.envelope, []); entries.push({ block: r.f.envelope }); }
       blocks.get(r.f.envelope)!.push({ tone: toneOfRow(r.f.row), text });
@@ -561,13 +603,13 @@ function composeLines(facts: readonly string[], evidence: readonly ToolEnvelope[
     ...(rendered.some(r => r.f.tool === "sunday.who_could_help" && r.f.row["status"] === "no overlap found") ? [NOT_FREE] : []),
     ...(people.length > 1 ? [NOT_RANKED] : []),
   ];
-  return { lines, after };
+  return { lines, after, fill: onMac.fill };
 }
 
 /**
  * Every fact named, as an answer choosing them all would say them, without an answer's limit on how many: for the copy
  * shared with other AI apps (core/mcp/render.ts), which says every fact a tool result holds in one piece, so the overview's
- * rows are grouped once under its sentence. Placeholder form.
+ * rows are grouped once under its sentence. Placeholder form, and only what the results hold: nothing this Mac alone knows.
  */
 export function composeFacts(facts: readonly string[], evidence: readonly ToolEnvelope[], day: DayWords | null = null): string[] {
   const { lines, after } = composeLines(facts, evidence, day);
@@ -578,12 +620,13 @@ export function composeFacts(facts: readonly string[], evidence: readonly ToolEn
  * The paragraphs for a verified answer (verify.ts), in placeholder form. A fact without a sentence is left out rather
  * than guessed at; an answer left with nothing to say says what wasn't covered. `day`: the watched service's day words
  * (the brief's `day`), so the answer names its real day and page; without them it uses the plan's date and neutral words,
- * never a fixed Sunday (decision 18).
+ * never a fixed Sunday (decision 18). `local`: on this Mac, what it may look up there (OnThisMac), put in by `fill`.
  */
-export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[], day: DayWords | null = null): ComposedAnswer {
+export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[], day: DayWords | null = null, local: OnThisMac | null = null): ComposedAnswer {
   const parsed = parseAnswer(answer);
-  if (!parsed) return { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
-  const { lines, after } = composeLines(parsed.facts, evidence, day);
+  const as = (shown: string) => shown;
+  if (!parsed) return { kind: "not-covered", paragraphs: [CANT_TELL], draft: null, fill: as };
+  const { lines, after, fill } = composeLines(parsed.facts, evidence, day, local);
   let draft: string | null = null;
   if (parsed.draft) {
     const drafted = evidence.find(e => (e.payload as Row | null)?.["draft_id"] === parsed.draft);
@@ -591,17 +634,17 @@ export function composeAnswer(answer: string, evidence: readonly ToolEnvelope[],
   }
   switch (parsed.answer) {
     case "facts":
-      return lines.length ? { kind: "facts", paragraphs: [...lines, ...after], draft: null } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
+      return lines.length ? { kind: "facts", paragraphs: [...lines, ...after], draft: null, fill } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null, fill: as };
     case "not-covered":
-      return { kind: "not-covered", paragraphs: [CANT_TELL, ...(lines.length ? [NOT_COVERED_MORE, ...lines, ...after] : [])], draft: null };
+      return { kind: "not-covered", paragraphs: [CANT_TELL, ...(lines.length ? [NOT_COVERED_MORE, ...lines, ...after] : [])], draft: null, fill };
     case "nothing-needs-a-decision": {
       // Every overview it read was for the services the question named: said for them, never for the whole check.
       const scopes = evidence.filter(e => e.tool === "sunday.overview").map(e => scopeOf(e.payload as Row));
       const where = scopes.length && scopes.every(x => x.length) ? list([...new Set(scopes.flat())]) : null;
-      return { kind: "nothing-needs-a-decision", paragraphs: [where ? nothingToDecideAt(where) : NOTHING_TO_DECIDE, ...lines, ...after], draft: null };
+      return { kind: "nothing-needs-a-decision", paragraphs: [where ? nothingToDecideAt(where) : NOTHING_TO_DECIDE, ...lines, ...after], draft: null, fill };
     }
     case "draft":
-      return draft ? { kind: "draft", paragraphs: [DRAFT_INTRO, ...lines, ...after], draft } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null };
+      return draft ? { kind: "draft", paragraphs: [DRAFT_INTRO, ...lines, ...after], draft, fill } : { kind: "not-covered", paragraphs: [CANT_TELL], draft: null, fill: as };
   }
 }
 
@@ -696,7 +739,9 @@ class KeptNames {
   }
   person(data: HarnessData, id: string | undefined) { return this.#label("person", (id && data.capture?.names[id]?.trim()) || "a team member"); }
   role(name: string | undefined) { return this.#label("role", name?.trim() || "a kids team"); }
-  readonly fill = (text: string) => text.replace(/\[Kept (?:person|role) ([1-9]\d{0,3})\]/gu, (whole, n: string) => this.#shown[+n - 1] ?? whole);
+  /** Words only this Mac knows, said as they are: a part of the check's plain reasons, a service's name (OnThisMac). */
+  part(text: string) { return this.#label("part", text); }
+  readonly fill = (text: string) => text.replace(/\[Kept (?:person|role|part) ([1-9]\d{0,3})\]/gu, (whole, n: string) => this.#shown[+n - 1] ?? whole);
 }
 
 type Kind = Finding["kind"];

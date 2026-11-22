@@ -94,6 +94,22 @@ export interface HarnessData {
   serviceOfFinding?: Readonly<Record<string, string>>;
 }
 export interface HarnessToolsOptions { now?: () => string }
+/**
+ * What only this Mac knows about one of the overview's rows for a part of the check that couldn't be verified
+ * (HarnessTools.unverifiedPart), for the answer written here (compose.ts): never in any tool result or request, and never
+ * in the copy for other AI apps.
+ */
+export interface UnverifiedPart {
+  /** How many roles, when every reason is a fact about a role as the church system lists it (sunday-brief.ts role_facts); else null. */
+  roles: number | null;
+  /**
+   * Its plain reasons as the service's page shows them, role names included. None when a read of its own service didn't
+   * complete or its check is out of date: then the overview row's own counts say it.
+   */
+  reasons: string[];
+  /** Its service by its own name, for an overview of more than one watched service that isn't for that service alone; null otherwise. */
+  service: string | null;
+}
 /** The services a task's question names, by their own names (header): its reads are for them only. Empty: every service. */
 export type Scope = readonly string[];
 
@@ -123,6 +139,12 @@ export const FACT_LISTS: Readonly<Partial<Record<ToolName, readonly string[]>>> 
 interface Numbering { fact: number; draft: number }
 /** Tasks whose numbering is kept; the oldest is forgotten first. */
 const KEEP_NUMBERING = 64;
+/** Overviews whose rows' own findings are kept (HarnessTools.unverifiedPart); the oldest is forgotten first. */
+const KEEP_PARTS = 64;
+/** A tool result by its content, whatever order its keys come back in: the key its rows' findings are kept under. */
+const contentKey = (e: Pick<ToolEnvelope, "source" | "check_time" | "payload">): string =>
+  JSON.stringify({ source: e.source, check_time: e.check_time, payload: e.payload }, (_k, v: unknown) => v && typeof v === "object" && !Array.isArray(v)
+    ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : v);
 
 /** Arguments exactly as the spec declares them, and every label one this session issued. Null when they don't fit. */
 export function checkArguments(spec: ToolSpec, args: unknown, session: HarnessSession): Record<string, string | number | boolean> | null {
@@ -251,7 +273,11 @@ const byId = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true 
 
 // ---- Running ----------------------------------------------------------------------------------------
 
-interface Result { completeness: Completeness; check_time: string; source: string; payload: Record<string, unknown>; list?: string }
+interface Result {
+  completeness: Completeness; check_time: string; source: string; payload: Record<string, unknown>; list?: string;
+  /** The overview's: what this Mac knows about each of its Services rows, by place (unverifiedPart). Never sealed into the result. */
+  parts?: readonly (UnverifiedPart | null)[];
+}
 interface Listed { id: string; person: string; status: Status; reasons?: string[] }
 const SERVICES = "Planning Center Services";
 
@@ -260,6 +286,8 @@ export class HarnessTools {
   readonly session: HarnessSession;
   readonly #now: () => string;
   readonly #numbering = new Map<string, Numbering>();
+  /** Each overview given out (by contentKey): what this Mac knows about its rows, by place. On this Mac only. */
+  readonly #parts = new Map<string, readonly (UnverifiedPart | null)[]>();
   constructor(data: HarnessData, session: HarnessSession = new HarnessSession(), options: HarnessToolsOptions = {}) {
     this.#data = data;
     this.session = session;
@@ -281,7 +309,14 @@ export class HarnessTools {
     let result: Result;
     if (name === "planning_center.refresh") result = await this.#refresh(signal);
     else result = this.#read(name, checked, scope);
-    return this.#seal(name, fit(name, numbered(name, result, this.#numberingFor(task))));
+    const out = fit(name, numbered(name, result, this.#numberingFor(task)));
+    const envelope = this.#seal(name, out);
+    if (out.parts) {
+      this.#parts.delete(contentKey(envelope));
+      this.#parts.set(contentKey(envelope), out.parts);
+      for (const old of this.#parts.keys()) { if (this.#parts.size <= KEEP_PARTS) break; this.#parts.delete(old); }
+    }
+    return envelope;
   }
   #numberingFor(task: string): Numbering {
     let n = this.#numbering.get(task);
@@ -334,10 +369,10 @@ export class HarnessTools {
     if (mode !== "live") return false;
     return own || (checkedAt !== null && Date.parse(this.#now()) > Date.parse(checkedAt) + LIVE_CHECK_VALID_MS);
   }
-  #servicesResult(payload: Record<string, unknown>, list?: string, scope: Scope = []): Result {
+  #servicesResult(payload: Record<string, unknown>, list?: string, scope: Scope = [], parts?: readonly (UnverifiedPart | null)[]): Result {
     const own = this.#reads(scope), at = this.#checkedAt(scope);
     const completeness: Completeness = this.#stale(at, own.stale) ? "stale" : own.failed ? "partial" : "complete";
-    return { source: this.#data.source ?? SERVICES, check_time: checkTime(at), completeness, payload, ...(list ? { list } : {}) };
+    return { source: this.#data.source ?? SERVICES, check_time: checkTime(at), completeness, payload, ...(list ? { list } : {}), ...(parts ? { parts } : {}) };
   }
   /**
    * When the check read: for a scope, the earliest of its services' own read times when the app gave them all (review B,
@@ -399,6 +434,32 @@ export class HarnessTools {
     if (!scope.length) return true;
     const own = this.#serviceOf(f);
     return own !== null && scope.some(s => serviceKey(s) === serviceKey(own));
+  }
+  /**
+   * On this Mac only (UnverifiedPart): what one of an overview's rows for a part of the check that couldn't be verified is
+   * about, as this Mac knew it when that overview was given out (kept by the result's content, the row by its numbered
+   * place, rowAt), so the answer written here says it in the service page's words instead of a count of reads that may
+   * be none (0.5.7), and never another check's or another service's reasons. Null for a result this Mac didn't give out
+   * here (another session, a copy). Nothing new is read, and what each tool returns stays exactly as it was.
+   */
+  unverifiedPart(envelope: ToolEnvelope, row: Record<string, unknown>): UnverifiedPart | null {
+    if (envelope.tool !== "sunday.overview" || row["kind"] !== KIND["worth-a-look"]) return null;
+    const number = (id: unknown) => typeof id === "string" && /^f[1-9]\d*$/u.test(id) ? Number(id.slice(1)) : NaN;
+    const index = number(row["fact"]) - number((envelope.payload as Record<string, unknown> | null)?.["fact"]) - 1;
+    const part = Number.isSafeInteger(index) && index >= 0 ? this.#parts.get(contentKey(envelope))?.[index] : undefined;
+    return part ? { ...part, reasons: [...part.reasons] } : null;
+  }
+  /**
+   * What this Mac knows about a part of the check that couldn't be verified (UnverifiedPart), for an overview for `scope`:
+   * its service, where the overview doesn't name that one service alone; its role facts; or its own plain reasons when
+   * every read of its own service completed and it is current (with several services, another service's failed reads
+   * are no reason of this one's).
+   */
+  #partOf(f: Finding, scope: Scope): UnverifiedPart {
+    const service = this.#data.serviceOfTeam && scope.length !== 1 ? this.#serviceOf(f) : null;
+    if (f.role_facts) return { roles: f.role_facts.roles, reasons: [...f.role_facts.reasons], service };
+    const own = Boolean(f.stale) || Boolean(f.unread?.length) || f.why.some(w => /didn't complete/u.test(w));
+    return { roles: null, reasons: own ? [] : [...f.why], service };
   }
   /** A scoped result's `service`, said before anything else: the label of each service it is for. Nothing when unscoped. */
   #scoped(scope: Scope): Record<string, unknown> {
@@ -505,7 +566,7 @@ export class HarnessTools {
       needs_a_decision: open.filter(f => f.tone === "decision").length + ops.decisions, worth_a_look: open.filter(f => f.tone === "look").length + ops.looks,
       ...(!this.#other && backgroundChecksOn(this.#data.rules) ? { kept_on_this_mac: KEPT_ON_THIS_MAC } : {}),
       findings: [...findings, ...ops.rows],
-    }, "findings", scope);
+    }, "findings", scope, mine.map(f => f.kind === "worth-a-look" ? this.#partOf(f, scope) : null));
   }
 
   /**

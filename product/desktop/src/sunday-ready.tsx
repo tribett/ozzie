@@ -2,7 +2,7 @@
 // everything still open for the Sunday on screen, in one place, with what wasn't checked and when it
 // was read. Built only from the brief, the person's decisions and the rooms / follow-ups check the
 // Sunday page shows; names resolve on this Mac only. Read-only: decisions happen on the Sunday page.
-import { blockoutRoles, blockoutTime, rosterSummary, shownUncertainties, sundayShownCount, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "../../../core/src/sunday-brief.js";
+import { blockoutRoles, blockoutTime, roleReasons, rosterSummary, shownUncertainties, sundayShownCount, serviceOfTeam, unnumberedRoster, withServices, type Finding, type SundayBrief, type TeamServices } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { includesSundayReady, scheduledSlots, type Scheduled } from "../../../core/src/harness/responsibilities.js";
@@ -44,7 +44,8 @@ export function sundayReadyLine(found: Finding, names: Names, d: DayWords = SUND
     case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
     case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} at ${blockoutTime(f) ? "that time" : "those times"}. ${f.source ?? "Planning Center"} still counts them.`;
     case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
-      : f.role_facts ? `${rolesUnchecked(f.role_facts.roles)}, so it isn't a full picture.` : `Part of ${d.thisOne} couldn't be checked, so it isn't a full picture.`;
+      // Only facts about roles: how many, then each plain reason, as the Services page says them.
+      : f.role_facts ? `${rolesUnchecked(f.role_facts.roles)}, so it isn't a full picture.${roleReasons(f)}` : `Part of ${d.thisOne} couldn't be checked, so it isn't a full picture.`;
     default: return f.why[0] ?? "Something else is worth a look.";
   }
 }

@@ -777,11 +777,12 @@ export function systemGaps(data: HarnessData, evidence: readonly Pick<ToolEnvelo
     ? [`${data.source} doesn't share how many people each role needs, so Ozzie can't say whether a role is full.`] : [];
 }
 export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: Skill | undefined, sender: string): ShownAnswer {
-  // The watched service's own day words, so an answer names Wednesday and "the Wednesday page" (review H4).
-  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
+  // The watched service's own day words, so an answer names Wednesday and "the Wednesday page" (review H4). What only this
+  // Mac knows (a part of the check's plain reasons) is put in after the restore.
+  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null, harness.tools);
   const mode = harness.data.mode;
   return {
-    body: composed.paragraphs.map(p => harness.restore(p, { sender })).join("\n\n"),
+    body: composed.paragraphs.map(p => composed.fill(harness.restore(p, { sender }))).join("\n\n"),
     draft: composed.draft ? harness.restore(composed.draft, { sender, firstNames: true }) : null,
     notCovered: composed.kind === "not-covered" || outcome.evidence.length === 0,
     basedOn: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
@@ -800,10 +801,10 @@ export function shownAnswer(harness: Harness, outcome: TaskOutcome, procedure: S
  * (Harness.keep), where the facts came from and when, what wasn't complete, and what it looked at.
  */
 export function keptWriteup(harness: Harness, outcome: TaskOutcome): { lines: string[]; based_on: string; gaps: string[]; steps: string[] } {
-  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null);
+  const composed = composeAnswer(outcome.answer ?? "", outcome.evidence, harness.data.brief?.day ?? null, harness.tools);
   const mode = harness.data.mode;
   return {
-    lines: composed.paragraphs.map(p => harness.keep(p)), based_on: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
+    lines: composed.paragraphs.map(p => composed.fill(harness.keep(p))), based_on: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
     gaps: evidenceGaps([...outcome.evidence, ...rowSources(harness, outcome)], mode), steps: outcomeSteps(outcome.events, outcome.evidence, mode),
   };
 }
@@ -879,8 +880,8 @@ export async function lookAtWhoCouldHelp(make: (data: HarnessData) => Harness, d
   // What the AI adds: Ozzie's lines for the facts it chose about the role, never about one person.
   const personFacts = new Set(results.flatMap(e => peopleIn(e).flatMap(p => p.fact ? [p.fact] : [])));
   const roleFacts = parsed.facts.filter(id => !personFacts.has(id));
-  const lines = parsed.answer === "facts" && roleFacts.length
-    ? composeAnswer(answerText({ ...parsed, facts: roleFacts }), outcome.evidence, h.data.brief?.day ?? null).paragraphs.map(p => h.restore(p)) : [];
+  const own = parsed.answer === "facts" && roleFacts.length ? composeAnswer(answerText({ ...parsed, facts: roleFacts }), outcome.evidence, h.data.brief?.day ?? null, h.tools) : null;
+  const lines = own ? own.paragraphs.map(p => own.fill(h.restore(p))) : [];
   look.kind = parsed.answer === "draft" ? "draft" : parsed.answer === "not-covered" ? "not-covered" : lines.length ? "lines" : "nothing";
   // A list cut to fit isn't a read that couldn't be finished: the card says it was shortened instead (review G, M-1).
   const cut = results.filter(e => cutIn(e) > 0 && e.completeness === "partial").length;

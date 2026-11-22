@@ -150,7 +150,8 @@ describe("Sunday page", () => {
     // Nothing implies a read failed, or that checking again would help.
     expect(t).not.toContain("Part of this Sunday couldn't be checked");
     expect(t).not.toContain("until every part is read");
-    expect(sundayReadyLine(b.findings.find(f => f.kind === "worth-a-look")!, {})).toBe("One role couldn't be checked, so it isn't a full picture.");
+    // Thursday's brief says each reason too, as the card does (2026-11-22: every answer on this Mac says the role and why).
+    expect(sundayReadyLine(b.findings.find(f => f.kind === "worth-a-look")!, {})).toBe(`One role couldn't be checked, so it isn't a full picture. ${reason} Ozzie couldn't tell from Planning Center who said yes for Lyrics, or when they serve.`);
     // A read that truly failed keeps its own words.
     c.reads = c.reads.map(r => r.collection === "person_blockouts" ? { ...r, outcome: "timeout" as const } : r);
     const failed = text(page(brief(c)));

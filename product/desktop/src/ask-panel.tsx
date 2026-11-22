@@ -18,6 +18,7 @@ import { MAX_QUESTION_CHARS, onDayPage, suggestedQuestions, type ChipServices } 
 import { kidsWording } from "../../../core/src/harness/compose.js";
 import type { Parsed } from "../../../core/src/harness/responsibilities.js";
 import type { SundayBrief } from "../../../core/src/sunday-brief.js";
+import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import type { DayWords } from "../../../core/src/service-day.js";
 import type { AskTurn, ShownAnswer } from "./harness-bridge.js";
 import {
@@ -318,6 +319,16 @@ export function TurnBody({ turn, page, onOpen, plans }: { turn: Turn; page?: str
   }
 }
 
+/**
+ * The findings Ask's suggested questions move on from, by key: what the person settled since the check on screen. Their
+ * own mark on the Services page (covered outside Planning Center, not needed: resolved until a later check reopens it),
+ * and `filled`, the roles adds made through Ozzie this session fill (App passes change-card.tsx `filledByAdds`, so the
+ * change code stays out of Ask's own modules). Display only: the questions asked are prepared as any other.
+ */
+export function settledRoles(brief: SundayBrief, decisions: readonly SundayDecision[], filled: readonly string[] = []): ReadonlySet<string> {
+  return new Set([...applyDecisions(brief, decisions).items.filter(i => i.state === "resolved").map(i => i.finding.key), ...filled]);
+}
+
 export function AskPanel(props: {
   open: boolean; onClose: () => void;
   /** Null until Ozzie's procedures are loaded. */
@@ -361,6 +372,8 @@ export function AskPanel(props: {
    * names the service of a role two of them hold ("Greeter (Weekend Service)"). Asking it sends labels only.
    */
   services?: ChipServices | undefined;
+  /** What the person settled since the check (settledRoles): suggested questions move on to a role still open. */
+  settled?: ReadonlySet<string> | undefined;
 }) {
   const { brief, modelReady } = props;
   // Several services watched now: a turn asked now keeps it (Turn `several`), and its answer covers them all (AnswerServices).
@@ -471,7 +484,7 @@ export function AskPanel(props: {
   };
 
   const chips = !canType || busy || listening !== "no" ? [] : props.here ? (props.here.checked ? [...props.here.chips] : [HELP_CHIP])
-    : ready ? suggestedQuestions(brief, props.services) : [HELP_CHIP];
+    : ready ? suggestedQuestions(brief, props.services, props.settled) : [HELP_CHIP];
   const off = voiceOff(voiceStatus);
   const answered = turns.length > 0;
   // What speaking does, or why it's off: under the question box until there is an answer, then folded with the other

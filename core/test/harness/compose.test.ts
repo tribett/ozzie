@@ -390,7 +390,7 @@ describe("fixed framing for each kind of answer", () => {
   });
   it("a draft is only the drafting tool's text (C1): a draft id with no draft, or another tool's, shows no draft", async () => {
     const evidence = await help();
-    expect(composeAnswer('{"answer":"draft","draft":"d1"}', evidence)).toEqual({ kind: "not-covered", paragraphs: [CANT_TELL], draft: null });
+    expect(composeAnswer('{"answer":"draft","draft":"d1"}', evidence)).toEqual({ kind: "not-covered", paragraphs: [CANT_TELL], draft: null, fill: expect.any(Function) });
   });
   it("each person's sentence takes the person from the fact itself (C3), so a label can't be moved onto another person's fact", async () => {
     const evidence = await help();
