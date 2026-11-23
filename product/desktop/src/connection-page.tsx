@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { moreOf, operationsGranted, yourName, YOUR_NAME_MAX, type ConnectionStatus } from "./connection.js";
 import { askForOperations, useOperationsReads } from "./operations-reads.js";
 import { MORE_LOST } from "./read-more.js";
+import { CARD_NAMES_READ } from "./people-question.js";
 import { MoreFromPlanningCenter } from "./planning-center-more.js";
 import type { Settings } from "./sunday-source.js";
 import type { ProactivePrefs } from "./proactive.js";
@@ -298,13 +299,18 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
         <h3 id="operations-title" className="settings-t">Rooms, follow-ups and group events</h3>
         <p className="find-body">Ozzie can also check room bookings in Planning Center Calendar, follow-ups without an owner in People, and group events at the same time as serving in Groups. {operationsGranted(status)
           ? "Your connection already includes Calendar, People and Groups, so turning this on needs no new sign-in."
-          : "Turning this on signs in again and asks Planning Center for Calendar, People and Groups access."} Planning Center grants each of those as read-and-write; Ozzie only reads Calendar, People and Groups, and has no way to change anything in them. People access is also used when you open a note for one person in Mail or Messages: Ozzie then reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, and uses one only to fill in To.</p>
+          : "Turning this on signs in again and asks Planning Center for Calendar, People and Groups access."} Planning Center grants each of those as read-and-write; Ozzie only reads Calendar, People and Groups, and has no way to change anything in them. People access is also used when you open a note for one person in Mail or Messages: Ozzie then reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, and uses one only to fill in To. {CARD_NAMES_READ}</p>
         <p className="checkline granted">{grantedCopy(status, readsOn)}</p>
         <div className="row form-actions">
           {!operationsGranted(status)
             ? <button className="btn btn-secondary" disabled={!canSignIn || working || pending} onClick={() => reconnect(true)}>Also check rooms, follow-ups and group events</button>
             : readsOn === false
-              ? <button className="btn btn-secondary" disabled={working} onClick={() => switchReads(true)}>Also check rooms, follow-ups and group events</button>
+              // People is held (allowed for a note's To line or the visitor cards): dropping it is here too, as the
+              // cards page's notice says (privacy review L5).
+              ? <>
+                <button className="btn btn-secondary" disabled={working} onClick={() => switchReads(true)}>Also check rooms, follow-ups and group events</button>
+                <button className="btn btn-quiet" disabled={!canSignIn || working || pending} onClick={() => reconnect(false)}>Connect again with Services only</button>
+              </>
               : <>
                 {readsOn === true && <button className="btn btn-secondary" disabled={working} onClick={() => switchReads(false)}>Turn off rooms, follow-ups and group events</button>}
                 <button className="btn btn-quiet" disabled={!canSignIn || working || pending} onClick={() => reconnect(false)}>Connect again with Services only</button>

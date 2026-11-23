@@ -6,6 +6,8 @@ pub mod anthropic;
 pub mod background;
 pub mod calendar_link;
 pub mod callback;
+// Visitor cards: the name on one card looked up in Planning Center People while cards are checked.
+pub mod card_lookup;
 // Changes in Planning Center, one at a time, with a person's yes: the closed list of writes.
 pub mod change;
 // Whole-day calendar arithmetic: the own-key route's month, a plan's weekday.

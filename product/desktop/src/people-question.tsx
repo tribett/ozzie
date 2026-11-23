@@ -8,6 +8,11 @@
 //
 // Ozzie still only reads People: the sign-in asks for People together with Calendar and Groups because Planning Center gives
 // them together. Nothing here reads an address: native fills in To when the note opens (draft-actions.tsx).
+//
+// The same sheet asks for People on the Visitor cards page (`purpose` "cards", owner decision 2026-11-23): there it's for
+// looking up the name on each card in Planning Center People (card-lookup.ts), with its own title and body, no
+// "Open it without an address", and a sign-in said to be for the cards, which never turns on rooms, follow-ups or group
+// events either (main.rs `SignInFor`).
 import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./icons.js";
 import { useModal } from "./modal.js";
@@ -24,11 +29,22 @@ export const peopleBody = (name: string) =>
  * Ozzie can check says the same sentences (read-more.tsx `MORE_PEOPLE_TO`).
  */
 export const PEOPLE_TO_READ = "Each time you open a note for one person in Mail or Messages, Ozzie reads that person's email addresses or phone numbers, and whether Planning Center lists them as a child, for that one person only. It uses one only to fill in To, keeps it nowhere, and never sends it to an AI. A person Planning Center lists as a child is never addressed.";
-export const PEOPLE_READS = `${PEOPLE_TO_READ} ` +
+/**
+ * People's other read (owner decision 2026-11-23; native card_lookup.rs): the name on each visitor card, looked up while
+ * the cards are checked. Said wherever People is allowed, beside the To line's, so every read is stated where it is first
+ * allowed (review P, L8).
+ */
+export const CARD_NAMES_READ = "While you check cards on the Visitor cards page, Ozzie looks up the name on each card in Planning Center People, only to show whether someone with that name is already there. It reads only the name of each person it finds and the number Planning Center uses for them, keeps nothing after the cards end, and never sends a card's name to an AI.";
+export const PEOPLE_READS = `${PEOPLE_TO_READ} ${CARD_NAMES_READ} ` +
   // Native reads rooms, follow-ups and group events only while Settings' switch is on, never because of this grant
   // (sunday_check.rs ChurchReads::operations, commit 2159c645; first-run review H1).
   "Allowing it starts nothing else: room bookings, follow-ups and group meetings are read only if you turn them on in Settings.";
 export const ALLOW_PEOPLE = "Allow People access in my browser";
+/** The sheet on the Visitor cards page. */
+export const CARDS_PEOPLE_TITLE = "Look up the names in Planning Center?";
+export const cardsPeopleBody = () =>
+  `To show whether the name on each card is already in Planning Center, Ozzie needs to read Planning Center People. Ozzie asks for People together with Calendar and Groups, and Planning Center words it as read-and-write. ${promise("connectAnd")}`;
+export const CARDS_NOT_GRANTED = "Planning Center didn't add People this time, so Ozzie still can't look up the names on the cards. Nothing else changed.";
 export const WITHOUT_ADDRESS = "Open it without an address";
 export const PEOPLE_WAITING = "Waiting for you to choose Allow in your browser…";
 export const PEOPLE_CHECKING = "Planning Center said yes. Checking…";
@@ -57,6 +73,12 @@ export const peopleAccess: PeopleAccess = {
   status: () => connection.status(),
   cancel: () => connection.cancel(),
 };
+/** The same sign-in for the Visitor cards page: said to be for the cards, so its grant starts nothing else either. */
+export const cardsPeopleAccess: PeopleAccess = {
+  start: async () => connection.connectApp(true, moreOf(await connection.status().catch(() => null)), "people-for-cards"),
+  status: () => connection.status(),
+  cancel: () => connection.cancel(),
+};
 /** About five minutes for Allow (native's attempt lasts five), plus a little for the check after. */
 const WAIT_MS = 330_000;
 
@@ -75,18 +97,22 @@ export function peopleOutcome(status: ConnectionStatus | null): PeopleEnd | null
 const endOf = (state: unknown, problem: unknown): PeopleEnd =>
   problem === "denied" ? "denied" : state === "expired" ? "expired" : state === "cancelled" ? "cancelled" : "failed";
 
-export function PeopleQuestion({ name, onAddressed, onWithout, onClose, access = peopleAccess, pollMs = 1000, clock = Date.now }: {
-  /** The name the page already shows for this person, or "this person". */
-  name: string;
-  /** People is granted now: open the note addressed. */
+export function PeopleQuestion({ purpose = "note", name = "this person", onAddressed, onWithout = () => undefined, onClose, access, pollMs = 1000, clock = Date.now }: {
+  /** What People is asked for: a note's To line (as always), or the names on visitor cards. */
+  purpose?: "note" | "cards" | undefined;
+  /** The name the page already shows for this person, or "this person" (a note only). */
+  name?: string | undefined;
+  /** People is granted now: open the note addressed (a note), or look the names up (the cards). */
   onAddressed: () => void;
-  /** "Open it without an address": the page remembers it and opens the note with To empty. */
-  onWithout: () => void;
+  /** "Open it without an address": the page remembers it and opens the note with To empty (a note only). */
+  onWithout?: (() => void) | undefined;
   /** Escape or closing the sheet: nothing opens. */
   onClose: () => void;
   access?: PeopleAccess | undefined; pollMs?: number | undefined; clock?: (() => number) | undefined;
 }) {
   const id = useId();
+  const cards = purpose === "cards";
+  const signIn = access ?? (cards ? cardsPeopleAccess : peopleAccess);
   const [phase, setPhase] = useState<"ask" | "waiting" | "checking">("ask");
   const [end, setEnd] = useState<PeopleEnd | null>(null);
   const title = useRef<HTMLHeadingElement>(null);
@@ -104,7 +130,7 @@ export function PeopleQuestion({ name, onAddressed, onWithout, onClose, access =
     const current = () => alive.current && attempt.current === mine;
     setEnd(null);
     setPhase("waiting");
-    try { await access.start(); }
+    try { await signIn.start(); }
     catch (error) {
       if (!current()) return;
       setPhase("ask");
@@ -116,7 +142,7 @@ export function PeopleQuestion({ name, onAddressed, onWithout, onClose, access =
       await new Promise(resolve => setTimeout(resolve, pollMs));
       if (!current()) return;
       let status: ConnectionStatus | null;
-      try { status = await access.status(); } catch { status = null; }
+      try { status = await signIn.status(); } catch { status = null; }
       if (!current()) return;
       const outcome = peopleOutcome(status);
       if (outcome === undefined && clock() < until) { setPhase(status?.state === "checking" ? "checking" : "waiting"); continue; }
@@ -126,23 +152,24 @@ export function PeopleQuestion({ name, onAddressed, onWithout, onClose, access =
       return;
     }
   };
-  const cancel = () => { attempt.current++; setPhase("ask"); setEnd("cancelled"); void access.cancel().catch(() => undefined); };
+  const cancel = () => { attempt.current++; setPhase("ask"); setEnd("cancelled"); void signIn.cancel().catch(() => undefined); };
 
   return <div className="people-scrim">
     <div className="people-sheet" role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} aria-describedby={`${id}-b`} ref={sheet}
       // Escape closes the sheet, never a sign-in in progress (spec §0.1): while waiting, Cancel is the way out.
       onKeyDown={e => { if (e.key === "Escape" && !waiting) { e.stopPropagation(); onClose(); } }}>
-      <h2 id={`${id}-t`} className="h3" tabIndex={-1} ref={title}>{PEOPLE_TITLE}</h2>
-      <p id={`${id}-b`}>{peopleBody(name)}</p>
+      <h2 id={`${id}-t`} className="h3" tabIndex={-1} ref={title}>{cards ? CARDS_PEOPLE_TITLE : PEOPLE_TITLE}</h2>
+      <p id={`${id}-b`}>{cards ? cardsPeopleBody() : peopleBody(name)}</p>
       <p className="small">{PEOPLE_READS}</p>
       <p className="people-wait" aria-live="polite">{waiting && <><Icon name="spinner" small spin />{phase === "checking" ? PEOPLE_CHECKING : PEOPLE_WAITING}</>}</p>
-      {end && <p role={end === "cancelled" ? undefined : "alert"} className={end === "cancelled" ? "small" : "problem"}>{PEOPLE_ENDS[end]}</p>}
+      {end && <p role={end === "cancelled" ? undefined : "alert"} className={end === "cancelled" ? "small" : "problem"}>{cards && end === "not-granted" ? CARDS_NOT_GRANTED
+        : cards && end === "cancelled" ? "Nothing changed. You can try again, or check the cards without looking the names up." : PEOPLE_ENDS[end]}</p>}
       <div className="people-acts">
         {waiting
           ? <button type="button" className="btn btn-quiet" onClick={cancel}>Cancel</button>
           : <>
             <button type="button" className="btn btn-primary" onClick={() => { void allow(); }}>{ALLOW_PEOPLE}</button>
-            <button type="button" className="btn btn-secondary" onClick={onWithout}>{WITHOUT_ADDRESS}</button>
+            {!cards && <button type="button" className="btn btn-secondary" onClick={onWithout}>{WITHOUT_ADDRESS}</button>}
             <button type="button" className="btn btn-quiet btn-sm" onClick={onClose}>Not now</button>
           </>}
       </div>

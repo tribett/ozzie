@@ -8,8 +8,20 @@
 // whoever comes back to the Mac. Nothing is saved (no storage, files, recordings or logs), nothing goes to an AI model,
 // and nothing is added to Planning Center; photos are revoked object URLs. App.tsx keeps this page mounted once opened,
 // hidden when another page is shown, and hears only how many cards are open.
+//
+// One thing leaves this Mac, by the owner's decision of 2026-11-23: while the cards are being checked (open, on screen
+// and on this page), the name on each card is looked up in the church's own Planning Center People, each distinct name
+// once unless that lookup was stopped or couldn't finish, or the person asks again (card-lookup.ts; native card_lookup.rs
+// reads only each match's id and name). Only a name goes, only to Planning
+// Center, never to an AI; what came back lives beside the cards and ends with them. A name match is never taken to be
+// the same person.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSystemWords } from "./church-system.js";
+import {
+  availabilityLine, CARD_NAMES_NEW, cardNames, LOOK_AGAIN, lookFirstLine, lookupAvailability, lookupWords, NameLookups, UNCLEAR_NOT_LOOKED_UP,
+  type CardNames, type LookupAvailability, type NameLookup, type PeopleAccessKnown,
+} from "./card-lookup.js";
+import { ALLOW_PEOPLE, PeopleQuestion, type PeopleAccess } from "./people-question.js";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { fields, type CardView, type FieldName, type Reading } from "../../../core/src/card-review/lifecycle.js";
@@ -259,11 +271,19 @@ async function writeClipboard(text: string): Promise<boolean> {
 
 const joined = (items: string[]) => items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
-/** What to look at first: possible matches with people already in the latest check, repeated names, and unclear readings. */
-export function lookFirst(cards: readonly CardView[], people: Readonly<Record<string, string>>, source: Sources = {}): { card: number; text: string }[] {
+/**
+ * What to look at first: names Planning Center People already has (`found`: what looking each card's name up found, when
+ * it was looked up), otherwise possible matches with people already in the latest check, then repeated names and unclear
+ * readings. A card is named once for its name: Planning Center's answer, when it has someone, in place of the check's.
+ */
+export function lookFirst(cards: readonly CardView[], people: Readonly<Record<string, string>>, source: Sources = {},
+  found: (name: string) => NameLookup | null = () => null): { card: number; text: string }[] {
   const out: { card: number; text: string }[] = [];
   for (const card of cards) {
     const name = card.fields.name.text.trim();
+    const lookup = name && card.fields.name.state === "typed" ? found(name) : null;
+    const inPlanningCenter = lookup && lookFirstLine(card.label, name, lookup);
+    if (inPlanningCenter) { out.push({ card: card.id, text: inPlanningCenter }); continue; }
     const matches = name ? possibleMatches(name, people).map(id => people[id]!) : [];
     if (matches.length) out.push({ card: card.id, text: `${card.label}: “${name}” has the same name as ${joined([...new Set(matches)])} in the latest check. Worth a look: only the name matches, which doesn't show it's the same person. Ozzie won't combine them. Check Planning Center before adding anyone.` });
   }
@@ -296,6 +316,8 @@ export const KEPT_TITLE = "Kept on this Mac until you discard them";
 /** All the box says up front, beside its title (owner's polish pass, 2026-11-18); when the cards end is under KEPT_MORE. */
 export const KEPT_PROMISE = "Nothing here is saved in Ozzie, sent to an AI model or added to Planning Center. Keep your original photos.";
 export const KEPT_MORE = "When these cards end";
+/** In When these cards end, while names are looked up (live test, 2026-11-23): the lookup ends with the cards too. */
+export const KEPT_LOOKUP = "While they're open, the name on each card is looked up in Planning Center People, read-only, and what Ozzie found ends with them.";
 export const KEPT_BODY = "These cards stay in Ozzie's memory while it is open: switching to another app, going to another page or closing the window keeps them. If the window was closed or minimized, the screen locked or the Mac slept, they wait behind Show the cards. They end when:";
 /** Every way the cards end, and which ask first: native app_menu.rs and always_on.rs (quitting), updates-view.tsx
  *  (updating), connection.ts `switchCopy` (switching churches). Nothing holds the Mac's own exits. */
@@ -360,7 +382,24 @@ export function namesBeside(check: ShownCheck | null, inUse: string | null, exam
  * changed or `discarded` goes up (Disconnect, after its question). Names beside the cards come only from a check of the
  * church the cards belong to while it is in use (`namesBeside`). It reads no setting and no ID typed in Settings.
  */
-export function KeptCards({ check, example, inUse, disconnected, signInAgain = false, discarded = 0, onScreen = true, onOpenCards, review, noNames = null }: {
+/**
+ * Looking each card's name up in Planning Center People (card-lookup.ts), as the host runs it: whether it can happen
+ * now, for which church, the bridge (tests pass their own), "Open in Planning Center" for a person it found (App's, or
+ * none), and the People question's sign-in (tests).
+ */
+export interface CardLookup {
+  availability: LookupAvailability;
+  church: string | null;
+  names?: CardNames | undefined;
+  openPerson?: ((id: string) => void) | null | undefined;
+  access?: PeopleAccess | undefined;
+  /** Whether "New: … now looks up the name on each card" was said on this Mac (App's card-names-notice.ts). */
+  notice?: { seen(): boolean; see(): void } | undefined;
+}
+const NO_LOOKUP: CardLookup = { availability: "waiting", church: null };
+
+export function KeptCards({ check, example, inUse, disconnected, signInAgain = false, discarded = 0, onScreen = true, onOpenCards, review, noNames = null,
+  access = "unknown", shown = true, openPerson = null, names, peopleAccess, notice }: {
   /** The check on screen, if any. */
   check: ShownCheck | null;
   /** Whether the fictional example is on. */
@@ -378,6 +417,20 @@ export function KeptCards({ check, example, inUse, disconnected, signInAgain = f
   review?: GivenReview | undefined;
   /** The church's system gives no names (Genesis): said in place of any promise of matches (review of 4c3d32ac, M-f). */
   noNames?: string | null;
+  /**
+   * People access as App knows it (connection.ts `granted`), or "other-system" for a church on B1 Church, Breeze or
+   * Genesis: decides whether each card's name is looked up in Planning Center People (`lookupAvailability`).
+   */
+  access?: PeopleAccessKnown;
+  /** Whether the Visitor cards page is the page shown (not another page, not setup): names are looked up only then. */
+  shown?: boolean;
+  /** "Open in Planning Center" for a person a lookup found (App's planning-center-pages.ts), or none. */
+  openPerson?: ((id: string) => void) | null;
+  /** Tests: the lookup bridge and the People question's sign-in. */
+  names?: CardNames | undefined;
+  peopleAccess?: PeopleAccess | undefined;
+  /** "New: … now looks up the name on each card", said once on this Mac (App's card-names-notice.ts). */
+  notice?: { seen(): boolean; see(): void } | undefined;
 }) {
   const [open, setOpen] = useState(0);
   const [at, setAt] = useState<CardsAt>(() => ({ church: inUse, epoch: 0 }));
@@ -386,9 +439,14 @@ export function KeptCards({ check, example, inUse, disconnected, signInAgain = f
   if (next !== at) setAt(next);
   const told = useCallback((n: number) => { setOpen(n); onOpenCards?.(n); }, [onOpenCards]);
   const beside = noNames && !example ? { names: {}, why: noNames } : namesBeside(check, next.church === inUse ? inUse : null, example, disconnected, signInAgain);
-  return <CardsPage people={beside.names} noMatches={beside.why} workspace={`cards-${next.epoch}-${discarded}`} onScreen={onScreen} onOpenCards={told} review={review} />;
+  // Names are looked up only for the church the cards belong to while it is the one in use (never while the example is
+  // on, never on another system), and only with People allowed.
+  const availability = lookupAvailability({ example, access, disconnected, signInAgain, inUse, cardsChurch: next.church });
+  const lookup: CardLookup = { availability, church: availability === "on" ? inUse : null, names, openPerson, access: peopleAccess, notice };
+  return <CardsPage people={beside.names} noMatches={beside.why} workspace={`cards-${next.epoch}-${discarded}`} onScreen={onScreen} onOpenCards={told} review={review}
+    lookup={lookup} shown={shown} />;
 }
-export function CardsPage({ people, noMatches = null, workspace, onScreen = true, onOpenCards, review }: {
+export function CardsPage({ people, noMatches = null, workspace, onScreen = true, onOpenCards, review, lookup = NO_LOOKUP, shown = true }: {
   people: Readonly<Record<string, string>>; workspace: string;
   /** Why no names are offered as possible matches, when none are (`namesBeside`). */
   noMatches?: string | null;
@@ -397,13 +455,18 @@ export function CardsPage({ people, noMatches = null, workspace, onScreen = true
   /** How many cards are open (a count only), so quitting can ask first. */
   onOpenCards?: ((count: number) => void) | undefined;
   review?: GivenReview | undefined;
+  /** Looking each card's name up in Planning Center People; none unless App says it can (`KeptCards`). */
+  lookup?: CardLookup | undefined;
+  /** Whether this page is the one shown. */
+  shown?: boolean | undefined;
 }) {
-  return <CardsHost key={workspace} people={people} noMatches={noMatches} workspace={workspace} onScreen={onScreen} onOpenCards={onOpenCards} given={review} />;
+  return <CardsHost key={workspace} people={people} noMatches={noMatches} workspace={workspace} onScreen={onScreen} onOpenCards={onOpenCards} given={review}
+    lookup={lookup} shown={shown} />;
 }
 
-function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given }: {
+function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given, lookup, shown }: {
   people: Readonly<Record<string, string>>; noMatches: string | null; workspace: string; onScreen: boolean; onOpenCards?: ((count: number) => void) | undefined;
-  given?: GivenReview | undefined;
+  given?: GivenReview | undefined; lookup: CardLookup; shown: boolean;
 }) {
   const [controller, setController] = useState<CardReviewController | null>(null);
   const [, redraw] = useState(0);
@@ -415,22 +478,67 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given 
   const current = useRef<number | null>(null);
   const recognizer = useRef<Recognizer>("unknown");
   const [veiled, setVeiled] = useState(false);
+  // Looking each card's name up in Planning Center People (card-lookup.ts): what was found lives here, beside the review,
+  // and is dropped whenever the review closes. `typing`: cards whose name is being typed, not looked up until it's done.
+  const found = useRef<NameLookups | null>(null);
+  const [, relook] = useState(0);
+  const [refused, setRefused] = useState(false);
+  const [typing, setTyping] = useState<ReadonlySet<number>>(() => new Set());
+  const [askingPeople, setAskingPeople] = useState(false);
+  // "New: …" for this set of cards, the first time any are checked with lookups on (privacy review L5).
+  const [newRead, setNewRead] = useState(false);
+  const lookupNow = useRef(lookup);
+  lookupNow.current = lookup;
   useLayoutEffect(() => {
     const review = given?.controller ?? new CardReviewController(workspace, keptImages());
+    const names = new NameLookups({
+      names: { lookUp: (church, name) => (lookupNow.current.names ?? cardNames).lookUp(church, name), cancel: () => (lookupNow.current.names ?? cardNames).cancel() },
+      church: () => lookupNow.current.church,
+      onChange: () => relook(v => v + 1),
+      onRefused: () => setRefused(true),
+    });
+    found.current = names;
     let open = review.status === "active";
     const stopReading = () => { void cardReader.cancel().catch(() => undefined); };
     const unsubscribe = review.subscribe(() => {
       const now = ["choosing", "loading", "active"].includes(review.status);
-      // Closing (finish, discard, interruption) lets go of the files and what was read, and stops any reading in progress.
-      if (!now) { files.current.fill(null); recognized.current.clear(); }
+      // Closing (finish, discard, interruption) lets go of the files, what was read and what was looked up, and stops any
+      // reading or looking up in progress.
+      if (!now) { files.current.fill(null); recognized.current.clear(); names.clear(); setNewRead(false); }
       if (open && !now) stopReading();
       open = now;
       flushSync(() => redraw(v => v + 1));
     });
     const unbind = bindKeep(review, window);
     setController(review);
-    return () => { files.current.fill(null); files.current = []; recognized.current.clear(); current.current = null; unsubscribe(); unbind(); stopReading(); };
+    return () => {
+      files.current.fill(null); files.current = []; recognized.current.clear(); current.current = null; unsubscribe(); unbind(); stopReading();
+      names.clear(); found.current = null;
+    };
   }, [workspace]);
+  // Names are looked up only while the cards are being checked: open, on this page, on screen and not waiting behind
+  // Show the cards, with lookups possible for the church they belong to. Otherwise anything under way stops.
+  useEffect(() => {
+    const names = found.current;
+    if (!names || !controller) return;
+    const checking = controller.status === "active" && lookup.availability === "on" && !refused && shown && onScreen && !veiled;
+    if (!checking) { names.pause(); return; }
+    let wanted: string[] = [];
+    controller.render(view => {
+      wanted = view.cards.filter(c => c.fields.name.state === "typed" && !typing.has(c.id)).map(c => c.fields.name.text);
+    });
+    names.resume();
+    names.want(wanted);
+    if (lookup.notice && !lookup.notice.seen()) { lookup.notice.see(); setNewRead(true); }
+  });
+  // People allowed again, or another reason to look names up (or not): Planning Center's refusal is asked about afresh.
+  // The example (its people are made up) or another church system drops every answer Planning Center gave, so no real
+  // person's name stays on the cards meanwhile, and coming back looks each name up afresh (privacy review M1).
+  useEffect(() => {
+    setRefused(false);
+    if (lookup.availability === "example" || lookup.availability === "other-system") found.current?.clear();
+    else found.current?.allowAgain();
+  }, [lookup.availability]);
   // Get this Mac's reader ready while the person finds their photos. It reads only Ozzie's own
   // practice picture; a card chosen meanwhile simply waits for it.
   useLayoutEffect(() => {
@@ -479,6 +587,7 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given 
   };
   const start = () => {
     recognized.current.clear();
+    setTyping(new Set());
     setUi(u => ({ ...emptyUi, recognizer: u.recognizer }));
     const t = pickCards(controller, cardPhotos.choose, (t, chosen) => { void begin(t, chosen); },
       problem => setUi(u => ({ ...u, refused: problem })));
@@ -494,19 +603,82 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given 
     if (controller.finish(ticket) !== "finished") controller.discard();
     setUi(u => ({ ...u, ended: "copied", copied: count, followUps, copyProblem: false }));
   };
-  return <CardsReview controller={controller} ticket={ticket} ui={ui} people={people} noMatches={noMatches} onChoose={start}
-    lines={controller.status === "active" ? Object.fromEntries(recognized.current) : {}}
-    onCopy={() => { void copy(); }}
-    onDiscard={() => { if (ticket !== null) controller.discard(ticket); setUi(u => ({ ...u, ended: "discarded" })); }}
-    onSource={(id, field, from) => setUi(u => ({ ...u, source: { ...u.source, [id]: { ...u.source[id], [field]: from } } }))}
-    onRemoved={id => { recognized.current.delete(id); setUi(u => ({ ...u, source: Object.fromEntries(Object.entries(u.source).filter(([k]) => Number(k) !== id)) })); }} />;
+  const names = found.current;
+  const availability: LookupAvailability = refused && lookup.availability === "on" ? "refused" : lookup.availability;
+  // What Planning Center said is shown only while names can be looked up (privacy review M1): never beside the example,
+  // another system, a sign-in being checked or a refusal, and no one can be opened then.
+  const showing = availability === "on";
+  const view: LookupView = {
+    availability,
+    found: text => showing ? names?.get(text) ?? null : null,
+    again: text => { names?.again(text); },
+    openPerson: showing ? lookup.openPerson ?? null : null,
+    onAllow: () => setAskingPeople(true),
+    onTyping: (id, now) => setTyping(t => t.has(id) === now ? t : new Set(now ? [...t, id] : [...t].filter(c => c !== id))),
+    newRead: newRead && showing,
+  };
+  return <>
+    <CardsReview controller={controller} ticket={ticket} ui={ui} people={people} noMatches={noMatches} onChoose={start}
+      lines={controller.status === "active" ? Object.fromEntries(recognized.current) : {}}
+      onCopy={() => { void copy(); }}
+      onDiscard={() => { if (ticket !== null) controller.discard(ticket); setUi(u => ({ ...u, ended: "discarded" })); }}
+      onSource={(id, field, from) => setUi(u => ({ ...u, source: { ...u.source, [id]: { ...u.source[id], [field]: from } } }))}
+      onRemoved={id => { recognized.current.delete(id); setUi(u => ({ ...u, source: Object.fromEntries(Object.entries(u.source).filter(([k]) => Number(k) !== id)) })); }}
+      lookup={view} />
+    {/* "Allow People access in my browser": the same sheet as a note's To line, asked for the cards (people-question.tsx). */}
+    {askingPeople && <PeopleQuestion purpose="cards" access={lookup.access} onAddressed={() => setAskingPeople(false)} onClose={() => setAskingPeople(false)} />}
+  </>;
+}
+
+/** What the page shows of looking each card's name up (`CardsHost`), and what the person can do there. */
+export interface LookupView {
+  availability: LookupAvailability;
+  /** What looking a card's name up found so far, or null when it hasn't been (or isn't) looked up. */
+  found: (name: string) => NameLookup | null;
+  /** "Look this name up again". */
+  again: (name: string) => void;
+  /** "Open in Planning Center" for a person it found, or none. */
+  openPerson: ((id: string) => void) | null;
+  /** "Allow People access in my browser". */
+  onAllow: () => void;
+  /** A card's name is being typed (true), or typing it is done (false): it is looked up only then. */
+  onTyping: (card: number, typing: boolean) => void;
+  /** Say "New: … now looks up the name on each card" above these cards. */
+  newRead?: boolean | undefined;
+}
+export const NO_LOOKUP_VIEW: LookupView = { availability: "waiting", found: () => null, again() {}, openPerson: null, onAllow() {}, onTyping() {} };
+const OPEN_IN_PLANNING_CENTER = "Open in Planning Center";
+
+/** A card's line about its name in Planning Center People, in the same style as the card's other facts. */
+function NameLine({ card, lookup, openPerson, onAgain }: { card: string; lookup: NameLookup; openPerson: ((id: string) => void) | null; onAgain: () => void }) {
+  const words = lookupWords(card, lookup);
+  if (!words) return null;
+  if (lookup.state === "looking") return <p className="small" role="status"><Icon name="spinner" small spin /> {words.lead}</p>;
+  return <div className={words.worth ? "panel-info cards-lookup" : "panel-sunken cards-lookup"}>
+    <Icon name={words.worth ? "user" : "info"} small />
+    <div className="stack-tight">
+      {/* The badge on its own line above the heading, as on other finding cards (live test, 2026-11-23). */}
+      {words.worth && <div><span className="badge b-look"><Icon name="eye" small />Worth a look</span></div>}
+      <p className="bold">{words.lead}</p>
+      <p className="small">{words.body}</p>
+      {lookup.state === "found" && openPerson && <div className="row">{lookup.people.map(p =>
+        <button type="button" key={p.id} className="btn btn-quiet btn-sm" onClick={() => openPerson(p.id)}>
+          {lookup.people.length === 1 ? <>{OPEN_IN_PLANNING_CENTER}<span className="sr-only"> ({p.name})</span></> : `Open ${p.name} in Planning Center`}</button>)}</div>}
+      {words.source && <p className="small">{words.source}</p>}
+      {lookup.state === "not-checked" && lookup.why === "could-not-check" &&
+        <div><button type="button" className="btn btn-quiet btn-sm" onClick={onAgain}>{LOOK_AGAIN}</button></div>}
+    </div>
+  </div>;
 }
 
 /** The page body. Rendered by the host above and by the tests with a controller on fixed fictional data. */
-export function CardsReview({ controller, ticket, ui, people, noMatches = null, lines, onChoose, onCopy, onDiscard, onSource, onRemoved, askingToDiscard = false }: {
+export function CardsReview({ controller, ticket, ui, people, noMatches = null, lines, onChoose, onCopy, onDiscard, onSource, onRemoved, askingToDiscard = false,
+  lookup = NO_LOOKUP_VIEW }: {
   controller: CardReviewController; ticket: number | null; ui: CardsUi; people: Readonly<Record<string, string>>;
   /** Why no names are offered as possible matches, said once cards are open. */
   noMatches?: string | null | undefined;
+  /** Looking each card's name up in Planning Center People (`CardsHost`); none by default. */
+  lookup?: LookupView | undefined;
   lines: Readonly<Record<number, readonly ReadLine[]>>;
   onChoose: () => void; onCopy: () => void; onDiscard: () => void;
   onSource: (card: number, field: FieldName, from: FieldSource) => void; onRemoved: (card: number) => void;
@@ -529,9 +701,12 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
   const reading = Object.values(ui.reading).filter(s => s === "waiting" || s === "reading").length;
   const total = Object.keys(ui.reading).length;
   const allChecked = cards.length > 0 && cards.every(c => c.reviewed);
-  const first = active ? lookFirst(cards, people, ui.source) : [];
+  const first = active ? lookFirst(cards, people, ui.source, lookup.found) : [];
   // A church on another system: the same sentences name it, and its connection doesn't end the cards (no question asks).
   const w = useSystemWords();
+  // Whether each card's name is looked up in Planning Center People, said once, when it isn't (nothing before a church
+  // system is chosen).
+  const lookupLine = active && !w.unchosen ? availabilityLine(lookup.availability, what => w.notHere(what)) : null;
   // Nothing chosen yet (round 5): no church to switch from, so the system's own line, said neutrally.
   const ends = w.system === "planning-center" && !w.unchosen ? KEPT_ENDS
     : KEPT_ENDS.map(end => end.startsWith("Ozzie switches to another church") ? "You switch to another church system in Settings. Ozzie asks first." : end);
@@ -548,6 +723,7 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
         <summary><Icon name="chev" small />{KEPT_MORE}</summary>
         <p>{KEPT_BODY}</p>
         <ul>{ends.map(end => <li key={end}>{end}</li>)}</ul>
+        {lookup.availability === "on" && <p>{KEPT_LOOKUP}</p>}
       </details>
     </div>
     {ui.recognizer === "not-available"
@@ -569,7 +745,14 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
       <p><strong>Reviewed here; nothing saved to your church's tools.</strong> Copied {ui.copied === 1 ? "1 card" : `${ui.copied} cards`}. Paste the list where your church keeps visitor records.{ui.followUps > 0 && ` The list includes ${ui.followUps === 1 ? "1 prepared follow-up" : `${ui.followUps} prepared follow-ups`}. Choose who will follow up in your church tools; Ozzie won't contact anyone.`} This review is closed and nothing from it was kept in Ozzie. The list is on this Mac's clipboard until you copy something else; if you use Universal Clipboard or a clipboard history app, it may be there too.</p></div>}
     {status === "closed" && ui.ended !== "copied" && (ui.ended === "discarded" || total > 0) && <p className="panel-sunken">{ui.ended === "discarded" ? "Discarded. Nothing from these cards was kept." : "This review is closed and nothing from it was kept."} Choose the photos again to start over.</p>}
 
-    {active && noMatches && <p className="small">{w.say(noMatches)}</p>}
+    {/* With names looked up in Planning Center People, the check's names aren't the only matches, so why there are none
+        from it isn't said. */}
+    {active && noMatches && lookup.availability !== "on" && <p className="small">{w.say(noMatches)}</p>}
+    {active && lookup.newRead && <p className="panel-info" role="status"><Icon name="info" small /><span>{CARD_NAMES_NEW}</span></p>}
+    {lookupLine && <div className="stack-tight">
+      <p className="small">{lookupLine}</p>
+      {lookup.availability === "not-allowed" && <div><button type="button" className="btn btn-secondary btn-sm" onClick={lookup.onAllow}>{ALLOW_PEOPLE}</button></div>}
+    </div>}
     {active && first.length > 0 && <section className="panel-info cards-first" aria-labelledby="first-title">
       <Icon name="eye" />
       <div className="stack-tight">
@@ -580,7 +763,7 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
 
     {active && cards.map(card => <CardItem key={`${ticket}-${card.id}`} card={card} controller={controller} ticket={ticket!}
       state={ui.reading[card.id] ?? "by-hand"} source={ui.source[card.id] ?? {}} lines={lines[card.id] ?? []} people={people}
-      onSource={onSource} onRemoved={onRemoved} />)}
+      onSource={onSource} onRemoved={onRemoved} lookup={lookup} />)}
 
     {open && <footer className="cards-end">
       {active && <button type="button" className="btn btn-primary" disabled={!allChecked || reading > 0} onClick={onCopy}>Copy the reviewed list</button>}
@@ -598,10 +781,11 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
   </div>;
 }
 
-function CardItem({ card, controller, ticket, state, source, lines, people, onSource, onRemoved }: {
+function CardItem({ card, controller, ticket, state, source, lines, people, onSource, onRemoved, lookup }: {
   card: CardView; controller: CardReviewController; ticket: number; state: ReadState;
   source: Readonly<Partial<Record<FieldName, FieldSource>>>; lines: readonly ReadLine[];
   people: Readonly<Record<string, string>>; onSource: (card: number, field: FieldName, from: FieldSource) => void; onRemoved: (card: number) => void;
+  lookup: LookupView;
 }) {
   const [large, setLarge] = useState(false);
   const { say } = useSystemWords();
@@ -609,6 +793,15 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
   const busy = state === "waiting" || state === "reading";
   const name = card.fields.name.text.trim();
   const matches = name ? possibleMatches(name, people).map(id => people[id]!) : [];
+  // What Planning Center People has for this name, once looked up. When it has someone, that is said in place of the
+  // check's possible match; when it has no one but the check matched, only the check's match is said, so the card never
+  // says two things that disagree.
+  const nameState = card.fields.name.state;
+  const inPeople = name && nameState === "typed" ? lookup.found(name) : null;
+  const peopleHas = inPeople?.state === "found" || inPeople?.state === "more";
+  const showMatch = matches.length > 0 && !peopleHas;
+  const showPeople = inPeople && !(inPeople.state === "none" && matches.length > 0);
+  const hardName = lookup.availability === "on" && name !== "" && (nameState === "unclear" || nameState === "not-readable");
   const unclear = fields.some(f => card.fields[f].state === "unclear" || card.fields[f].state === "not-readable");
   const empty = fields.some(f => card.fields[f].state === "unreviewed");
   const edit = (field: FieldName, text: string, hard: boolean) => {
@@ -658,8 +851,10 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
         {state === "failed" && <span className="small">This card couldn't be read. Please type it.</span>}
       </div>
       {unlabeled && <p className="small">This Mac read this card but found no printed labels like “Name:”, so it filled nothing in. Put the lines it read where they belong, or type what you see.</p>}
-      {matches.length > 0 && <p className="panel-info"><Icon name="user" small />
+      {showMatch && <p className="panel-info"><Icon name="user" small />
         <span><span className="badge b-look"><Icon name="eye" small />Worth a look</span> Possible match: {joined(matches)} in the latest check {matches.length === 1 ? "has" : "have"} the same name. Only the name matches, and a name alone doesn't show it's the same person. Ozzie won't combine them.</span></p>}
+      {showPeople && <NameLine card={name} lookup={inPeople} openPerson={lookup.openPerson} onAgain={() => lookup.again(name)} />}
+      {hardName && <p className="small">{UNCLEAR_NOT_LOOKED_UP}</p>}
       {fields.map(field => {
         const value = card.fields[field];
         const hard = value.state === "unclear" || value.state === "not-readable";
@@ -676,7 +871,13 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
         const props = {
           id, className: "input", value: value.text, maxLength: LIMIT[field], disabled: busy, autoComplete: "off", spellCheck: false,
           "aria-describedby": note ? `${id}-note` : undefined,
-          onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { edit(field, e.target.value, hard); onSource(card.id, field, "typed"); },
+          onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+            // Said before the edit redraws the page, so a name half typed is never looked up.
+            if (field === "name") lookup.onTyping(card.id, true);
+            edit(field, e.target.value, hard); onSource(card.id, field, "typed");
+          },
+          // A typed name is looked up once typing it is done.
+          onBlur: field === "name" ? () => lookup.onTyping(card.id, false) : undefined,
         };
         return <div className="cards-field" key={field}>
           <div className="cards-field-top">

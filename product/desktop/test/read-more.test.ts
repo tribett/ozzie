@@ -36,7 +36,7 @@ import { finishItems, FinishSettingUp, openItem, type FinishFacts } from "../src
 import { finishStore, type KeyValue } from "../src/moments.js";
 import { DayProvider } from "../src/day-words.js";
 import { promise } from "../src/promises.js";
-import { PEOPLE_ENDS, PEOPLE_READS, PEOPLE_TO_READ, PEOPLE_WAITING } from "../src/people-question.js";
+import { CARD_NAMES_READ, PEOPLE_ENDS, PEOPLE_READS, PEOPLE_TO_READ, PEOPLE_WAITING } from "../src/people-question.js";
 import type { ConnectionStatus } from "../src/connection.js";
 import { SundayPage } from "../src/sunday-page.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
@@ -191,8 +191,9 @@ describe("Services only: the offer", () => {
     expect(t).toContain(promise("names"));
     // People's other read, said where it is first allowed, in the To sheet's own tested sentences (review L8).
     expect(t).toContain(MORE_PEOPLE_TO);
-    expect(MORE_PEOPLE_TO).toBe(`With People, Ozzie also fills in To on a note. ${PEOPLE_TO_READ}`);
-    expect(PEOPLE_READS.startsWith(PEOPLE_TO_READ)).toBe(true);
+    // Both of People's other reads, in the People sheet's own sentences (owner decision 2026-11-23: the names on visitor cards).
+    expect(MORE_PEOPLE_TO).toBe(`With People, Ozzie also fills in To on a note and looks up the names on visitor cards. ${PEOPLE_TO_READ} ${CARD_NAMES_READ}`);
+    expect(PEOPLE_READS.startsWith(`${PEOPLE_TO_READ} ${CARD_NAMES_READ} `)).toBe(true);
     expect(t).toContain(MORE_BUTTON);
     expect(t).toContain("Not now");
     expect(t).toContain(MORE_HIDE);

@@ -932,6 +932,10 @@ fn target_for(collection: Collection) -> Target {
         | Collection::PendingChecksAwaitingApplicant
         | Collection::PendingChecksReportProcessing
         | Collection::PendingChecksNeedsReview => Target::people_person("50"),
+        // A visitor card's name (card_lookup_tests.rs).
+        Collection::PeopleNameSearch => {
+            Target::name_search(SearchName::new("Riley Fictional").unwrap())
+        }
     }
 }
 /// A valid request for every collection: the picker's reads come before a plan is chosen, so
@@ -945,9 +949,16 @@ fn valid(collection: Collection) -> SourceRequest {
         | Collection::PersonChild
         | Collection::PendingChecksAwaitingApplicant
         | Collection::PendingChecksReportProcessing
-        | Collection::PendingChecksNeedsReview => ("", ""),
+        | Collection::PendingChecksNeedsReview
+        | Collection::PeopleNameSearch => ("", ""),
         Collection::UpcomingPlans => ("10", ""),
         _ => ("10", "20"),
+    };
+    // A card's name search asks for one short page.
+    let per_page = if collection == Collection::PeopleNameSearch {
+        NAME_SEARCH_PAGE
+    } else {
+        100
     };
     SourceRequest::capture_at(
         &binding(),
@@ -955,12 +966,12 @@ fn valid(collection: Collection) -> SourceRequest {
         plan,
         collection,
         &target_for(collection),
-        100,
+        per_page,
         0,
     )
     .unwrap()
 }
-const ALL: [Collection; 36] = [
+const ALL: [Collection; 37] = [
     Collection::Plan,
     Collection::Organization,
     Collection::PlanTimes,
@@ -997,6 +1008,7 @@ const ALL: [Collection; 36] = [
     Collection::PendingChecksAwaitingApplicant,
     Collection::PendingChecksReportProcessing,
     Collection::PendingChecksNeedsReview,
+    Collection::PeopleNameSearch,
 ];
 
 #[test]

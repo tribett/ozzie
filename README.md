@@ -35,7 +35,8 @@ invented people). No church data is shown.
   scheduled on kids teams, and Groups events; each only if you turn it
   on, People forms, Check-Ins and Registrations, below; with People
   access, one person's email addresses or phone numbers when you open a note
-  for them, below; and, when you ask to add someone to an open role, whether
+  for them, below, and a People search for the name on each visitor card while
+  you check the cards, below; and, when you ask to add someone to an open role, whether
   Planning Center lists that person as a child and as active and, for a team
   marked as a kids team, their background check status and end date (cleared
   and unfinished checks), below). It changes nothing in
@@ -47,12 +48,15 @@ invented people). No church data is shown.
   anything else, and never changes anything on its own. The Services, Calendar,
   People and Groups reads are listed in
   [docs/build/sunday-capture-contract.md](docs/build/sunday-capture-contract.md);
-  every read, these three and the two below included, is an operation in
-  `core/native-auth/src/source.rs`. For a note's To line Ozzie reads only
+  every read, these three, the two below and the card name search included, is
+  an operation in `core/native-auth/src/source.rs`. For a note's To line Ozzie reads only
   `/people/v2/people/{id}?include=emails&fields[Person]=child,emails&fields[Email]=address,primary,blocked`
   (Mail) or
   `/people/v2/people/{id}?include=phone_numbers&fields[Person]=child,phone_numbers&fields[PhoneNumber]=number,primary,location`
-  (Messages), for that one person (`core/native-auth/src/contact.rs`).
+  (Messages), for that one person (`core/native-auth/src/contact.rs`). For a
+  visitor card's name it reads only
+  `/people/v2/people?where[search_name]={name}&fields[Person]=name&per_page=5&offset=0`
+  (`core/native-auth/src/card_lookup.rs`).
   Signing in, renewing access and disconnecting use Planning Center's standard
   OAuth sign-in endpoints.
 - **Or reads B1 Church or Breeze, and changes nothing there.** A church that plans its
@@ -214,8 +218,22 @@ invented people). No church data is shown.
   screen locked or the Mac slept they wait behind "Show the cards". Names from
   this Sunday's check are offered beside a card as possible matches only when
   the check is of the church Ozzie is using; while no church is in use, and
-  while the example is on, none are. Nothing
-  from a card goes to an AI model or into Planning Center.
+  while the example is on, none are. While you check the cards, and only with
+  People access, Ozzie looks up the name on each card in your church's
+  Planning Center People to show whether someone with that name is already
+  there: only while the cards are open and on screen, one at a time, each
+  name once (again only after that lookup was stopped or couldn't finish,
+  after the example or another church system was turned on and off again, or
+  when you choose "Look this name up again"), for the church Ozzie is using
+  (its sign-in is checked with Planning Center before each search), reading
+  each match's name and Planning Center id only (at most five; more is said
+  without names). A name with a word that has no letter, or with more than
+  three digits, isn't sent. A
+  matching name is said to be possibly someone else, and what it found ends
+  with the cards (`core/native-auth/src/card_lookup.rs`). It isn't done while
+  the example is on or with B1 Church, Breeze or Genesis. Only a card's name
+  goes, and only to Planning Center; nothing from a card goes to an AI model
+  or is added to Planning Center.
 - **Shares its last check with other AI apps, if you turn it on.** Off by
   default. Another AI app on the same Mac (for example Claude Desktop) can
   read Ozzie's last saved check through a small read-only server, with

@@ -338,7 +338,7 @@ describe("speaking a question in Ask", () => {
     const turn: Turn = { id: 1, question: "Read these visitor cards", state: "cards" };
     const html = body(turn);
     expect(html).toContain("Visitor cards are read on this Mac, on the Visitor cards page");
-    expect(html).toContain("Nothing from them goes to an AI model or into Planning Center.");
+    expect(html).toContain("Nothing from them goes to an AI model or is added to Planning Center.");
     expect(html).toContain(">Open Visitor cards<");
     // Already on that page: no button to where the person already is.
     expect(renderToStaticMarkup(React.createElement(TurnBody, { turn, page: "cards", onOpen: () => {} }))).not.toContain("Open Visitor cards");

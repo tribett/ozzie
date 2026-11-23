@@ -211,6 +211,69 @@ pub enum Collection {
     PendingChecksReportProcessing,
     /// One person's background checks waiting for the church's review (`filter=needs_review`).
     PendingChecksNeedsReview,
+    // Visitor cards (card_lookup.rs; owner decision 2026-11-23): in-process only, never on the stdin
+    // protocol, never part of a Sunday check or a recording, never followed past its first page.
+    /// Planning Center People's own name search (`where[search_name]`) for the name on one visitor
+    /// card, while a person checks the cards: one page of at most `NAME_SEARCH_PAGE` people, each
+    /// with its id and display name only (`fields[Person]=name`). No include, no other field.
+    PeopleNameSearch,
+}
+/// The most people one visitor card's name search asks Planning Center for (its `per_page`).
+pub const NAME_SEARCH_PAGE: u16 = 5;
+/// The name on one visitor card, as it may go to Planning Center People's name search: one line,
+/// its whitespace collapsed to single spaces, 2 to `NAME_CHARS` characters in at most `NAME_WORDS`
+/// words, each character a letter, a digit, a space, an apostrophe (`'` or `’`), a hyphen or a
+/// period, with at least two letters, a letter in every word and at most `NAME_DIGITS` digits in
+/// all, so no phone number, nor part of one, goes with a name (privacy review L1). Nothing else (no
+/// `@`, no `%` or `_`, which a search could read as a wildcard, no control or direction character) is
+/// ever sent, and nothing is repaired but the spaces. Deliberately no Display or Serialize; its Debug
+/// form withholds the name.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SearchName(String);
+/// The longest name looked up, in characters, and the most words in it.
+pub const NAME_CHARS: usize = 80;
+pub const NAME_WORDS: usize = 6;
+/// The most digits a name looked up may hold ("Flo901"), so no phone number goes with it.
+pub const NAME_DIGITS: usize = 3;
+impl std::fmt::Debug for SearchName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SearchName(withheld)")
+    }
+}
+impl SearchName {
+    pub fn new(text: &str) -> Option<Self> {
+        if text.len() > NAME_CHARS * 4 * 2 {
+            return None;
+        }
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let name = words.join(" ");
+        let chars = name.chars().count();
+        let allowed = |c: char| c.is_alphanumeric() || matches!(c, ' ' | '\'' | '\u{2019}' | '-' | '.');
+        let ok = (2..=NAME_CHARS).contains(&chars)
+            && (1..=NAME_WORDS).contains(&words.len())
+            && name.chars().all(allowed)
+            && name.chars().filter(|c| c.is_alphabetic()).count() >= 2
+            && words.iter().all(|word| word.chars().any(char::is_alphabetic))
+            && name.chars().filter(|c| c.is_numeric()).count() <= NAME_DIGITS;
+        ok.then_some(Self(name))
+    }
+    /// The query value: each byte that isn't an ASCII letter, digit or one of `-._~` as `%XX`
+    /// (RFC 3986, upper-case hex), so a space is `%20` and nothing in a name can add a parameter.
+    fn encoded(&self) -> String {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut out = String::with_capacity(self.0.len() * 3);
+        for byte in self.0.bytes() {
+            if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+                out.push(char::from(byte));
+            } else {
+                let digit = |nibble: u8| HEX.get(usize::from(nibble)).copied().unwrap_or(b'0');
+                out.push('%');
+                out.push(char::from(digit(byte >> 4)));
+                out.push(char::from(digit(byte & 0x0F)));
+            }
+        }
+        out
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -280,6 +343,7 @@ impl Collection {
             Self::PendingChecksAwaitingApplicant => "pending_checks_awaiting_applicant",
             Self::PendingChecksReportProcessing => "pending_checks_report_processing",
             Self::PendingChecksNeedsReview => "pending_checks_needs_review",
+            Self::PeopleNameSearch => "people_name_search",
         }
     }
     pub fn product(self) -> Product {
@@ -299,7 +363,8 @@ impl Collection {
             | Self::PersonChild
             | Self::PendingChecksAwaitingApplicant
             | Self::PendingChecksReportProcessing
-            | Self::PendingChecksNeedsReview => Product::People,
+            | Self::PendingChecksNeedsReview
+            | Self::PeopleNameSearch => Product::People,
             Self::GroupsPersonMemberships | Self::GroupsGroupEvents => Product::Groups,
             Self::CheckInsEvents
             | Self::CheckInsLocations
@@ -351,6 +416,8 @@ impl Collection {
             Self::PersonEmails | Self::PersonPhoneNumbers | Self::PersonChild => {
                 Scope::PersonRecord
             }
+            // `/people/v2/people`: the People Organization is its parent.
+            Self::PeopleNameSearch => Scope::Organization,
         }
     }
     /// Which Sunday ids a request names: (service type, plan). Every Sunday read names both;
@@ -364,7 +431,8 @@ impl Collection {
             | Self::PersonChild
             | Self::PendingChecksAwaitingApplicant
             | Self::PendingChecksReportProcessing
-            | Self::PendingChecksNeedsReview => (false, false),
+            | Self::PendingChecksNeedsReview
+            | Self::PeopleNameSearch => (false, false),
             Self::UpcomingPlans => (true, false),
             _ => (true, true),
         }
@@ -437,6 +505,7 @@ impl Collection {
             | Self::PendingChecksAwaitingApplicant
             | Self::PendingChecksReportProcessing
             | Self::PendingChecksNeedsReview => "background_checks",
+            Self::PeopleNameSearch => "people",
             Self::ServiceTypes => "service_types",
             Self::UpcomingPlans => "plans",
             Self::PeopleForms => "forms",
@@ -483,7 +552,12 @@ impl Collection {
             Self::RegistrationsSignups => "Signup",
             Self::RegistrationsAttendees => "Attendee",
             Self::PersonEmails | Self::PersonPhoneNumbers | Self::PersonChild => "Person",
+            Self::PeopleNameSearch => "Person",
         }
+    }
+    /// A read of one page only: its next link is never followed, so it is dropped unread.
+    fn one_page(self) -> bool {
+        matches!(self, Self::PeopleNameSearch)
     }
 }
 /// Reads whose rows carry a free-text display `name` (a room, follow-up workflow or step, a
@@ -556,6 +630,8 @@ pub(crate) struct Target {
     pub(crate) checkins_event_time_id: Option<String>,
     pub(crate) signup_id: Option<String>,
     pub(crate) window: Option<Window>,
+    /// A visitor card's name, for `PeopleNameSearch` only.
+    pub(crate) name_search: Option<SearchName>,
 }
 impl Target {
     pub(crate) fn event(id: &str) -> Self {
@@ -624,6 +700,12 @@ impl Target {
             ..Self::default()
         }
     }
+    pub(crate) fn name_search(name: SearchName) -> Self {
+        Self {
+            name_search: Some(name),
+            ..Self::default()
+        }
+    }
     pub(crate) fn within(mut self, window: &Window) -> Self {
         self.window = Some(window.clone());
         self
@@ -675,6 +757,8 @@ pub struct SourceRequest {
     pub(crate) signup_id: Option<String>,
     #[serde(skip)]
     pub(crate) window: Option<Window>,
+    #[serde(skip)]
+    pub(crate) name_search: Option<SearchName>,
     #[serde(skip)]
     pub(crate) profile: Profile,
 }
@@ -740,6 +824,7 @@ impl SourceRequest {
             checkins_event_time_id: target.checkins_event_time_id.clone(),
             signup_id: target.signup_id.clone(),
             window: target.window.clone(),
+            name_search: target.name_search.clone(),
             profile: Profile::Capture,
         };
         request.validate()?;
@@ -798,13 +883,19 @@ impl SourceRequest {
             || !scoped
             || !windowed
             || (!self.collection.paginated() && self.offset != 0)
+            // A card's name only for the name search, which always has one, on one short page.
+            || (self.collection == Collection::PeopleNameSearch)
+                != self.name_search.is_some()
+            || (self.collection == Collection::PeopleNameSearch
+                && (self.per_page > NAME_SEARCH_PAGE || self.offset != 0))
         {
             return Err(SourceError::InvalidRequest);
         }
         Ok(())
     }
     /// Fixed, non-paging query parameters for this read, in URL order. Window values are
-    /// validated canonical instants; nothing else in a query comes from outside this table.
+    /// validated canonical instants; nothing else in a query comes from outside this table but a
+    /// visitor card's checked, percent-encoded name (`PeopleNameSearch`).
     fn query(&self) -> Vec<(&'static str, String)> {
         let fixed = |pairs: &[(&'static str, &str)]| -> Vec<(&'static str, String)> {
             pairs.iter().map(|&(k, v)| (k, v.to_owned())).collect()
@@ -898,6 +989,20 @@ impl SourceRequest {
                 ("filter", "needs_review"),
                 ("fields[BackgroundCheck]", "status,person"),
             ]),
+            // A visitor card's name (card_lookup.rs): Planning Center People's own name search (People
+            // 2025-11-10: the Person's `where[search_name]` and `fields[Person]`), with each person's
+            // display name and nothing else. The name is the one value here that comes from outside
+            // this table: checked by `SearchName::new` and percent-encoded whole.
+            Collection::PeopleNameSearch => vec![
+                (
+                    "where[search_name]",
+                    self.name_search
+                        .as_ref()
+                        .map(SearchName::encoded)
+                        .unwrap_or_default(),
+                ),
+                ("fields[Person]", "name".to_owned()),
+            ],
             _ => Vec::new(),
         }
     }
@@ -1513,6 +1618,7 @@ impl SourceRequest {
                     Collection::PersonEmails
                         | Collection::PersonPhoneNumbers
                         | Collection::PersonChild
+                        | Collection::PeopleNameSearch
                 ) =>
             {
                 PERSON
@@ -1721,6 +1827,8 @@ impl SourceRequest {
             Collection::PendingChecksAwaitingApplicant
             | Collection::PendingChecksReportProcessing
             | Collection::PendingChecksNeedsReview => &[("status", true, Fact::Code)],
+            // A visitor card's name search: each person's display name, and nothing else.
+            Collection::PeopleNameSearch => &[("name", true, Fact::Text)],
         }
     }
     fn relationships(&self) -> &'static [&'static str] {
@@ -1796,6 +1904,8 @@ impl SourceRequest {
             Collection::PendingChecksAwaitingApplicant
             | Collection::PendingChecksReportProcessing
             | Collection::PendingChecksNeedsReview => &["person"],
+            // Every link a person renders (campus, households, whoever created them) is dropped.
+            Collection::PeopleNameSearch => &[],
         }
     }
     /// Included resource types this read asked for. Protocol reads never keep `included`.
@@ -1962,6 +2072,8 @@ fn confirm(request: &SourceRequest, row: &Value) -> Result<(), SourceError> {
             parent("person", &request.people_person_id)
                 && attribute("status") == Some("needs_review")
         }
+        // A person the search found always has a name to show.
+        Collection::PeopleNameSearch => attribute("name").is_some_and(|name| !name.trim().is_empty()),
         _ => true,
     };
     if kept {
@@ -2203,6 +2315,7 @@ pub fn project_page(
         }
         if let Some(next) = meta.get("next")
             && !next.is_null()
+            && !request.collection.one_page()
         {
             let offset = next
                 .get("offset")
@@ -2232,7 +2345,9 @@ pub fn project_page(
     if let Some(links) = raw.get("links") {
         let links = links.as_object().ok_or(SourceError::InvalidResponse)?;
         let mut output = Map::new();
-        if let Some(next) = links.get("next") {
+        if let Some(next) = links.get("next")
+            && !request.collection.one_page()
+        {
             output.insert("next".into(), page_link(request, next)?);
         }
         body["links"] = Value::Object(output);

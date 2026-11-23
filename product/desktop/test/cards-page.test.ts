@@ -602,7 +602,10 @@ describe("cards are kept until the leader discards them or quits Ozzie (audit it
 
   it("their text stays out of every way off this Mac: nothing that sends anything reaches the cards' code", async () => {
     const { ALL, NATIVE_COMMANDS, names, reach, source } = await import("../../../core/test/stays-on-this-mac-imports.js");
-    const CARDS = (p: string) => p === "product/desktop/src/cards-page.tsx" || p.startsWith("product/src/card-review/") || p.startsWith("core/src/card-review/") || p === "core/src/card-fields.ts";
+    // Looking each card's name up in Planning Center People (card-lookup.ts, owner decision 2026-11-23) is the cards' own code.
+    const LOOKUP = "product/desktop/src/card-lookup.ts";
+    const CARDS = (p: string) => p === "product/desktop/src/cards-page.tsx" || p.startsWith("product/src/card-review/") || p.startsWith("core/src/card-review/") || p === "core/src/card-fields.ts"
+      || p === LOOKUP;
     const SENDING = ["ask_ozzie", "reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect",
       "save_shortcuts_check", "speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center", "phone_notice_test", "ledger_admit", "ledger_event", "ledger_transition"];
     const boundary = ALL.filter(p => !CARDS(p) && (SENDING.some(c => names(source(p), c)) || p.startsWith("core/src/harness/") || p.startsWith("core/mcp/")));
@@ -611,6 +614,15 @@ describe("cards are kept until the leader discards them or quits Ozzie (audit it
     // The cards page names only the card reader's and the photo window's commands.
     const named = NATIVE_COMMANDS.filter(c => names(source("product/desktop/src/cards-page.tsx"), c)).sort();
     expect(named).toEqual(["cancel_card_reading", "choose_card_photos", "prepare_card_reader", "read_card_text"]);
+    // The one way a card's name leaves this Mac: the lookup's bridge names only its own two commands, nothing else in the
+    // app's source names them (so no model route, notice, What happened entry or other AI app can look a name up), and it
+    // imports only the cards' own code.
+    const LOOKUPS = ["cancel_card_name_lookups", "look_up_card_name"];
+    for (const c of LOOKUPS) expect(NATIVE_COMMANDS, c).toContain(c);
+    expect(NATIVE_COMMANDS.filter(c => names(source(LOOKUP), c)).sort()).toEqual(LOOKUPS);
+    expect(ALL.filter(p => LOOKUPS.some(c => source(p).includes(c)))).toEqual([LOOKUP]);
+    const fieldRules = reach("core/src/card-fields.ts");
+    expect([...reach(LOOKUP)].filter(p => !CARDS(p) && !fieldRules.has(p))).toEqual([]);
     // Only App.tsx imports the page.
     expect(ALL.filter(p => !CARDS(p) && [...reach(p, true)].includes("product/desktop/src/cards-page.tsx") && p !== "product/desktop/src/App.tsx" && p !== "product/desktop/src/main.tsx")).toEqual([]);
   }, 30_000); // reads the whole source tree; slow when the Mac is busy

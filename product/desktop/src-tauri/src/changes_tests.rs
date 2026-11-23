@@ -332,10 +332,14 @@ fn only_the_confirm_command_makes_a_change_and_only_undo_takes_one_off() {
             );
         }
         if let Some(rest) = path.strip_prefix("ozzie_native_auth::") {
+            // And the card lookups' state, only to wait for one holding the connection's turn (privacy
+            // review L3; card_names.rs checks that nothing else of it is used here).
             assert!(
                 rest.starts_with("change::")
                     || rest == "oauth::numeric_id"
-                    || rest == "sunday_check::SundayCapture",
+                    || rest == "sunday_check::SundayCapture"
+                    || rest == "card_lookup::CHANGE_WAITS"
+                    || rest == "card_lookup::CardLookups",
                 "changes.rs reaches {path}"
             );
         }

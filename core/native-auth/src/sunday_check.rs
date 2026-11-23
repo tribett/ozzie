@@ -1437,6 +1437,8 @@ fn valid_read(capture: &SundayCapture, binding: &Binding, read: &SundayRead) -> 
         checkins_event_time_id: read.checkins_event_time_id.clone(),
         signup_id: read.signup_id.clone(),
         window: read.window.clone(),
+        // A recording never holds a visitor card's name search (`collection_of` knows no such read).
+        name_search: None,
     };
     let Ok(request) = SourceRequest::capture_at(
         binding,
@@ -1705,6 +1707,8 @@ pub struct Turns(std::sync::Arc<(std::sync::Mutex<Option<Reader>>, std::sync::Co
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reader {
     Check,
+    /// Setup's picker; also a visitor card's name looked up in People (card_lookup.rs), the same kind of brief, bounded
+    /// read that a check waits for and a note or a change hears as Ozzie reading Planning Center.
     Picker,
     /// Filling in To on a note: one person's email address or mobile number (contact.rs).
     Note,

@@ -29,11 +29,11 @@ export const moreOf = (status: Pick<ConnectionStatus, "scopes"> | null | undefin
 };
 const moreArgs = (more: MoreProducts) => ({ ...(more.checkIns ? { checkIns: true } : {}), ...(more.registrations ? { registrations: true } : {}) });
 /**
- * What a browser sign-in is for, when it is one of these two: the rooms, follow-ups and group reads (operations-reads.ts
- * `askForOperations`), or People for a note's To line (people-question.tsx). Native keeps it with the sign-in, and only a
+ * What a browser sign-in is for, when it is one of these: the rooms, follow-ups and group reads (operations-reads.ts
+ * `askForOperations`), or People for a note's To line or for the names on visitor cards (people-question.tsx). Native keeps it with the sign-in, and only a
  * grant from one started for the reads lets the page turn their switch on (main.rs `set_operations_reads`; review M1).
  */
-export type SignInPurpose = "operations" | "people-for-to";
+export type SignInPurpose = "operations" | "people-for-to" | "people-for-cards";
 const purposeArgs = (purpose: SignInPurpose | undefined) => (purpose ? { purpose } : {});
 const starting = new Set<(purpose: SignInPurpose | undefined) => void>();
 /** Hears every browser sign-in as it starts, with its purpose (none for any other sign-in). Returns a way to stop. */

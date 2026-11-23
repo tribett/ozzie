@@ -1,7 +1,7 @@
 import { shouldRefreshStale } from "./stale-refresh.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  connection, followInUse, foundOrganization, fresher, needsSignIn, operationsAsked, operationsGranted, parseInUse, parseSwitchQuestion, pendingSettings, seenInUse, yourName,
+  connection, followInUse, foundOrganization, fresher, granted as scopesGranted, needsSignIn, operationsAsked, operationsGranted, parseInUse, parseSwitchQuestion, pendingSettings, seenInUse, yourName,
   type ConnectionStatus,
 } from "./connection.js";
 import { adoptRules, loadRulesByChurch, moveRules, ofChurchInUse, onScreenCapture, rulesInUse, saveRulesByChurch } from "./church-in-use.js";
@@ -50,6 +50,7 @@ import {
 } from "./harness-bridge.js";
 import { modelSteps, type TaskRow } from "./harness-words.js";
 import { KeptCards } from "./cards-page.js";
+import { cardNamesNoticeMemory } from "./card-names-notice.js";
 import { FirstRun, startMemory } from "./setup-flow.js";
 import { aiStillOpen, firstRunScreen, isConnected, setupMemory, type FirstRunScreen } from "./first-run-state.js";
 import { decideService, type ResultView } from "./your-service.js";
@@ -2026,7 +2027,12 @@ export function App() {
             example={fictional} inUse={onSystem ? (sys.connection ? SYSTEM_CARDS : null) : onGenesis ? (sys.state.genesis ? SYSTEM_CARDS : null) : inUseOrg ?? null}
             discarded={cardsDiscarded} onScreen={visible} onOpenCards={setOpenCards}
             disconnected={onSystem ? !systemConnected : onGenesis ? !sys.state.genesis : status?.state === "disconnected"} signInAgain={!offPc && needsSignIn(status)}
-            noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null} /></div>}
+            noNames={onGenesis ? "Genesis gives Ozzie no one's name, so no possible matches are shown." : null}
+            // Each card's name is looked up in Planning Center People only with People allowed, on this page, for the church
+            // in use (cards-page.tsx `KeptCards`, card-lookup.ts; owner decision 2026-11-23).
+            access={offPc ? "other-system" : scopesGranted(status) === null ? "unknown" : operationsGranted(status) ? "allowed" : "not-allowed"}
+            shown={!showSetup && page === "cards"} openPerson={offPc || fictional ? null : id => { void openInPlanningCenter("person", id); }}
+            notice={cardNamesNoticeMemory} /></div>}
       </main>
       {quitAsk && <QuitQuestion ask={{ ...quitAsk, checks: checksNow }} undo={changes.undoable.length ? quitUndo(changes.undoable) : null} onKeep={() => { setQuitAsk(null); quitting.keep(); }} onQuit={() => { void quitting.quit().catch(() => setQuitAsk(null)); }} />}
       {/* Over the page, Ask dims what it makes unusable; a click there or Escape closes it (review of 0.6.1: the page

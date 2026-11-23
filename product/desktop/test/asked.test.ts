@@ -171,7 +171,7 @@ describe("the marks stay on this Mac: nothing that builds what is sent can reach
   const APP = "product/desktop/src/App.tsx";
   /** Commands that reach a model, send a notice, write the copy for other AI apps or Siri, or carry text off the page. */
   const OUTWARD = ["reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect",
-    "save_shortcuts_check", "speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center", "phone_notice_test"];
+    "save_shortcuts_check", "speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center", "phone_notice_test", "look_up_card_name"];
   it("is imported by App.tsx alone, which hands the pages only words and Undo", () => {
     expect(ALL).toContain(ASKED);
     for (const c of OUTWARD) expect(NATIVE_COMMANDS, c).toContain(c);

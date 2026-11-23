@@ -39,6 +39,8 @@ mod app_menu;
 mod calendars;
 // Visitor cards: Ozzie's own images-only photo panel (no path ever comes from the page).
 mod card_picker;
+// Visitor cards: whether a card's name is already in Planning Center People, while the cards are checked.
+mod card_names;
 // The church's own AI key, taken in natively (clipboard or Ozzie's key window), checked, then kept in the Keychain.
 mod church_sources;
 // B1 Church, Breeze and Genesis, read-only: keys through the native key window, reads through core/church-systems.
@@ -894,12 +896,14 @@ fn again_ask(held: Option<Scopes>, reads_on: Option<bool>) -> (Scopes, Option<Si
 }
 /// What a browser sign-in was started for, as the page says (`connect_planning_center(_app)`'s `purpose`): the rooms,
 /// follow-ups and group reads (Settings' "Also check rooms, follow-ups and group events", the offer after the first
-/// check), or People for a note's To line. Absent: any other sign-in.
+/// check), People for a note's To line, or People for looking up the names on visitor cards. Absent: any other sign-in.
+/// Only `Operations` lets a grant turn those reads on; the two People purposes never do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum SignInFor {
     Operations,
     PeopleForTo,
+    PeopleForCards,
 }
 /// The sign-in Ozzie started last, what it was for, and the church it was granted for once a status showed it connected.
 /// Each new sign-in replaces it, as it replaces the sign-in itself (`Connections::prepare`, `prepare_finder`).
@@ -1821,6 +1825,7 @@ fn main() {
         .manage(ai_setup::ModelJob::default())
         .manage(ollama_setup::OllamaJob::default())
         .manage(CheckedPeople::default())
+        .manage(ozzie_native_auth::card_lookup::CardLookups::default())
         .manage(changes::state())
         .manage(Ledger::default())
         .manage(ManagedConnect::default())
@@ -1952,6 +1957,8 @@ fn main() {
             local_tools::read_card_text,
             local_tools::cancel_card_reading,
             card_picker::choose_card_photos,
+            card_names::look_up_card_name,
+            card_names::cancel_card_name_lookups,
             draft_apps::open_draft,
             draft_apps::open_draft_to,
             changes::changes_status,
@@ -2500,6 +2507,36 @@ mod tests {
                     None
                 );
             }
+        }
+
+        /// A People grant for the names on visitor cards ("people-for-cards", owner decision 2026-11-23) is no ask for
+        /// rooms, follow-ups or group events, just as the To line's isn't (privacy review of the card lookup): the page's
+        /// after-a-sign-in call is refused, and a church decided before such a grant starts them off.
+        #[test]
+        fn a_people_grant_for_visitor_cards_never_turns_the_reads_on() {
+            let (consumer, _, _) = launched_with(r#","scopes":"services-and-operations""#);
+            let church = current_church(&consumer).unwrap();
+            assert_eq!(church, ("1001".to_owned(), true));
+            let connected = consumer.0.current().unwrap();
+            // The page's word for it is native's.
+            let purpose: SignInFor = serde_json::from_str("\"people-for-cards\"").unwrap();
+            assert_eq!(purpose, SignInFor::PeopleForCards);
+            let sign_ins = SignIns::default();
+            sign_ins.started(Some(purpose), connected.clone(), None);
+            sign_ins.note();
+            assert_eq!(
+                sign_ins.granted_for("1001"),
+                Some(Some(SignInFor::PeopleForCards))
+            );
+            assert!(!reads_may_go_on(&church, false, &sign_ins));
+            let dir = std::env::temp_dir()
+                .join(format!("ozzie-operations-cards-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            decide_before_grant(&dir, "1001", true, &sign_ins);
+            assert_eq!(operations_reads_saved(&dir, "1001"), Some(false));
+            let _ = std::fs::remove_dir_all(&dir);
+            // Settings' own switch, pressed with the access held, still may.
+            assert!(reads_may_go_on(&church, true, &sign_ins));
         }
 
         /// A People grant for a note's To line can't turn the reads on through a church switch (review 2026-11-18): the

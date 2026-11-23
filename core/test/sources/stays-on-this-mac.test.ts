@@ -42,8 +42,11 @@ const SENDING = ["reword_draft", "agent_step", "responsibility_agent_step", "sha
  * if that changes.
  */
 const PHONE_NOTICE_SENDING: readonly string[] = [];
-/** Commands that carry text off the page on this Mac: the briefing read aloud, and a draft opened in Mail or Messages. */
-const OFF_THE_PAGE = ["speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center"];
+/**
+ * Commands that carry text off the page: the briefing read aloud, a draft opened in Mail or Messages, a page opened in
+ * Planning Center, and a visitor card's name looked up in Planning Center People.
+ */
+const OFF_THE_PAGE = ["speak_briefing", "open_draft", "open_draft_to", "open_in_planning_center", "look_up_card_name"];
 const OUTWARD = [...SENDING, ...PHONE_NOTICE_SENDING, ...OFF_THE_PAGE];
 /** Modules that build what a model, a notice, Siri or another AI app is given (the calendar test's list, and the brief and listen-script builders). */
 const BUILDERS = [

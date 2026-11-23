@@ -98,7 +98,7 @@ export type AskFn = (typed: string, signal: AbortSignal) => Promise<AskTurn>;
  * there without any AI model: the question isn't sent anywhere.
  */
 export const isCardsRequest = (typed: string) => /\b(?:visitor|newcomer|guest|welcome|connect(?:ion)?)\s+cards?\b/i.test(typed);
-export const CARDS_POINTER = "Visitor cards are read on this Mac, on the Visitor cards page: choose the photos there and check each card against its photo. Nothing from them goes to an AI model or into Planning Center.";
+export const CARDS_POINTER = "Visitor cards are read on this Mac, on the Visitor cards page: choose the photos there and check each card against its photo. Nothing from them goes to an AI model or is added to Planning Center.";
 
 /** "What can you do?", "help", "How do you work?" and the like, as the whole question: answered here in fixed words. */
 const HELP_ASK = new RegExp("^(?:(?:hey|hi|ok|okay)[\\s,]+)?(?:ozzie[\\s,:]+)?(?:help|what\\s+can\\s+(?:you|ozzie)\\s+(?:do|help\\s+(?:me\\s+)?with)(?:\\s+for\\s+(?:me|us))?(?:\\s+here)?" +

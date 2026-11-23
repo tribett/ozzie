@@ -21,7 +21,7 @@ import { promise } from "./promises.js";
 import { connection, granted, onSignInStart, operationsGranted, type ConnectionStatus } from "./connection.js";
 import { CopyForAdministrator, useConnectionControl } from "./planning-center-forms.js";
 import { askForOperations, useOperationsReads } from "./operations-reads.js";
-import { PEOPLE_CHECKING, PEOPLE_ENDS, PEOPLE_TO_READ, PEOPLE_WAITING, peopleOutcome } from "./people-question.js";
+import { CARD_NAMES_READ, PEOPLE_CHECKING, PEOPLE_ENDS, PEOPLE_TO_READ, PEOPLE_WAITING, peopleOutcome } from "./people-question.js";
 import { finishMemory, type FinishStore, type KeyValue } from "./moments.js";
 import type { Settings } from "./sunday-source.js";
 import type { SundayRead } from "../../../core/src/sunday-capture.js";
@@ -78,10 +78,11 @@ export const moreLines = (need: ReadMoreNeed, d: DayWords): string[] => [
 export const moreAccess = () => "Planning Center gives Calendar, People and Groups together, in one sign-in in your browser, and words them as read-and-write. "
   + `${promise("connectAnd")} ${promise("names")}`;
 /**
- * People's other read, said where it is first allowed (review P, L8; contact.rs reads it and never addresses a child), in
- * the To sheet's own sentences, so the two places say the same thing (review L8, 2026-11-18).
+ * People's other reads, said where they are first allowed (review P, L8; contact.rs reads the To line and never addresses
+ * a child; card_lookup.rs looks up the names on visitor cards), in the People sheet's own sentences, so the places say the
+ * same thing (review L8, 2026-11-18; owner decision 2026-11-23).
  */
-export const MORE_PEOPLE_TO = `With People, Ozzie also fills in To on a note. ${PEOPLE_TO_READ}`;
+export const MORE_PEOPLE_TO = `With People, Ozzie also fills in To on a note and looks up the names on visitor cards. ${PEOPLE_TO_READ} ${CARD_NAMES_READ}`;
 export const moreHeld = () => `Your connection already includes Calendar, People and Groups, so this needs no new sign-in. ${promise("connectAnd")}`;
 /** The reads are on, but the last sign-in didn't include the access they need ("lost"); Settings' granted line says it too. */
 export const MORE_LOST = "Your last Planning Center sign-in didn't include Calendar, People and Groups, so Ozzie can't check rooms, follow-ups and group events until they're allowed again.";

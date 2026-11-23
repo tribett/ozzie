@@ -1321,7 +1321,7 @@ describe("the change code stays on the page: nothing that reaches a model, a not
   const COMMANDS = ["changes_status", "changes_set", "change_prepare", "change_confirm", "change_undo", "change_history"];
   /** Commands that reach a model, send a notice, write the copy for other AI apps or Siri, or carry text off the page. */
   const OUTWARD = ["reword_draft", "agent_step", "responsibility_agent_step", "share_last_check", "notify_sunday_attention", "notify_ozzie", "managed_connect",
-    "save_shortcuts_check", "speak_briefing", "open_draft", "open_draft_to", "phone_notice_test"];
+    "save_shortcuts_check", "speak_briefing", "open_draft", "open_draft_to", "phone_notice_test", "look_up_card_name"];
 
   it("native code registers each command, and only planning-center-changes.ts names them, anywhere in the app's source", () => {
     expect(ALL).toContain(CHANGES);

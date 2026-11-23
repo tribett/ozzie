@@ -26,6 +26,7 @@
 //! model route, agent step, task ledger, copy for other AI apps or Siri, notice, timer or
 //! responsibility reaches this file (tests below), and nothing here prints, logs or keeps a name.
 use ozzie_native_auth::{
+    card_lookup::{CHANGE_WAITS, CardLookups},
     change::{
         BackgroundCheck, ChangeId, ChangeLog, ChangeRecord, ChangeSwitch, Changes, Confirmation,
         DespiteTheAdvice, Outcome, Proposed, Refusal, Undone,
@@ -34,6 +35,13 @@ use ozzie_native_auth::{
     sunday_check::SundayCapture,
 };
 use tauri::Manager;
+
+/// A visitor card's name lookup may hold the connection's turn for a few seconds (core card_lookup.rs):
+/// a change waits for it, at most `CHANGE_WAITS`, rather than being refused as if a check were running
+/// (privacy review L3). It never waits for a check, and it changes nothing in core `change`.
+fn after_card_lookups(lookups: &CardLookups) {
+    lookups.let_finish(CHANGE_WAITS);
+}
 
 /// The most records What happened asks for at once.
 const MAX_HISTORY: usize = 200;
@@ -205,6 +213,7 @@ pub(crate) async fn change_prepare(
     consumer: tauri::State<'_, crate::Consumer>,
     checks: tauri::State<'_, crate::SundayChecks>,
     changes: tauri::State<'_, Changes>,
+    lookups: tauri::State<'_, CardLookups>,
     plan: String,
     team: String,
     position: String,
@@ -223,7 +232,11 @@ pub(crate) async fn change_prepare(
     let consumer = consumer.inner().clone();
     let turns = checks.inner().clone();
     let changes = changes.inner().clone();
+    let lookups = lookups.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // The wait for a card lookup comes first, so the church system is checked as it is when the change goes ahead
+        // (privacy review, second pass, L-a).
+        after_card_lookups(&lookups);
         let switch = gate_for_session(&app, &consumer)?;
         changes.prepare(
             &switch,
@@ -249,6 +262,7 @@ pub(crate) async fn change_confirm(
     consumer: tauri::State<'_, crate::Consumer>,
     checks: tauri::State<'_, crate::SundayChecks>,
     changes: tauri::State<'_, Changes>,
+    lookups: tauri::State<'_, CardLookups>,
     change: String,
     despite_advice: Option<String>,
 ) -> Result<Outcome, Refusal> {
@@ -261,7 +275,9 @@ pub(crate) async fn change_confirm(
     let consumer = consumer.inner().clone();
     let turns = checks.inner().clone();
     let changes = changes.inner().clone();
+    let lookups = lookups.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        after_card_lookups(&lookups);
         let switch = match gate_for_session(&app, &consumer) {
             Ok(switch) => switch,
             Err(reason) => return Outcome::NotMade { reason },
@@ -286,6 +302,7 @@ pub(crate) async fn change_undo(
     consumer: tauri::State<'_, crate::Consumer>,
     checks: tauri::State<'_, crate::SundayChecks>,
     changes: tauri::State<'_, Changes>,
+    lookups: tauri::State<'_, CardLookups>,
     row: String,
 ) -> Result<Undone, Refusal> {
     if !numeric_id(&row) {
@@ -296,7 +313,9 @@ pub(crate) async fn change_undo(
     let consumer = consumer.inner().clone();
     let turns = checks.inner().clone();
     let changes = changes.inner().clone();
+    let lookups = lookups.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        after_card_lookups(&lookups);
         let switch = match gate_for_session(&app, &consumer) {
             Ok(switch) => switch,
             Err(reason) => return Undone::NotRemoved { reason },
