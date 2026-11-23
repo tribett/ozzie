@@ -1,7 +1,7 @@
 {
   "name": "ozzie",
   "displayName": "Ozzie",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Ask Claude about Ozzie's last Planning Center check on your Mac: roles that still need people, requests without an answer, overlapping room bookings and your Church rules. Read-only, with labels like [Person 1] instead of names.",
   "author": {
     "name": "FlockConnect LLC",

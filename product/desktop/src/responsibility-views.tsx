@@ -9,7 +9,7 @@ import {
   type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type RunRow, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { Autostart } from "./background.js";
-import type { NoticedItem, Runner, RunnerView, SwitchQuestion, WriteUp } from "./responsibility-runner.js";
+import type { JobChurch, NoticedItem, Runner, RunnerView, SwitchQuestion, WriteUp } from "./responsibility-runner.js";
 import {
   accountsText, areasText, assumedText, atText, daysText, foundText, isWeekdays, jobTitle, keepAbout, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT,
   NO_WRITEUP, NOTICE_WORDS, noticedBadge, noticedChanges, noticedTitle, offerText, oneOfEach, ONLY_WHILE, preparedTitle, purposeText, QUIT_LINE, refusalText, REPORT_CHOICES,
@@ -30,7 +30,7 @@ import { signNote, yourName } from "./connection.js";
 import { DraftActions, type OpenDraft } from "./draft-actions.js";
 import { isOtherSystem, systemWords, useSystemWords, type OtherSystem, type SystemWords } from "./church-system.js";
 import { runsOn } from "./system-jobs.js";
-import { itemSay, switchQuestionText } from "./responsibility-words.js";
+import { heldText, itemSay, STALLED_TEXT, switchQuestionText } from "./responsibility-words.js";
 import { useAnnounce } from "./announce.js";
 
 /** The church's system when it is B1 Church or Breeze (the page's system words); null on Planning Center. */
@@ -362,7 +362,9 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
   // The newest thing it reported about a check, if that was that it couldn't check (the store refused the run).
   const lastReport = view.noticed.find(i => i.responsibility_id === r.id && (i.kind === "couldnt-check" || i.kind === "found" || i.kind === "clear" || i.kind === "briefing"));
   const couldnt = lastReport?.kind === "couldnt-check";
-  const status = statusText(r, view.paused_all, couldnt);
+  // Its checks kept coming back from another church or service: it waits, and says why (it uses no checks meanwhile).
+  const stalled = view.stalled?.includes(r.id) && r.status === "active";
+  const status = stalled ? { label: "Waiting", tone: "look" as const } : statusText(r, view.paused_all, couldnt);
   // As the Mac counts it: this kind's checks in the last 24 hours, including one stopped and set up again.
   const left = templateLimitsLeft(r, view.items, now);
   const next = view.next[r.id];
@@ -385,7 +387,7 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
       : <div className="sp">
         <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runSay(r.runs[0], view)(runText(r.runs[0], now, reportFor(r.runs[0], view))) : "Not yet."}</span></div>
         {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
-          <span>{back ? `It has used its checks for now. It can check again ${againText(back, now)}.` : next ? whenText(next, now)
+          <span>{stalled ? STALLED_TEXT : back ? `It has used its checks for now. It can check again ${againText(back, now)}.` : next ? whenText(next, now)
             : context.signingIn ? "Once the Planning Center sign-in in your browser is done."
               : !context.connected ? context.notReady ?? w.say("As soon as Planning Center is connected.") : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Checks used</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} in the last 24 hours.</span></div>
@@ -485,7 +487,9 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
   const others = active.filter(r => r !== keep);
   // Jobs confirmed for another church, each paused until the person answers: asked first, before anything else.
   const asked = view.questions ?? [];
-  const keepAsked = asked.some(q => q.template === "keep-sunday-covered");
+  // A kind this Mac keeps for another church, not shown here: never offered to set up again (native allows one of each).
+  const held = view.held ?? [];
+  const keepAsked = asked.some(q => q.template === "keep-sunday-covered") || held.some(h => h.template === "keep-sunday-covered");
   // Pause everything pauses the regular look at the service too (proactive.ts pauseWithEverything), so it is
   // offered whenever anything runs on its own, that look alone included.
   const watching = `Ozzie keeping an eye on ${SERVICES}`;
@@ -502,6 +506,7 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
     {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it watches couldn't be read on this Mac right now.</p>}
     {view.paused_all && <p className="panel-info" role="status"><Icon name="info" small />Everything is paused. Nothing runs on its own until you resume.</p>}
     {asked.map(q => <SwitchQuestionCard key={q.responsibility_id} question={q} runner={runner} />)}
+    {held.map(h => <HeldLine key={h.responsibility_id} held={h} runner={runner} />)}
     {grouped && <section className="sunday-watch" aria-labelledby="sunday-watch-title">
       <h3 id="sunday-watch-title" className="sunday-watch-h">{Services}</h3>
       {sunday}
@@ -511,7 +516,7 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
     {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “{watchTitle()}”, or set one up here.</p>}
     {others.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} names={names} />)}
     {picking
-      ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} asked={asked.map(q => q.template)} />
+      ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} asked={[...asked.map(q => q.template), ...held.map(h => h.template)]} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
     <details className="listen-more watch-how"><summary><Icon name="chev" small />See how this works</summary>
       <ul className="small">{[...WATCH_HOW, oneOfEach()].map(line => <li key={line}>{line}</li>)}</ul>
@@ -684,3 +689,18 @@ export function AutostartToggle({ autostart }: { autostart: Autostart }) {
     {problem && <p className="small">This Mac didn't let Ozzie change that setting.</p>}
   </div>;
 }
+
+/**
+ * A job this Mac keeps for another church (or one that was disconnected and forgotten): why it waits, and a Stop, so
+ * a person is never left with a job they can't end (review of 0.8.1: 0.8.0's card had Stop; this line had none).
+ */
+function HeldLine({ held, runner }: { held: { responsibility_id: string; template: TemplateId; title: string; church: JobChurch }; runner: { stop(id: string): Promise<void> } }) {
+  const [confirm, setConfirm] = useState(false);
+  return <p className="small asked-line"><Icon name="info" small /><span>{heldText(held)}</span>
+    {confirm
+      ? <><span>Stop for good? Ozzie won't check this again.</span>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setConfirm(false); void runner.stop(held.responsibility_id); }}>Yes, stop it</button>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(false)}>Keep it</button></>
+      : <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirm(true)}>Stop</button>}</p>;
+}
+

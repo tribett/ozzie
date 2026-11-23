@@ -521,3 +521,103 @@ describe("second-pass review fixes", () => {
     expect(h.notify).not.toHaveBeenCalled();
   });
 });
+
+describe("fourth-pass review fixes", () => {
+  it("L1: a waiting question stays while the church it names isn't connected, says so, and its answer applies to that church", async () => {
+    const h = switching();
+    await h.use("harbor");
+    const r = await h.runner.create(keepPlan(ET));
+    await h.runner.tick();
+    await h.use("second");
+    await h.noChurch("planning-center");
+    const q = h.runner.view().questions![0]!;
+    expect(q).toMatchObject({ to: CHURCH.second, waiting: true });
+    expect(switchQuestionText(q).body).toContain("Second Street Church isn't connected right now: if you keep it, its first check waits until it is.");
+    const v = h.runner.view();
+    const page = render(null, React.createElement(ResponsibilityList, { view: v, context: { ...context, organization: "1002", connected: false, zone: ET },
+      runner: fakeRunner(v), actions, sunday: React.createElement("p", null, "regular") }));
+    expect(page).toContain("Keep it for Second Street Church on Planning Center?");
+    expect(page).not.toContain("Set up Keep services covered");
+    // Yes while it isn't connected: the job is Second Street's now, and waits; its first check, once connected, tells nothing.
+    await h.runner.answerSwitch(r.id, true);
+    expect(JSON.parse(h.store.get("ozzie.responsibilities.churches.v1")!)[r.id]).toEqual(CHURCH.second);
+    h.set("2026-11-20T18:00:30.000Z");
+    await h.runner.tick();
+    expect(h.calls()).toEqual(["begin start", "pause", "resume"]);
+    await h.back("second");
+    await h.runner.tick();
+    expect(h.calls()).toEqual(["begin start", "pause", "resume", "begin start"]);
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("L1: a kind this Mac keeps for another church is never offered to set up again; Keeping watch says where it is", async () => {
+    const h = switching();
+    await h.use("harbor");
+    await h.runner.create(keepPlan(ET));
+    await h.runner.tick();
+    await h.noChurch("b1");
+    const v = h.runner.view();
+    expect(v.held?.map(x => x.template)).toEqual(["keep-sunday-covered"]);
+    const page = render("b1", React.createElement(ResponsibilityList, { view: v, context: { ...context, connected: false }, runner: fakeRunner(v), actions,
+      sunday: React.createElement("p", null, "regular") }));
+    expect(page).toContain("Keep services covered was set up for Harbor Example Church on Planning Center: it waits until Ozzie uses that church again. Stop it to set one up here instead.");
+    expect(page).not.toContain("Set up Keep services covered");
+    // It can always be ended (review of 0.8.1: 0.8.0's card had Stop; this line had none).
+    expect(page).toContain("Stop it to set one up here instead. Stop");
+  });
+
+  it("L2: forgetting a church takes its name from everything the jobs keep, and its items; a 0.8.0 store with a name still loads", async () => {
+    const h = switching("cedar");
+    await h.use("cedar");
+    const r = await h.runner.create(keepPlan(CT));
+    await h.runner.tick();
+    expect(h.store.get("ozzie.responsibilities.church.v1")).toContain("Cedar Hollow Fellowship");
+    // 0.8.0's store, as it was: loads, and its last church is used while none is known.
+    h.relaunch();
+    await h.noChurch("b1");
+    expect(h.runner.view().items.map(x => x.id)).toEqual([r.id]);
+    // Disconnect B1 Church (or switch away from it): its name goes.
+    h.runner.forgetChurch(CHURCH.cedar.church!);
+    expect(h.store.get("ozzie.responsibilities.church.v1")).toBe("");
+    const kept = h.store.dump().filter(([k]) => k.startsWith("ozzie.responsibilities.")).map(([, v]) => v).join("\n");
+    expect(kept).not.toContain("Cedar Hollow Fellowship");
+    expect(JSON.parse(h.store.get("ozzie.responsibilities.churches.v1")!)[r.id]).toEqual({ church: CHURCH.cedar.church, name: null, system: "b1" });
+    expect(JSON.parse(h.store.get("ozzie.responsibilities.noticed.v1")!).items).toEqual([]);
+    // Still asked about on the next church, without the forgotten name.
+    await h.use("willow");
+    expect(switchQuestionText(h.runner.view().questions![0]!).title).toBe("Keep services covered was set up for your church on B1 Church. Keep it for Willow Creek Fictional on B1 Church?");
+  });
+
+  it("L3: two runs in a row whose check comes back from another church or service: it waits, says why, uses no checks, and runs again once its own comes back", async () => {
+    const h = switching();
+    await h.use("harbor");
+    const r = await h.runner.create(keepPlan(ET));
+    await h.runner.tick();
+    // Every check comes back for another church (a watched service that moved on, say); App's belongs refuses each.
+    h.check.mockImplementation(async () => pcAt(h.now(), "9999"));
+    h.set("2026-11-20T17:00:30.000Z");
+    await h.runner.tick();
+    expect(h.runner.view().stalled).toBeUndefined();
+    h.set("2026-11-20T22:00:30.000Z");
+    await h.runner.tick();
+    expect(h.runner.view().stalled).toEqual([r.id]);
+    expect(h.fake.calls.filter(c => c.startsWith("end"))).toEqual(["end ok - 8 1", "end failed cancelled 0 0", "end failed cancelled 0 0"]);
+    // It uses no more checks.
+    for (const at of ["2026-11-21T12:00:30.000Z", "2026-11-21T17:00:30.000Z"]) { h.set(at); await h.runner.tick(); }
+    expect(h.calls().filter(c => c.startsWith("begin"))).toHaveLength(3);
+    expect(h.notify).not.toHaveBeenCalled();
+    const v = h.runner.view();
+    const page = render(null, React.createElement(ResponsibilityList, { view: v, context: { ...context, organization: "1001", zone: ET }, runner: fakeRunner(v), actions,
+      sunday: React.createElement("p", null, "regular") }));
+    expect(page).toContain("Waiting Planning Center Services");
+    expect(page).toContain("Waiting: its last two checks came back from another church or service than the one it was set up for, so it uses no checks until Ozzie's own check reads that one again.");
+    // Ozzie's own check reads Harbor again: it runs at its next time.
+    h.check.mockReset();
+    h.check.mockImplementation(async () => pcAt(h.now(), CHURCH.harbor.church!));
+    h.runner.captured(pcAt(h.now(), CHURCH.harbor.church!));
+    h.set("2026-11-21T22:00:30.000Z");
+    await h.runner.tick();
+    expect(h.calls().filter(c => c.startsWith("begin"))).toHaveLength(4);
+    expect(h.runner.view().stalled).toBeUndefined();
+  });
+});

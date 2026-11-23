@@ -80,6 +80,8 @@ vi.mock("@tauri-apps/api/core", () => ({
         return { outcome: "ok", capture: native.capture || JSON.stringify(b1Capture({ church: { id: "CHU0000cedar", time_zone: zone ?? "America/Chicago" } })) };
       }
       case "church_system_saved": return [];
+      case "church_system_forget": return null;
+      case "church_system_delete_checks": return 0;
       case "church_system_saved_checks": return [];
       case "notify_sunday_attention": return null;
       case "notify_ozzie": return null;
@@ -246,5 +248,26 @@ describe("a job set up for another church, on a Mac now on B1 Church (owner deci
     expect(dom.seen()).toContain("Keep services covered is stopped.");
     expect(native.calls.map(([c]) => c)).toContain("responsibility_stop");
     expect(native.calls.filter(([c]) => c === "responsibility_run_begin")).toEqual([]);
+  }, 60_000);
+});
+
+describe("Disconnect B1 Church forgets the church's name from what jobs keep (review of 0.8.0, fourth pass, L2)", () => {
+  it("the last church in use is removed, and each job keeps only the church's id and system", async () => {
+    seed("b1");
+    const plan = defaultPlan("keep-sunday-covered", "2026-11-19T15:00:00Z", "America/Chicago");
+    native.jobs = [{ ...plan, id: "00000000-0000-4000-8000-0000000000f2", title: "Keep Sunday covered", skill_id: "sunday-ready", status: "active",
+      created_at: "2026-11-19T15:00:00Z", confirmed_at: "2026-11-19T15:00:00Z", runs: [], open_run: null }];
+    kept.set("ozzie.responsibilities.churches.v1", JSON.stringify({ "00000000-0000-4000-8000-0000000000f2": { church: "b1:CHU0000cedar", name: "Cedar Hollow Fellowship", system: "b1" } }));
+    const app = await launch();
+    await app.waitFor("B1 Church: Cedar Hollow Fellowship");
+    for (let i = 0; i < 20 && !(storage.getItem("ozzie.responsibilities.church.v1") ?? "").includes("Cedar"); i++) await app.settle(5);
+    expect(storage.getItem("ozzie.responsibilities.church.v1")).toContain("Cedar Hollow Fellowship");
+    await app.go("Settings");
+    await app.press("Disconnect B1 Church");
+    await app.press("Disconnect and forget the key");
+    expect(storage.getItem("ozzie.responsibilities.church.v1") ?? "").toBe("");
+    const jobs = [...kept.entries()].filter(([k]) => k.startsWith("ozzie.responsibilities.")).map(([, v]) => v).join("\n");
+    expect(jobs).not.toContain("Cedar Hollow Fellowship");
+    expect(JSON.parse(storage.getItem("ozzie.responsibilities.churches.v1")!)).toEqual({ "00000000-0000-4000-8000-0000000000f2": { church: "b1:CHU0000cedar", name: null, system: "b1" } });
   }, 60_000);
 });

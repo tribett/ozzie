@@ -339,6 +339,13 @@ interface Saved extends LocalState {
   paused_at: string | null;
   /** Kept for a new church after a switch (Yes): its first check there tells nothing, only learns what is there. */
   baseline?: true;
+  /** Runs in a row whose check came back from another church or service than the job's (each ended quietly). */
+  mismatches?: number;
+  /**
+   * After two such runs: it stops asking native for runs (no checks used) until a check of its own church comes back
+   * (captured), or the church in use changes. Its card says why it waits.
+   */
+  mismatch_hold?: true;
 }
 export interface RunnerView {
   available: boolean;
@@ -356,6 +363,13 @@ export interface RunnerView {
   questions?: readonly SwitchQuestion[];
   /** The system each B1 Church or Breeze run read (by its run id), so a run is said in its own system's name. */
   run_systems?: Readonly<Record<string, OtherSystem>>;
+  /**
+   * Jobs this Mac keeps that are confirmed for another church than the one shown and aren't asked about (one of each kind
+   * at a time, so that kind is never offered to set up again here): each waits until Ozzie uses its church again.
+   */
+  held?: readonly { responsibility_id: string; template: TemplateId; title: string; church: JobChurch }[];
+  /** Jobs that stopped using checks because their last two checks came back from another church or service (by id). */
+  stalled?: readonly string[];
 }
 /**
  * The church a job was confirmed for: its key (Planning Center's organization number, or `<system>:<church id>` for
@@ -364,7 +378,11 @@ export interface RunnerView {
  */
 export interface JobChurch { church: string | null; name: string | null; system: "planning-center" | OtherSystem; adopt?: true }
 /** A job confirmed for another church than the one in use: paused until the person answers (Keeping watch and Today). */
-export interface SwitchQuestion { responsibility_id: string; template: TemplateId; title: string; from: JobChurch; to: JobChurch }
+export interface SwitchQuestion {
+  responsibility_id: string; template: TemplateId; title: string; from: JobChurch; to: JobChurch;
+  /** `to` is the church last in use, not connected right now (a disconnect): a job kept for it waits until it is. */
+  waiting?: true;
+}
 export interface Runner {
   start(hooks: RunnerHooks): void;
   refresh(): Promise<void>;
@@ -405,6 +423,12 @@ export interface Runner {
   answerSwitch?(id: string, keep: boolean): Promise<void>;
   /** The church was let go of (a switch of system, a disconnect): a notice held about it never goes out, and a run stops. */
   letGo?(): void;
+  /**
+   * A church this Mac forgets (a B1 Church or Breeze Disconnect, or a switch away from it), by its key: its name goes from
+   * everything the jobs keep (the last church in use is removed; each job and question keeps only its id and system, so
+   * it is still asked about), and its items go.
+   */
+  forgetChurch?(church: string): void;
   /** Every job this Mac keeps that hasn't ended, as last read (those the page doesn't show included), with its church. */
   jobs?(): { template: TemplateId; church: JobChurch | null }[];
   view(): RunnerView;
@@ -463,6 +487,10 @@ const sendNotice = (deps: Pick<RunnerDeps, "notify">, kind: NoticeKind, macOnly:
 const CANCELLED = Symbol("cancelled");
 /** A check that finished for a church Ozzie no longer uses (hooks.belongs): its run ends as cancelled, telling nothing. */
 const FOREIGN = Symbol("another church");
+/** A run whose check came back from another church or service than its job's: it ends quietly, and is counted. */
+const MISMATCH = Symbol("mismatch");
+/** How many such runs in a row before the job stops using checks (review of 0.8.0, fourth pass, L3). */
+const MISMATCHES_HELD_AFTER = 2;
 const rateLimited = (value: unknown) => (JSON.stringify(value) ?? "").includes("rate-limited");
 
 /** One finding a run reports, by its stable key and kind (for the person's Church rules on notices). Ids only. */
@@ -578,7 +606,7 @@ export const handChanges = (runner: Pick<Runner, "takes" | "changes">) =>
   (changes: readonly SundayChange[], about: HandedChanges): Promise<boolean> | undefined => runner.takes(changes) ? runner.changes(changes, about) : undefined;
 
 /** The runner App uses: with the church controls the Runner interface leaves optional (tests' fakes leave them out). */
-export type ChurchRunner = Runner & Required<Pick<Runner, "churchInUse" | "answerSwitch" | "letGo" | "jobs">>;
+export type ChurchRunner = Runner & Required<Pick<Runner, "churchInUse" | "answerSwitch" | "letGo" | "jobs" | "forgetChurch">>;
 export function createRunner(deps: RunnerDeps): ChurchRunner {
   let hooks: RunnerHooks | null = null;
   let listing: Listing | null = null;
@@ -651,6 +679,9 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
    */
   const viewChurch = (): string | null | undefined => !churchNow ? undefined
     : churchNow.church ?? (lastKnown?.church && lastKnown.system === churchNow.system ? lastKnown.church : null);
+  /** That church, whole (its name and system), when there is one: what a question names and an answer applies to. */
+  const shownChurch = (): JobChurch | null => churchNow?.church ? churchNow
+    : churchNow && lastKnown?.church && lastKnown.system === churchNow.system ? lastKnown : null;
   const build = (): RunnerView => {
     const system = hooks?.context().system;
     // Only the church in use's items (one kept before churches were, until it is first stamped, as before). While the
@@ -661,8 +692,15 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
     const here = !churchNow ? noticed : noticed.filter(i => i.church === undefined || (cur !== null && i.church === cur));
     const ownHere = (r: Responsibility) => !churchNow || !churches[r.id]?.church || churches[r.id]!.church === cur;
     const shown = system ? here.filter(i => runsOn(i.template, system)) : here;
-    const asked = churchNow?.church ? (listing?.items ?? []).filter(r => r.status !== "ended" && Object.hasOwn(questions, r.id))
-      .map((r): SwitchQuestion => ({ responsibility_id: r.id, template: r.template, title: r.title, from: questions[r.id]!.from, to: churchNow! })) : [];
+    // A question waiting for an answer stays while the church it names isn't connected for a while (it is the one shown).
+    const to = shownChurch();
+    const asked = to ? (listing?.items ?? []).filter(r => r.status !== "ended" && Object.hasOwn(questions, r.id) && questions[r.id]!.from.church !== to.church)
+      .map((r): SwitchQuestion => ({ responsibility_id: r.id, template: r.template, title: r.title, from: questions[r.id]!.from, to,
+        ...(churchNow?.church ? {} : { waiting: true as const }) })) : [];
+    // Kinds this Mac keeps for another church, not asked about: never offered to set up again here (native allows one).
+    const held = churchNow ? (listing?.items ?? []).filter(r => r.status !== "ended" && runsOn(r.template, system) && !ownHere(r) && !asked.some(q => q.responsibility_id === r.id))
+      .map(r => ({ responsibility_id: r.id, template: r.template, title: r.title, church: churches[r.id]! })) : [];
+    const stalled = (listing?.items ?? []).filter(r => r.status !== "ended" && saved[r.id]?.mismatch_hold).map(r => r.id);
     const runSystems = Object.fromEntries(noticed.flatMap(i => i.run_id && i.system ? [[i.run_id, i.system] as const] : []));
     return {
       available, paused_all: listing?.paused_all ?? false,
@@ -670,6 +708,7 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
       writeups: Object.fromEntries(writeups.filter(w => church !== null && w.organization === church).map(w => [w.item, w])), next, running: running?.id ?? null,
       unseen: shown.filter(i => attention(i) && (!seenAt || i.at > seenAt)).length, open_today: openToday,
       ...(asked.length ? { questions: asked } : {}), ...(Object.keys(runSystems).length ? { run_systems: runSystems } : {}),
+      ...(held.length ? { held } : {}), ...(stalled.length ? { stalled } : {}),
     };
   };
   let snapshot = build();
@@ -891,8 +930,18 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
     const window = options().fast ? FAST_SHARED_CHECK_MS : SHARED_CHECK_MS;
     return latest && ms(deps.now()) - latest.at < window && hooks?.belongs?.(latest.capture) !== false ? latest.capture : null;
   }
+  /** Jobs held back by mismatches whose own church this check read (or every one, `all`): they run again. */
+  function release(of: string | null) {
+    for (const [id, st] of Object.entries(saved)) {
+      if (!st.mismatch_hold || (of !== null && churches[id]?.church && churches[id]!.church !== of)) continue;
+      const { mismatches: _m, mismatch_hold: _h, ...rest } = st;
+      void _m; void _h;
+      saved[id] = rest;
+    }
+  }
   function captured(capture: JobCheck) {
     if (capture.kind !== "live" || hooks?.belongs?.(capture) === false) return;
+    release(capture.organization);
     const at = Number.isFinite(ms(capture.completed_at)) ? Math.min(ms(capture.completed_at), ms(deps.now())) : ms(deps.now());
     if (!latest || at >= latest.at) latest = { capture, at };
     if (readsOf(capture).some(r => r.outcome === "rate-limited")) slowDown();
@@ -990,11 +1039,11 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
       if (TEMPLATES[r.template].needs.includes("operations") && !ctx.granted.includes("operations")) return await fail("denied", true);
       let capture: JobCheck;
       try { capture = await guard(check(trigger)); }
-      catch (error) { if (error === CANCELLED || error === FOREIGN) throw CANCELLED; return await fail(checkFailure(error), false, readWord(error)); }
+      catch (error) { if (error === CANCELLED) throw error; if (error === FOREIGN) throw MISMATCH; return await fail(checkFailure(error), false, readWord(error)); }
       const now = deps.now();
       // A check of another church than the one this job was confirmed for (the church changed as it started): nothing of
       // it is kept or told; the run ends as if paused, and the switch's question comes next.
-      if (own?.church && capture.organization !== own.church) throw CANCELLED;
+      if (own?.church && capture.organization !== own.church) throw MISMATCH;
       // A B1 Church or Breeze check that can't make a service check (no roles, no service times) or, on B1 Church, waits for
       // the church's time zone to be confirmed: nothing is counted or compared, and the run says so.
       if (isSystemCheck(capture)) {
@@ -1040,8 +1089,8 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
         // What this check read: its church, and its system when it isn't Planning Center.
         church: capture.organization, ...(isSystemCheck(capture) ? { system: systemOf(capture) } : {}),
       });
-      const { baseline: _quiet, ...settled } = stateOf(r.id);
-      void _quiet;
+      const { baseline: _quiet, mismatches: _m, mismatch_hold: _h, ...settled } = stateOf(r.id);
+      void _quiet; void _m; void _h;
       saved[r.id] = { ...settled, failures: 0, retry_at: null, memory,
         reported: [...new Set([...Object.keys(found.others ?? {}).map(seenMark), ...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
       if (briefing) {
@@ -1085,6 +1134,15 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
       const decided = noticed.find(i => i.id === item.id)?.notice;
       return { status: "ok", code: null, noticed: count, drafts, ...(decided && decided !== "none" ? { decided_for: capture.plan_id } : {}) };
     } catch (error) {
+      if (error === MISMATCH) {
+        // Its check came back from another church or service: it ends as cancelled, quietly, and is counted; the second in a
+        // row holds it back, so a mismatch that lasts never uses its checks unseen (its card says why it waits).
+        const n = (stateOf(r.id).mismatches ?? 0) + 1;
+        saved[r.id] = { ...stateOf(r.id), mismatches: n, ...(n >= MISMATCHES_HELD_AFTER ? { mismatch_hold: true as const } : {}) };
+        await deps.native.end(r.id, grant.run_id, "failed", "cancelled", 0, 0).catch(() => undefined);
+        log(`responsibility: run status=failed code=cancelled mismatch=${n}`);
+        return { status: "failed", code: "cancelled", noticed: 0, drafts: 0 };
+      }
       if (error === CANCELLED || abort.signal.aborted) {
         // Paused while it ran: it ends as cancelled, quietly; nothing is retried or announced.
         await deps.native.end(r.id, grant.run_id, "failed", "cancelled", 0, 0).catch(() => undefined);
@@ -1197,8 +1255,9 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
         const s = stateOf(r.id);
         const due = dueNow(r, s, now, zoneOf(r), options());
         if (!due.due) continue;
-        // Waiting for the person's answer about a switch of church: paused, nothing runs.
-        if (Object.hasOwn(questions, r.id)) continue;
+        // Waiting for the person's answer about a switch of church: paused, nothing runs. So does one whose checks kept
+        // coming back from another church or service, until one of its own comes back.
+        if (Object.hasOwn(questions, r.id) || s.mismatch_hold) continue;
         // None is known now (a setup left unfinished, a disconnect): a job confirmed for a church waits, and says since when,
         // so a time it misses is said as not connected. The app already on another church (the runner not told yet): it
         // waits for that switch's question.
@@ -1227,7 +1286,7 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
     const s = stateOf(r.id);
     if (s.not_before && ms(deps.now()) < ms(s.not_before)) return false;
     if (slowing() && !shared()) return false;
-    if (!runsOn(r.template, hooks?.context().system) || Object.hasOwn(questions, r.id)) return false;
+    if (!runsOn(r.template, hooks?.context().system) || Object.hasOwn(questions, r.id) || s.mismatch_hold) return false;
     const now = hooks?.context().church;
     if (churches[r.id]?.church && (now ? now !== churches[r.id]!.church : churchNow !== null && !churchNow.church)) return false;
     return changeEligible(r, s, changes, deps.now(), options());
@@ -1347,6 +1406,8 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
       // Another church than the last one known (a moment with none in between isn't a switch): a notice held about the
       // old one never goes out, and a run of it stops (as proactive.ts letGo does for the regular check).
       if (next?.church && lastKnown?.church && next.church !== lastKnown.church) { dropHeld(); cancelRunning(); }
+      // Another church in use: a job held back by mismatches gets its chance again.
+      if (next?.church && next.church !== was?.church) release(null);
       if (next?.church) lastKnown = { church: next.church, name: next.name, system: next.system };
       // Against the list as last read (nothing is read just for this; the first tick after Ozzie starts reads it and
       // reconciles too): only a switch reaches native, to pause the jobs it asks about.
@@ -1358,7 +1419,8 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
       void serial(async () => { if (await reconcile() || shownNow !== shownBefore) { scheduleNext(); emit(); } });
     },
     answerSwitch: (id, keep) => serial(async () => {
-      const asked = questions[id], here = churchNow;
+      // The church the question named: the one in use, or the one last in use while it isn't connected for a while.
+      const asked = questions[id], here = shownChurch();
       if (!asked || !here?.church) return;
       delete questions[id];
       if (!keep) {
@@ -1382,6 +1444,15 @@ export function createRunner(deps: RunnerDeps): ChurchRunner {
       if (keep) void serial(tickOnce);
     }),
     letGo() { dropHeld(); cancelRunning(); emit(); },
+    forgetChurch(key) {
+      const nameless = (c: JobChurch): JobChurch => c.church === key ? { church: c.church, name: null, system: c.system, ...(c.adopt ? { adopt: true as const } : {}) } : c;
+      for (const id of Object.keys(churches)) churches[id] = nameless(churches[id]!);
+      for (const id of Object.keys(questions)) questions[id] = { ...questions[id]!, from: nameless(questions[id]!.from) };
+      if (lastKnown?.church === key) { lastKnown = null; deps.store.set(KEYS.church, ""); }
+      if (churchNow?.church === key) churchNow = { ...churchNow, name: null };
+      noticed = noticed.filter(i => i.church !== key);
+      emit();
+    },
     jobs: () => (listing?.items ?? []).filter(r => r.status !== "ended").map(r => ({ template: r.template, church: churches[r.id] ?? null })),
     view: () => snapshot,
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },

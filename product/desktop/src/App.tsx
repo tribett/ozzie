@@ -1488,6 +1488,8 @@ export function App() {
       if (word !== "forgotten") return `This Mac didn't let Ozzie remove the ${systemWords(c.system).name} key just now, so nothing was switched. Unlock this Mac (type your Mac password if it asks), then try again.`;
       // Its saved checks hold volunteers' names: they go with it, or are kept to delete again (church-system.ts).
       void deleteChecksOrLater(c);
+      // "Switching forgets <church>": its name goes from what jobs keep on this Mac too (runner.forgetChurch).
+      runner.forgetChurch(`${c.system}:${c.church_id}`);
     } else if (from.main === "planning-center" && (Boolean(org) || (status !== null && status.state !== "disconnected"))) {
       // Leaving Planning Center for another system: native code turns adding people off for the church left, however
       // the Disconnect ends, so the switch is read again.
@@ -1982,7 +1984,10 @@ export function App() {
         {page === "connection" && <ConnectionPage
           system={onSystem && sys.connection ? <SystemSettings connection={sys.connection} onConnection={next => { sys.setState({ ...sys.state, connection: next });
             if (next.service_id !== sys.connection?.service_id || next.zone !== sys.connection?.zone) void sys.check(next); }}
-            onForget={() => { void forgetSystemChecks(); sys.forgetCheck(); forgetMovedLine(); runner.forgetAllWriteups(); sys.setState({ ...sys.state, connection: null }); }} onConnect={() => openSetup("first")}
+            onForget={() => { void forgetSystemChecks(); sys.forgetCheck(); forgetMovedLine(); runner.forgetAllWriteups();
+              // Disconnect forgets the church: its name goes from what jobs keep on this Mac too (runner.forgetChurch).
+              if (sys.connection) runner.forgetChurch(`${sys.connection.system}:${sys.connection.church_id}`);
+              sys.setState({ ...sys.state, connection: null }); }} onConnect={() => openSetup("first")}
             startsAt={sys.capture?.service?.starts_at ?? null} systemZone={sys.capture?.church.time_zone ?? null} />
             : onSystem ? <section className="settings-sec" aria-labelledby="pco-title"><h2 id="pco-title" className="h3" tabIndex={-1}>{words.name} and which service Ozzie watches</h2>
               <div className="find"><p className="find-body">{words.notConnected}.</p><div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => openSetup("first")}>{words.connect}</button></div></div></section>

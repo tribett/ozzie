@@ -422,20 +422,26 @@ const churchOn = (c: JobChurch, unknown: string) => `${c.name ?? unknown} on ${s
  * buttons that name the effect (AGENTS.md), what each does said before either is pressed, and what the status line says
  * after each. Fixed local words around the churches' own names; no person's name.
  */
-export function switchQuestionText(q: Pick<SwitchQuestion, "template" | "title" | "from" | "to">): {
+export function switchQuestionText(q: Pick<SwitchQuestion, "template" | "title" | "from" | "to" | "waiting">): {
   title: string; body: string; keep: string; stop: string; kept: string; stopped: string;
 } {
   const job = jobTitle(q);
   const here = q.to.name ?? "this church";
   return {
     title: `${job} was set up for ${churchOn(q.from, "your church")}. Keep it for ${churchOn(q.to, "the church you use now")}?`,
-    body: `Until you answer, it's paused: it checks nothing and tells you nothing. If you keep it, its first check of ${here} only learns what is there now and tells you nothing about it; after that it tells you what changes. If you stop it, it ends, as Stop does.`,
+    body: `Until you answer, it's paused: it checks nothing and tells you nothing. If you keep it, its first check of ${here} only learns what is there now and tells you nothing about it; after that it tells you what changes. If you stop it, it ends, as Stop does.${q.waiting ? ` ${here} isn't connected right now: if you keep it, its first check waits until it is.` : ""}`,
     keep: `Yes, keep it for ${here}`,
     stop: "No, stop it",
     kept: `${job} keeps an eye on ${here} now.`,
     stopped: `${job} is stopped.`,
   };
 }
+
+/** A job this Mac keeps for another church, not shown here (RunnerView `held`): why, in one line. */
+export const heldText = (h: { template: TemplateId; title: string; church: JobChurch }): string =>
+  `${jobTitle(h)} was set up for ${churchOn(h.church, "your church")}: it waits until Ozzie uses that church again. Stop it to set one up here instead.`;
+/** A job whose last two checks came back from another church or service (RunnerView `stalled`): why it waits. */
+export const STALLED_TEXT = "Waiting: its last two checks came back from another church or service than the one it was set up for, so it uses no checks until Ozzie's own check reads that one again.";
 
 /** What changed since the last run, one sentence each, names resolved locally, the service named by its real day. */
 export function noticedChanges(item: NoticedItem, names: Readonly<Record<string, string>>, d: DayWords = SUNDAY_WORDS): string[] {
