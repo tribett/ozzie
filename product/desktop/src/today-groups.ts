@@ -31,11 +31,11 @@ import type { AttentionFinding, Message } from "../../../core/src/attention-impo
 import type { Responsibility } from "../../../core/src/harness/responsibilities.js";
 import { addDays, DAY_MS, weekdayOf } from "../../../core/src/harness/responsibilities.js";
 import { isTimeZone, localDate, localDay } from "../../../core/src/church-time.js";
-import type { NoticedItem, RunnerView, WriteUp } from "./responsibility-runner.js";
+import type { NoticedItem, RunnerView, SwitchQuestion, WriteUp } from "./responsibility-runner.js";
 import type { KeyValueStore } from "./proactive.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
 import { roleWithService, serviceOfTeam, type TeamServices } from "../../../core/src/sunday-brief.js";
-import { eyeLine, keepTitle, pageRef } from "./day-phrases.js";
+import { eyeLine, genesisNoJobs, keepTitle, pageRef } from "./day-phrases.js";
 
 export type GroupId = "attention" | "review" | "progress";
 export type ItemState = "needs-decision" | "needs-you" | "prepared" | "waiting-answer" | "under-way";
@@ -59,6 +59,8 @@ export type TodaySubject =
   /** The regular Sunday check (proactive.ts), once it can run: how often, when it last and next looks, what it missed. */
   | { type: "regular"; check: RegularCheck }
   | { type: "answers"; positions: string[] }
+  /** A job confirmed for another church than the one in use, paused until the person answers (owner decision 2026-11-22). */
+  | { type: "job-question"; question: SwitchQuestion }
   /**
    * A church system that doesn't share how many people each role needs (Breeze): someone hasn't answered, or a role
    * has nobody who said yes. Never "nothing needs a decision" for it (round 5); the card says what is known.
@@ -193,6 +195,11 @@ export function todayItems(input: TodayInput): TodayItem[] {
     items.push({ id, state: "needs-you", since: seen(id), subject: { type: "roster" } });
   }
   items.push(...noticed);
+  // A job paused by a switch of church waits on the person: one question each, until it is answered.
+  for (const question of view?.questions ?? []) {
+    const id = `job-question:${question.responsibility_id}`;
+    items.push({ id, state: "needs-you", since: seen(id), subject: { type: "job-question", question } });
+  }
   for (const [rid, item] of access) {
     // A later check that finished shows the access is there now.
     if (!current(rid) || (succeeded.has(rid) && succeeded.get(rid)! > item.at)) continue;
@@ -303,12 +310,13 @@ export function progressEmptyText(regular: RegularCheck | null | undefined, exam
   if (example) return "Nothing runs in the fictional example.";
   // Genesis has no service to choose: its reads start once it is connected and has been read once (review of 4c3d32ac).
   if (system.system === "genesis" && regular && !regular.ready) {
-    return `Nothing runs yet. Ozzie reads Genesis on its own once it is connected and has read it once; ${keepTitle()} and other jobs work with Planning Center only for now.`;
+    return `Nothing runs yet. Ozzie reads Genesis on its own once it is connected and has read it once; ${keepTitle()} and the morning briefing work with Planning Center, B1 Church and Breeze.`;
   }
-  // A church on B1 Church or Breeze: jobs work with Planning Center only for now, so none is offered as starting here.
-  const jobs = system.jobs ? `${keepTitle()} and other jobs start when you set them up` : `${keepTitle()} and other jobs work with Planning Center only for now`;
+  // A church whose system no job reads (Genesis): where jobs work, and why none reads it; none is offered as starting here.
+  if (!system.jobs) return `Nothing is running. ${genesisNoJobs()}`;
+  const jobs = `${keepTitle()} and other jobs start when you set them up`;
   if (regular && !regular.ready) return `Nothing runs yet. ${eyeLine()} once ${system.name} is connected and a service is chosen; ${jobs}.`;
-  return system.jobs ? `Nothing is running. ${jobs} in Keeping watch.` : `Nothing is running. ${jobs}.`;
+  return `Nothing is running. ${jobs} in Keeping watch.`;
 }
 
 /** One decision Today names (audit item 17): its words, the Sunday card it opens, and whether that card lists people. */

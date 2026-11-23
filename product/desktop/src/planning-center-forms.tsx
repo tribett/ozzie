@@ -1,7 +1,8 @@
 // The Planning Center sign-in and "which Sunday" fields, shared by Settings and guided setup so both
 // use the same connection calls and say connected only after Planning Center confirmed the organization; and the copy
 // button beside every refusal that says an administrator can give access.
-import { useEffect, useId, useState } from "react";
+import { useContext, useEffect, useId, useState } from "react";
+import { jobsAtStake, JobsAtStakeContext } from "./jobs-at-stake.js";
 import {
   againFor, attemptCopy, churchShort, connectOneClick, connection, connectionProblem, connectionStatusProblem, declinedCopy, leftBehindActions, leftBehindCopy,
   missingCopy, parseDeclined, parseInUse, parseLastAttempt, parseSwitchQuestion, parseUnretired, signInInstead, switchCopy, switchProblem,
@@ -316,7 +317,9 @@ export function answeredCopy(answered: { decision: SwitchDecision; question: Swi
 export function SwitchQuestionPanel({ question, stake, working, onAnswer, cards = 0 }: {
   question: SwitchQuestion; stake: RulesAtStake; working: boolean; onAnswer: (decision: SwitchDecision) => void; cards?: number;
 }) {
-  const copy = switchCopy(question, stake, cards);
+  // How many jobs the switch pauses and asks about (App's Keeping watch list).
+  // Planning Center to Planning Center: every job is asked about but those confirmed for the church switched to.
+  const copy = switchCopy(question, stake, cards, jobsAtStake(useContext(JobsAtStakeContext).jobs, "planning-center", question.to).asked);
   return <div className="decide switch-church" role="group" aria-labelledby="switch-church-q">
     <p id="switch-church-q" className="bold">{copy.title}</p>
     <p className="find-body">{copy.lead}</p>

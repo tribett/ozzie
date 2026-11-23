@@ -391,7 +391,7 @@ export type SwitchAction = { label: string; decision: SwitchDecision };
  *  - A sign-in Ozzie found saved on this Mac: keep (primary), or sign in to that church instead. Ozzie never switches to
  *    a found sign-in as it is, and the wording doesn't suggest the person made it (review S2, L3).
  */
-export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { from: false, to: false }, cards = 0) {
+export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { from: false, to: false }, cards = 0, jobs = 0) {
   const { to, to_name, from, from_name, others, fresh } = question;
   const toShort = churchShort(to, to_name, from_name), fromShort = churchShort(from, from_name, to_name);
   const keepLine = (what: string) => `Keeping ${fromShort} checks its sign-in with Planning Center first. Then Planning Center stops accepting the ${what} sign-in for ${toShort}, and it's removed from this Mac.`;
@@ -423,7 +423,10 @@ export function switchCopy(question: SwitchQuestion, rules: RulesAtStake = { fro
       `Switching checks ${toShort}'s sign-in with Planning Center first. Then Planning Center stops accepting Ozzie's ${several ? "sign-ins" : "sign-in"} for ${leaving}, and ${several ? "they're" : "it's"} removed from this Mac. Your church's information in Planning Center doesn't change.`,
       `Saved copies of ${fromShort}'s checks stay on this Mac. Ozzie shows them only while it uses ${fromShort}.`,
       ...(rulesLine ? [rulesLine] : []),
-      `What runs automatically stays set up. Ozzie checks ${toShort} on its schedule once you choose which of its services to check.`,
+      // A job is for the church it was confirmed for (owner decision 2026-11-22): each pauses and is asked about once.
+      jobs > 0
+        ? `Ozzie's own check stays set up: it checks ${toShort} on its schedule once you choose which of its services to check. ${jobs === 1 ? "Your job in Keeping watch pauses" : `Your ${jobs} jobs in Keeping watch pause`} until you say whether to keep ${jobs === 1 ? "it" : "each one"} for ${toShort}.`
+        : `What runs automatically stays set up. Ozzie checks ${toShort} on its schedule once you choose which of its services to check.`,
       keepLine("new"),
     ],
     actions: [

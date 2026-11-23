@@ -12,9 +12,9 @@ import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { Icon } from "./icons.js";
 import { BriefingPanel } from "./briefing.js";
-import type { RunnerView } from "./responsibility-runner.js";
-import { NoticedCard, watchLine, WriteUpBlock } from "./responsibility-views.js";
-import { jobTitle, noticedChanges, noticedTitle, whenText } from "./responsibility-words.js";
+import type { Runner, RunnerView } from "./responsibility-runner.js";
+import { NoticedCard, SwitchQuestionCard, watchLine, WriteUpBlock } from "./responsibility-views.js";
+import { jobTitle, noticedChanges, noticedTitle, switchQuestionText, whenText } from "./responsibility-words.js";
 import { browserStore, type KeyValueStore } from "./proactive.js";
 import {
   ageText, backText, CAN_SET_ASIDE, countText, decisionLines, GROUP_OF, groupToday, ledeText, notesReadyText, pageNotes, progressEmptyText, regularLine, regularMissedText, setAsideChoices,
@@ -37,6 +37,8 @@ import { useAnnounce } from "./announce.js";
 export interface TodayWatch {
   view: RunnerView; now: string;
   onAutomatic: () => void; onOpen: (page: "sunday" | "automatic" | "connection") => void;
+  /** Answers a job's question after a switch of church (responsibility-runner.ts answerSwitch). */
+  runner?: Pick<Runner, "answerSwitch">;
 }
 
 /** The fictional import's own clock and zone. */
@@ -134,6 +136,7 @@ function itemTitle(item: TodayItem, now: string, d: DayWords, w: SystemWords = s
     // Genesis has no service to keep an eye on: its own reads are what runs (review of e9cbd97d, H1).
     case "regular": return w.system === "genesis" ? "Ozzie reads Genesis on its own" : eyeLine();
     case "answers": return `Waiting for an answer in ${w.name}`;
+    case "job-question": return switchQuestionText(s.question).title;
   }
 }
 
@@ -399,6 +402,9 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
           {missed && <ul className="list resp-problems"><li><Icon name="clock" small />{missed}</li></ul>}
         </article>;
       }
+      // A job paused by a switch of church: its one question, answered here or on Keeping watch.
+      case "job-question": return <SwitchQuestionCard key={item.id} question={s.question} runner={watch?.runner ?? {}}
+        onAnswered={() => setFocusGroup(GROUP_OF[item.state])}>{later}</SwitchQuestionCard>;
       case "answers": return <article key={item.id} className="find" aria-labelledby={titleId}>
         <div className="find-top"><span className="badge b-muted"><Icon name="clock" small />Waiting for an answer</span>
           <span className="find-where">{w.services}</span>{age && <span className="find-age">{age}</span>}</div>

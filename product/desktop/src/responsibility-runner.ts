@@ -12,6 +12,20 @@
 //   handed over (handChanges), this run's notice is the one notice; the regular check sends its own only
 //   if this run doesn't decide one.
 //
+// A church on B1 Church or Breeze (system-jobs.ts): Keep services covered and the morning briefing run the same way over
+// the system's own check of the watched service (its schedule's read, recorded in the task ledger, shared the same way),
+// counted from the brief its service page shows and compared by the same name-free record. The other jobs read Planning
+// Center's Calendar, People and Groups, which those systems' keys don't read: they wait, unshown, as when Planning
+// Center isn't connected, and run again if the church switches back. Each item says which system its check read.
+//
+// A job is for the church a person confirmed its plan for (owner decision 2026-11-22). Each job keeps that church
+// on this Mac (KEYS.churches, beside the native store, which holds no church). When the Mac uses a different church,
+// whatever system each is on, each job confirmed for the old one pauses and Ozzie asks once whether to keep it for the
+// new one (`questions`): Yes starts it fresh there, its first check a quiet baseline; No stops it; switching back before
+// answering simply resumes it. A job from before churches were kept belongs to the Planning Center church in use when it
+// is first seen, without a question. Only the church in use's items are shown, and a notice held about another never
+// goes out.
+//
 // Missed runs (Mac asleep, Ozzie not running, Planning Center not connected) are reported plainly
 // and caught up ONCE. A run that couldn't finish, or couldn't start, says so and is tried again
 // later, within limits. A refused run is never asked for again before the store would allow it, so
@@ -32,16 +46,16 @@
 // copy for other AI apps or Siri, and never a notice.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import {
-  changeEligible, checksFreeAt, dueNow, includesSundayReady, quietDeferral, refusedUntil, retryAt, scheduledSlots, settledPlan, TEMPLATES, type LocalState, type Plan,
+  changeEligible, checksFreeAt, dueNow, includesSundayReady, quietDeferral, refusedUntil, retryAt, scheduledSlots, settledPlan, TEMPLATES, untilLifetime, type LocalState, type Plan,
   type Responsibility, type RunTrigger, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { FailureCode, ModelStep } from "../../../core/src/harness/contract.js";
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { inQuietHours, type QuietHours } from "../../../core/src/schedule.js";
-import { buildSundayBrief, sundayShownCount, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { buildSundayBrief, sundayShownCount, unnumberedRoster, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { isOperationsRead, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
-import { changeStillHolds, compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory } from "../../../core/src/sunday-changes.js";
+import { changeStillHolds, compareSundayCheck, recordSundayCheck, type SundayChange, type SundayCheckMemory, type SundayCheckRecord } from "../../../core/src/sunday-changes.js";
 import { sundayOperations, type SundayOperations } from "../../../core/src/operations-capture.js";
 import { partKey } from "./services-merge.js";
 import {
@@ -50,6 +64,28 @@ import {
 import { checkFailure, retryDenied, StepFailure, stepFailure, StepNotes, stepNotes, type Invoke } from "./harness-bridge.js";
 import type { KeyValueStore } from "./proactive.js";
 import { heldMacOnly, THIS_MAC_ONLY, thisMacOnly, type NoticeOptions } from "./phone-notice.js";
+import { isSystemCheck, runsOn, systemJobBrief, systemJobRecord, systemOf, type SystemJobCheck } from "./system-jobs.js";
+import type { OtherSystem } from "./church-system.js";
+
+/** What a job reads: a Planning Center check, or a B1 Church or Breeze check of the watched service (system-jobs.ts). */
+export type JobCheck = SundayCapture | SystemJobCheck;
+/** Every read the check made, with how it ended. */
+const readsOf = (c: JobCheck): readonly { outcome: string }[] => isSystemCheck(c) ? c.system.reads : c.reads;
+/**
+ * Why a B1 Church or Breeze read didn't finish, as native's closed word (proactive.ts SystemReadFailure), for the item's
+ * own sentence; nothing for any other failure (a Planning Center check says what it always said).
+ */
+const readWord = (error: unknown): Pick<NoticedItem, "read"> | Record<string, never> => {
+  if (!(error instanceof Error) || !Object.hasOwn(error, "system")) return {};
+  const outcome = (error as { outcome?: unknown }).outcome;
+  return typeof outcome === "string" && /^[a-z-]{1,40}$/u.test(outcome) ? { read: outcome } : {};
+};
+/** What a check is compared by (sunday-changes.ts); null for a system check whose brief can't be built. */
+function recordOf(c: JobCheck, rules: SundayRules, now: string): SundayCheckRecord | null {
+  if (!isSystemCheck(c)) return recordSundayCheck(c, rules, now);
+  const built = systemJobBrief(c, rules, now);
+  return built.ok ? systemJobRecord(c, built.brief) : null;
+}
 
 // ---- The native store --------------------------------------------------------------------------------
 
@@ -163,6 +199,23 @@ export interface NoticedItem {
    * "in-briefing": held for quiet hours, then brought into the morning briefing instead of its own notice.
    */
   notice?: "sent" | "held" | "sent-later" | "in-app" | "unavailable" | "briefing" | "in-briefing" | "none";
+  /** The church system the job read when it came up, when it isn't Planning Center (B1 Church, Breeze). Absent: Planning Center. */
+  system?: OtherSystem;
+  /**
+   * The church it is about, as JobChurch `church` keeps it ("" for one from before churches were kept that no longer
+   * belongs to a known church). Absent on an item kept before 0.8.0, until the runner first knows the church in use.
+   * Keeping watch and Today show only the church in use's.
+   */
+  church?: string;
+  /**
+   * found / clear / briefing: the system shares no number needed for any role (Breeze), so Ozzie can't say whether the
+   * service is covered, and every sentence that would say nothing needs a decision says that instead.
+   */
+  unnumbered?: true;
+  /** couldnt-check: why the system's read didn't finish, as native's closed word (church-system.ts readProblemText). */
+  read?: string;
+  /** couldnt-check: the system lists no roles on the service watched, so there was nothing to check. */
+  no_roles?: true;
 }
 /**
  * What the AI wrote for a run, in the form kept on this Mac: Ozzie's own sentences for the facts it chose, people as id
@@ -211,6 +264,11 @@ export interface RunnerContext {
    * it was confirmed in; this one (as it was at launch) only for one confirmed before zones were kept.
    */
   zone: string;
+  /**
+   * The church in use as the app knows it at this moment (JobChurch `church`; null with none), which can be ahead of what
+   * the runner was last told (churchInUse): a job confirmed for another church never starts a run then. Absent: not said.
+   */
+  church?: string | null;
   /** Quiet hours follow this Mac's clock, as they always have. */
   macZone: string;
   quiet: QuietHours;
@@ -222,7 +280,12 @@ export interface RunnerContext {
    * The leader's own decisions about a check's Sunday, as the Sunday page applies them (kept on this Mac), so Keep Sunday
    * covered's report counts what the page shows. Absent: none.
    */
-  decisionsFor?: (capture: SundayCapture) => readonly SundayDecision[];
+  decisionsFor?: (capture: JobCheck) => readonly SundayDecision[];
+  /**
+   * The church's system when it is B1 Church or Breeze: jobs read its checks, and only the jobs it can run do
+   * (system-jobs.ts SYSTEM_TEMPLATES); the rest wait, unshown, as when nothing is connected. Absent: Planning Center.
+   */
+  system?: OtherSystem | null;
   /**
    * The other services Ozzie watches as the Services page shows them now, beside `capture` (this run's check of the first
    * service): their latest checks, read in the same round, with the leader's decisions for each and each one's own rooms
@@ -236,17 +299,17 @@ export interface RunnerContext {
 export interface RunnerHooks {
   context(): RunnerContext;
   /** One fresh deterministic check through the app's own path (recorded in the task ledger). */
-  check(): Promise<SundayCapture>;
+  check(): Promise<JobCheck>;
   /**
    * With an AI model: the template's procedure for this run, its steps paid from the grant, written up in the form kept
    * on this Mac. `signal` aborts when it's paused; `trigger`: why this run started, for What happened.
    */
-  prepare(r: Responsibility, grant: Grant, capture: SundayCapture, signal?: AbortSignal, trigger?: RunTrigger): Promise<Prepared | null>;
+  prepare(r: Responsibility, grant: Grant, capture: JobCheck, signal?: AbortSignal, trigger?: RunTrigger): Promise<Prepared | null>;
   /**
    * Whether a check is of the church Ozzie uses now. A check of another church (one finished or shared from before a
    * switch) is never reused or acted on. Absent: every check is.
    */
-  belongs?(capture: SundayCapture): boolean;
+  belongs?(capture: JobCheck): boolean;
 }
 export interface RunnerDeps {
   native: ResponsibilityNative;
@@ -274,6 +337,8 @@ interface Saved extends LocalState {
   interrupted_told: string | null;
   /** Paused (on its own or with everything) since: its scheduled times meanwhile weren't missed. */
   paused_at: string | null;
+  /** Kept for a new church after a switch (Yes): its first check there tells nothing, only learns what is there. */
+  baseline?: true;
 }
 export interface RunnerView {
   available: boolean;
@@ -287,7 +352,19 @@ export interface RunnerView {
   unseen: number;
   /** A briefing was announced: open Today when the window comes back. */
   open_today: boolean;
+  /** Jobs confirmed for another church than the one in use, each paused until the person says whether to keep it. */
+  questions?: readonly SwitchQuestion[];
+  /** The system each B1 Church or Breeze run read (by its run id), so a run is said in its own system's name. */
+  run_systems?: Readonly<Record<string, OtherSystem>>;
 }
+/**
+ * The church a job was confirmed for: its key (Planning Center's organization number, or `<system>:<church id>` for
+ * B1 Church and Breeze, as checks carry it), its name when known, and its system. `church: null`: not known yet; `adopt`:
+ * confirmed before any church was connected, so it belongs to the first one used.
+ */
+export interface JobChurch { church: string | null; name: string | null; system: "planning-center" | OtherSystem; adopt?: true }
+/** A job confirmed for another church than the one in use: paused until the person answers (Keeping watch and Today). */
+export interface SwitchQuestion { responsibility_id: string; template: TemplateId; title: string; from: JobChurch; to: JobChurch }
 export interface Runner {
   start(hooks: RunnerHooks): void;
   refresh(): Promise<void>;
@@ -303,7 +380,7 @@ export interface Runner {
    */
   changes(changes: readonly SundayChange[], about?: HandedChanges): Promise<boolean>;
   /** A check the app just made (the regular Sunday check's included): runs within a couple of minutes share it. */
-  captured(capture: SundayCapture): void;
+  captured(capture: JobCheck): void;
   /** "Pause everything" changed somewhere else (the menu bar): takes effect at once, not after a running run. */
   pausedElsewhere(paused: boolean): Promise<void>;
   create(plan: Plan): Promise<Responsibility>;
@@ -319,6 +396,17 @@ export interface Runner {
   keepWriteupsFor(organization: string): void;
   /** Saved checks were deleted, or Planning Center was disconnected: every write-up is forgotten (review H, M4). */
   forgetAllWriteups(): void;
+  /**
+   * The church Ozzie uses now (null while none is connected): jobs confirmed for another one pause and are asked about;
+   * one confirmed for this one resumes if a question about it was waiting; a notice held about another church is dropped.
+   */
+  churchInUse?(church: JobChurch | null): void;
+  /** The person's answer to a SwitchQuestion: keep the job for the church in use (true), or stop it. */
+  answerSwitch?(id: string, keep: boolean): Promise<void>;
+  /** The church was let go of (a switch of system, a disconnect): a notice held about it never goes out, and a run stops. */
+  letGo?(): void;
+  /** Every job this Mac keeps that hasn't ended, as last read (those the page doesn't show included), with its church. */
+  jobs?(): { template: TemplateId; church: JobChurch | null }[];
   view(): RunnerView;
   subscribe(listener: () => void): () => void;
 }
@@ -339,6 +427,12 @@ const KEYS = {
   settled: "ozzie.responsibilities.settled.v1",
   /** Each run's write-up (header): people as Planning Center ids. Read and written only here. */
   writeups: "ozzie.responsibilities.writeups.v1",
+  /** The church each job was confirmed for (JobChurch), by its id: church keys and names, never a person's. */
+  churches: "ozzie.responsibilities.churches.v1",
+  /** Jobs paused by a switch of church until the person answers: the church each was for, and whether it was running. */
+  questions: "ozzie.responsibilities.switch.v1",
+  /** The last church in use Ozzie knew (JobChurch), so its jobs stay shown while it isn't known for a while. */
+  church: "ozzie.responsibilities.church.v1",
 };
 const NOTICED_KEPT = 30;
 const HELD_KEPT = 30;
@@ -367,6 +461,8 @@ const changeKind = (c: SundayChange) => c.finding?.kind ?? changeFindingKind(c.k
 /** Sends one notice; `macOnly`: only background checks brought it, so "A notice on your phone" leaves it on this Mac. */
 const sendNotice = (deps: Pick<RunnerDeps, "notify">, kind: NoticeKind, macOnly: boolean) => macOnly ? deps.notify(kind, THIS_MAC_ONLY) : deps.notify(kind);
 const CANCELLED = Symbol("cancelled");
+/** A check that finished for a church Ozzie no longer uses (hooks.belongs): its run ends as cancelled, telling nothing. */
+const FOREIGN = Symbol("another church");
 const rateLimited = (value: unknown) => (JSON.stringify(value) ?? "").includes("rate-limited");
 
 /** One finding a run reports, by its stable key and kind (for the person's Church rules on notices). Ids only. */
@@ -390,6 +486,8 @@ export interface AlsoServices {
 export interface Found {
   decisions: number; looks: number; findings: NonNullable<NoticedItem["findings"]>; found: FoundKey[]; keys: string[]; drafts: number; all: FoundKey[];
   others?: Readonly<Record<string, readonly string[]>>;
+  /** A church system that shares no number needed for any role (Breeze): Ozzie can't say whether the service is covered. */
+  unnumbered?: true;
 }
 /**
  * What one fresh check shows for a template. Counts and keys (ids) only. The person's Church rules
@@ -402,7 +500,8 @@ export interface Found {
  * group meeting is then every service's, each once, as the Services page and the job's own write-up (which reads every
  * service's) say them; the church's follow-ups stay the first service's.
  */
-export function findingsFor(template: TemplateId, capture: SundayCapture, rules: SundayRules, now: string, decided: readonly SundayDecision[] = [], also: AlsoServices | null = null): Found {
+export function findingsFor(template: TemplateId, capture: JobCheck, rules: SundayRules, now: string, decided: readonly SundayDecision[] = [], also: AlsoServices | null = null): Found {
+  if (isSystemCheck(capture)) return systemFindings(template, capture, rules, now, decided);
   const brief = buildSundayBrief(capture, rules, now);
   const own = also && !also.firstRooms ? { rooms: false as const } : {};
   const ops = TEMPLATES[template].needs.includes("operations") || template === "morning-briefing" ? sundayOperations(capture, rules, { now, ...own }) : null;
@@ -449,6 +548,27 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
 }
 
 /**
+ * What one B1 Church or Breeze check shows for Keep services covered or the morning briefing: the service page's own count
+ * (sundayShownCount over the brief it shows, after the leader's decisions), its decisions as what a job tells, and notes
+ * as drafts. These systems hold no rooms, follow-ups or group meetings, so there are none. Where the system shares no
+ * number needed for any role (Breeze), "covered" can't be said, and the item says so (`unnumbered`); its counts are still
+ * the page's. A brief that can't be built counts nothing (the run says why before it gets here).
+ */
+function systemFindings(template: TemplateId, capture: SystemJobCheck, rules: SundayRules, now: string, decided: readonly SundayDecision[]): Found {
+  const built = systemJobBrief(capture, rules, now);
+  const none: Found = { decisions: 0, looks: 0, findings: {}, found: [], keys: [], drafts: 0, all: [] };
+  if (!built.ok || !runsOn(template, systemOf(capture))) return none;
+  const brief = built.brief;
+  const entries = feedbackOf(rules);
+  const always = brief.findings.filter(f => alwaysFor(entries, briefTarget(f, capture.plan_id))).length;
+  const drafts = brief.findings.filter(f => f.kind === "needs-people" && (f.people?.suggestions.length ?? 0) > 0).length + always;
+  const found = brief.findings.filter(f => f.tone === "decision").map((f): FoundKey => ({ key: f.key, kind: f.kind, tone: f.tone }));
+  const shown = sundayShownCount(applyDecisions(brief, decided), null);
+  return { decisions: shown.decisions, looks: shown.looks, findings: {}, found, keys: found.map(f => f.key), drafts,
+    all: foundOf(brief, null), ...(unnumberedRoster(brief) ? { unnumbered: true as const } : {}) };
+}
+
+/**
  * The regular Sunday check's onChanges. What got worse goes to Keep Sunday covered when it would run for it
  * now; the regular check then leaves the notice to that run and sends its own only if the run didn't decide
  * one (proactive.ts afterCapture). Otherwise nothing is handed over and the regular check's notice goes out
@@ -457,7 +577,9 @@ export function findingsFor(template: TemplateId, capture: SundayCapture, rules:
 export const handChanges = (runner: Pick<Runner, "takes" | "changes">) =>
   (changes: readonly SundayChange[], about: HandedChanges): Promise<boolean> | undefined => runner.takes(changes) ? runner.changes(changes, about) : undefined;
 
-export function createRunner(deps: RunnerDeps): Runner {
+/** The runner App uses: with the church controls the Runner interface leaves optional (tests' fakes leave them out). */
+export type ChurchRunner = Runner & Required<Pick<Runner, "churchInUse" | "answerSwitch" | "letGo" | "jobs">>;
+export function createRunner(deps: RunnerDeps): ChurchRunner {
   let hooks: RunnerHooks | null = null;
   let listing: Listing | null = null;
   let available = true;
@@ -466,6 +588,14 @@ export function createRunner(deps: RunnerDeps): Runner {
   let held: Held[] = read<Held[]>(deps.store, KEYS.held) ?? [];
   let seenAt = read<string>(deps.store, KEYS.seen);
   let writeups: WriteUp[] = (read<{ version: 1; items: WriteUp[] }>(deps.store, KEYS.writeups)?.items ?? []).filter(w => w && typeof w.item === "string");
+  const churches: Record<string, JobChurch> = read<Record<string, JobChurch>>(deps.store, KEYS.churches) ?? {};
+  const questions: Record<string, { from: JobChurch; resume: boolean }> = read<Record<string, { from: JobChurch; resume: boolean }>>(deps.store, KEYS.questions) ?? {};
+  /**
+   * The church in use (churchInUse), and the last one known (kept across launches), so a switch is told apart from a
+   * while with none known on the same system (a disconnect, a launch before the status, a sign-in that never answers).
+   */
+  let churchNow: JobChurch | null = null;
+  let lastKnown: JobChurch | null = read<JobChurch>(deps.store, KEYS.church);
   /**
    * The church Ozzie uses now, once App says (keepWriteupsFor): only its write-ups are shown, so no id is ever filled
    * with another church's names, and none at all until it is known (review H, L9).
@@ -480,7 +610,7 @@ export function createRunner(deps: RunnerDeps): Runner {
   let openToday = false;
   let next: Record<string, string | null> = {};
   /** The newest live check, shared by runs that need one soon after. */
-  let latest: { capture: SundayCapture; at: number } | null = null;
+  let latest: { capture: JobCheck; at: number } | null = null;
   /** Planning Center asked Ozzie to slow down: no new check starts before this. */
   let slowUntil: string | null = null;
   const listeners = new Set<() => void>();
@@ -492,6 +622,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     deps.store.set(KEYS.noticed, JSON.stringify({ version: 1, items: noticed }));
     deps.store.set(KEYS.held, JSON.stringify(held));
     deps.store.set(KEYS.writeups, JSON.stringify({ version: 1, items: writeups }));
+    deps.store.set(KEYS.churches, JSON.stringify(churches));
+    deps.store.set(KEYS.questions, JSON.stringify(questions));
+    if (lastKnown) deps.store.set(KEYS.church, JSON.stringify(lastKnown));
   };
   /**
    * How many times every write-up was forgotten (deleted saved checks, a disconnect, a switch of church): the write-up of
@@ -507,10 +640,38 @@ export function createRunner(deps: RunnerDeps): Runner {
   };
   const forgetWriteups = (keep: (w: WriteUp) => boolean) => { writeups = writeups.filter(keep); };
   const attention = (i: NoticedItem) => i.kind === "found" || i.kind === "couldnt-check" || i.kind === "missed" || i.kind === "briefing";
-  const build = (): RunnerView => ({
-    available, paused_all: listing?.paused_all ?? false, items: listing?.items ?? [], noticed, writeups: Object.fromEntries(writeups.filter(w => church !== null && w.organization === church).map(w => [w.item, w])), next, running: running?.id ?? null,
-    unseen: noticed.filter(i => attention(i) && (!seenAt || i.at > seenAt)).length, open_today: openToday,
-  });
+  /**
+   * What Keeping watch and Today show: on B1 Church or Breeze only the jobs that church can run and what they noticed (the
+   * rest wait, unshown); on Planning Center everything, as before.
+   */
+  /**
+   * The church whose jobs and items the pages show: the one in use; while none is known on the system the last one was on
+   * (a disconnect, a launch before the status), that one; after a switch to a system whose church isn't connected, none.
+   * `undefined` before App has said anything (every job and item is shown, as before churches were kept).
+   */
+  const viewChurch = (): string | null | undefined => !churchNow ? undefined
+    : churchNow.church ?? (lastKnown?.church && lastKnown.system === churchNow.system ? lastKnown.church : null);
+  const build = (): RunnerView => {
+    const system = hooks?.context().system;
+    // Only the church in use's items (one kept before churches were, until it is first stamped, as before). While the
+    // church in use isn't known on the system it was last known on (a disconnect, a launch before the status), that last
+    // church's: its jobs stay shown, waiting (none runs meanwhile). After a switch to another system whose church isn't
+    // connected yet, no church's items and no job confirmed for a church: none is ever shown under another church.
+    const cur = viewChurch();
+    const here = !churchNow ? noticed : noticed.filter(i => i.church === undefined || (cur !== null && i.church === cur));
+    const ownHere = (r: Responsibility) => !churchNow || !churches[r.id]?.church || churches[r.id]!.church === cur;
+    const shown = system ? here.filter(i => runsOn(i.template, system)) : here;
+    const asked = churchNow?.church ? (listing?.items ?? []).filter(r => r.status !== "ended" && Object.hasOwn(questions, r.id))
+      .map((r): SwitchQuestion => ({ responsibility_id: r.id, template: r.template, title: r.title, from: questions[r.id]!.from, to: churchNow! })) : [];
+    const runSystems = Object.fromEntries(noticed.flatMap(i => i.run_id && i.system ? [[i.run_id, i.system] as const] : []));
+    return {
+      available, paused_all: listing?.paused_all ?? false,
+      items: (listing?.items ?? []).filter(r => runsOn(r.template, system) && ownHere(r) && !asked.some(q => q.responsibility_id === r.id)), noticed: shown,
+      writeups: Object.fromEntries(writeups.filter(w => church !== null && w.organization === church).map(w => [w.item, w])), next, running: running?.id ?? null,
+      unseen: shown.filter(i => attention(i) && (!seenAt || i.at > seenAt)).length, open_today: openToday,
+      ...(asked.length ? { questions: asked } : {}), ...(Object.keys(runSystems).length ? { run_systems: runSystems } : {}),
+    };
+  };
   let snapshot = build();
   const emit = () => { save(); snapshot = build(); listeners.forEach(l => l()); };
   /** During quiet hours (this Mac's clock, as notices follow it): the morning briefing labels it Overnight. */
@@ -518,8 +679,14 @@ export function createRunner(deps: RunnerDeps): Runner {
     const ctx = hooks?.context();
     return Boolean(ctx && inQuietHours(ctx.quiet, at, ctx.macZone));
   };
+  /**
+   * One item. Its church and system are the caller's (what the run read when it started, or the job's own church), never
+   * whichever church is in use when it is added; with none given, the job's own church.
+   */
   const add = (item: Omit<NoticedItem, "id">): NoticedItem => {
-    const marked = item.kind !== "briefing" && item.kind !== "ended" && item.kind !== "clear" && overnight(item.at) ? { ...item, overnight: true } : item;
+    const own = churches[item.responsibility_id];
+    const stamped = item.church === undefined && own?.church ? { ...item, church: own.church, ...(own.system !== "planning-center" && !item.system ? { system: own.system } : {}) } : item;
+    const marked = stamped.kind !== "briefing" && stamped.kind !== "ended" && stamped.kind !== "clear" && overnight(stamped.at) ? { ...stamped, overnight: true } : stamped;
     const full = { ...marked, id: `${item.responsibility_id}:${item.at}:${item.kind}` };
     noticed = [full, ...noticed.filter(i => i.id !== full.id)].slice(0, NOTICED_KEPT);
     return full;
@@ -641,15 +808,14 @@ export function createRunner(deps: RunnerDeps): Runner {
     const newer = latest && latest.capture.plan_id === plan && ms(latest.capture.completed_at) > ms(item.check.completed_at) ? latest.capture : null;
     let memory = stateOf(item.responsibility_id).memory;
     if (memory && memory.latest.plan_id !== plan) memory = null;
-    if (memory && newer && ms(newer.completed_at) > ms(memory.latest.completed_at)) {
-      memory = compareSundayCheck(memory, recordSundayCheck(newer, ctx.rules, newer.completed_at), { now: deps.now(), urgentWithinHours: ctx.urgentWithinHours }).memory;
-    }
+    const record = newer && memory && ms(newer.completed_at) > ms(memory.latest.completed_at) ? recordOf(newer, ctx.rules, newer.completed_at) : null;
+    if (memory && record) memory = compareSundayCheck(memory, record, { now: deps.now(), urgentWithinHours: ctx.urgentWithinHours }).memory;
     const holding = (item.changes ?? []).filter(c => !memory || changeStillHolds(c, memory));
     const changed = routeChanges(holding, entries).notify;
     if (changed.length) return { kinds: changed.map(changeKind) };
     // New findings: still there in a newer check that read what this job reads; otherwise as its own check found them.
-    const answers = newer && (!TEMPLATES[item.template].needs.includes("operations") || newer.reads.some(isOperationsRead));
-    const still = answers ? findingsFor(item.template, newer, ctx.rules, newer.completed_at, [], ctx.alsoServices?.(newer) ?? null).found.filter(f => h.found!.some(x => x.key === f.key)) : h.found;
+    const answers = newer && (!TEMPLATES[item.template].needs.includes("operations") || (!isSystemCheck(newer) && newer.reads.some(isOperationsRead)));
+    const still = answers ? findingsFor(item.template, newer, ctx.rules, newer.completed_at, [], isSystemCheck(newer) ? null : ctx.alsoServices?.(newer) ?? null).found.filter(f => h.found!.some(x => x.key === f.key)) : h.found;
     const notify = routeFindings(still, entries).notify;
     return notify.length ? { kinds: still.filter(f => notify.includes(f.key)).map(f => f.kind) } : null;
   }
@@ -685,7 +851,8 @@ export function createRunner(deps: RunnerDeps): Runner {
     for (const h of held) patch(h.item, { notice: "in-briefing" });
     held = [];
     const previous = noticed.find(i => i.kind === "briefing" && i.id !== briefing.id && i.at < briefing.at);
-    return noticed.filter(i => i.overnight && i.id !== briefing.id && i.at <= briefing.at && (!previous || i.at > previous.at)).length;
+    return noticed.filter(i => i.overnight && i.id !== briefing.id && i.at <= briefing.at && (!previous || i.at > previous.at)
+      && (i.church === undefined || briefing.church === undefined || i.church === briefing.church)).length;
   }
   /** A morning briefing due now (and able to run) gathers held notices itself. */
   function briefingDue(ready: boolean): boolean {
@@ -720,15 +887,15 @@ export function createRunner(deps: RunnerDeps): Runner {
   }
 
   /** A check recent enough to share, or null. */
-  function shared(): SundayCapture | null {
+  function shared(): JobCheck | null {
     const window = options().fast ? FAST_SHARED_CHECK_MS : SHARED_CHECK_MS;
     return latest && ms(deps.now()) - latest.at < window && hooks?.belongs?.(latest.capture) !== false ? latest.capture : null;
   }
-  function captured(capture: SundayCapture) {
+  function captured(capture: JobCheck) {
     if (capture.kind !== "live" || hooks?.belongs?.(capture) === false) return;
     const at = Number.isFinite(ms(capture.completed_at)) ? Math.min(ms(capture.completed_at), ms(deps.now())) : ms(deps.now());
     if (!latest || at >= latest.at) latest = { capture, at };
-    if (capture.reads.some(r => r.outcome === "rate-limited")) slowDown();
+    if (readsOf(capture).some(r => r.outcome === "rate-limited")) slowDown();
   }
   function slowDown() { slowUntil = iso(ms(deps.now()) + (options().fast ? FAST_RATE_LIMIT_WAIT_MS : RATE_LIMIT_WAIT_MS)); }
   const slowing = () => slowUntil !== null && ms(deps.now()) < ms(slowUntil);
@@ -736,13 +903,13 @@ export function createRunner(deps: RunnerDeps): Runner {
    * One check for every run that needs one now: a recent one is shared (except for Check now, which reads
    * again); otherwise the app's own path, which shares a check already running.
    */
-  async function check(trigger: RunTrigger): Promise<SundayCapture> {
+  async function check(trigger: RunTrigger): Promise<JobCheck> {
     const recent = trigger === "manual" ? null : shared();
     if (recent) return recent;
     try {
       const capture = await hooks!.check();
-      // Finished after Ozzie switched churches: not this church's Sunday, so not acted on.
-      if (hooks!.belongs?.(capture) === false) throw "not-connected";
+      // Finished after Ozzie switched churches: not this church's Sunday, so not acted on; the run ends as if paused.
+      if (hooks!.belongs?.(capture) === false) throw FOREIGN;
       captured(capture);
       return capture;
     } catch (error) {
@@ -762,6 +929,12 @@ export function createRunner(deps: RunnerDeps): Runner {
     // Taken before anything is read: a forget while this run still reads Planning Center drops its write-up too (review K, L3).
     const since = forgotten;
     const s = stateOf(r.id);
+    // The church and system this run is for, as they are when it starts: what it says stays theirs whatever happens next.
+    const own = churches[r.id];
+    const runSystem = hooks.context().system ?? undefined;
+    const whose = { ...(own?.church ? { church: own.church } : churchNow?.church ? { church: churchNow.church } : {}), ...(runSystem ? { system: runSystem } : {}) };
+    // Kept for a new church after a switch: its first check there tells nothing (owner decision 2026-11-22).
+    const quietFirst = s.baseline === true;
     let grant: Grant;
     try { grant = await deps.native.begin(r.id, trigger); }
     catch (error) {
@@ -773,7 +946,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (code === "too-soon" || code === "busy") { saved[r.id] = { ...s, not_before: until }; return { status: "refused", code }; }
       const day = started.slice(0, 10);
       if (code === "checks-limit" && s.limit_told !== day) {
-        add({ responsibility_id: r.id, template: r.template, at: started, kind: "limit", trigger });
+        add({ responsibility_id: r.id, template: r.template, at: started, kind: "limit", trigger, ...whose });
         saved[r.id] = { ...s, limit_told: day };
       }
       const broken = code === "unavailable" || code === "invalid";
@@ -781,7 +954,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       saved[r.id] = { ...stateOf(r.id), last_slot: slot ?? s.last_slot, retry_at: broken ? until : null, not_before: until, failures: s.failures + (broken ? 1 : 0) };
       if (broken) {
         // The store couldn't be read, or refused the plan as saved: say so, and try again later.
-        const item = add({ responsibility_id: r.id, template: r.template, at: started, kind: "couldnt-check", code, retry_at: until, scheduled_for: slot ?? started, trigger });
+        const item = add({ responsibility_id: r.id, template: r.template, at: started, kind: "couldnt-check", code, retry_at: until, scheduled_for: slot ?? started, trigger, ...whose });
         if (s.failures === 0 && !fallback) await notice("couldnt-check", item, trigger, r.id);
         else patch(item.id, { notice: "none" });
       }
@@ -797,15 +970,16 @@ export function createRunner(deps: RunnerDeps): Runner {
     emit();
     if (missed.length) {
       add({ responsibility_id: r.id, template: r.template, at: started, kind: "missed", scheduled_for: missed[0]!, missed_count: missed.length,
-        missed_reason: missedReason(missed[0]!, s), ran_at: started, trigger });
+        missed_reason: missedReason(missed[0]!, s), ran_at: started, trigger, ...whose });
     }
-    const fail = async (code: FailureCode, access = false): Promise<RunResult> => {
+    const fail = async (code: FailureCode, access = false, why: Partial<Pick<NoticedItem, "read" | "no_roles">> = {}): Promise<RunResult> => {
       const failures = stateOf(r.id).failures + 1;
       const retry = access ? null : retryAt(r, deps.now(), options());
       saved[r.id] = { ...stateOf(r.id), failures, retry_at: retry };
       await deps.native.end(r.id, grant.run_id, "failed", code, 0, 0).catch(() => undefined);
       log(`responsibility: run status=failed code=${code} noticed=0 drafts=0`);
-      const item = add({ responsibility_id: r.id, template: r.template, at: deps.now(), kind: "couldnt-check", code, retry_at: retry, scheduled_for: slot ?? started, trigger, ...(access ? { access } : {}) });
+      const item = add({ responsibility_id: r.id, template: r.template, at: deps.now(), kind: "couldnt-check", code, retry_at: retry, scheduled_for: slot ?? started, trigger, run_id: grant.run_id,
+        ...(access ? { access } : {}), ...why, ...whose });
       // Reported once per streak; retries continue quietly.
       if (failures === 1 && !fallback) await notice("couldnt-check", item, trigger, r.id);
       else patch(item.id, { notice: "none" });
@@ -814,17 +988,27 @@ export function createRunner(deps: RunnerDeps): Runner {
     try {
       const ctx = hooks.context();
       if (TEMPLATES[r.template].needs.includes("operations") && !ctx.granted.includes("operations")) return await fail("denied", true);
-      let capture: SundayCapture;
+      let capture: JobCheck;
       try { capture = await guard(check(trigger)); }
-      catch (error) { if (error === CANCELLED) throw error; return await fail(checkFailure(error)); }
+      catch (error) { if (error === CANCELLED || error === FOREIGN) throw CANCELLED; return await fail(checkFailure(error), false, readWord(error)); }
       const now = deps.now();
+      // A check of another church than the one this job was confirmed for (the church changed as it started): nothing of
+      // it is kept or told; the run ends as if paused, and the switch's question comes next.
+      if (own?.church && capture.organization !== own.church) throw CANCELLED;
+      // A B1 Church or Breeze check that can't make a service check (no roles, no service times) or, on B1 Church, waits for
+      // the church's time zone to be confirmed: nothing is counted or compared, and the run says so.
+      if (isSystemCheck(capture)) {
+        const built = systemJobBrief(capture, ctx.rules, now);
+        if (!built.ok || built.coverage.waiting_for_zone) return await fail("partial", false, !built.ok && built.reason === "no-roles" ? { no_roles: true } : {});
+      }
       // Every service watched, as the Services page shows them (and the job's write-up reads them).
-      const found = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? [], ctx.alsoServices?.(capture) ?? null);
+      const found = findingsFor(r.template, capture, ctx.rules, now, ctx.decisionsFor?.(capture) ?? [], isSystemCheck(capture) ? null : ctx.alsoServices?.(capture) ?? null);
       // What changed since this responsibility last looked at the same Sunday.
       let changes: SundayChange[] = [];
       let memory = stateOf(r.id).memory;
-      if (capture.kind === "live" && (r.template === "keep-sunday-covered" || r.template === "morning-briefing")) {
-        const compared = compareSundayCheck(memory, recordSundayCheck(capture, ctx.rules, now), { now, urgentWithinHours: ctx.urgentWithinHours });
+      const record = capture.kind === "live" && (r.template === "keep-sunday-covered" || r.template === "morning-briefing") ? recordOf(capture, ctx.rules, now) : null;
+      if (record) {
+        const compared = compareSundayCheck(memory, record, { now, urgentWithinHours: ctx.urgentWithinHours });
         changes = compared.changes;
         memory = compared.memory;
       }
@@ -852,9 +1036,13 @@ export function createRunner(deps: RunnerDeps): Runner {
         responsibility_id: r.id, template: r.template, at: now, kind, trigger, run_id: grant.run_id, check: { plan_id: capture.plan_id, completed_at: capture.completed_at },
         decisions: found.decisions, looks: found.looks, findings: found.findings,
         changes: listed, drafts, ...(briefing && includesSundayReady(now, zoneOf(r)) ? { sunday_ready: true } : {}),
-        ...(forBriefing.length ? { kept: forBriefing } : {}),
+        ...(forBriefing.length ? { kept: forBriefing } : {}), ...(found.unnumbered ? { unnumbered: true as const } : {}),
+        // What this check read: its church, and its system when it isn't Planning Center.
+        church: capture.organization, ...(isSystemCheck(capture) ? { system: systemOf(capture) } : {}),
       });
-      saved[r.id] = { ...stateOf(r.id), failures: 0, retry_at: null, memory,
+      const { baseline: _quiet, ...settled } = stateOf(r.id);
+      void _quiet;
+      saved[r.id] = { ...settled, failures: 0, retry_at: null, memory,
         reported: [...new Set([...Object.keys(found.others ?? {}).map(seenMark), ...found.keys, ...stateOf(r.id).reported])].slice(0, REPORTED_KEPT) };
       if (briefing) {
         const n = foldIntoBriefing(item);
@@ -872,7 +1060,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       const cause = noticeKind === "needs-decision" ? found.found.filter(f => (r.report === "every-check" ? kept : fresh).notify.includes(f.key)) : undefined;
       // Only background checks brought it: "A notice on your phone" leaves it on this Mac. A mix still goes.
       const macOnly = noticeKind === "needs-decision" && thisMacOnly([...routed.notify.map(changeKind), ...(cause ?? []).map(f => f.kind)]);
-      if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent, cause, macOnly);
+      // A baseline (the first check for a church after a switch) is shown in Ozzie and tells nothing.
+      if (quietFirst) patch(item.id, { notice: trigger === "start" || trigger === "manual" ? "in-app" : "none" });
+      else if (noticeKind) await notice(noticeKind, item, trigger, r.id, urgent, cause, macOnly);
       else patch(item.id, { notice: briefingOnly ? "briefing" : "none" });
       // The AI's write-up, or why there is none: after the notice is decided and sent or held, so a notice never waits on
       // the model and quiet hours are judged at check time (review H, L14). Everything above is worked out without it.
@@ -926,14 +1116,76 @@ export function createRunner(deps: RunnerDeps): Runner {
     if (!listing || !hooks) return;
     const ready = hooks.context().ready;
     const now = deps.now();
-    next = Object.fromEntries(listing.items.map(r => [r.id, listing!.paused_all ? null : nextFor(r, ready, now)]));
+    const system = hooks.context().system;
+    // A job confirmed for a church while none is known (a disconnect): no time is promised; its card says what it waits for.
+    const unknown = (r: Responsibility) => churchNow !== null && !churchNow.church && Boolean(churches[r.id]?.church);
+    next = Object.fromEntries(listing.items.map(r => [r.id, listing!.paused_all || unknown(r) ? null
+      : nextFor(r, ready && runsOn(r.template, system) && !Object.hasOwn(questions, r.id), now)]));
     const soonest = Object.values(next).filter((x): x is string => x !== null).sort()[0] ?? null;
     try { deps.nextDue?.(soonest); } catch { /* the regular tick still comes */ }
   }
 
+  /** Whether `own` is the church in use. */
+  const isHere = (own: JobChurch | undefined, here: JobChurch) => Boolean(own?.church) && own!.church === here.church;
+  /**
+   * Each job against the church in use (owner decision 2026-11-22): one confirmed for it runs (a question about it, from a
+   * switch away and back, is dropped and it resumes as it was); one confirmed for another church pauses and is asked about
+   * once. A job from before churches were kept was Planning Center's (jobs ran nowhere else), following its church in use:
+   * on a Planning Center church it belongs to that one, with no question and nothing told; on another system it is asked
+   * about as Planning Center's. Only jobs the church's system can run are asked about; the rest wait, unshown.
+   */
+  async function reconcile(): Promise<boolean> {
+    const here = churchNow;
+    if (!here?.church || !listing) return false;
+    let paused = false, changed = false;
+    // Items kept before churches were: the job's church when known, else this Planning Center church's, else no one's.
+    if (noticed.some(i => i.church === undefined)) {
+      changed = true;
+      noticed = noticed.map(i => i.church !== undefined ? i
+        : { ...i, church: churches[i.responsibility_id]?.church ?? (here.system === "planning-center" ? here.church! : "") });
+    }
+    for (const r of listing.items) {
+      if (r.status === "ended") continue;
+      let own = churches[r.id];
+      if (!own) { own = churches[r.id] = here.system === "planning-center" ? { church: here.church, name: here.name, system: here.system } : { church: null, name: null, system: "planning-center" }; changed = true; }
+      // Confirmed before a church was known: the first church used takes it over (one made on another system before it was
+      // connected; or one from before churches were kept, which was Planning Center's and followed its church in use, so the
+      // first Planning Center church used after the upgrade, without a question, even if this Mac has used two of them).
+      else if (own.church === null && (own.adopt || (own.system === "planning-center" && here.system === "planning-center"))) {
+        own = churches[r.id] = { church: here.church, name: here.name, system: here.system }; changed = true;
+      }
+      // Its church's name, once Ozzie knows it (a question names it).
+      else if (isHere(own, here) && !own.name && here.name) { own = churches[r.id] = { ...own, name: here.name }; changed = true; }
+      const asked = questions[r.id];
+      if (isHere(own, here)) {
+        if (asked) {
+          changed = true;
+          delete questions[r.id];
+          if (asked.resume) { try { await deps.native.resume(r.id); markResumed([r.id]); } catch { /* it shows as paused; Resume is on its card */ } }
+        }
+        continue;
+      }
+      if (asked || !runsOn(r.template, here.system === "planning-center" ? null : here.system)) continue;
+      questions[r.id] = { from: own, resume: r.status === "active" };
+      changed = true;
+      if (r.status === "active") {
+        try { await deps.native.pause(r.id); } catch { /* the page holds it back all the same (tickOnce) */ }
+        markPaused([r.id]); dropHeld(r.id); cancelRunning(r.id); paused = true;
+      }
+    }
+    if (paused || (changed && Object.keys(questions).length)) await refresh();
+    return changed;
+  }
+  /** A run's plan on another church's clock: the same schedule and limits, its dated end on that clock's same day. */
+  const rezoned = (r: Responsibility, zone: string): Plan => ({
+    template: r.template, schedule: r.schedule, report: r.report, limits: r.limits, zone,
+    lifetime: r.lifetime.kind === "until" ? untilLifetime(r.lifetime.until, zone) ?? r.lifetime : r.lifetime,
+  });
+
   async function tickOnce() {
     if (!hooks) return;
     await refresh();
+    await reconcile();
     await settleDefaults();
     // A morning briefing about to run brings held notices in with it, rather than sending them first.
     if (!briefingDue(hooks.context().ready)) await deliverHeld();
@@ -945,8 +1197,15 @@ export function createRunner(deps: RunnerDeps): Runner {
         const s = stateOf(r.id);
         const due = dueNow(r, s, now, zoneOf(r), options());
         if (!due.due) continue;
-        // Planning Center not connected yet: the run waits; it isn't missed.
-        if (!ctx.ready) { if (!s.waiting_since) saved[r.id] = { ...s, waiting_since: now }; continue; }
+        // Waiting for the person's answer about a switch of church: paused, nothing runs.
+        if (Object.hasOwn(questions, r.id)) continue;
+        // None is known now (a setup left unfinished, a disconnect): a job confirmed for a church waits, and says since when,
+        // so a time it misses is said as not connected. The app already on another church (the runner not told yet): it
+        // waits for that switch's question.
+        if (churches[r.id]?.church && !ctx.church && churchNow !== null && !churchNow.church) { if (!s.waiting_since) saved[r.id] = { ...s, waiting_since: now }; continue; }
+        if (churches[r.id]?.church && ctx.church && ctx.church !== churches[r.id]!.church) continue;
+        // Planning Center not connected yet: the run waits; it isn't missed. So does a job the church's system can't run.
+        if (!ctx.ready || !runsOn(r.template, ctx.system)) { if (!s.waiting_since) saved[r.id] = { ...s, waiting_since: now }; continue; }
         if (s.not_before && ms(now) < ms(s.not_before)) continue;
         // Planning Center asked Ozzie to slow down: no new check until then (a recent one may still be shared).
         if (slowing() && !shared()) { saved[r.id] = { ...s, not_before: slowUntil }; continue; }
@@ -968,6 +1227,9 @@ export function createRunner(deps: RunnerDeps): Runner {
     const s = stateOf(r.id);
     if (s.not_before && ms(deps.now()) < ms(s.not_before)) return false;
     if (slowing() && !shared()) return false;
+    if (!runsOn(r.template, hooks?.context().system) || Object.hasOwn(questions, r.id)) return false;
+    const now = hooks?.context().church;
+    if (churches[r.id]?.church && (now ? now !== churches[r.id]!.church : churchNow !== null && !churchNow.church)) return false;
     return changeEligible(r, s, changes, deps.now(), options());
   }
   /** After Pause / Pause everything (or their resume) changed in the store: at once, never after a running run. */
@@ -988,7 +1250,7 @@ export function createRunner(deps: RunnerDeps): Runner {
       if (first) { launchedAt = deps.now(); sessionZone = h.context().zone; }
       void serial(tickOnce);
     },
-    refresh: () => serial(async () => { await refresh(); scheduleNext(); emit(); }),
+    refresh: () => serial(async () => { await refresh(); await reconcile(); scheduleNext(); emit(); }),
     tick: () => serial(tickOnce),
     wake(sleptMs, at) {
       wakes.unshift({ from: new Date(ms(at) - sleptMs).toISOString(), to: at });
@@ -1019,6 +1281,10 @@ export function createRunner(deps: RunnerDeps): Runner {
     },
     create: plan => serial(async () => {
       const r = await deps.native.create(plan);
+      // Confirmed for the church in use; before any is connected on another system, for the first one connected there.
+      // (On Planning Center with none connected yet it is a job with no church, which the first church in use adopts.)
+      if (churchNow?.church) churches[r.id] = { church: churchNow.church, name: churchNow.name, system: churchNow.system };
+      else if (churchNow && churchNow.system !== "planning-center") churches[r.id] = { church: null, name: null, system: churchNow.system, adopt: true };
       log(`responsibility: created template=${r.template} lifetime=${r.lifetime.kind === "until" ? `until:${r.lifetime.until}` : "until-stopped"}`);
       await refresh();
       scheduleNext();
@@ -1033,6 +1299,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     resume: async id => { await deps.native.resume(id); await refresh(); await afterPause(false, id); void serial(tickOnce); },
     stop: async id => {
       await deps.native.stop(id);
+      delete questions[id];
       // Stopped by a person: it never says it ended as planned, and its write-ups go with it.
       saved[id] = { ...stateOf(id), ended_told: true };
       forgetWriteups(w => w.responsibility_id !== id);
@@ -1048,7 +1315,7 @@ export function createRunner(deps: RunnerDeps): Runner {
     runNow: id => serial(async () => {
       await refresh();
       const r = listing?.items.find(x => x.id === id);
-      if (!r || !hooks) return { status: "skipped" } as RunResult;
+      if (!r || !hooks || !runsOn(r.template, hooks.context().system) || Object.hasOwn(questions, r.id)) return { status: "skipped" } as RunResult;
       const result = await run(r, "manual", null, []);
       scheduleNext();
       emit();
@@ -1073,6 +1340,49 @@ export function createRunner(deps: RunnerDeps): Runner {
       forgetWriteups(w => w.organization === organization);
       if (writeups.length !== before || was !== church) emit();
     },
+    churchInUse(next) {
+      const was = churchNow;
+      const shownBefore = viewChurch();
+      churchNow = next ? { church: next.church, name: next.name, system: next.system } : null;
+      // Another church than the last one known (a moment with none in between isn't a switch): a notice held about the
+      // old one never goes out, and a run of it stops (as proactive.ts letGo does for the regular check).
+      if (next?.church && lastKnown?.church && next.church !== lastKnown.church) { dropHeld(); cancelRunning(); }
+      if (next?.church) lastKnown = { church: next.church, name: next.name, system: next.system };
+      // Against the list as last read (nothing is read just for this; the first tick after Ozzie starts reads it and
+      // reconciles too): only a switch reaches native, to pause the jobs it asks about.
+      if (!hooks || (was?.church === churchNow?.church && was?.name === churchNow?.name && was?.system === churchNow?.system)) return;
+      // Shown again only when what the pages show changes: the church whose jobs and items they show, or a job, its church or
+      // an item reconcile affected. (A moment with no church on the same system shows the same; the next tick drops its
+      // jobs' promised times.)
+      const shownNow = viewChurch();
+      void serial(async () => { if (await reconcile() || shownNow !== shownBefore) { scheduleNext(); emit(); } });
+    },
+    answerSwitch: (id, keep) => serial(async () => {
+      const asked = questions[id], here = churchNow;
+      if (!asked || !here?.church) return;
+      delete questions[id];
+      if (!keep) {
+        // No: it stops, as Stop does.
+        await deps.native.stop(id).catch(() => undefined);
+        saved[id] = { ...stateOf(id), ended_told: true };
+        forgetWriteups(w => w.responsibility_id !== id);
+      } else {
+        // Yes: it is this church's now, on its clock, starting fresh (its first check a quiet baseline).
+        churches[id] = { church: here.church, name: here.name, system: here.system };
+        const r = listing?.items.find(x => x.id === id);
+        const zone = hooks?.context().zone;
+        if (r && zone && isTimeZone(zone) && r.zone !== zone) await deps.native.edit(id, rezoned(r, zone)).catch(() => undefined);
+        if (asked.resume) await deps.native.resume(id).catch(() => undefined);
+        saved[id] = { ...stateOf(id), memory: null, reported: [], baseline: true, last_slot: null, last_run_at: null, retry_at: null, failures: 0,
+          waiting_since: null, not_before: null, limit_told: null, paused_at: null };
+      }
+      await refresh();
+      scheduleNext();
+      emit();
+      if (keep) void serial(tickOnce);
+    }),
+    letGo() { dropHeld(); cancelRunning(); emit(); },
+    jobs: () => (listing?.items ?? []).filter(r => r.status !== "ended").map(r => ({ template: r.template, church: churches[r.id] ?? null })),
     view: () => snapshot,
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };

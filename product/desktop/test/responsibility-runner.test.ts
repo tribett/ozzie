@@ -181,11 +181,13 @@ describe("a check of a church Ozzie no longer uses (review S2, L1)", () => {
     h.runner.captured(captureAt(h.now(), decline));
     church = "fictional-other-church";
     await h.runner.changes([{ id: "x", kind: "need-opened", effect: "worse", urgency: "attention", position: "Greeter", from: 0, to: 1 }]);
-    // Not shared: a fresh check ran, and it too was of the old church (finished after the switch), so the run failed
-    // as "couldn't check" rather than reporting the old church's Sunday.
+    // Not shared: a fresh check ran, and it too was of the old church (finished after the switch), so the run ended as
+    // cancelled, quietly (third-pass review of 0.8.0, L2: no "couldn't check" item or notice), never reporting the old
+    // church's Sunday.
     expect(h.check).toHaveBeenCalledTimes(2);
-    expect(h.fake.calls.at(-1)).toMatch(/^end failed denied/u);
-    expect(h.runner.view().noticed[0]).toMatchObject({ kind: "couldnt-check" });
+    expect(h.fake.calls.at(-1)).toMatch(/^end failed cancelled/u);
+    expect(h.runner.view().noticed.filter(i => i.kind === "couldnt-check")).toEqual([]);
+    expect(h.notify).not.toHaveBeenCalled();
   });
 });
 

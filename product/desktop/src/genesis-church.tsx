@@ -283,7 +283,7 @@ export function GenesisWatch({ intervalMinutes, capture, problem, paused = false
       {/* Its own pause, so a pause kept from before a switch can always be lifted here (review of 4c3d32ac, M-e). */}
       {(paused ? onResume : onPause) && <div className="row form-actions"><button type="button" className="btn btn-secondary" onClick={paused ? onResume : onPause}>
         {paused ? "Resume reading Genesis" : "Pause reading Genesis"}</button></div>}
-      <p className="small">{GENESIS_NO_SCHEDULES} {keepTitle()} and the morning briefing work with Planning Center only for now, and private notices with Planning Center, B1 Church and Breeze.</p>
+      <p className="small">{GENESIS_NO_SCHEDULES} {keepTitle()}, the morning briefing and private notices work with Planning Center, B1 Church and Breeze.</p>
     </section>
   </div>;
 }

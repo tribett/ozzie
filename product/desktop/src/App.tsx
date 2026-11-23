@@ -69,7 +69,7 @@ import { CheckMySetup } from "./check-setup.js";
 import { hasPassed, moveOn, WAIT_AGAIN_MS, waitingText, type WatchedPlan } from "./move-on.js";
 import { useBiggerTextKey } from "./text-size.js";
 import { Announcer } from "./announce.js";
-import { keepTitle, noticeDayOf } from "./day-phrases.js";
+import { genesisNoJobs, noticeDayOf } from "./day-phrases.js";
 import { onboarding, type ModelProgress, type NoticeDay, type OllamaHistory, type OllamaProgress } from "./onboarding-bridge.js";
 import { kidsTeams } from "../../../core/src/kids-rules.js";
 import { pausedWhen, type ModelStatus } from "./model.js";
@@ -81,7 +81,9 @@ import { openInPlanningCenter } from "./planning-center-pages.js";
 import { invoke } from "@tauri-apps/api/core";
 import { autostart, background, quitting, startProbe } from "./background.js";
 import { checksOn, QuitQuestion, useQuitGuard, type QuitAsk } from "./quit-question.js";
-import { allowanceSpent, createRunner, handChanges, nativeResponsibilities, responsibilityStep, type RunnerHooks } from "./responsibility-runner.js";
+import { allowanceSpent, createRunner, handChanges, nativeResponsibilities, responsibilityStep, type JobCheck, type RunnerHooks } from "./responsibility-runner.js";
+import { createJobsGate, forSystem, isSystemCheck, systemJobCheck, systemJobHarness } from "./system-jobs.js";
+import { JobsAtStakeContext } from "./jobs-at-stake.js";
 import { ResponsibilityList, useRunnerView, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import type { FeedbackSource } from "./finding-feedback.js";
@@ -99,7 +101,7 @@ import {
   churchSystem, churchSystems, deleteChecksOrLater, isOtherSystem, keychainAsking, letGoAgain, NOT_CHOSEN, SystemWordsContext, systemWords, useKeychainAsking, type ChurchSystemState,
   type MainSystem,
 } from "./church-system.js";
-import { readSystem, useSystemChurch } from "./system-church.js";
+import { ofConnection, readSystem, useSystemChurch } from "./system-church.js";
 import { buildSystemBrief } from "../../../core/src/church-systems/brief.js";
 import { fictionalB1, fictionalBreeze } from "../../../core/src/church-systems/fictional.js";
 import { GenesisFirstRun, GenesisPage, GenesisSettings, GenesisToday, GenesisWatch, genesisAnswer, genesisExample, genesisQuestions, useGenesisChurch } from "./genesis-church.js";
@@ -157,6 +159,8 @@ const watchedDay = {
 const proactive = desktopProactive();
 // A church on B1 Church or Breeze is kept watch over by its own schedule, beside Planning Center's (system-watch.ts).
 const systemProactive = desktopSystemProactive();
+/** Why a B1 Church or Breeze church's jobs wait although it is set up (its key, or a service with no roles): system-jobs.ts. */
+const jobsGate = createJobsGate();
 // Keeping watch (responsibility-runner.ts): one per webview, like the Sunday schedule.
 // Debug builds only: a fast schedule and name-free lines for the developer's terminal.
 const debugRunner = { fast: false, lines: false };
@@ -173,6 +177,8 @@ const macZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
  * another church there) never ends open cards unasked; only a switch of system does, after its question says so.
  */
 const SYSTEM_CARDS = "church-system";
+/** The jobs that read Planning Center's Calendar, People and Groups, which B1 Church's and Breeze's keys don't read. */
+const ONLY_PC_JOBS = "Watching room bookings, follow-ups and group meetings";
 /** A system check's roles as Church lists and the cards match them: the system's own ids, its role names, the service's time. */
 const systemPositions = (c: SystemCapture): PositionLabel[] => c.positions.map(p => ({
   position_id: p.id, team_id: p.team_id ?? "?", name: Object.hasOwn(c.labels, `position:${p.id}`) ? c.labels[`position:${p.id}`]! : "A role without a name",
@@ -466,8 +472,6 @@ export function App() {
     setRulesByChurch(moved.store);
   }, [inUseOrg]);
   useEffect(() => saveRulesByChurch(rulesByChurch), [rulesByChurch]);
-  // A job's write-ups belong to the church they were read from: another church's are forgotten (audit item 6).
-  useEffect(() => { if (inUseOrg) runner.keepWriteupsFor(inUseOrg); }, [inUseOrg]);
   const rules = rulesInUse(savedRules, rulesByChurch, inUseOrg, settings.organization);
   // A church on B1 Church or Breeze (decision 21): its connection, last check and brief (system-church.ts). Planning
   // Center's own state below is untouched; where a page needs the service check, it reads `onSystem` first.
@@ -483,19 +487,23 @@ export function App() {
   // a notice held for quiet hours is dropped (its checks already stop, since each reads the connection kept now).
   const watchedChurch = useRef(systemChurchKey);
   useEffect(() => {
-    if (watchedChurch.current && watchedChurch.current !== systemChurchKey) systemProactive.letGo();
+    if (watchedChurch.current && watchedChurch.current !== systemChurchKey) { systemProactive.letGo(); runner.letGo(); }
     watchedChurch.current = systemChurchKey;
   }, [systemChurchKey]);
   // Leaving Planning Center for another system: a notice it held about the church signed out of is dropped (review L9).
   const mainBefore = useRef(sys.state.main);
   useEffect(() => {
-    if (mainBefore.current === "planning-center" && sys.state.main !== null && sys.state.main !== "planning-center") proactive.letGo();
+    if (mainBefore.current === "planning-center" && sys.state.main !== null && sys.state.main !== "planning-center") { proactive.letGo(); runner.letGo(); }
     mainBefore.current = sys.state.main;
   }, [sys.state.main]);
   // A key Ozzie let go of that this Mac's Keychain didn't let it remove then (church-system.ts letGoLater): tried again
   // when Ozzie starts and whenever the church connected changes, never the one in use.
   useEffect(() => { void letGoAgain(churchSystem.get()); }, [systemChurchKey]);
   const onSystem = sys.on;
+  // A job's write-ups belong to the church they were read from: another church's are forgotten (audit item 6). A church on
+  // B1 Church or Breeze is its placeholder scope (`<system>:<church id>`), which its checks carry as their church.
+  const jobsChurch = onSystem ? systemChurchKey : inUseOrg;
+  useEffect(() => { if (jobsChurch) runner.keepWriteupsFor(jobsChurch); }, [jobsChurch]);
   // A church whose main system is Genesis (round 5): no service to check; what Genesis shares, read on its own schedule.
   const onGenesis = sys.state.main === "genesis";
   // Planning Center's state is kept off any other main system: B1 Church, Breeze or Genesis (review of e9cbd97d, H2).
@@ -576,6 +584,15 @@ export function App() {
   // A live check is acted on only if it is of the church Ozzie uses now: one that finishes, or is shared, after a switch
   // is dropped by every consumer (review S2, L1).
   const belongs = (c: SundayCapture) => ofChurchInUse(c, current.current.settings.organization, current.current.inUseOrg);
+  /**
+   * A job's check is acted on only if it is of the church its jobs read now: a B1 Church or Breeze check of the church and
+   * service connected now, or, while the church isn't on another system, a Planning Center check of the church in use.
+   */
+  const jobBelongs = (c: JobCheck): boolean => {
+    if (!isSystemCheck(c)) return !onSystemNow.current && belongs(c);
+    const held = churchSystem.get();
+    return isOtherSystem(held.main) && ofConnection(c.system, held.connection);
+  };
   const pcAutomatic = useProactiveView(proactive);
   const systemAutomatic = useProactiveView(systemProactive);
   // Keeping watch shows the schedule of the church's own system.
@@ -637,12 +654,21 @@ export function App() {
     onCapture: c => {
       // Kept only when it is of the church and service watched now (system-church.ts `take`).
       sysNow.current.take(c);
+      // Jobs due soon share this check rather than reading the system again (only one of the service watched now).
+      const job = systemJobCheck(c, churchSystem.get().connection?.zone ?? null);
+      if (job && jobBelongs(job)) { runner.captured(job); jobsGate.checked(c, churchSystem.get().connection?.zone ?? null); }
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
       setNow(new Date().toISOString());
     },
+    // Something got worse: Keep services covered may check sooner, and then sends the one notice about it, as on Planning Center.
+    onChanges: handChanges(runner),
     // A check on its own that brought nothing says why on the service's page, as Check now does (a key no longer accepted).
     onFailure: (error, trigger) => {
       if (trigger !== "manual") sysNow.current.fail(error);
+      // A key the system no longer accepts holds the church's jobs back until a check reads it again (system-jobs.ts).
+      const held = churchSystem.get().connection;
+      const of = error instanceof SystemReadFailure && error.church ? `${error.system}:${error.church}` : held ? `${held.system}:${held.church_id}` : null;
+      jobsGate.failed(of, error);
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
     },
   }), []);
@@ -656,7 +682,10 @@ export function App() {
   useEffect(() => { if (readiness === "ready") { void proactive.tick(); void runner.tick(); } }, [readiness]);
   // The same for a church on another system, as soon as its service and first result are known.
   const systemWatchReady = systemReady(onSystem && sys.connection ? { connection: sys.connection, read: () => systemRead.current() } : null);
-  useEffect(() => { if (systemWatchReady) void systemProactive.tick(); }, [systemWatchReady]);
+  useEffect(() => { if (systemWatchReady) { void systemProactive.tick(); void runner.tick(); } }, [systemWatchReady]);
+  // Keeping watch and Today show the jobs the church's system can run: shown again when the church's system changes.
+  const jobsSystem = useRef(onSystem);
+  useEffect(() => { if (jobsSystem.current !== onSystem) { jobsSystem.current = onSystem; void runner.refresh(); } }, [onSystem]);
   // Keeping watch reads the latest app state through refs, like the Sunday schedule.
   const watch = useRunnerView(runner);
   useEffect(() => { if ((page === "automatic" || page === "today") && visible) runner.markSeen(); }, [page, watch.unseen, visible]);
@@ -710,11 +739,27 @@ export function App() {
   };
   const runnerState = useRef({ readiness, status, rules, decisions: [] as readonly SundayDecision[], modelReady,
     prefs: automatic.prefs, zone: macZone(), procedures, loop, workspace: "this-mac", capture, fictional, configured: false, sunday: null as string | null });
+  /** The leader's decisions about a job's check's service, as its page applies them (a live check and a saved copy share them). */
+  const decisionsOf = (c: JobCheck): SundayDecision[] => { try { return loadDecisions(localStorage, decisionsStorageKey("live", c.organization, c.plan_id)); } catch { return []; } };
   const runnerHooks: RunnerHooks = useMemo(() => ({
     context: () => {
       const s = runnerState.current;
+      // A church on B1 Church or Breeze (as this Mac keeps it, never render state): its jobs read its checks, ready when its
+      // own schedule is (a service watched, a first result seen and, for B1 Church, the zone confirmed).
+      const held = churchSystem.get();
+      const system = isOtherSystem(held.main) ? held.main : null;
+      if (system) return {
+        ready: systemReady(watchNow()) && !jobsGate.blocked(held.connection ? `${held.connection.system}:${held.connection.church_id}` : null), granted: ["services"], rules: s.rules, system,
+        // The church in use as this Mac keeps it now, ahead of what the runner was last told: another church's job never starts.
+        church: held.connection ? `${held.connection.system}:${held.connection.church_id}` : null,
+        zone: s.zone, macZone: macZone(), quiet: { start: s.prefs.quietStart, end: s.prefs.quietEnd }, urgentDuringQuiet: s.prefs.urgentDuringQuiet,
+        urgentWithinHours: s.prefs.urgentWithinHours, modelReady: s.modelReady,
+        // The leader's decisions about that service, kept under the church's placeholder scope as its page keeps them.
+        decisionsFor: decisionsOf,
+      };
       return {
         ready: s.readiness === "ready", granted: grantedFor(s.fictional ? null : s.capture, false, s.status), rules: s.rules,
+        church: current.current.inUseOrg ?? null,
         zone: s.zone, macZone: macZone(), quiet: { start: s.prefs.quietStart, end: s.prefs.quietEnd }, urgentDuringQuiet: s.prefs.urgentDuringQuiet,
         urgentWithinHours: s.prefs.urgentWithinHours,
         modelReady: s.modelReady,
@@ -730,21 +775,31 @@ export function App() {
         },
       };
     },
-    // The same check as "Check Planning Center now" (one at a time, recorded in the task ledger as automatic).
+    // The same check as "Check Planning Center now" (one at a time, recorded in the task ledger as automatic). A church on
+    // B1 Church or Breeze: the same check as its "Check … now" (its own schedule's read of the watched service).
     check: async () => {
+      const held = churchSystem.get();
+      if (isOtherSystem(held.main)) {
+        const read = await systemProactive.checkNow("automatic");
+        const job = systemJobCheck(read, churchSystem.get().connection?.zone ?? null);
+        if (!job) throw new SystemReadFailure(held.main, "invalid-response", held.connection?.church_id ?? null);
+        return job;
+      }
       const c = await proactive.checkNow("automatic");
       if (!current.current.fictional) { setCapture(c); setNow(new Date().toISOString()); }
       void desktopRecorder().idle().then(() => setLedgerVersion(v => v + 1));
       return c;
     },
-    belongs,
+    belongs: jobBelongs,
     // With an AI model: the template's procedure through the harness, each step paid from this run's grant. Its
     // write-up is kept with the run, people as id tokens (harness-bridge keptWriteup); it decides nothing.
     prepare: async (r, grant, c, signal, trigger) => {
       const s = runnerState.current;
-      if (!s.procedures || !belongs(c)) return null;
-      // Every service watched, as the job's count says them (owner decision 2026-11-19).
-      const data = mergedHarness(c, new Date().toISOString(), s);
+      if (!s.procedures || !jobBelongs(c)) return null;
+      // Every service watched, as the job's count says them (owner decision 2026-11-19). A church on B1 Church or Breeze:
+      // its own check, as Ask reads it.
+      const data = isSystemCheck(c) ? systemJobHarness(c, s.rules, decisionsOf(c), new Date().toISOString()) : mergedHarness(c, new Date().toISOString(), s);
+      if (!data) return null;
       const h = createAppHarness({ workspace_id: s.workspace, data, skills: s.procedures, session: harnessSession, loop: s.loop, recorder: desktopRecorder(), step: responsibilityStep(grant.run_id) });
       const observer = desktopRecorder().task("skill", r.skill_id, trigger ? `job:${r.template}:${trigger}` : undefined);
       // A pause aborts the run's signal, which stops the AI work at once (the loop cancels its step and tools).
@@ -1527,16 +1582,33 @@ export function App() {
     [alsoShownCaptures, changeNames]);
   // The church's time zone as Planning Center Services gave it, from a real check of the same organization only.
   const churchZone = capture && !fictional && capture.organization === org ? brief?.time_zone ?? null : null;
+  // A church on B1 Church or Breeze: the zone its check is placed in (the one confirmed in Ozzie, for B1 Church), and the
+  // watched service's day as its check read it, else as this Mac keeps it.
+  const systemZone = onSystem ? sys.connection?.zone ?? sys.built?.brief.time_zone ?? null : null;
   // Responsibilities follow the church's clock when a check has read it, otherwise this Mac's.
-  const scheduleZone = churchZone ?? macZone();
+  const scheduleZone = (onSystem ? systemZone : churchZone) ?? macZone();
   // The Sunday chosen in Settings, as a real check of it read it: "Keep an eye on Sunday" means that one.
-  const chosenSunday = capture && !fictional && capture.organization === org && capture.plan_id === settings.planId ? brief?.plan.date ?? null : null;
+  const chosenSunday = onSystem ? sys.built?.brief.plan.date ?? sys.connection?.service_day ?? null
+    : capture && !fictional && capture.organization === org && capture.plan_id === settings.planId ? brief?.plan.date ?? null : null;
   runnerState.current = {
     readiness, status, rules, decisions, modelReady, prefs: automatic.prefs, zone: scheduleZone, procedures, loop, workspace, capture, fictional,
     configured: Boolean(org && configured), sunday: chosenSunday,
   };
   const granted = grantedFor(fictional ? null : capture, false, status);
-  const planContext: PlanContext = {
+  // Why its checks don't run yet, in its own words (review L7): the zone to confirm, or first run to finish.
+  const systemNotReady = !onSystem || systemWatchReady || !sys.connection?.service_id ? null
+    : onSystem === "b1" && !sys.connection.zone ? "Confirm your church's time zone under Settings, then checks start on their own."
+      : `Finish setting up ${words.name}, then checks start on their own.`;
+  // A church on B1 Church or Breeze whose jobs wait although it is set up (system-jobs.ts JobsBlock), in its own words.
+  const jobsBlock = onSystem ? jobsGate.blocked(systemChurchKey) : null;
+  const jobsNotReady = jobsBlock === "key" ? `${words.name} no longer accepts the key Ozzie has. Connect ${words.name} again in Settings with a new key; jobs check again after that.`
+    : jobsBlock === "no-roles" && onSystem ? refusalLine(onSystem, "no-roles") : systemNotReady;
+  const planContext: PlanContext = onSystem ? {
+    // A church on B1 Church or Breeze: its own connection, church and service, one service, and the jobs it can run
+    // (system-jobs.ts; the plan's words follow the system's, SystemWordsContext).
+    organization: systemChurchKey ?? "", granted: ["services"], modelReady, connected: systemWatchReady && !jobsBlock, zone: scheduleZone, now: () => new Date().toISOString(),
+    sunday: chosenSunday, existing: watch.items, pausedAll: watch.paused_all, church: sys.connection?.church_name ?? null, several: false, notReady: jobsNotReady,
+  } : {
     // Words only (a plan card's "isn't connected yet"): held through a sign-in, as Today's regular check (review item 4); a
     // job started meanwhile says its first check waits for the sign-in, since none runs until then.
     organization: org, granted, modelReady, connected: shownReadiness === "ready", signingIn, zone: scheduleZone, now: () => new Date().toISOString(), sunday: chosenSunday,
@@ -1550,6 +1622,13 @@ export function App() {
   const feedback: FeedbackSource = { entries: feedbackOf(rules), onEntries: next => setRules(r => ({ ...r, feedback: next })) };
   // "Keep an eye on Sunday" in Ask becomes a plan to confirm: read here, with no model.
   const plans: PlanHooks = { parse: typed => parseRequest(typed, new Date().toISOString(), scheduleZone, { sunday: chosenSunday }), context: planContext, actions: planActions };
+  // A church on B1 Church or Breeze: Ask plans the jobs it can run there, and says plainly that the rest (rooms,
+  // follow-ups, group meetings) work with Planning Center only, sending nothing (system-jobs.ts forSystem).
+  const systemAsk = onSystem ? {
+    plans: { ...plans, parse: (typed: string) => forSystem(plans.parse(typed)).plan },
+    jobsNotHere: { parse: (typed: string) => { const p = plans.parse(typed); return forSystem(p).notHere ? p : { kind: "none" as const }; },
+      text: words.notHere(ONLY_PC_JOBS) },
+  } : null;
   const dark = useDarkAppearance();
   // ⌘+ makes everything bigger, as View › Bigger Text (⌘=) does (text-size.ts; accessibility audit B1).
   useBiggerTextKey();
@@ -1598,12 +1677,19 @@ export function App() {
   // A church on another system: its own connection decides, never Planning Center's status.
   // Genesis: no service, so nothing to decide is counted there.
   const sundayBadge = onGenesis || (!fictional && (onSystem ? !systemConnected : status?.state === "disconnected")) ? 0 : sundayCount(open);
-  // Jobs read Planning Center checks only: on another system none runs, so none counts here.
-  const automaticCount = page !== "automatic" ? automatic.unseen + (offPc ? 0 : watch.unseen) : 0;
+  // Jobs read Planning Center, B1 Church and Breeze checks: on Genesis none runs, so none counts here.
+  const automaticCount = page !== "automatic" ? automatic.unseen + (offPc && !onSystem ? 0 : watch.unseen) : 0;
   // The sidebar keeps its words at every width (audit item 22c); a narrow window puts them under Menu, which Escape closes.
   // Its two lines (what Ozzie reads or changes; the church in use) go under Menu too, and the church stays in the bar (review F, L-6).
   // The church's name stays in the sidebar while a sign-in for it is in the browser (native names no church in use then).
   const shownChurch = inUse ?? (reconnecting || addingAccess ? heldInUse : null);
+  // The church jobs are confirmed for and read (owner decision 2026-11-22: a switch pauses each and asks once). On Planning
+  // Center, the church in use, held while a sign-in for it is in the browser as the sidebar holds it (so its jobs don't
+  // vanish for a moment); none while disconnected. None on Genesis or before a church is chosen: no job reads it there.
+  const jobsOn = onSystem ?? (onGenesis || nothingChosen ? null : "planning-center");
+  const jobsKey = onSystem ? systemChurchKey : shownChurch?.organization ?? null;
+  const jobsName = onSystem ? sys.connection?.church_name ?? null : shownChurch?.name ?? null;
+  useEffect(() => { runner.churchInUse(jobsOn ? { church: jobsKey, name: jobsName, system: jobsOn } : null); }, [jobsKey, jobsName, jobsOn]);
   const churchLine = onSystem ? (!sys.connection ? words.notConnected : sys.connection.church_name ? words.connectedTo(sys.connection.church_name) : words.connected)
     : onGenesis ? (!sys.state.genesis ? words.notConnected : sys.state.genesis.church_name ? words.connectedTo(sys.state.genesis.church_name) : words.connected)
     : nothingChosen && !checkingSaved ? NOT_CHOSEN.notConnected
@@ -1615,10 +1701,6 @@ export function App() {
   // The person's own schedule and quiet hours hold for whichever system the church uses.
   const setPrefs = (p: ProactivePrefs) => { proactive.setPrefs(p); systemProactive.setPrefs(p); };
   const systemReadiness: Readiness = systemWatchReady ? "ready" : sys.connection ? "not-configured" : "not-connected";
-  // Why its checks don't run yet, in its own words (review L7): the zone to confirm, or first run to finish.
-  const systemNotReady = !onSystem || systemWatchReady || !sys.connection?.service_id ? null
-    : onSystem === "b1" && !sys.connection.zone ? "Confirm your church's time zone under Settings, then checks start on their own."
-      : `Finish setting up ${words.name}, then checks start on their own.`;
   // "What does your church use?" comes first on a Mac with no church yet (decision 21).
   const choosing = sys.state.main === null && !isConnected(status) && setup === "first";
 
@@ -1736,7 +1818,10 @@ export function App() {
         checking={checkingSaved && !connected} stuck={checkStuck ? checkConnection : null} adding={addingAccess || reconnecting} onSetUp={() => openSetup()}
         onSettings={() => setPage("connection")} problem={problem} refused={refused} summary={open ? acrossText(open, 1 + otherParts.length) : undefined} />}
       parts={[{ key: "main", date: brief?.plan.date ?? planDate(watchedDay.get(settings.planId)?.sort_date ?? null), dayText: day.date, node: main }, ...otherParts]} watch={pcWatch} />;
-  return <DayProvider value={day}><SystemWordsContext.Provider value={onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null)}><ListsSystemName.Provider value={words.name}>
+  // Every job this Mac keeps that hasn't ended (the runner's whole list, those waiting unshown included) with its church,
+  // and the Planning Center church in Settings, for the switch questions' own words: each counts only the ones it asks about.
+  const jobsAtStake = { jobs: runner.jobs(), returning: org || null };
+  return <JobsAtStakeContext.Provider value={jobsAtStake}><DayProvider value={day}><SystemWordsContext.Provider value={onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null)}><ListsSystemName.Provider value={words.name}>
     {/* Teams named with their service while more than one is watched (team-labels.ts): Church rules and Church lists. */}
     <TeamServicesContext.Provider value={serviceOfTeam}><FindingServicesContext.Provider value={findingServiceNames}><AlsoOperationsContext.Provider value={alsoOpsWords}><ListsTeamServices.Provider value={listsTeamServices}>
     <ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
@@ -1818,8 +1903,8 @@ export function App() {
         {/* Today counts and names every service watched, as the Services page does (services-merge.ts). */}
         {page === "today" && <DayProvider value={others.length && !offPc ? MANY_SERVICES : day}><TodayPage brief={harnessBrief} names={offPc ? shownNames : harnessCapture?.names} sundayDecisions={harnessDecisions} operations={operations} onSunday={() => setPage("sunday")}
           services={1 + others.length}
-          // Jobs read Planning Center checks only: a church on another system has none running (each waits; Keeping watch says so).
-          watch={fictional || offPc ? null : { view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage }} feedback={feedback} example={fictional} now={now}
+          // Jobs read Planning Center, B1 Church and Breeze checks: on Genesis none runs (each waits; Keeping watch says so).
+          watch={fictional || (offPc && !onSystem) ? null : { view: watch, now, onAutomatic: () => setPage("automatic"), onOpen: setPage, runner }} feedback={feedback} example={fictional} now={now}
           // Genesis: its own connection decides, never Planning Center's (review of e9cbd97d, H1).
           notConnected={onGenesis ? (!sys.state.genesis && !fictional ? { onConnect: () => openSetup("first"), onExample: showExample } : null)
             : onSystem ? (!systemConnected && !fictional ? { onConnect: () => openSetup("first"), onExample: showExample } : null)
@@ -1879,8 +1964,8 @@ export function App() {
         {page === "automatic" && onSystem && <ProactivePage view={automatic} names={sys.capture?.names ?? {}} organization={systemChurchKey ?? ""} planId={sys.connection?.service_id ?? ""}
           church={sys.connection?.church_name ?? null} readiness={systemReadiness} busy={sys.busy} now={now}
           churchTimeZone={sys.capture?.church.time_zone ?? sys.connection?.zone ?? null}
-          onCheckNow={systemCheck} onPause={() => systemProactive.pause()} onResume={() => systemProactive.resume()} onPrefs={setPrefs}
-          note={words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true)} notReady={systemNotReady} />}
+          onCheckNow={systemCheck} onPause={() => systemProactive.pause()} onResume={() => systemProactive.resume()} onPrefs={setPrefs} notReady={systemNotReady}
+          responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} names={sys.capture?.names ?? {}} />} />}
         {page === "automatic" && onGenesis && <GenesisWatch intervalMinutes={automatic.prefs.intervalMinutes} capture={genesis.capture} problem={genesis.problem} paused={automatic.schedule.paused}
           onPause={() => systemProactive.pause()} onResume={() => systemProactive.resume()} />}
         {page === "automatic" && !onSystem && !onGenesis && <ProactivePage view={automatic} names={changeNames} organization={org} planId={settings.planId} church={inUse?.name ?? null}
@@ -1897,7 +1982,7 @@ export function App() {
         {page === "connection" && <ConnectionPage
           system={onSystem && sys.connection ? <SystemSettings connection={sys.connection} onConnection={next => { sys.setState({ ...sys.state, connection: next });
             if (next.service_id !== sys.connection?.service_id || next.zone !== sys.connection?.zone) void sys.check(next); }}
-            onForget={() => { void forgetSystemChecks(); sys.forgetCheck(); forgetMovedLine(); sys.setState({ ...sys.state, connection: null }); }} onConnect={() => openSetup("first")}
+            onForget={() => { void forgetSystemChecks(); sys.forgetCheck(); forgetMovedLine(); runner.forgetAllWriteups(); sys.setState({ ...sys.state, connection: null }); }} onConnect={() => openSetup("first")}
             startsAt={sys.capture?.service?.starts_at ?? null} systemZone={sys.capture?.church.time_zone ?? null} />
             : onSystem ? <section className="settings-sec" aria-labelledby="pco-title"><h2 id="pco-title" className="h3" tabIndex={-1}>{words.name} and which service Ozzie watches</h2>
               <div className="find"><p className="find-body">{words.notConnected}.</p><div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={() => openSetup("first")}>{words.connect}</button></div></div></section>
@@ -1947,8 +2032,8 @@ export function App() {
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),
           // What was read decides what Ask offers on Genesis, never Planning Center's check (review of e9cbd97d, M1).
           here: { checked: Boolean(genesisShown.capture), chips: genesisQuestions(genesisShown.view) } } : {})}
-        {...(onSystem || onGenesis ? { jobsNotHere: { parse: plans.parse, text: words.notHere(`${keepTitle()}, the morning briefing and other jobs`, true) } } : { plans })} />
+        {...(onGenesis ? { jobsNotHere: { parse: plans.parse, text: genesisNoJobs() } } : systemAsk ?? { plans })} />
     </div>
     </Announcer>
-  </div></ChooseAiContext.Provider></ListsTeamServices.Provider></AlsoOperationsContext.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider>;
+  </div></ChooseAiContext.Provider></ListsTeamServices.Provider></AlsoOperationsContext.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider></JobsAtStakeContext.Provider>;
 }

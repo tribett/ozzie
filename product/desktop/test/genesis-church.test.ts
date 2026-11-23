@@ -102,6 +102,6 @@ describe("Genesis's own schedule words (review of 4c3d32ac, M-a, M-e)", () => {
     expect(watch(false)).toContain("at least every 30 minutes");
     expect(watch(false)).toContain("Pause reading Genesis");
     expect(watch(true)).toContain("Resume reading Genesis");
-    expect(watch(false)).toContain("and the morning briefing work with Planning Center only for now, and private notices with Planning Center, B1 Church and Breeze.");
+    expect(watch(false)).toContain(", the morning briefing and private notices work with Planning Center, B1 Church and Breeze.");
   });
 });

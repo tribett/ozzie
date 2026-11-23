@@ -255,6 +255,9 @@ describe("a church that uses only Genesis (round 5)", () => {
     await ask("How many times was the visitor card filled in?");
     expect(dom.seen()).toContain("Prayer Card: filled in 7 times.");
     expect(dom.seen()).not.toContain("Visitor cards are read on this Mac, on the Visitor cards page");
+    // Jobs: where they work, and why none reads Genesis (review of 0.8.0, M2), never "Planning Center only".
+    await ask("Keep an eye on Sunday for me");
+    expect(dom.seen()).toContain("Keep services covered and the morning briefing work with Planning Center, B1 Church and Breeze. Genesis shares no volunteer schedules, so no job reads it.");
     expect(native.calls.map(([c]) => c)).not.toContain("agent_step");
     await app.go("What happened");
     expect(dom.seen()).toContain("Every read in the latest check");
@@ -263,6 +266,9 @@ describe("a church that uses only Genesis (round 5)", () => {
     await app.go("Settings");
     expect(dom.seen()).toContain("Connected to Cedar Hollow Fellowship in Genesis.");
     expect(dom.seen()).not.toContain("Also read Genesis");
+    // What Ozzie runs and notices: the same sentence about jobs (M2).
+    expect(dom.seen()).toContain("Keep services covered and the morning briefing work with Planning Center, B1 Church and Breeze. Genesis shares no volunteer schedules, so no job reads it.");
+    expect(dom.seen()).not.toMatch(/morning briefing work with Planning Center only/u);
     // M3: switching away keeps Genesis as Also read Genesis, and says so.
     await app.press("Switch to Breeze");
     expect(dom.seen()).toContain("Genesis stays connected: Ozzie reads it beside the system you switch to, under Also read Genesis in Settings");
@@ -601,7 +607,7 @@ describe("a Mac set up on B1 Church, opened again", () => {
     await app.waitFor("Live read from B1 Church");
   }, 60_000);
 
-  it("Today shows B1 Church's own schedule, and jobs are said plainly to need Planning Center for now", async () => {
+  it("Today shows B1 Church's own schedule; Keeping watch and Ask offer its jobs, and say plainly which need Planning Center", async () => {
     seed("b1");
     // This Mac on another zone than the church's (Chicago), so the briefing's times are shown to follow the church's
     // clock and not this Mac's (review of round 3, L9).
@@ -619,16 +625,29 @@ describe("a Mac set up on B1 Church, opened again", () => {
       if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
     }
     expect(misnamed(dom.seen())).toEqual([]);
+    // Keeping watch: jobs work with B1 Church too (0.8.0); nothing says they need Planning Center. (This Mac's list of jobs
+    // can't be read in this fake, so none is offered here: system-jobs-app.test.ts sets one up.)
     await app.go("Keeping watch");
-    expect(dom.seen()).toContain("Keep services covered, the morning briefing and other jobs work with Planning Center only for now. Ozzie can't do these with B1 Church yet.");
-    // Asked to take something on, Ask says the same, here, and sends nothing.
+    expect(dom.seen()).not.toContain("Keep services covered, the morning briefing and other jobs work with Planning Center only for now.");
+    expect(dom.seen()).toContain("What Ozzie is watching");
+    expect(misnamed(dom.seen())).toEqual([]);
+    // Asked to take something on, Ask shows the plan to confirm in B1 Church's words, here, and sends nothing.
     await app.press("Ask Ozzie");
-    await app.type("ask-input", "Keep an eye on Sunday for me");
     const { act } = await import("react");
-    const form = all(dom.root as unknown as { childNodes: unknown[] }).find(n => (n as { tagName?: string }).tagName === "FORM" && byIdIn(n, "ask-input"));
-    await act(async () => { (propsOf(form) as unknown as { onSubmit: (e: unknown) => void }).onSubmit({ preventDefault() {} }); });
-    await app.settle();
-    expect(dom.seen()).toContain("Keep services covered, the morning briefing and other jobs work with Planning Center only for now.");
+    const send = async (typed: string) => {
+      await app.type("ask-input", typed);
+      const form = all(dom.root as unknown as { childNodes: unknown[] }).find(n => (n as { tagName?: string }).tagName === "FORM" && byIdIn(n, "ask-input"));
+      await act(async () => { (propsOf(form) as unknown as { onSubmit: (e: unknown) => void }).onSubmit({ preventDefault() {} }); });
+      await app.settle();
+    };
+    await send("Keep an eye on Sunday for me");
+    expect(dom.seen()).toContain("Plan · not started yetB1 ChurchKeep services covered");
+    expect(dom.seen()).toContain("B1 Church, Cedar Hollow Fellowship. Reads only.");
+    expect(dom.seen()).toContain("It only reads. It never changes anything in B1 Church.");
+    expect(dom.seen()).not.toContain("Keep services covered, the morning briefing and other jobs work with Planning Center only for now.");
+    // What reads Planning Center's Calendar, People or Groups is said plainly to need Planning Center.
+    await send("Watch room bookings for me");
+    expect(dom.seen()).toContain("Watching room bookings, follow-ups and group meetings works with Planning Center only for now. Ozzie can't do this with B1 Church yet.");
     expect(native.calls.map(([c]) => c)).not.toContain("agent_step");
   }, 60_000);
 

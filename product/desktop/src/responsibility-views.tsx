@@ -9,7 +9,7 @@ import {
   type Area, type Lifetime, type Parsed, type Plan, type Responsibility, type RunRow, type TemplateId,
 } from "../../../core/src/harness/responsibilities.js";
 import type { Autostart } from "./background.js";
-import type { NoticedItem, Runner, RunnerView, WriteUp } from "./responsibility-runner.js";
+import type { NoticedItem, Runner, RunnerView, SwitchQuestion, WriteUp } from "./responsibility-runner.js";
 import {
   accountsText, areasText, assumedText, atText, daysText, foundText, isWeekdays, jobTitle, keepAbout, lifetimeChoice, lifetimeText, limitsText, missingAccess, NEVER_TEXT,
   NO_WRITEUP, NOTICE_WORDS, noticedBadge, noticedChanges, noticedTitle, offerText, oneOfEach, ONLY_WHILE, preparedTitle, purposeText, QUIT_LINE, refusalText, REPORT_CHOICES,
@@ -28,6 +28,13 @@ import { dateText, weekRollup } from "./responsibility-words.js";
 import { KeptForBriefing } from "./sunday-ready.js";
 import { signNote, yourName } from "./connection.js";
 import { DraftActions, type OpenDraft } from "./draft-actions.js";
+import { isOtherSystem, systemWords, useSystemWords, type OtherSystem, type SystemWords } from "./church-system.js";
+import { runsOn } from "./system-jobs.js";
+import { itemSay, switchQuestionText } from "./responsibility-words.js";
+import { useAnnounce } from "./announce.js";
+
+/** The church's system when it is B1 Church or Breeze (the page's system words); null on Planning Center. */
+const otherOf = (w: Pick<SystemWords, "system">): OtherSystem | null => isOtherSystem(w.system) ? w.system : null;
 
 export const useRunnerView = (runner: Runner) => useSyncExternalStore(runner.subscribe, runner.view, runner.view);
 
@@ -58,6 +65,11 @@ export interface PlanContext {
   several?: boolean;
   /** "Pause everything" is on. */
   pausedAll?: boolean;
+  /**
+   * Why checks can't start yet when it isn't that nothing is connected (a church on B1 Church or Breeze: its time zone to
+   * confirm, its first result to see), said in place of "isn't connected yet". Absent: nothing more to say.
+   */
+  notReady?: string | null;
 }
 /** A plan's times are on the clock it was made in (the church's when known); say so when this Mac's clock is different. */
 function zoneNote(zone: string, context: PlanContext): string {
@@ -85,6 +97,14 @@ export interface PlanActions {
   onAutomatic: () => void;
 }
 const errorCode = (e: unknown) => typeof e === "string" ? e : "unavailable";
+/**
+ * A run's words in the system it read (a B1 Church or Breeze run, by run_systems), whatever church is in use now; a run
+ * with none recorded read Planning Center (every run before other systems had jobs did), so its words stay as they were.
+ */
+const runSay = (run: RunRow, view: RunnerView): ((text: string) => string) => {
+  const system = view.run_systems?.[run.run_id];
+  return system ? systemWords(system).say : (text: string) => text;
+};
 const TONE: Record<string, string> = { ok: "b-ok", muted: "b-muted", attn: "b-attn", look: "b-look" };
 const REPORTS = new Set<NoticedItem["kind"]>(["found", "clear", "briefing"]);
 /** The report a run made, when Ozzie still has it. */
@@ -156,22 +176,28 @@ export function PlanEditor({ plan, context, onDone, onCancel, doneLabel = "Use t
 /** The plan rows: what it watches, which accounts, when, how it tells you, until when, limits, how to stop. */
 export function PlanRows({ plan, context }: { plan: Plan; context: PlanContext }) {
   const d = useDay();
+  // A church on B1 Church or Breeze: the same plan in its system's name (church-system.ts say), with what Ozzie checks there.
+  const w = useSystemWords();
   return <div className="sp">
-    <div className="sp-row sp-2"><span className="sp-h">What Ozzie will watch</span><span>{watchesText(plan.template, d, context.several)}</span></div>
-    <div className="sp-row sp-2"><span className="sp-h">Accounts</span><span>{accountsText(plan.template, context.church)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">What Ozzie will watch</span><span>{watchesText(plan.template, d, context.several, otherOf(w))}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">Accounts</span><span>{w.say(accountsText(plan.template, context.church))}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">When it checks</span><span>{scheduleText(plan, at(plan, context), d)}{zoneNote(plan.zone, context)} {ONLY_WHILE}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">When it tells you</span><span>{reportText(plan)}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(plan.lifetime, plan.template, plan.schedule.weekdays)}</span></div>
-    <div className="sp-row sp-2"><span className="sp-h">Limits</span><span>{limitsText(plan, context.modelReady)}</span></div>
+    <div className="sp-row sp-2"><span className="sp-h">Limits</span><span>{w.say(limitsText(plan, context.modelReady))}</span></div>
     <div className="sp-row sp-2"><span className="sp-h">How to stop</span><span>{STOP_TEXT}</span></div>
   </div>;
 }
 
-/** What the plan card says once it has started: only what is true now (checking, waiting for a connection, or paused). */
-export function startedText(plan: Plan, context: PlanContext, d?: DayWords): string {
+/**
+ * What the plan card says once it has started: only what is true now (checking, waiting for a connection, or paused).
+ * `w`: the church's system words (a church on B1 Church or Breeze waits until its system can be checked).
+ */
+export function startedText(plan: Plan, context: PlanContext, d?: DayWords, w: Pick<SystemWords, "system" | "name"> = systemWords(null)): string {
   const then = scheduleText(plan, at(plan, context), d).replace(/^Every/u, "every").replace(/\.$/u, "");
   const first = context.pausedAll ? `Everything is paused, so Ozzie won't check until you resume everything. Then ${then}.`
     : context.signingIn ? `Ozzie will check once the Planning Center sign-in in your browser is done, then ${then}.`
+    : !context.connected && otherOf(w) ? `Ozzie will check as soon as ${w.name} can be checked, then ${then}.`
     : !context.connected ? `Ozzie will check as soon as Planning Center is connected, then ${then}.`
       : `Ozzie is checking now, then ${then}.`;
   return `${first} ${ONLY_WHILE} ${STOP_TEXT}`;
@@ -190,6 +216,7 @@ export function PlanCard({ plan: initial, assumed = [], context, actions }: {
     () => existingFor(initial.template, context) ? "exists" : "review");
   const [problem, setProblem] = useState<string | null>(null);
   const d = useDay();
+  const w = useSystemWords();
   const title = templateTitle(plan.template);
   const access = missingAccess(plan.template, context.granted);
   const assumption = stage === "review" && plan === initial ? assumedText(plan, assumed) : null;
@@ -208,7 +235,7 @@ export function PlanCard({ plan: initial, assumed = [], context, actions }: {
   if (stage === "started") {
     return <div className="find plan-card" role="status">
       <div className="find-top"><span className="badge b-ok"><Icon name="check" small />Started</span><span className="find-where">{title}</span></div>
-      <p className="find-body">{startedText(plan, context, d)}</p>
+      <p className="find-body">{startedText(plan, context, d, w)}</p>
       <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={actions.onAutomatic}>Open Keeping watch</button></div>
     </div>;
   }
@@ -231,16 +258,17 @@ export function PlanCard({ plan: initial, assumed = [], context, actions }: {
     </div>;
   }
   return <div className="find plan-card">
-    <div className="find-top"><span className="badge b-muted">Plan · not started yet</span><span className="find-where">Planning Center</span></div>
+    <div className="find-top"><span className="badge b-muted">Plan · not started yet</span><span className="find-where">{w.name}</span></div>
     <h3 className="find-title">{title}</h3>
     {stage === "edit"
       ? <PlanEditor plan={plan} context={context} onDone={p => { setPlan(p); setStage("review"); }} onCancel={() => setStage("review")} />
       : <PlanRows plan={plan} context={context} />}
     {assumption && <p className="small plan-assumed"><Icon name="info" small />{assumption}</p>}
     {early && stage !== "edit" && <p className="panel-warn" role="status"><Icon name="info" small />{early}</p>}
-    <p className="small">{NEVER_TEXT}</p>
+    <p className="small">{w.say(NEVER_TEXT)}</p>
     {access && <p className="panel-warn" role="status"><Icon name="lock" small />{access}</p>}
-    {!access && !context.connected && <p className="panel-info"><Icon name="info" small />Planning Center isn't connected yet, so the first check waits until it is.</p>}
+    {!access && !context.connected && <p className="panel-info"><Icon name="info" small />{context.notReady
+      ? `${context.notReady} The first check waits until then.` : w.say("Planning Center isn't connected yet, so the first check waits until it is.")}</p>}
     {problem && <p className="problem" role="alert">{problem}</p>}
     {stage !== "edit" && <div className="find-next">
       {access
@@ -271,16 +299,24 @@ export function PlanTurn({ parsed, context, actions }: { parsed: Exclude<Parsed,
 }
 
 /** "Set up something new": the fixed templates, each opening its plan. */
-export function TemplatePicker({ context, actions, onCancel }: { context: PlanContext; actions: PlanActions; onCancel: () => void }) {
+export function TemplatePicker({ context, actions, onCancel, asked = [] }: {
+  context: PlanContext; actions: PlanActions; onCancel: () => void;
+  /** Kinds with a job paused by a switch of church, waiting for an answer (one of each kind at a time). */
+  asked?: readonly TemplateId[];
+}) {
   const [picked, setPicked] = useState<TemplateId | null>(null);
   const d = useDay();
+  // A church on B1 Church or Breeze: the jobs it can run, and one plain line for the rest (system-jobs.ts).
+  const w = useSystemWords();
+  const system = otherOf(w);
   if (picked) return <PlanCard plan={defaultPlan(picked, context.now(), context.zone, planOptions(context))} context={context} actions={actions} />;
   return <div className="find template-picker">
     <h3 className="find-title">What should Ozzie keep an eye on?</h3>
-    <ul className="list template-list">{TEMPLATE_IDS.map(id => <li key={id}>
+    <ul className="list template-list">{TEMPLATE_IDS.filter(id => runsOn(id, system) && !asked.includes(id)).map(id => <li key={id}>
       <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicked(id)}>{templateTitle(id)}</button>
       <span className="small">{purposeText(id, d)}</span>
     </li>)}</ul>
+    {system && <p className="small">{w.notHere("Watching room bookings, follow-ups and group meetings")}</p>}
     <div className="find-next"><button type="button" className="btn btn-quiet btn-sm" onClick={onCancel}>Cancel</button></div>
   </div>;
 }
@@ -316,6 +352,8 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
 }) {
   const Title = level === 4 ? "h4" : "h3";
   const d = useDay();
+  // A church on B1 Church or Breeze: its system's name where Planning Center's would be (church-system.ts say).
+  const w = useSystemWords();
   const title = jobTitle(r);
   const [editing, setEditing] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -337,7 +375,7 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
   const lastWriteup = lastItem ? view.writeups[lastItem.id] ?? null : null;
   const act = (work: () => Promise<unknown>) => { setProblem(null); void work().catch(e => setProblem(refusalText(errorCode(e)))); };
   return <section className="find responsibility" aria-label={title}>
-    <div className="find-top"><span className={`badge ${TONE[status.tone]}`}>{status.label}</span><span className="find-where">{areasText(r.template)}{context.church ? `, ${context.church}` : ""}</span></div>
+    <div className="find-top"><span className={`badge ${TONE[status.tone]}`}>{status.label}</span><span className="find-where">{w.say(areasText(r.template))}{context.church ? `, ${context.church}` : ""}</span></div>
     <Title className="find-title">{title}</Title>
     {about && <p className="find-body">{about}</p>}
     {/* Where it stands first (its last and next check, its checks used), then what it does. */}
@@ -345,13 +383,13 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
       ? <PlanEditor plan={plan} context={context} doneLabel="Save changes" onCancel={() => setEditing(false)}
         onDone={p => { setEditing(false); act(() => runner.edit(r.id, p)); }} />
       : <div className="sp">
-        <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runText(r.runs[0], now, reportFor(r.runs[0], view)) : "Not yet."}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Last check</span><span>{running ? "Checking now…" : r.runs[0] ? runSay(r.runs[0], view)(runText(r.runs[0], now, reportFor(r.runs[0], view))) : "Not yet."}</span></div>
         {r.status === "active" && !view.paused_all && <div className="sp-row sp-2"><span className="sp-h">Next check</span>
           <span>{back ? `It has used its checks for now. It can check again ${againText(back, now)}.` : next ? whenText(next, now)
             : context.signingIn ? "Once the Planning Center sign-in in your browser is done."
-              : !context.connected ? "As soon as Planning Center is connected." : "Not scheduled."}</span></div>}
+              : !context.connected ? context.notReady ?? w.say("As soon as Planning Center is connected.") : "Not scheduled."}</span></div>}
         <div className="sp-row sp-2"><span className="sp-h">Checks used</span><span>{r.limits.checks_per_day - left.checks} of {r.limits.checks_per_day} in the last 24 hours.</span></div>
-        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{watchesText(r.template, d, context.several)}</span></div>
+        <div className="sp-row sp-2"><span className="sp-h">Watches</span><span>{watchesText(r.template, d, context.several, otherOf(w))}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">When</span><span>{scheduleText(plan, at(plan, context), d)}{zoneNote(plan.zone, context)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Until</span><span>{lifetimeText(r.lifetime, r.template, r.schedule.weekdays)}</span></div>
         <div className="sp-row sp-2"><span className="sp-h">Tells you</span><span>{reportText(r)}</span></div>
@@ -375,6 +413,41 @@ function ResponsibilityCard({ r, view, context, runner, level = 3, names = {}, a
           <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirmStop(false)}>Keep it</button></>
         : <button type="button" className="btn btn-quiet btn-sm" onClick={() => setConfirmStop(true)}>Stop</button>}
     </div>}
+  </section>;
+}
+
+/**
+ * A job confirmed for another church than the one in use (owner decision 2026-11-22): paused, with one question naming
+ * both churches and their systems, and two buttons that name the effect. The app's status line says what happened.
+ */
+export function SwitchQuestionCard({ question, runner, level = 3, onAnswered, children }: {
+  question: SwitchQuestion; runner: Pick<Runner, "answerSwitch">; level?: 2 | 3 | 4;
+  /** After the answer is kept (Today puts focus back on its group's heading). */
+  onAnswered?: () => void; children?: ReactNode;
+}) {
+  const said = switchQuestionText(question);
+  const announce = useAnnounce();
+  const [working, setWorking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const Title = level === 2 ? "h2" : level === 4 ? "h4" : "h3";
+  const id = `switch-q-${question.responsibility_id}`;
+  const answer = (keep: boolean) => {
+    setWorking(true); setProblem(null);
+    void (runner.answerSwitch?.(question.responsibility_id, keep) ?? Promise.resolve())
+      .then(() => { announce(keep ? said.kept : said.stopped); onAnswered?.(); },
+        () => setProblem("Ozzie couldn't save your answer on this Mac just now. Try again."))
+      .finally(() => setWorking(false));
+  };
+  return <section className="find switch-job" aria-labelledby={id}>
+    <div className="find-top"><span className="badge b-muted"><Icon name="question" small />Paused · needs your answer</span><span className="find-where">Keeping watch</span></div>
+    <Title id={id} className="find-title">{said.title}</Title>
+    <p className="find-body">{said.body}</p>
+    {problem && <p className="problem" role="alert">{problem}</p>}
+    <div className="find-next">
+      <button type="button" className="btn btn-primary btn-sm" disabled={working} aria-describedby={id} onClick={() => answer(true)}>{said.keep}</button>
+      <button type="button" className="btn btn-secondary btn-sm" disabled={working} aria-describedby={id} onClick={() => answer(false)}>{said.stop}</button>
+    </div>
+    {children}
   </section>;
 }
 
@@ -410,6 +483,9 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
   const grouped = sunday !== undefined;
   const keep = grouped ? active.find(r => r.template === "keep-sunday-covered") ?? null : null;
   const others = active.filter(r => r !== keep);
+  // Jobs confirmed for another church, each paused until the person answers: asked first, before anything else.
+  const asked = view.questions ?? [];
+  const keepAsked = asked.some(q => q.template === "keep-sunday-covered");
   // Pause everything pauses the regular look at the service too (proactive.ts pauseWithEverything), so it is
   // offered whenever anything runs on its own, that look alone included.
   const watching = `Ozzie keeping an eye on ${SERVICES}`;
@@ -425,16 +501,17 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
     <p className="small">{stops && !view.paused_all && <><span id="pause-scope">Pause everything stops {stops} until you resume.</span>{" "}</>}{QUIT_LINE}</p>
     {!view.available && <p className="panel-warn" role="status"><Icon name="info" small />Ozzie's list of what it watches couldn't be read on this Mac right now.</p>}
     {view.paused_all && <p className="panel-info" role="status"><Icon name="info" small />Everything is paused. Nothing runs on its own until you resume.</p>}
+    {asked.map(q => <SwitchQuestionCard key={q.responsibility_id} question={q} runner={runner} />)}
     {grouped && <section className="sunday-watch" aria-labelledby="sunday-watch-title">
       <h3 id="sunday-watch-title" className="sunday-watch-h">{Services}</h3>
       {sunday}
       {keep ? <ResponsibilityCard r={keep} view={view} context={context} runner={runner} level={4} names={names} about={keepAbout(d)} />
-        : view.available && <KeepSundayOffer context={context} actions={actions} />}
+        : view.available && !keepAsked && <KeepSundayOffer context={context} actions={actions} />}
     </section>}
     {view.available && !grouped && active.length === 0 && <p className="panel-sunken">Nothing yet. Ask Ozzie something like “{watchTitle()}”, or set one up here.</p>}
     {others.map(r => <ResponsibilityCard key={r.id} r={r} view={view} context={context} runner={runner} names={names} />)}
     {picking
-      ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} />
+      ? <TemplatePicker context={context} actions={actions} onCancel={() => setPicking(false)} asked={asked.map(q => q.template)} />
       : <div><button type="button" className="btn btn-secondary" onClick={() => setPicking(true)}>Set up something new</button></div>}
     <details className="listen-more watch-how"><summary><Icon name="chev" small />See how this works</summary>
       <ul className="small">{[...WATCH_HOW, oneOfEach()].map(line => <li key={line}>{line}</li>)}</ul>
@@ -454,14 +531,16 @@ export function ResponsibilityList({ view, context, runner, actions, sunday, nam
  * card's counts, findings and notice come from Ozzie's own check.
  */
 export function WriteUpBlock({ item, writeup, names, now }: {
-  item: Pick<NoticedItem, "template" | "at" | "trigger">; writeup: WriteUp | null | undefined; names: Readonly<Record<string, string>>; now: string;
+  item: Pick<NoticedItem, "template" | "at" | "trigger" | "system">; writeup: WriteUp | null | undefined; names: Readonly<Record<string, string>>; now: string;
 }) {
   const [how, setHow] = useState(false);
   const d = useDay();
   if (!writeup) return null;
+  // A B1 Church or Breeze run's write-up says that system's name where Planning Center's would be.
+  const say = itemSay(item);
   // With no AI route set up the card simply shows the check (review H, L15); "stopped" was a pause during the write-up.
   if (writeup.kind !== "written") return writeup.why === "off" || writeup.why === "stopped" ? null
-    : <p className="small writeup-none"><Icon name="info" small />{NO_WRITEUP[writeup.why ?? "unavailable"]}</p>;
+    : <p className="small writeup-none"><Icon name="info" small />{say(NO_WRITEUP[writeup.why ?? "unavailable"])}</p>;
   const started = item.trigger ? jobStarted(item.template, item.trigger, atText(item.at, now).replace(/^(?:at|on) /u, "")) : null;
   return <section className="writeup" aria-label="Ozzie's write-up">
     <p className="writeup-head">{writeupHead(item, now)}</p>
@@ -472,10 +551,10 @@ export function WriteUpBlock({ item, writeup, names, now }: {
     <button type="button" className="btn btn-quiet btn-sm ask-how" aria-expanded={how} onClick={() => setHow(!how)}><Icon name="info" small />See how this works</button>
     {how && <div className="ask-how-body stack-tight">
       <TaskAccount account={{
-        started: [started, WRITEUP_CHECK].filter(Boolean).join(" "), looked: writeup.steps ?? [],
+        started: [started, say(WRITEUP_CHECK)].filter(Boolean).join(" "), looked: writeup.steps ?? [],
         ai: aiText("skill", undefined, writeup.ai_steps ?? 0, true), ended: "Ozzie wrote the lines above from the facts the AI chose.",
       }} />
-      <p className="small">{WRITEUP_HOW}</p>
+      <p className="small">{say(WRITEUP_HOW)}</p>
     </div>}
   </section>;
 }

@@ -65,9 +65,12 @@ invented people). No church data is shown.
   has no blockout dates and doesn't say how many people a role needs, so Ozzie
   shows who is on each role instead of calling the service covered; none of
   them shares background checks). Checks on a schedule, private notices, saved
-  checks and Ask work with them as with Planning Center; jobs, Siri and
-  Shortcuts, the copy for other AI apps and the extras below work with Planning
-  Center only for now.
+  checks, Ask, and the jobs Keep services covered and the morning briefing work
+  with them too, for the one service Ozzie watches there and without scheduled
+  leads, kids teams or rooms; Siri and Shortcuts, the copy for other AI apps and
+  the extras below (with the jobs that watch them) work with Planning Center
+  only for now. Each job is for the church it was set up for: when the Mac
+  switches church, each job pauses until you say whether to keep it.
 - **Or reads Genesis, and changes nothing there, with no coverage check.** Genesis shares
   no volunteer schedules, so Ozzie can't check whether a service is covered
   there and never says it is. A church on Genesis gives Ozzie a key with Read

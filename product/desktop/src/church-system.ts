@@ -275,7 +275,10 @@ export interface SystemWords {
   connectedTo: (church: string) => string;
   /** Ozzie's checks on their own: the schedule, what changed, quiet hours and private notices. */
   checksOnItsOwn: boolean;
-  /** Jobs (Keep {day} covered, the morning briefing): Planning Center only for now. */
+  /**
+   * Jobs (Keep {day} covered, the morning briefing): Planning Center, B1 Church and Breeze (system-jobs.ts; there, only those
+   * two: watching room bookings, follow-ups and group meetings reads Planning Center's Calendar, People and Groups).
+   */
   jobs: boolean;
   /** Siri and Shortcuts, and the copy for other AI apps, read only Planning Center checks for now (Ask reads every system's). */
   askAndShare: boolean;
@@ -324,7 +327,7 @@ const other = (system: SystemId): SystemWords => {
     notSent: `${name} shows the request hasn't been sent yet. Is that expected?`,
     sentUnknown: SYSTEMS[system].asked ? null : `${name} doesn't say whether the request was sent.`,
     notConnected: `${name} not connected`, connected: `${name} connected`, connectedTo: (church: string) => `${name}: ${church}`,
-    checksOnItsOwn: true, jobs: false, askAndShare: false, savedChecks: true, extras: false,
+    checksOnItsOwn: true, jobs: system !== "genesis", askAndShare: false, savedChecks: true, extras: false,
     notHere: (what: string, plural = false) => `${what} ${plural ? "work" : "works"} with Planning Center only for now. Ozzie can't do ${plural ? "these" : "this"} with ${name} yet.`,
     say: (text: string) => text.replace(/Planning Center Services/gu, name).replace(/Planning Center/gu, name),
     reads: system === "b1"
@@ -340,7 +343,7 @@ const other = (system: SystemId): SystemWords => {
 };
 const WORDS: Readonly<Record<MainSystem, SystemWords>> = Object.freeze({ "planning-center": PLANNING_CENTER, b1: other("b1"), breeze: other("breeze"),
   // Genesis as the main system (round 5): no service check, saved checks or jobs; its own checks run while Ozzie is open.
-  genesis: Object.freeze({ ...other("genesis"), savedChecks: false }) });
+  genesis: Object.freeze({ ...other("genesis"), savedChecks: false, jobs: false }) });
 /**
  * The words before a church has chosen what it uses (a fresh Mac, round 5): neutral, never "Planning Center not
  * connected", and the way on is "Choose what your church uses". Planning Center's structure otherwise (it was every

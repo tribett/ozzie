@@ -75,6 +75,8 @@ export function helpFor(w: SystemWords, several = false): { intro: string; can: 
       ...(w.noTeam ? ["Show who is on each role, who said yes, who hasn't answered yet and who said no."] : [HELP.can[1]!]),
       HELP.can[2]!,
       "Keep an eye on the service and tell you privately when something changes.",
+      // The morning briefing works with B1 Church and Breeze too (0.8.0).
+      HELP.can[4]!,
       HELP.can[5]!,
     ],
   };
@@ -368,8 +370,9 @@ export function AskPanel(props: {
    */
   notHere?: string | undefined;
   /**
-   * A church on a system jobs don't read yet: a request to take something on (`parse`, as `plans` would read it) is
-   * answered with `text`, which says so plainly.
+   * A church on a system some jobs don't read yet: a request to take one of those on (`parse` reads it; `{ kind: "none" }`
+   * for anything else) is answered with `text`, which says so plainly. Beside `plans` (B1 Church, Breeze), what `plans`
+   * can plan there is planned; alone (Genesis), every request to take something on is answered so.
    */
   jobsNotHere?: { parse: (typed: string) => Parsed; text: string } | undefined;
   /** Whether listening is possible, before the check (tests and restored views). */
@@ -471,9 +474,9 @@ export function AskPanel(props: {
     if (!canType || busy || listening !== "no" || !typed.trim()) return;
     setVoiceNote(null);
     const question = typed.trim();
-    // A church on another system: asking Ozzie to take something on is read the same way, and answered with what can't be
-    // done there yet (props.jobsNotHere), never sent to the AI as a question.
-    const route = !props.plans && props.jobsNotHere && props.jobsNotHere.parse(typed).kind !== "none"
+    // A church on another system: asking Ozzie to take something it can't do there yet is read the same way, and answered
+    // with what can't be done there (props.jobsNotHere), never sent to the AI as a question; the rest is planned (props.plans).
+    const route = props.jobsNotHere && props.jobsNotHere.parse(typed).kind !== "none"
       ? { kind: "jobs-not-here" as const } : routeQuestion(typed, { brief, modelReady, canAsk: Boolean(props.ask), parse: props.plans?.parse });
     // Everything but a question about what was read is answered here, without any model. Nothing is sent anywhere.
     const local = (turn: TurnState) => {

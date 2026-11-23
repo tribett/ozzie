@@ -808,7 +808,9 @@ export function keptWriteup(harness: Harness, outcome: TaskOutcome): { lines: st
   const mode = harness.data.mode;
   return {
     lines: composed.paragraphs.map(p => composed.fill(harness.keep(p))), based_on: basedOnEvidence([...outcome.evidence, ...rowSources(harness, outcome)], mode),
-    gaps: evidenceGaps([...outcome.evidence, ...rowSources(harness, outcome)], mode), steps: outcomeSteps(outcome.events, outcome.evidence, mode),
+    // A church system that shares no number for any role (Breeze): the limit, as Ask says it, so no write-up reads as all clear.
+    gaps: [...new Set([...evidenceGaps([...outcome.evidence, ...rowSources(harness, outcome)], mode), ...systemGaps(harness.data, outcome.evidence)])],
+    steps: outcomeSteps(outcome.events, outcome.evidence, mode),
   };
 }
 

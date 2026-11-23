@@ -1,7 +1,8 @@
 // Settings for a church on B1 Church or Breeze (in place of the Planning Center section), and, for every church, the
 // other systems: switching the main system (one at a time, said plainly with what it forgets) and Genesis, read beside
 // the main system for groups, events and forms only (design §8). Keys go only through native (church-system.ts).
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useContext, useState, type ReactNode } from "react";
+import { jobsAtStake, jobsPause, JobsAtStakeContext, type JobAtStake } from "./jobs-at-stake.js";
 import { readableName, readProblem, sharedLabel, systemFacts, type FactOutcome, type NullCount, type SystemFacts } from "../../../core/src/church-systems/facts.js";
 import { labelsOf } from "../../../core/src/church-systems/placeholders.js";
 import { parseSystemCaptureText, SYSTEMS, type SystemCapture, type SystemId } from "../../../core/src/church-systems/types.js";
@@ -16,13 +17,28 @@ import { zoneLabel } from "./proactive-page.js";
 type Bridge = Pick<typeof defaultBridge, "verify" | "forget" | "choices" | "check" | "connect" | "saved">;
 const clock = (ms: number) => formatAt(ms, { hour: "numeric", minute: "2-digit" }) ?? "just now";
 const NAMES: Readonly<Record<MainSystem, string>> = { "planning-center": "Planning Center", b1: "B1 Church", breeze: "Breeze", genesis: "Genesis" };
-/** What a church on another system doesn't get yet, said once where it would look. */
+/**
+ * What a church on another system gets and doesn't get yet, said once where it would look: the jobs it can run (0.8.0,
+ * system-jobs.ts), then what still works with Planning Center only.
+ */
 export const ONLY_PLANNING_CENTER = (name: string) =>
-  `Siri and Shortcuts, the copy for other AI apps, jobs such as the morning briefing, and rooms and follow-ups work with Planning Center only for now. Ozzie can't do these with ${name} yet.`;
+  `Keep services covered and the morning briefing work with ${name} too; set them up in Keeping watch. Siri and Shortcuts, the copy for other AI apps, and rooms, follow-ups and group meetings (and the jobs that watch them) work with Planning Center only for now. Ozzie can't do these with ${name} yet.`;
 
-/** What switching away from `from` forgets on this Mac, in one plain sentence. */
-export function switchForgets(from: MainSystem, church: string | null, cards = 0): string {
-  const open = cards > 0 ? ` ${cards === 1 ? "The visitor card you have open is" : `The ${cards} visitor cards you have open are`} discarded too.` : "";
+/**
+ * What switching away from `from` forgets on this Mac, in one plain sentence; with `jobs` (every job this Mac keeps, owner
+ * decision 2026-11-22), what happens to them: each one `to`'s system runs pauses until the person says whether to keep it
+ * for the church connected next; the others wait (Genesis runs none; B1 Church and Breeze don't share rooms, follow-ups or
+ * group meetings, so those jobs wait until the Mac is back on Planning Center).
+ */
+export function switchForgets(from: MainSystem, church: string | null, cards = 0, jobs: readonly JobAtStake[] = [], to: MainSystem | null = null,
+  returning: string | null = null): string {
+  const { asked, waiting } = jobsAtStake(jobs, to, returning);
+  const said = jobsPause(asked);
+  const waits = (n: number) => asked ? (n === 1 ? "The other one waits" : `The other ${n} wait`) : n === 1 ? "Your job in Keeping watch waits" : `Your ${n} jobs in Keeping watch wait`;
+  const open = (asked > 0 ? ` ${said.lead} until you say whether to keep ${said.one} for the church you connect.` : "")
+    + (waiting > 0 ? to === "genesis" ? ` ${waits(waiting)}: Genesis shares no volunteer schedules, so no job reads it.`
+      : ` ${waits(waiting)} until you're back on Planning Center: ${to ? NAMES[to] : "that system"} doesn't share rooms, follow-ups or group meetings.` : "")
+    + (cards > 0 ? ` ${cards === 1 ? "The visitor card you have open is" : `The ${cards} visitor cards you have open are`} discarded too.` : "");
   if (from === "planning-center") return `Switching signs Ozzie out of Planning Center on this Mac. Nothing changes in Planning Center, and your Church rules stay here. Its saved checks stay on this Mac until you delete them in Settings. Switching back asks you to allow Ozzie in Planning Center again.${open}`;
   // Genesis stays as Also read Genesis beside the system switched to: its key and church are kept (review of e9cbd97d, M3).
   if (from === "genesis") return `Genesis stays connected: Ozzie reads it beside the system you switch to, under Also read Genesis in Settings, and its key stays in this Mac's Keychain. Nothing changes in Genesis.${open}`;
@@ -137,6 +153,8 @@ export function OtherSystems({ state, onSwitch, genesis, cards = 0 }: {
 }) {
   const from: MainSystem = state.main ?? "planning-center";
   const [to, setTo] = useState<MainSystem | null>(null);
+  // Every job this Mac keeps, and the Planning Center church a switch there comes back to (App).
+  const { jobs, returning } = useContext(JobsAtStakeContext);
   const [working, setWorking] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const go = async (target: MainSystem) => {
@@ -153,7 +171,7 @@ export function OtherSystems({ state, onSwitch, genesis, cards = 0 }: {
       {!to && state.main !== null && <div className="row form-actions">{(["planning-center", "b1", "breeze", "genesis"] as const).filter(s => s !== from).map(s =>
         <button key={s} type="button" className="btn btn-quiet" onClick={() => setTo(s)}>Switch to {NAMES[s]}</button>)}</div>}
       {to && <div className="decide" role="group" aria-labelledby="switch-q">
-        <p id="switch-q" className="find-body"><strong>Switch to {NAMES[to]}?</strong> {switchForgets(from, state.connection?.church_name ?? null, cards)}</p>
+        <p id="switch-q" className="find-body"><strong>Switch to {NAMES[to]}?</strong> {switchForgets(from, state.connection?.church_name ?? null, cards, jobs, to, to === "planning-center" ? returning : null)}</p>
         <div className="row">
           <button type="button" className="btn btn-secondary" disabled={working} onClick={() => { void go(to); }}>Switch to {NAMES[to]}</button>
           <button type="button" className="btn btn-quiet" disabled={working} onClick={() => { setTo(null); setProblem(null); }}>Keep {NAMES[from]}</button>

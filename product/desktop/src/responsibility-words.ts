@@ -8,9 +8,10 @@ import {
 import { describeChange } from "../../../core/src/sunday-changes.js";
 import { kindWords } from "../../../core/src/finding-feedback.js";
 import { SUNDAY_WORDS, type DayWords } from "../../../core/src/service-day.js";
-import type { NoticedItem } from "./responsibility-runner.js";
+import type { JobChurch, NoticedItem, SwitchQuestion } from "./responsibility-runner.js";
 import { dayName, keepTitle, pageRef, SERVICES } from "./day-phrases.js";
 import { promise } from "./promises.js";
+import { readProblemText, systemWords, type OtherSystem } from "./church-system.js";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 /** "7:00 AM" for a church-local "07:00". */
@@ -49,10 +50,15 @@ export const jobTitle = (r: Pick<Responsibility, "template" | "title">): string 
 /** The morning briefing's fuller brief, by the service's day, as its own heading says it (sunday-ready.tsx): "“Ready for Wednesday” brief". */
 export const readyBriefName = (d: DayWords = SUNDAY_WORDS): string => `“Ready for ${dayName(d)}” brief`;
 
-/** What each one watches, in a sentence. `several`: more than one service is watched, and Keep services covered reads each. */
-export function watchesText(template: TemplateId, d: DayWords = SUNDAY_WORDS, several = false): string {
+/**
+ * What each one watches, in a sentence. `several`: more than one service is watched, and Keep services covered reads each.
+ * `system`: a church on B1 Church or Breeze, where Ozzie checks no leads, and Breeze ties no number to most roles.
+ */
+export function watchesText(template: TemplateId, d: DayWords = SUNDAY_WORDS, several = false, system: OtherSystem | null = null): string {
   switch (template) {
-    case "keep-sunday-covered": return `Open roles, who has accepted or declined, and scheduled leads for ${several ? "each service" : "the service"} Ozzie watches.`;
+    case "keep-sunday-covered": return system === "breeze" ? "Who has said yes, hasn't answered or said no on each role of the service Ozzie watches, and open roles where Breeze gives a number."
+      : system === "b1" ? "Open roles, and who has accepted or declined, for the service Ozzie watches."
+      : `Open roles, who has accepted or declined, and scheduled leads for ${several ? "each service" : "the service"} Ozzie watches.`;
     case "watch-room-bookings": return `Room bookings on ${dayName(d)} that overlap under your room rules.`;
     case "follow-ups-without-owner": return "Follow-ups in Planning Center People that are overdue with no one assigned.";
     case "group-night-clashes": return `Group meetings at the same time as someone is serving on ${dayName(d)}.`;
@@ -219,7 +225,7 @@ export function runText(run: RunRow, now?: string, report?: NoticedItem | null):
   if (run.outcome === "failed") return `${at}, ${RUN_WHY[run.trigger]}. Couldn't finish: ${problemText(run.code)}.`;
   const own = reportOf(run, report);
   const labeled = own ? foundText(own) : "";
-  const found = labeled || (!own && run.noticed ? count(run.noticed, "finding", "findings") : "nothing new needs a decision");
+  const found = labeled || (!own && run.noticed ? count(run.noticed, "finding", "findings") : own?.unnumbered ? "nothing new to tell you" : "nothing new needs a decision");
   return `${at}, ${RUN_WHY[run.trigger]}. Finished: ${found}${run.drafts ? `; ${count(run.drafts, "note", "notes")} ready to review` : ""}.`;
 }
 // ---- A job's write-up (audit item 6) -------------------------------------------------------------------
@@ -299,9 +305,26 @@ export function statusText(r: Responsibility, pausedAll: boolean, problem = fals
 // ---- What Ozzie noticed -------------------------------------------------------------------------------
 
 const AT_TIME = (iso: string, now?: string) => whenText(iso, now);
+/**
+ * An item's own system words (B1 Church, Breeze): Ozzie's sentences that name Planning Center only as where the facts are,
+ * said in the name of the system its check read, whatever the church uses now. Planning Center's items: unchanged.
+ */
+export const itemSay = (item: Pick<NoticedItem, "system">): ((text: string) => string) => item.system ? systemWords(item.system).say : (text: string) => text;
+/** Where a system shares no number needed for any role (Breeze): the limit, said where "covered" would be. */
+export const unnumberedText = (system: OtherSystem, d: DayWords = SUNDAY_WORDS): string =>
+  `${systemWords(system).name} doesn't share how many people each role needs, so Ozzie can't say whether ${d.thisOne} is covered.`;
 /** The headline of one "Ozzie noticed" item. Names come only from `names`, resolved on this Mac. `d`: the watched service's day words. */
 export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUNDAY_WORDS): string {
+  const said = noticedPlain(item, now, d);
+  if (!item.system) return said;
+  // Breeze shares no number needed for any role: never "nothing needs a decision", and the limit is said (round 5); a
+  // briefing other than Thursday's (whose full brief says it) says it too.
+  const limit = item.unnumbered && (item.kind === "found" || item.kind === "clear" || (item.kind === "briefing" && !item.sunday_ready)) ? ` ${unnumberedText(item.system, d)}` : "";
+  return `${itemSay(item)(said)}${limit}`;
+}
+function noticedPlain(item: NoticedItem, now: string | undefined, d: DayWords): string {
   const title = templateTitle(item.template);
+  const system = item.system ? systemWords(item.system).name : null;
   switch (item.kind) {
     case "found": {
       const parts: string[] = [];
@@ -314,7 +337,8 @@ export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUND
       if (item.looks && !parts.length) parts.push(`${count(item.looks, "thing is", "things are")} worth a look`);
       return `${title}: ${parts.length ? list(parts) : "something changed"}.`;
     }
-    case "clear": return `${title}: checked at ${AT_TIME(item.at, now)}. Nothing new needs a decision.`;
+    case "clear": return item.unnumbered ? `${title}: checked at ${AT_TIME(item.at, now)}. Nothing new to tell you.`
+      : `${title}: checked at ${AT_TIME(item.at, now)}. Nothing new needs a decision.`;
     case "briefing": {
       const n = item.overnight_count ?? 0;
       const kept = (item.kept ?? []).reduce((sum, k) => sum + k.count, 0);
@@ -326,6 +350,10 @@ export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUND
       const at = AT_TIME(item.scheduled_for ?? item.at, now);
       const why = item.code === "denied" && item.access ? "this connection doesn't include what it needs" : problemText(item.code);
       const next = item.retry_at ? ` It will try again at ${AT_TIME(item.retry_at, now)}.` : item.access ? " Add access under Settings, then it can check." : " It will try again at its next scheduled time.";
+      // A B1 Church or Breeze read that didn't finish says why in that system's own words (church-system.ts readProblemText).
+      const read = item.system && item.read ? readProblemText(item.system, item.read) : null;
+      if (read) return `Ozzie couldn't check ${subject(item.template)} at ${at}. ${read}${next}`;
+      if (system && item.no_roles) return `Ozzie couldn't check ${subject(item.template)} at ${at} — ${system} lists no roles for the service Ozzie watches.${next}`;
       return `Ozzie couldn't check ${subject(item.template)} at ${at} — ${why}.${next}`;
     }
     case "missed": {
@@ -335,13 +363,15 @@ export function noticedTitle(item: NoticedItem, now?: string, d: DayWords = SUND
       if (item.before_end) switch (item.missed_reason) {
         case "asleep": return `Your Mac was asleep at ${at}${others}, and ${title} ended before Ozzie could check again.`;
         case "closed": return `Ozzie wasn't running at ${at}${others}, and ${title} ended before it could check again.`;
-        case "waiting": return `Planning Center wasn't connected at ${at}${others}, and ${title} ended before Ozzie could check.`;
+        case "waiting": return system ? `${system} couldn't be checked yet at ${at}${others}, and ${title} ended before Ozzie could check.`
+          : `Planning Center wasn't connected at ${at}${others}, and ${title} ended before Ozzie could check.`;
         default: return `Ozzie couldn't check at ${at}${others}, and ${title} ended before it could check again.`;
       }
       switch (item.missed_reason) {
         case "asleep": return `Your Mac was asleep at ${at}${others}, so Ozzie checked at ${ran} instead.`;
         case "closed": return `Ozzie wasn't running at ${at}${others}, so it checked at ${ran} instead.`;
-        case "waiting": return `Planning Center wasn't connected at ${at}${others}, so Ozzie checked at ${ran} instead.`;
+        case "waiting": return system ? `${system} couldn't be checked yet at ${at}${others}, so Ozzie checked at ${ran} instead.`
+          : `Planning Center wasn't connected at ${at}${others}, so Ozzie checked at ${ran} instead.`;
         default: return `Ozzie couldn't check at ${at}${others}, so it checked at ${ran} instead.`;
       }
     }
@@ -382,9 +412,36 @@ export function weekRollup(jobs: readonly (Pick<Responsibility, "title" | "runs"
     problems: problems.map(j => `${j.title} couldn't finish ${j.failed} of ${count(j.total, "check", "checks")} this week.`),
   };
 }
+// ---- A job confirmed for another church (owner decision 2026-11-22) -----------------------------------------------
+
+const systemName = (c: Pick<JobChurch, "system">) => c.system === "planning-center" ? "Planning Center" : systemWords(c.system).name;
+/** "Harbor on Planning Center"; "your church on Planning Center" when its name isn't known. */
+const churchOn = (c: JobChurch, unknown: string) => `${c.name ?? unknown} on ${systemName(c)}`;
+/**
+ * The one question about a job after the Mac switched church, in plain words naming both churches and systems, with
+ * buttons that name the effect (AGENTS.md), what each does said before either is pressed, and what the status line says
+ * after each. Fixed local words around the churches' own names; no person's name.
+ */
+export function switchQuestionText(q: Pick<SwitchQuestion, "template" | "title" | "from" | "to">): {
+  title: string; body: string; keep: string; stop: string; kept: string; stopped: string;
+} {
+  const job = jobTitle(q);
+  const here = q.to.name ?? "this church";
+  return {
+    title: `${job} was set up for ${churchOn(q.from, "your church")}. Keep it for ${churchOn(q.to, "the church you use now")}?`,
+    body: `Until you answer, it's paused: it checks nothing and tells you nothing. If you keep it, its first check of ${here} only learns what is there now and tells you nothing about it; after that it tells you what changes. If you stop it, it ends, as Stop does.`,
+    keep: `Yes, keep it for ${here}`,
+    stop: "No, stop it",
+    kept: `${job} keeps an eye on ${here} now.`,
+    stopped: `${job} is stopped.`,
+  };
+}
+
 /** What changed since the last run, one sentence each, names resolved locally, the service named by its real day. */
 export function noticedChanges(item: NoticedItem, names: Readonly<Record<string, string>>, d: DayWords = SUNDAY_WORDS): string[] {
-  return (item.changes ?? []).filter(c => c.effect === "worse").slice(0, 5).map(c => describeChange(c, id => names[id], d));
+  // A B1 Church or Breeze item's changes name that system as where the facts are (core sunday-changes.ts `source`).
+  const source = item.system ? [systemWords(item.system).name] as const : [] as const;
+  return (item.changes ?? []).filter(c => c.effect === "worse").slice(0, 5).map(c => describeChange(c, id => names[id], d, ...source));
 }
 export function noticedBadge(item: NoticedItem): { label: string; tone: "attn" | "look" | "ok" | "muted" } {
   switch (item.kind) {

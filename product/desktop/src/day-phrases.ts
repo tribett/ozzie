@@ -18,6 +18,9 @@ export const Services = "Your services";
 export const OPEN_SERVICES = `Open ${SERVICES_PAGE}`;
 /** The job that also prepares notes, as shown (spec §5.2, §6; renamed 2026-11-19). The day words are no longer needed. */
 export const keepTitle = (): string => "Keep services covered";
+/** Jobs, said to a church on Genesis: where they work, and why none reads Genesis. */
+export const genesisNoJobs = (): string =>
+  `${keepTitle()} and the morning briefing work with Planning Center, B1 Church and Breeze. Genesis shares no volunteer schedules, so no job reads it.`;
 /** "Keep an eye on my services" (the job, as a person asks for it), "Ozzie keeps an eye on your services" (the hourly look, spec §6). */
 export const watchTitle = (): string => "Keep an eye on my services";
 export const eyeLine = (): string => `Ozzie keeps an eye on ${SERVICES}`;

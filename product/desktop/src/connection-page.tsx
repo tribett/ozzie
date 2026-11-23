@@ -16,7 +16,7 @@ import { quietLine, scheduleLine } from "./proactive-page.js";
 import { Icon } from "./icons.js";
 import type { Autostart } from "./background.js";
 import { AutostartToggle } from "./responsibility-views.js";
-import { eyeLine, keepTitle, SERVICES, Services } from "./day-phrases.js";
+import { eyeLine, genesisNoJobs, keepTitle, SERVICES, Services } from "./day-phrases.js";
 import { promise } from "./promises.js";
 import { useSystemWords } from "./church-system.js";
 import { TEXT_SIZE_NOTE } from "./text-size.js";
@@ -337,7 +337,8 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
           : w.system === "genesis" ? "Ozzie reads Genesis on its own while it is open on this Mac, and says on Today when a form has been filled in again."
           : `${eyeLine()} on a schedule while Ozzie is open on this Mac, and tells you privately when something gets worse.`}</p>
         {w.jobs ? <p className="small">{keepTitle()} and other jobs are set up in Keeping watch.</p>
-          : <p className="small">{w.notHere(`${keepTitle()} and the morning briefing`, true)}</p>}
+          // Only Genesis has no jobs: they work with Planning Center, B1 Church and Breeze (0.8.0).
+          : <p className="small">{genesisNoJobs()}</p>}
         {onAutomatic && <div className="find-next"><button type="button" className="btn btn-secondary btn-sm" onClick={onAutomatic}>Change these in Keeping watch</button></div>}
       </section>
       {autostart && <section className="find" aria-labelledby="background-title">

@@ -162,6 +162,7 @@ export function BriefingPreview({ next, thursday, zone, brief, decisions = [], o
     <p className="small">It brings together what still needs you before {dayName(d)}, and anything that came up overnight.
       {nextIsThursday ? ` It's Thursday's, so it includes ${fullBrief}:` : thursday ? ` Thursday's briefing, ${zoned(thursday, zone)}, also includes ${fullBrief}. From Ozzie's last check, it would say:` : ` Thursday's briefing also includes ${fullBrief}. From Ozzie's last check, it would say:`}</p>
     {ready}
-    <p className="small">A preview from Ozzie's last check. Nothing was read or sent to make it. The briefing checks Planning Center again when it runs, so it can differ.</p>
+    {/* The system the check read (B1 Church, Breeze), where it isn't Planning Center: one sentence, as before. */}
+    <p className="small">{`A preview from Ozzie's last check. Nothing was read or sent to make it. The briefing checks ${brief?.source ?? "Planning Center"} again when it runs, so it can differ.`}</p>
   </section>;
 }
