@@ -26,7 +26,7 @@
 //! model route, agent step, task ledger, copy for other AI apps or Siri, notice, timer or
 //! responsibility reaches this file (tests below), and nothing here prints, logs or keeps a name.
 use ozzie_native_auth::{
-    card_lookup::{CHANGE_WAITS, CardLookups},
+    card_lookup::{CHANGE_WAITS, CardLookups, ChangePending},
     change::{
         BackgroundCheck, ChangeId, ChangeLog, ChangeRecord, ChangeSwitch, Changes, Confirmation,
         DespiteTheAdvice, Outcome, Proposed, Refusal, Undone,
@@ -38,9 +38,12 @@ use tauri::Manager;
 
 /// A visitor card's name lookup may hold the connection's turn for a few seconds (core card_lookup.rs):
 /// a change waits for it, at most `CHANGE_WAITS`, rather than being refused as if a check were running
-/// (privacy review L3). It never waits for a check, and it changes nothing in core `change`.
-fn after_card_lookups(lookups: &CardLookups) {
-    lookups.let_finish(CHANGE_WAITS);
+/// (privacy review L3). It never waits for a check, and it changes nothing in core `change`. Each
+/// command keeps what this returns until core is done with the change, so no lookup keeps the turn
+/// meanwhile, however long the sign-in renewal before the turn takes (privacy review L-b); every way
+/// out of the command lets go of it.
+fn after_card_lookups(lookups: &CardLookups) -> ChangePending {
+    lookups.let_finish(CHANGE_WAITS)
 }
 
 /// The most records What happened asks for at once.
@@ -236,7 +239,7 @@ pub(crate) async fn change_prepare(
     tauri::async_runtime::spawn_blocking(move || {
         // The wait for a card lookup comes first, so the church system is checked as it is when the change goes ahead
         // (privacy review, second pass, L-a).
-        after_card_lookups(&lookups);
+        let _pending = after_card_lookups(&lookups);
         let switch = gate_for_session(&app, &consumer)?;
         changes.prepare(
             &switch,
@@ -277,7 +280,7 @@ pub(crate) async fn change_confirm(
     let changes = changes.inner().clone();
     let lookups = lookups.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        after_card_lookups(&lookups);
+        let _pending = after_card_lookups(&lookups);
         let switch = match gate_for_session(&app, &consumer) {
             Ok(switch) => switch,
             Err(reason) => return Outcome::NotMade { reason },
@@ -315,7 +318,7 @@ pub(crate) async fn change_undo(
     let changes = changes.inner().clone();
     let lookups = lookups.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        after_card_lookups(&lookups);
+        let _pending = after_card_lookups(&lookups);
         let switch = match gate_for_session(&app, &consumer) {
             Ok(switch) => switch,
             Err(reason) => return Undone::NotRemoved { reason },

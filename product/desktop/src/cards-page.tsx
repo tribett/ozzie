@@ -158,15 +158,25 @@ const focused = (win: Window, doc: Document, ms = 1500) => new Promise<void>(res
 });
 
 /**
+ * A line beside the photo under What this Mac read: one line of the card, or (`readAs`) what this Mac read for a field
+ * the person had already typed in, so Ozzie kept their words and offers this beside them to choose (its `line` is -1).
+ */
+export type ShownLine = ReadLine & { readonly readAs?: FieldName };
+
+/**
  * Reads each card on this Mac, one at a time, and fills only what was read cleanly from a labeled
  * line or flags what wasn't. Every line it read goes to `onRead` for the person to place themselves.
- * Results for a review that has closed (or a card that was removed) are dropped.
+ * A field the person has edited since the card appeared (`edited`: typed in, marked hard to read or
+ * given a line) is never filled: it keeps their words, and what this Mac read for it is offered first
+ * among the lines instead. Results for a review that has closed (or a card that was removed) are dropped.
  */
-export async function readCardsLocally({ controller, ticket, files, read, live, onState, onSuggested, onRead, onRecognizer }: {
+export async function readCardsLocally({ controller, ticket, files, read, live, edited, onState, onSuggested, onRead, onRecognizer }: {
   controller: CardReviewController; ticket: number; files: (File | null)[];
   read: (image: Uint8Array) => Promise<CardTextResult>; live: () => boolean;
+  /** Whether the person has edited this card's field since the card appeared (checked when its reading comes back). */
+  edited: (id: number, field: FieldName) => boolean;
   onState: (id: number, state: ReadState) => void; onSuggested: (id: number, fields: Partial<Record<FieldName, FieldSource>>) => void;
-  onRead: (id: number, lines: ReadLine[]) => void; onRecognizer: (r: Recognizer) => void;
+  onRead: (id: number, lines: ShownLine[]) => void; onRecognizer: (r: Recognizer) => void;
 }): Promise<void> {
   for (let index = 0; index < files.length; index++) {
     const id = index + 1;
@@ -196,12 +206,18 @@ export async function readCardsLocally({ controller, ticket, files, read, live, 
     const lines = readLines(text, unclearLines);
     text = null;
     const filled: Partial<Record<FieldName, FieldSource>> = {};
+    const kept: ShownLine[] = [];
     for (const field of fields) {
       const s = suggestions[field];
       if (!s.text && !s.unclear) continue;
+      // The person's own words stay; what this Mac read for that field is there to choose instead.
+      if (edited(id, field)) {
+        if (s.text) kept.push({ line: -1, text: s.text, unclear: s.unclear, readAs: field });
+        continue;
+      }
       if (controller.edit(ticket, { card: id, field, text: s.text, state: s.unclear ? "unclear" : "typed" }) === "ok") filled[field] = s.more ? "read-more" : "read";
     }
-    onRead(id, lines);
+    onRead(id, [...kept, ...lines]);
     onSuggested(id, filled);
     onState(id, "read");
   }
@@ -474,7 +490,12 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given,
   const [ui, setUi] = useState<CardsUi>(emptyUi);
   const files = useRef<(File | null)[]>([]);
   /** The lines this Mac read on each card of the open review. Emptied whenever the review closes. */
-  const recognized = useRef(new Map<number, readonly ReadLine[]>());
+  const recognized = useRef(new Map<number, readonly ShownLine[]>());
+  /**
+   * The fields the person has edited on each card of the open review (field names only, never their words), so this
+   * Mac's reading never replaces them. Emptied whenever the review closes or a new one starts.
+   */
+  const edited = useRef(new Map<number, Set<FieldName>>());
   const current = useRef<number | null>(null);
   const recognizer = useRef<Recognizer>("unknown");
   const [veiled, setVeiled] = useState(false);
@@ -504,7 +525,7 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given,
       const now = ["choosing", "loading", "active"].includes(review.status);
       // Closing (finish, discard, interruption) lets go of the files, what was read and what was looked up, and stops any
       // reading or looking up in progress.
-      if (!now) { files.current.fill(null); recognized.current.clear(); names.clear(); setNewRead(false); }
+      if (!now) { files.current.fill(null); recognized.current.clear(); edited.current.clear(); names.clear(); setNewRead(false); }
       if (open && !now) stopReading();
       open = now;
       flushSync(() => redraw(v => v + 1));
@@ -512,7 +533,7 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given,
     const unbind = bindKeep(review, window);
     setController(review);
     return () => {
-      files.current.fill(null); files.current = []; recognized.current.clear(); current.current = null; unsubscribe(); unbind(); stopReading();
+      files.current.fill(null); files.current = []; recognized.current.clear(); edited.current.clear(); current.current = null; unsubscribe(); unbind(); stopReading();
       names.clear(); found.current = null;
     };
   }, [workspace]);
@@ -579,14 +600,17 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given,
     await readCardsLocally({
       controller, ticket: t, files: files.current, read: cardReader.read,
       live: () => current.current === t && controller.status === "active",
+      edited: (id, field) => edited.current.get(id)?.has(field) ?? false,
       onState: (id, state) => setUi(u => ({ ...u, reading: { ...u.reading, [id]: state } })),
-      onSuggested: (id, filled) => setUi(u => ({ ...u, source: { ...u.source, [id]: filled } })),
+      // Beside what the person already typed (which stays "typed").
+      onSuggested: (id, filled) => setUi(u => ({ ...u, source: { ...u.source, [id]: { ...u.source[id], ...filled } } })),
       onRead: (id, lines) => { recognized.current.set(id, lines); },
       onRecognizer: r => { recognizer.current = r; setUi(u => ({ ...u, recognizer: r })); },
     });
   };
   const start = () => {
     recognized.current.clear();
+    edited.current.clear();
     setTyping(new Set());
     setUi(u => ({ ...emptyUi, recognizer: u.recognizer }));
     const t = pickCards(controller, cardPhotos.choose, (t, chosen) => { void begin(t, chosen); },
@@ -623,7 +647,8 @@ function CardsHost({ people, noMatches, workspace, onScreen, onOpenCards, given,
       onCopy={() => { void copy(); }}
       onDiscard={() => { if (ticket !== null) controller.discard(ticket); setUi(u => ({ ...u, ended: "discarded" })); }}
       onSource={(id, field, from) => setUi(u => ({ ...u, source: { ...u.source, [id]: { ...u.source[id], [field]: from } } }))}
-      onRemoved={id => { recognized.current.delete(id); setUi(u => ({ ...u, source: Object.fromEntries(Object.entries(u.source).filter(([k]) => Number(k) !== id)) })); }}
+      onEdited={(id, field) => { const card = edited.current.get(id) ?? new Set<FieldName>(); card.add(field); edited.current.set(id, card); }}
+      onRemoved={id => { recognized.current.delete(id); edited.current.delete(id); setUi(u => ({ ...u, source: Object.fromEntries(Object.entries(u.source).filter(([k]) => Number(k) !== id)) })); }}
       lookup={view} />
     {/* "Allow People access in my browser": the same sheet as a note's To line, asked for the cards (people-question.tsx). */}
     {askingPeople && <PeopleQuestion purpose="cards" access={lookup.access} onAddressed={() => setAskingPeople(false)} onClose={() => setAskingPeople(false)} />}
@@ -672,16 +697,18 @@ function NameLine({ card, lookup, openPerson, onAgain }: { card: string; lookup:
 }
 
 /** The page body. Rendered by the host above and by the tests with a controller on fixed fictional data. */
-export function CardsReview({ controller, ticket, ui, people, noMatches = null, lines, onChoose, onCopy, onDiscard, onSource, onRemoved, askingToDiscard = false,
-  lookup = NO_LOOKUP_VIEW }: {
+export function CardsReview({ controller, ticket, ui, people, noMatches = null, lines, onChoose, onCopy, onDiscard, onSource, onEdited = () => {}, onRemoved,
+  askingToDiscard = false, lookup = NO_LOOKUP_VIEW }: {
   controller: CardReviewController; ticket: number | null; ui: CardsUi; people: Readonly<Record<string, string>>;
   /** Why no names are offered as possible matches, said once cards are open. */
   noMatches?: string | null | undefined;
   /** Looking each card's name up in Planning Center People (`CardsHost`); none by default. */
   lookup?: LookupView | undefined;
-  lines: Readonly<Record<number, readonly ReadLine[]>>;
+  lines: Readonly<Record<number, readonly ShownLine[]>>;
   onChoose: () => void; onCopy: () => void; onDiscard: () => void;
   onSource: (card: number, field: FieldName, from: FieldSource) => void; onRemoved: (card: number) => void;
+  /** The person edited a card's field (typed in it, marked it hard to read or put a line in it): never read over. */
+  onEdited?: ((card: number, field: FieldName) => void) | undefined;
   /** Start with "Discard these cards?" asked (tests). */
   askingToDiscard?: boolean;
 }) {
@@ -763,7 +790,7 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
 
     {active && cards.map(card => <CardItem key={`${ticket}-${card.id}`} card={card} controller={controller} ticket={ticket!}
       state={ui.reading[card.id] ?? "by-hand"} source={ui.source[card.id] ?? {}} lines={lines[card.id] ?? []} people={people}
-      onSource={onSource} onRemoved={onRemoved} lookup={lookup} />)}
+      onSource={onSource} onEdited={onEdited} onRemoved={onRemoved} lookup={lookup} />)}
 
     {open && <footer className="cards-end">
       {active && <button type="button" className="btn btn-primary" disabled={!allChecked || reading > 0} onClick={onCopy}>Copy the reviewed list</button>}
@@ -781,10 +808,11 @@ export function CardsReview({ controller, ticket, ui, people, noMatches = null, 
   </div>;
 }
 
-function CardItem({ card, controller, ticket, state, source, lines, people, onSource, onRemoved, lookup }: {
+function CardItem({ card, controller, ticket, state, source, lines, people, onSource, onEdited, onRemoved, lookup }: {
   card: CardView; controller: CardReviewController; ticket: number; state: ReadState;
-  source: Readonly<Partial<Record<FieldName, FieldSource>>>; lines: readonly ReadLine[];
+  source: Readonly<Partial<Record<FieldName, FieldSource>>>; lines: readonly ShownLine[];
   people: Readonly<Record<string, string>>; onSource: (card: number, field: FieldName, from: FieldSource) => void; onRemoved: (card: number) => void;
+  onEdited: (card: number, field: FieldName) => void;
   lookup: LookupView;
 }) {
   const [large, setLarge] = useState(false);
@@ -804,10 +832,13 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
   const hardName = lookup.availability === "on" && name !== "" && (nameState === "unclear" || nameState === "not-readable");
   const unclear = fields.some(f => card.fields[f].state === "unclear" || card.fields[f].state === "not-readable");
   const empty = fields.some(f => card.fields[f].state === "unreviewed");
+  // Said before the edit itself, so a reading that comes back meanwhile already leaves this field alone.
   const edit = (field: FieldName, text: string, hard: boolean) => {
+    onEdited(card.id, field);
     controller.edit(ticket, { card: card.id, field, text, state: readingFor(text, hard) });
   };
   const place = (field: FieldName, line: ReadLine) => {
+    onEdited(card.id, field);
     const from = placeLine(controller, ticket, card, field, line, source[field]);
     if (from) onSource(card.id, field, from);
   };
@@ -826,8 +857,9 @@ function CardItem({ card, controller, ticket, state, source, lines, people, onSo
         <ol className="cards-lines">{lines.map((line, i) => {
           const id = `card-${card.id}-line-${i + 1}`;
           const used = fields.filter(f => f === "request" ? card.fields.request.text.split("\n").includes(line.text) : card.fields[f].text === line.text);
-          return <li key={line.line} className="cards-line">
+          return <li key={line.readAs ? `as-${line.readAs}` : line.line} className="cards-line">
             <span id={id} className="cards-line-t">{line.text}</span>
+            {line.readAs && <span className="small">{`This Mac read this as the ${line.readAs}. Ozzie kept what you typed there.`}</span>}
             {line.unclear && <><span className="badge b-look"><Icon name="eye" small />Worth a look</span><span className="small">Hard to read</span></>}
             {used.length > 0 && <span className="small">In {joined(used.map(f => SHORT[f]))}</span>}
             <select className="input" aria-label={`Use line ${i + 1} as`} aria-describedby={id} value="" disabled={busy}

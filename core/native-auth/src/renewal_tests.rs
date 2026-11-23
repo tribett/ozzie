@@ -221,12 +221,14 @@ impl Provider for Pco {
             return Err(OrganizationFailure {
                 error,
                 diagnostic: OrganizationDiagnostic::userinfo(reason),
+                asked_to_wait: None,
             });
         }
         if !self.accepts(access) {
             return Err(OrganizationFailure {
                 error: AuthError::OrganizationUnverified,
                 diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::AccessDenied),
+                asked_to_wait: None,
             });
         }
         Ok((*self.organization.lock().unwrap()).into())

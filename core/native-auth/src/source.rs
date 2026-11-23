@@ -2389,6 +2389,13 @@ impl NativeSourceHttp {
         ))
     }
 }
+/// A Retry-After header as Ozzie honours it: a plain number of seconds (at most five digits that fit
+/// a u16), or nothing. The same rule for a read's 429 and the identity check's (provider.rs).
+pub(crate) fn retry_after_seconds(value: &str) -> Option<u16> {
+    (!value.is_empty() && value.len() <= 5 && value.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
+}
 /// Closed status vocabulary. The stdin protocol keeps its original denied/provider-failure
 /// pair, so its envelope never changes; only in-process capture reads see 429 and 400/422,
 /// and only `groups_person_memberships` (capture-only) sees 404 as `NotFound`.
@@ -2401,11 +2408,9 @@ pub(crate) fn status_error(
     match status {
         200 => None,
         401 | 403 => Some(SourceError::Denied),
-        429 if capture => Some(SourceError::RateLimited(retry_after.and_then(|v| {
-            (!v.is_empty() && v.len() <= 5 && v.bytes().all(|b| b.is_ascii_digit()))
-                .then(|| v.parse().ok())
-                .flatten()
-        }))),
+        429 if capture => Some(SourceError::RateLimited(
+            retry_after.and_then(retry_after_seconds),
+        )),
         400 | 422 if capture => Some(SourceError::Rejected),
         // Live, 2026-11-13: Groups answers 404 for a Services person with no Groups profile.
         404 if capture && request.collection == Collection::GroupsPersonMemberships => {

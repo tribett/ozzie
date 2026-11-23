@@ -20,6 +20,7 @@ impl Http for Scripted {
         Ok(Response {
             status: self.status,
             body: Zeroizing::new(self.response.as_bytes().to_vec()),
+            retry_after: None,
         })
     }
 }

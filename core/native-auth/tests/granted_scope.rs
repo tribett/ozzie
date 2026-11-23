@@ -55,6 +55,7 @@ impl Http for NarrowGrant {
         Ok(Response {
             status: 200,
             body: Zeroizing::new(body),
+            retry_after: None,
         })
     }
 }
@@ -130,6 +131,7 @@ impl Http for Shared {
         Ok(Response {
             status,
             body: Zeroizing::new(body.into_bytes()),
+            retry_after: None,
         })
     }
 }

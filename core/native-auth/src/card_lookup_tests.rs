@@ -3,7 +3,10 @@
 use super::*;
 use crate::{
     credentials::{CredentialStore, StoreError},
-    oauth::{AuthError, Binding, Provider, Tokens},
+    oauth::{
+        AskedToWait, AuthError, Binding, OrganizationDiagnostic, OrganizationFailure, Provider,
+        Tokens, UserInfoReason,
+    },
     source::{NAME_CHARS, SourcePage, project_page},
 };
 use serde_json::json;
@@ -763,7 +766,9 @@ fn planning_center_s_retry_after_holds_every_lookup_until_it_has_passed() {
         assert_eq!(told.reason(), NotLookedUp::Busy);
         let wait = told.wait_seconds().unwrap();
         assert!(wait <= waits && wait + 2 >= waits, "{asked:?}: {wait}");
-        // Until then nothing goes out, not even for the turn.
+        // Until then nothing goes out, not even for the turn. The lookup's thread answers before it lets go of the turn,
+        // so wait for that first (flaky without it; third privacy pass of 0.9.1).
+        assert!(settled(&turns), "the turn was never let go");
         let held = turns.take_now(Reader::Check).unwrap();
         let next = Answer::new(Ok(one()));
         let started = Instant::now();
@@ -793,6 +798,78 @@ fn planning_center_s_retry_after_holds_every_lookup_until_it_has_passed() {
     );
 }
 
+/// Planning Center's identity check answering 429 with `0` as its Retry-After, counted.
+struct AsksToWait(Option<u16>, AtomicUsize);
+impl Provider for AsksToWait {
+    fn organization(&self, access: &str) -> Result<String, AuthError> {
+        self.organization_detailed(access).map_err(|failure| failure.error)
+    }
+    fn organization_detailed(&self, access: &str) -> Result<String, OrganizationFailure> {
+        assert_eq!(access, SECRET);
+        self.1.fetch_add(1, Ordering::SeqCst);
+        Err(OrganizationFailure {
+            error: AuthError::ProviderFailure,
+            diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::ProviderFailure),
+            asked_to_wait: Some(AskedToWait(self.0)),
+        })
+    }
+    fn exchange(&self, _: &str, _: &str, _: &str) -> Result<Tokens, AuthError> {
+        panic!("no sign-in is ever started from here")
+    }
+    fn refresh(&self, _: &str, _: &str) -> Result<Tokens, AuthError> {
+        panic!("not due")
+    }
+    fn revoke(&self, _: &str, _: &str, _: &str) -> Result<(), AuthError> {
+        panic!("no revoke")
+    }
+}
+fn asks_to_wait(retry_after: Option<u16>) -> (Arc<AuthController>, Arc<AsksToWait>) {
+    let identity = Arc::new(AsksToWait(retry_after, AtomicUsize::new(0)));
+    let store = Arc::new(Store(Mutex::new(stored(PEOPLE_SCOPE)), AtomicUsize::new(0)));
+    let auth = AuthController::new(binding(), store, identity.clone(), Arc::new(|| 0)).unwrap();
+    (Arc::new(auth), identity)
+}
+
+/// Privacy review L-c: Planning Center's 429 on the identity check before the search is honoured the
+/// way the search's own is: the lookup is `busy` with the wait it asked for (20 s when it names none,
+/// at most `LONGEST_WAIT`), and until then no lookup asks again, not even the identity check. Never
+/// `could-not-check`, which moved the page on to the next name and up to 30 identity checks a minute.
+#[test]
+fn planning_center_s_wait_on_the_identity_check_holds_lookups_as_the_search_s_does() {
+    for (asked, waits) in [(Some(30), 30), (None, 20), (Some(9_000), 300)] {
+        let (auth, identity) = asks_to_wait(asked);
+        let lookups = CardLookups::default();
+        let turns = Turns::default();
+        let answer = Answer::new(Ok(one()));
+        assert_eq!(
+            look_as(&auth, &lookups, &turns, CHURCH, CARD, &answer, LOOKUP_DEADLINE),
+            Err(NotLookedUp::Busy)
+        );
+        assert!(answer.seen().is_empty(), "the search never went out");
+        let wait = lookups.refused(NotLookedUp::Busy).wait_seconds().unwrap();
+        assert!(wait <= waits && wait + 2 >= waits, "{asked:?}: {wait}");
+        assert!(settled(&turns));
+        for _ in 0..5 {
+            assert_eq!(
+                look_as(&auth, &lookups, &turns, CHURCH, CARD, &answer, LOOKUP_DEADLINE),
+                Err(NotLookedUp::Busy)
+            );
+        }
+        assert_eq!(identity.1.load(Ordering::SeqCst), 1);
+        assert!(answer.seen().is_empty());
+    }
+    // Only a card's lookup waits on it: every other reader's identity check fails as it always has.
+    let (auth, _) = asks_to_wait(Some(30));
+    assert_eq!(
+        auth.verify_source(&AtomicBool::new(false)).err(),
+        Some(SourceError::ProviderFailure)
+    );
+    assert_eq!(
+        auth.verify_source_or_wait(&AtomicBool::new(false)).err(),
+        Some(SourceError::RateLimited(Some(30)))
+    );
+}
+
 /// Privacy review L3: a change a person confirmed waits for a card lookup that holds the
 /// connection's turn (never for a check), so it isn't refused as if a check were running.
 #[test]
@@ -811,22 +888,134 @@ fn a_change_waits_for_a_lookup_never_for_a_check() {
         }
         assert!(lookups.holding());
         let started = Instant::now();
-        lookups.let_finish(CHANGE_WAITS);
+        let pending = lookups.let_finish(CHANGE_WAITS);
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(!lookups.holding());
         // The turn is free for the change at once.
         assert!(turns.take_now(Reader::Change).is_ok());
         assert!(looking.join().unwrap().is_ok());
+        drop(pending);
     });
     // A check holding the turn is never waited for.
     let held = turns.take_now(Reader::Check).unwrap();
     let started = Instant::now();
-    lookups.let_finish(CHANGE_WAITS);
+    let _pending = lookups.let_finish(CHANGE_WAITS);
     assert!(started.elapsed() < Duration::from_millis(200));
     drop(held);
     // While a change goes ahead, a new lookup is told to wait a moment.
     assert!(lookups.refused(NotLookedUp::Busy).wait_seconds().is_some());
     assert_eq!(CHANGE_WAITS, Duration::from_secs(20));
+}
+
+/// One read that waits until the test lets it go (never a timer), telling the test once it is under way.
+struct Held {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+impl SourceHttp for Held {
+    fn read(&self, request: &SourceRequest, access: &str) -> Result<SourcePage, SourceError> {
+        assert_eq!(access, SECRET);
+        if let Some(entered) = self.entered.lock().unwrap().take() {
+            entered.send(()).unwrap();
+        }
+        self.release.lock().unwrap().recv().unwrap();
+        project_page(request, &serde_json::to_vec(&one()).unwrap(), &Default::default())
+    }
+}
+/// Waits, at most a few seconds, until `done` says so.
+fn until(done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done() {
+        assert!(Instant::now() < deadline, "never happened");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Privacy review L-b: a lookup already waiting for the connection's turn when a change a person
+/// confirmed starts waiting takes the turn as the lookup before it lets go, while `holding` reads none.
+/// It gives the turn straight back and is `busy`, so the change finds it free, however long its sign-in
+/// renewal takes; until the change lets go of its `ChangePending`, no lookup keeps the turn.
+#[test]
+fn a_lookup_that_takes_the_turn_while_a_change_waits_gives_it_straight_back() {
+    let auth = controller(PEOPLE_SCOPE);
+    let lookups = CardLookups::default();
+    let turns = Turns::default();
+    let (entered, under_way) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let first = Arc::new(Held {
+        entered: Mutex::new(Some(entered)),
+        release: Mutex::new(released),
+    });
+    let second = Answer::new(Ok(one()));
+    std::thread::scope(|scope| {
+        // A lookup holds the turn, its read under way.
+        let reading = scope.spawn(|| {
+            let first = first.clone();
+            look_up_with(
+                &lookups,
+                &turns,
+                CHURCH,
+                CARD,
+                || Some(auth.clone()),
+                Box::new(move || Ok(first as Arc<dyn SourceHttp + Send + Sync>)),
+                LOOKUP_DEADLINE,
+            )
+        });
+        under_way.recv().unwrap();
+        assert!(lookups.holding());
+        // The next lookup went out before any change: it waits for the turn.
+        let waiting = scope.spawn(|| {
+            look_as(&auth, &lookups, &turns, CHURCH, CARD, &second, LOOKUP_DEADLINE)
+        });
+        until(|| lookups.0.lock().unwrap().under_way.len() == 2);
+        // A change a person confirmed starts waiting for the first lookup.
+        let change = scope.spawn(|| lookups.let_finish(CHANGE_WAITS));
+        until(|| lookups.0.lock().unwrap().pending == 1);
+        // The first lookup ends: the waiting one takes the turn, and gives it straight back.
+        release.send(()).unwrap();
+        assert!(reading.join().unwrap().is_ok());
+        assert_eq!(waiting.join().unwrap(), Err(NotLookedUp::Busy));
+        assert!(second.seen().is_empty(), "nothing read");
+        let pending = change.join().unwrap();
+        assert!(!lookups.holding());
+        // However long the change's sign-in renewal takes (past the moment new lookups are held back),
+        // a new lookup is busy at once, never waiting for the turn, and the change finds the turn free.
+        lookups.waited_until(Instant::now());
+        let third = Answer::new(Ok(one()));
+        let started = Instant::now();
+        assert_eq!(
+            look_as(&auth, &lookups, &turns, CHURCH, CARD, &third, LOOKUP_DEADLINE),
+            Err(NotLookedUp::Busy)
+        );
+        assert!(started.elapsed() < TURN_WAIT);
+        assert!(third.seen().is_empty());
+        let turn = turns.take_now(Reader::Change);
+        assert!(turn.is_ok());
+        // Done (made, refused, or ended any other way): lookups go ahead again.
+        drop(turn);
+        drop(pending);
+        assert_eq!(lookups.0.lock().unwrap().pending, 0);
+        assert!(look_as(&auth, &lookups, &turns, CHURCH, CARD, &third, LOOKUP_DEADLINE).is_ok());
+    });
+    // Two changes waiting at once: lookups wait for both to be done.
+    let one_change = lookups.let_finish(CHANGE_WAITS);
+    let other = lookups.let_finish(CHANGE_WAITS);
+    lookups.waited_until(Instant::now());
+    drop(one_change);
+    let answer = Answer::new(Ok(one()));
+    assert_eq!(
+        look_as(&auth, &lookups, &turns, CHURCH, CARD, &answer, LOOKUP_DEADLINE),
+        Err(NotLookedUp::Busy)
+    );
+    drop(other);
+    assert!(look_as(&auth, &lookups, &turns, CHURCH, CARD, &answer, LOOKUP_DEADLINE).is_ok());
+    // A change that panics still lets go.
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pending = lookups.let_finish(CHANGE_WAITS);
+        panic!("a change ended badly");
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(lookups.0.lock().unwrap().pending, 0);
 }
 
 #[test]
@@ -931,8 +1120,10 @@ fn this_module_reaches_only_the_guarded_planning_center_get() {
     ] {
         assert!(!code.contains(token), "card_lookup.rs names {token}");
     }
-    // Its only reads: the identity check and the one name search, after the turn.
-    assert_eq!(code.matches("verify_source(").count(), 1);
+    // Its only reads: the identity check (waiting as Planning Center asks, review L-c) and the one
+    // name search, after the turn.
+    assert_eq!(code.matches("verify_source_or_wait(").count(), 1);
+    assert!(!code.contains("verify_source("));
     assert_eq!(code.matches("read_verified_using(").count(), 1);
     assert_eq!(code.matches("Collection::").count(), 1);
     assert!(code.contains("Collection::PeopleNameSearch"));

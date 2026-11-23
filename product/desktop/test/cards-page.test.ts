@@ -4,11 +4,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => { throw new Error("NATIVE_CALL_FORBIDDEN"); }) }));
 import { CardReviewController } from "../../src/card-review/controller.js";
-import type { CardView } from "../../../core/src/card-review/lifecycle.js";
+import type { CardView, FieldName } from "../../../core/src/card-review/lifecycle.js";
 import { readLines, reviewedList, type ReadLine } from "../../../core/src/card-fields.js";
 import {
   bindKeep, cardPhotoFiles, CardsReview, checkCard, DISCARD_ASK, emptyUi, escapeCloses, keptImages, KEPT_BODY, KEPT_ENDS, KEPT_MORE, KEPT_PROMISE, KEPT_TITLE, listFor, lookFirst, pickCards, PICK_PROBLEM, placeLine,
-  readCardsLocally, readingFor, SHOW_CARDS, veiledText, type CardsUi, type CardTextResult, type FieldSource, type ReadState,
+  readCardsLocally, readingFor, SHOW_CARDS, veiledText, type CardsUi, type CardTextResult, type FieldSource, type ReadState, type ShownLine,
 } from "../src/cards-page.js";
 
 // Invented people and synthetic printed-card text only. No real card or photo is used.
@@ -42,16 +42,16 @@ async function openReview(count: number) {
 const cardsOf = (c: CardReviewController) => { let cards: CardView[] = []; c.render(v => { cards = [...v.cards]; }); return cards; };
 const fieldsOf = (card: CardView) => Object.fromEntries((["name", "phone", "email", "request"] as const).map(f => [f, { text: card.fields[f].text, state: card.fields[f].state }]));
 
-async function readWith(texts: (CardTextResult | Error)[], count = texts.length) {
+async function readWith(texts: (CardTextResult | Error)[], count = texts.length, edited: (id: number, field: FieldName) => boolean = () => false) {
   const review = await openReview(count);
   const states: Record<number, ReadState> = {};
   const suggested: Record<number, Partial<Record<string, FieldSource>>> = {};
-  const lines: Record<number, readonly ReadLine[]> = {};
+  const lines: Record<number, readonly ShownLine[]> = {};
   let recognizer = "unknown";
   const pending = [...review.files] as (File | null)[];
   let i = 0;
   await readCardsLocally({
-    controller: review.controller, ticket: review.ticket, files: pending, live: () => review.controller.status === "active",
+    controller: review.controller, ticket: review.ticket, files: pending, live: () => review.controller.status === "active", edited,
     read: async image => { expect(image.byteLength).toBe(PNG.byteLength); const r = texts[i++]!; if (r instanceof Error) throw r; return r; },
     onState: (id, s) => { states[id] = s; }, onSuggested: (id, f) => { suggested[id] = f; }, onRead: (id, l) => { lines[id] = l; },
     onRecognizer: r => { recognizer = r; },
@@ -128,12 +128,71 @@ describe("reading visitor cards on this Mac", () => {
     for (const card of cardsOf(controller)) expect(card.fields.name.state).toBe("unreviewed");
   });
 
+  it("never reads over a field the person edited since the card appeared: their words stay, and what this Mac read for it is there to choose", async () => {
+    const { controller, ticket, files } = await openReview(1);
+    const pending = [...files] as (File | null)[];
+    // The reading is held until the test lets it come back (no timers).
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let release!: (r: CardTextResult) => void;
+    const typed = new Set<FieldName>();
+    const suggested: Record<number, Partial<Record<FieldName, FieldSource>>> = {};
+    let lines: readonly ShownLine[] = [];
+    const run = readCardsLocally({
+      controller, ticket, files: pending, live: () => controller.status === "active", edited: (id, field) => id === 1 && typed.has(field),
+      read: () => { started(); return new Promise(r => { release = r; }); },
+      onState() {}, onSuggested: (id, f) => { suggested[id] = f; }, onRead: (_, l) => { lines = l; }, onRecognizer() {},
+    });
+    await reading;
+    // While the card is read, the person types a name and a phone, and marks the email hard to read.
+    const person = (field: FieldName, text: string, state: "typed" | "unclear") => {
+      typed.add(field);
+      expect(controller.edit(ticket, { card: 1, field, text, state })).toBe("ok");
+    };
+    person("name", "Jordan Typed", "typed");
+    person("phone", "555 0100", "typed");
+    person("email", "", "unclear");
+    release({ status: "read", text: CARD_A, unclearLines: [0] });
+    await run;
+    const card = () => cardsOf(controller)[0]!;
+    expect(fieldsOf(card())).toEqual({
+      name: { text: "Jordan Typed", state: "typed" }, phone: { text: "555 0100", state: "typed" },
+      email: { text: "", state: "unclear" }, request: { text: "Please pray for my\nnew job starting Monday.", state: "typed" },
+    });
+    // Only the field nobody touched was filled.
+    expect(suggested).toEqual({ 1: { request: "read" } });
+    // What this Mac read for each edited field comes first among the lines, as read (unclear stays unclear).
+    expect(lines.slice(0, 3)).toEqual([
+      { line: -1, text: "Riley Thornbury", unclear: true, readAs: "name" },
+      { line: -1, text: "(555) 014-2290", unclear: false, readAs: "phone" },
+      { line: -1, text: "riley.t@example.com", unclear: false, readAs: "email" },
+    ]);
+    expect(lines.slice(3)).toEqual(readLines(CARD_A, [0]));
+    // Beside the photo: the name this Mac read, why it isn't in the field, and the same control to put it there.
+    const html = renderPage(controller, ticket, { reading: { 1: "read" }, source: { 1: { name: "typed", phone: "typed", request: "read" } } }, { 1: lines });
+    expect(html).toContain('value="Jordan Typed"');
+    expect(html).toMatch(/<span id="card-1-line-1" class="cards-line-t">Riley Thornbury<\/span><span class="small">This Mac read this as the name\. Ozzie kept what you typed there\.<\/span>/u);
+    expect(html).toMatch(/<select[^>]*aria-label="Use line 1 as"[^>]*aria-describedby="card-1-line-1"/u);
+    expect(html).toContain("This Mac read this as the phone. Ozzie kept what you typed there.");
+    expect(html).not.toContain("found no printed labels");
+    // The person may still choose it: then it is in the field, marked as theirs to check.
+    expect(placeLine(controller, ticket, card(), "name", lines[0]!, "typed")).toBe("chosen");
+    expect(fieldsOf(card()).name).toEqual({ text: "Riley Thornbury", state: "unclear" });
+    // A field the person didn't touch is filled as before, on every field.
+    for (const field of ["name", "phone", "email", "request"] as const) {
+      const one = await readWith([{ status: "read", text: CARD_A, unclearLines: [] }], 1, (_, f) => f === field);
+      expect(cardsOf(one.controller)[0]!.fields[field].state, field).toBe("unreviewed");
+      expect(one.lines[1]![0]!.readAs, field).toBe(field);
+      expect(Object.keys(one.suggested[1]!).sort(), field).toEqual(["email", "name", "phone", "request"].filter(f => f !== field));
+    }
+  });
+
   it("drops a reading that arrives after the review was discarded, and the photos' addresses are revoked", async () => {
     const review = await openReview(2);
     const pending = [...review.files] as (File | null)[];
     let release!: (r: CardTextResult) => void;
     const run = readCardsLocally({
-      controller: review.controller, ticket: review.ticket, files: pending, live: () => review.controller.status === "active",
+      controller: review.controller, ticket: review.ticket, files: pending, live: () => review.controller.status === "active", edited: () => false,
       read: () => new Promise(r => { release = r; }), onState: () => {}, onSuggested: () => {}, onRead: () => { throw new Error("read lines kept after discard"); }, onRecognizer: () => {},
     });
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));

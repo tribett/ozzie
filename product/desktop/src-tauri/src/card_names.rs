@@ -79,7 +79,8 @@ mod tests {
             assert!(!code.contains(token), "card_names.rs names {token}");
         }
         // In the desktop app, only this file names the lookup; main.rs registers it and its state, and
-        // changes.rs only waits for a lookup holding the connection's turn (privacy review L3).
+        // changes.rs only waits for a lookup holding the connection's turn and keeps lookups from taking
+        // it until the change is done (privacy reviews L3, L-b).
         let main = include_str!("main.rs");
         let main = &main[..main.find("#[cfg(test)]").unwrap()];
         assert_eq!(main.matches("card_names::look_up_card_name").count(), 1);
@@ -97,9 +98,11 @@ mod tests {
             let text = std::fs::read_to_string(entry.path()).unwrap();
             if name == "changes.rs" {
                 let code = &text[..text.find("#[cfg(test)]").unwrap()];
-                assert!(code.contains("card_lookup::{CHANGE_WAITS, CardLookups}"));
+                assert!(code.contains("card_lookup::{CHANGE_WAITS, CardLookups, ChangePending}"));
                 assert_eq!(code.matches("lookups.let_finish(CHANGE_WAITS)").count(), 1);
-                assert_eq!(code.matches("after_card_lookups(&lookups);").count(), 3);
+                // Each change command keeps its place ahead of lookups until core is done (review L-b).
+                assert_eq!(code.matches("let _pending = after_card_lookups(&lookups);").count(), 3);
+                assert_eq!(code.matches("after_card_lookups(&lookups)").count(), 3);
                 assert!(!code.contains("look_up") && !code.contains(".cancel("));
                 continue;
             }

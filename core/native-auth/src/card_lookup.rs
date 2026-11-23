@@ -37,10 +37,12 @@
 //!    one write's own module (change.rs), which this read leaves untouched. At most
 //!    `LOOKUPS_PER_MINUTE` lookups a minute (`too-many-just-now`), and each read has `LOOKUP_DEADLINE`
 //!    once the connection is in hand (`could-not-check` past it). Planning Center's own 429 is
-//!    honoured: every lookup is `busy` until its Retry-After has passed (20 s when it names none, at
-//!    most `LONGEST_WAIT`), and the page is told how long (`Refused`, privacy review L2). A change a
+//!    honoured, on the search and on the identity check before it (review L-c): every lookup is `busy`
+//!    until its Retry-After has passed (20 s when it names none, at most `LONGEST_WAIT`), and the page
+//!    is told how long (`Refused`, privacy review L2). A change a
 //!    person confirmed waits for a lookup that holds the turn (`let_finish`, desktop changes.rs), so it
-//!    is never refused as if a check were running (review L3); it never waits for a check.
+//!    is never refused as if a check were running (review L3), and from then until it is done no lookup
+//!    keeps the turn (`ChangePending`, review L-b); it never waits for a check.
 //! 6. **Nothing added, nothing combined.** A name match is never taken to be the same person: the
 //!    page says it may be someone else. Nothing is written anywhere.
 use crate::{
@@ -162,8 +164,9 @@ impl Refused {
 }
 
 /// This session's lookups: when the recent ones went out, the cancel flags of those still under way,
-/// how many hold the connection's turn, and until when Planning Center (or a change going ahead) asked
-/// lookups to wait. Times, flags and counts only, held in memory: never a name or an answer.
+/// how many hold the connection's turn, how many changes a person confirmed are waiting to go ahead,
+/// and until when Planning Center (or a change going ahead) asked lookups to wait. Times, flags and
+/// counts only, held in memory: never a name or an answer.
 #[derive(Clone, Default)]
 pub struct CardLookups(Arc<Mutex<Session>>);
 #[derive(Default)]
@@ -171,7 +174,21 @@ struct Session {
     reads: VecDeque<Instant>,
     under_way: Vec<Arc<AtomicBool>>,
     holding: usize,
+    /// Changes a person confirmed, from `let_finish` until their `ChangePending` is dropped.
+    pending: usize,
     wait_until: Option<Instant>,
+}
+/// A change a person confirmed, waiting to go ahead (`CardLookups::let_finish`): while any is held, a
+/// lookup never keeps the connection's turn. Held by desktop changes.rs until the change is done
+/// (made, refused or ended any other way, a panic included), so it outlasts the moment the change
+/// takes the turn; dropping it is the only way it ends.
+#[must_use]
+pub struct ChangePending(CardLookups);
+impl Drop for ChangePending {
+    fn drop(&mut self) {
+        let mut session = (self.0).0.lock().unwrap_or_else(|e| e.into_inner());
+        session.pending = session.pending.saturating_sub(1);
+    }
 }
 /// The connection's turn as a lookup holds it: counted while held, so a change can wait for it.
 struct Holding {
@@ -218,26 +235,46 @@ impl CardLookups {
             flag,
         }
     }
-    fn hold(&self, turn: Turn) -> Holding {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).holding += 1;
-        Holding {
+    /// The connection's turn as a lookup keeps it, counted; or, while a change a person confirmed is
+    /// waiting to go ahead (`ChangePending`), given straight back: `busy`. Checked and counted at once,
+    /// so a change that sees no lookup holding the turn never finds one keeping it (review L-b).
+    fn hold(&self, turn: Turn) -> Result<Holding, NotLookedUp> {
+        let mut session = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if session.pending > 0 {
+            drop(session);
+            drop(turn);
+            return Err(NotLookedUp::Busy);
+        }
+        session.holding += 1;
+        Ok(Holding {
             lookups: self.clone(),
             turn: Some(turn),
-        }
+        })
     }
     /// Whether a lookup holds the connection's turn now.
     pub fn holding(&self) -> bool {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).holding > 0
     }
-    /// For a change a person confirmed (desktop changes.rs): holds new lookups back for a moment and
-    /// waits, at most `longest`, until no lookup holds the connection's turn. A check holding it is
-    /// never waited for: then this returns at once.
-    pub fn let_finish(&self, longest: Duration) {
+    /// Whether a change a person confirmed is waiting to go ahead.
+    fn pending(&self) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).pending > 0
+    }
+    /// For a change a person confirmed (desktop changes.rs), before anything else: from now until the
+    /// returned `ChangePending` is dropped, no lookup keeps the connection's turn (one that takes it
+    /// gives it straight back and is `busy`, and new ones are `busy` before they ask for it), and new
+    /// lookups are held back for a moment besides. Then waits, at most `longest`, until no lookup holds
+    /// the turn. A check holding it is never waited for: then this returns at once. Privacy review
+    /// L-b: the change's sign-in renewal before it takes the turn (`connect`) can outlast the moment,
+    /// and a lookup already waiting for the turn could take it as the one before let it go.
+    pub fn let_finish(&self, longest: Duration) -> ChangePending {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).pending += 1;
+        let pending = ChangePending(self.clone());
         let started = Instant::now();
         self.hold_back(started + CHANGE_HOLDS_LOOKUPS);
         while self.holding() && started.elapsed() < longest {
             std::thread::sleep(RETRY_EVERY);
         }
+        pending
     }
     /// Planning Center asked Ozzie to wait (its 429): `seconds` from its Retry-After, or
     /// `WAIT_WITHOUT_RETRY_AFTER` when it named none, at most `LONGEST_WAIT`, from `now`.
@@ -342,15 +379,16 @@ pub(crate) fn look_up_with(
         .filter(|_| numeric_id(church))
         .ok_or(NotLookedUp::InvalidName)?;
     // Planning Center asked Ozzie to wait, or a change is going ahead: nothing, not even the turn.
-    if lookups.wait_left(Instant::now()).is_some() {
+    if lookups.wait_left(Instant::now()).is_some() || lookups.pending() {
         return Err(NotLookedUp::Busy);
     }
     let under_way = lookups.begin();
+    // A change that began waiting meanwhile gets the turn straight back (`hold`).
     let turn = lookups.hold(
         turns
             .take(Reader::Picker, TURN_WAIT)
             .map_err(|_| NotLookedUp::Busy)?,
-    );
+    )?;
     if under_way.flag.load(Ordering::SeqCst) {
         return Err(NotLookedUp::Cancelled);
     }
@@ -429,7 +467,8 @@ fn read_one(
         }
         refused(error)
     };
-    let verified = waiting(cancelled, || auth.verify_source(cancelled)).map_err(refused)?;
+    // Planning Center's 429 on the identity check is a wait too (review L-c).
+    let verified = waiting(cancelled, || auth.verify_source_or_wait(cancelled)).map_err(refused)?;
     // A sign-in without People is never asked to search it; no new sign-in is started either.
     if !Product::People.granted(verified.scopes()) {
         return Err(NotLookedUp::NotAllowed);

@@ -169,6 +169,7 @@ impl Provider for Churches {
             .map_err(|error| OrganizationFailure {
                 error,
                 diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::Unclassified),
+                asked_to_wait: None,
             })?;
         let name = match id.as_str() {
             "1001" => Some("Fictional Grace Church".to_string()),

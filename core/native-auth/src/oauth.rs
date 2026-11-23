@@ -129,7 +129,14 @@ impl OrganizationDiagnostic {
 pub struct OrganizationFailure {
     pub error: AuthError,
     pub diagnostic: OrganizationDiagnostic,
+    /// Planning Center asked Ozzie to wait (its 429): only a visitor card's name lookup waits on it
+    /// (`AuthController::verify_source_or_wait`); for everything else it is the failure it always was.
+    pub asked_to_wait: Option<AskedToWait>,
 }
+/// Planning Center's 429 on an identity check: its Retry-After in seconds, when it gave a plain
+/// number. It says nothing about which church a credential belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AskedToWait(pub Option<u16>);
 /// The organization a credential belongs to, and the church's name when userinfo states one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedOrganization {
@@ -177,6 +184,7 @@ pub trait Provider: Send + Sync {
             .map_err(|error| OrganizationFailure {
                 error,
                 diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::Unclassified),
+                asked_to_wait: None,
             })
     }
     fn refresh(&self, client: &str, refresh: &str) -> Result<Tokens, AuthError>;
@@ -1517,7 +1525,8 @@ impl AuthController {
         self.source_session(generation, cancelled, |access, _, check| {
             let organization = self.identify(access);
             check()?;
-            if organization.map_err(source_error)? != self.binding.organization {
+            if organization.map_err(|(error, _)| source_error(error))? != self.binding.organization
+            {
                 return Err(SourceError::OrganizationUnverified);
             }
             check()?;
@@ -1530,6 +1539,22 @@ impl AuthController {
         &self,
         cancelled: &AtomicBool,
     ) -> Result<VerifiedSource, crate::source::SourceError> {
+        self.verified_source(cancelled, false)
+    }
+    /// `verify_source` for a visitor card's name lookup (card_lookup.rs): when Planning Center answers
+    /// the identity check with its 429, that is `RateLimited` with its Retry-After, as the search's own
+    /// 429 is, so lookups wait as it asked (privacy review L-c). Every other reader keeps `verify_source`.
+    pub(crate) fn verify_source_or_wait(
+        &self,
+        cancelled: &AtomicBool,
+    ) -> Result<VerifiedSource, crate::source::SourceError> {
+        self.verified_source(cancelled, true)
+    }
+    fn verified_source(
+        &self,
+        cancelled: &AtomicBool,
+        wait: bool,
+    ) -> Result<VerifiedSource, crate::source::SourceError> {
         use crate::source::SourceError;
         if self.sunday.is_some() {
             return Err(SourceError::Busy);
@@ -1538,7 +1563,11 @@ impl AuthController {
         self.source_session(generation, cancelled, |access, scopes, check| {
             let organization = self.identify(access);
             check()?;
-            if organization.map_err(source_error)? != self.binding.organization {
+            let organization = organization.map_err(|(error, asked)| match asked {
+                Some(AskedToWait(seconds)) if wait => SourceError::RateLimited(seconds),
+                _ => source_error(error),
+            })?;
+            if organization != self.binding.organization {
                 return Err(SourceError::OrganizationUnverified);
             }
             Ok(VerifiedSource { generation, scopes })
@@ -1603,8 +1632,9 @@ impl AuthController {
     /// userinfo read as before. When Planning Center refuses the token itself (401 or 403), it ran
     /// out sooner than this controller's clock says (the clock `system_clock` keeps doesn't count
     /// time this Mac spent asleep) or was withdrawn: the next read renews it first
-    /// (`renewal_due`). The read itself fails as it always did.
-    fn identify(&self, access: &str) -> Result<String, AuthError> {
+    /// (`renewal_due`). The read itself fails as it always did; Planning Center asking Ozzie to wait
+    /// is said beside the failure (`verify_source_or_wait`).
+    fn identify(&self, access: &str) -> Result<String, (AuthError, Option<AskedToWait>)> {
         self.provider
             .organization_detailed(access)
             .map_err(|failure| {
@@ -1616,11 +1646,12 @@ impl AuthController {
                     state.runs_out = Some(0);
                 }
                 // Planning Center unanswered says nothing about the church: out of reach (review M, L5).
-                if unanswered(&failure.diagnostic) {
+                let error = if unanswered(&failure.diagnostic) {
                     AuthError::ProviderFailure
                 } else {
                     failure.error
-                }
+                };
+                (error, failure.asked_to_wait)
             })
     }
     /// True once the proof's generation has ended (cancel, disconnect or a new attempt).

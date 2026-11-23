@@ -111,6 +111,7 @@ impl Http for Shared {
         Ok(Response {
             status,
             body: Zeroizing::new(body.into_bytes()),
+            retry_after: None,
         })
     }
 }

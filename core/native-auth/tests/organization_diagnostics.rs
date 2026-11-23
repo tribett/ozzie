@@ -5,6 +5,7 @@ use zeroize::Zeroizing;
 struct FictionalHttp {
     status: u16,
     body: Vec<u8>,
+    retry_after: Option<u16>,
     error: Option<AuthError>,
     calls: AtomicUsize,
 }
@@ -25,13 +26,22 @@ impl Http for FictionalHttp {
         Ok(Response {
             status: self.status,
             body: Zeroizing::new(self.body.clone()),
+            retry_after: self.retry_after,
         })
     }
 }
 fn response(status: u16, body: &str) -> PcoProvider<FictionalHttp> {
+    with_retry_after(status, body, None)
+}
+fn with_retry_after(
+    status: u16,
+    body: &str,
+    retry_after: Option<u16>,
+) -> PcoProvider<FictionalHttp> {
     PcoProvider(FictionalHttp {
         status,
         body: body.as_bytes().into(),
+        retry_after,
         error: None,
         calls: AtomicUsize::new(0),
     })
@@ -56,6 +66,21 @@ fn userinfo_rate_limit_is_a_provider_failure_not_an_organization_contradiction()
         Some(AuthError::ProviderFailure)
     );
     assert_eq!(p.0.calls.load(Ordering::SeqCst), 2);
+    // It is told apart as Planning Center asking Ozzie to wait, with its Retry-After when it gave one
+    // (a visitor card's name lookup waits that long: card_lookup.rs, privacy review L-c).
+    assert_eq!(error.asked_to_wait, Some(AskedToWait(None)));
+    let error = with_retry_after(429, "fictional-body-canary", Some(7))
+        .organization_detailed("fictional-access-canary")
+        .unwrap_err();
+    assert_eq!(error.asked_to_wait, Some(AskedToWait(Some(7))));
+    assert_eq!(error.error, AuthError::ProviderFailure);
+    // No other answer is a wait, whatever Retry-After it carries.
+    for status in [200, 401, 403, 500, 503] {
+        let failure = with_retry_after(status, "{}", Some(7))
+            .organization_detailed("fictional-access-canary")
+            .unwrap_err();
+        assert_eq!(failure.asked_to_wait, None, "{status}");
+    }
 }
 #[test]
 fn provider_classifies_failures_from_one_existing_userinfo_request_without_changing_outer_errors() {
@@ -165,6 +190,7 @@ impl Http for SharedHttp {
         Ok(Response {
             status,
             body: Zeroizing::new(body.into_bytes()),
+            retry_after: None,
         })
     }
 }

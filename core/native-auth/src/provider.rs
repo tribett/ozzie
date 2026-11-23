@@ -1,6 +1,6 @@
 use crate::oauth::{
-    AuthError, Grant, NamedOrganization, OrganizationDiagnostic, OrganizationFailure, Provider,
-    REDIRECT_URI, Tokens, UserInfoReason, church_name, numeric_id,
+    AskedToWait, AuthError, Grant, NamedOrganization, OrganizationDiagnostic, OrganizationFailure,
+    Provider, REDIRECT_URI, Tokens, UserInfoReason, church_name, numeric_id,
 };
 use std::{io::Read, time::Duration};
 use zeroize::Zeroizing;
@@ -23,6 +23,8 @@ impl Endpoint {
 pub struct Response {
     pub status: u16,
     pub body: Zeroizing<Vec<u8>>,
+    /// Planning Center's Retry-After in seconds, when it gave a plain number (`source::retry_after_seconds`).
+    pub retry_after: Option<u16>,
 }
 /// Only fixed authorization endpoints exist here, never church-record mutation tools.
 pub trait Http: Send + Sync {
@@ -71,6 +73,11 @@ impl Http for NativeHttp {
         }
         let response = request.send().map_err(|_| AuthError::ProviderFailure)?;
         let status = response.status().as_u16();
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(crate::source::retry_after_seconds);
         let mut body = Zeroizing::new(Vec::new());
         response
             .take(65_537)
@@ -79,7 +86,11 @@ impl Http for NativeHttp {
         if body.len() > 65_536 {
             return Err(AuthError::ProviderFailure);
         }
-        Ok(Response { status, body })
+        Ok(Response {
+            status,
+            body,
+            retry_after,
+        })
     }
 }
 pub struct PcoProvider<H: Http>(pub H);
@@ -146,6 +157,7 @@ impl<H: Http> Provider for PcoProvider<H> {
         let failure = |reason| OrganizationFailure {
             error: AuthError::OrganizationUnverified,
             diagnostic: OrganizationDiagnostic::userinfo(reason),
+            asked_to_wait: None,
         };
         let response = self
             .0
@@ -153,12 +165,15 @@ impl<H: Http> Provider for PcoProvider<H> {
             .map_err(|error| OrganizationFailure {
                 error,
                 diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::TransportFailure),
+                asked_to_wait: None,
             })?;
-        // Rate limiting says nothing about which organization the credential belongs to.
+        // Rate limiting says nothing about which organization the credential belongs to. It is told
+        // apart, with its Retry-After, for a reader that waits on it (a visitor card's name lookup).
         if response.status == 429 {
             return Err(OrganizationFailure {
                 error: AuthError::ProviderFailure,
                 diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::ProviderFailure),
+                asked_to_wait: Some(AskedToWait(response.retry_after)),
             });
         }
         if response.status != 200 {

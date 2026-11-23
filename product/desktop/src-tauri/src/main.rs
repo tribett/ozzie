@@ -2383,6 +2383,7 @@ mod tests {
                 Err(OrganizationFailure {
                     error: AuthError::OrganizationUnverified,
                     diagnostic: OrganizationDiagnostic::userinfo(UserInfoReason::AccessDenied),
+                    asked_to_wait: None,
                 })
             }
             fn refresh(&self, _: &str, _: &str) -> Result<Tokens, AuthError> {
