@@ -4,7 +4,7 @@
 // Planning Center are fakes. Fictional people only.
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
 import { text } from "./harness-fakes.js";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
@@ -51,8 +51,14 @@ async function mount(element: () => React.ReactElement) {
     if (!fn) throw new Error(`no ${handler}`);
     await act(async () => { fn(event); });
   };
-  return { press, settle, fire, rerender: (e: React.ReactElement) => act(async () => { root.render(e); }), unmount: async () => { await act(async () => { root.unmount(); }); dom.root.removeChild(box); } };
+  let on = true;
+  const unmount = async () => { if (!on) return; on = false; await act(async () => { root.unmount(); }); dom.root.removeChild(box); };
+  left.push(unmount);
+  return { press, settle, fire, rerender: (e: React.ReactElement) => act(async () => { root.render(e); }), unmount };
 }
+/** Whatever a test left mounted (it failed before its own unmount) is taken down, so it can't fail the tests after it. */
+const left: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const off of left.splice(0)) await off(); });
 
 describe("Your name for the end of notes", () => {
   it("Use this name keeps it on this Mac, puts it in the note, and isn't asked again", async () => {
@@ -132,13 +138,19 @@ describe("Fill in who it's to?", () => {
 
   it("Allow: waits with words and a Cancel, then opens the note addressed once Planning Center adds People", async () => {
     const o = opens();
-    const { access, calls } = fakeAccess([status("waiting"), status("checking"), status("connected", "services-and-operations")]);
+    // The sign-in is held open until the waiting words have been checked: with no delay between looks, a fast fake
+    // could otherwise finish before the test looks (seen on CI, 0.9.0).
+    let release: (value: unknown) => void = () => undefined;
+    const held = new Promise(resolve => { release = resolve; });
+    const { access, calls } = fakeAccess([status("waiting"), status("checking"), status("connected", "services-and-operations")],
+      async () => { await held; return status("waiting"); });
     const m = await mount(draft(o, access));
     await m.press("Open in Messages");
     await m.press(ALLOW_PEOPLE);
-    expect(dom.seen()).toMatch(new RegExp(`${PEOPLE_WAITING}|Planning Center said yes`, "u"));
+    expect(dom.seen()).toContain(PEOPLE_WAITING);
     expect(dom.button("Cancel")).not.toBeNull();
     expect(dom.button(WITHOUT_ADDRESS)).toBeNull();
+    release(undefined);
     await m.settle();
     expect(calls[0]).toBe("start");
     expect(o.calls).toEqual([["openTo", "messages", "511"]]);
