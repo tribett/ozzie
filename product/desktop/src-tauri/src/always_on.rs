@@ -374,15 +374,18 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 /// What a menu item does: the menu bar icon's three, the app menu's "Quit Ozzie" (Command-Q), which shares the menu
-/// bar's id, and View's Bigger Text, Smaller Text and Actual Size (text_size.rs). Every other app menu item is the
-/// system's own (Hide, Copy, Close Window...) and never comes here.
+/// bar's id, View's Bigger Text, Smaller Text and Actual Size (text_size.rs), and Edit's Find… (the page's Find in
+/// Ozzie). Every other app menu item is the system's own (Hide, Copy, Close Window...) and never comes here.
 #[derive(Debug, PartialEq, Eq)]
 enum MenuAction {
     Open,
     Pause,
     Quit,
     Text(crate::text_size::Change),
+    Find,
 }
+/// The page opens Find in Ozzie when it hears this (find-box.tsx FIND_EVENT). It carries nothing.
+pub const FIND_EVENT: &str = "ozzie:find";
 fn menu_action(id: &str) -> Option<MenuAction> {
     use crate::text_size::Change;
     match id {
@@ -392,6 +395,7 @@ fn menu_action(id: &str) -> Option<MenuAction> {
         crate::app_menu::BIGGER_ID => Some(MenuAction::Text(Change::Bigger)),
         crate::app_menu::SMALLER_ID => Some(MenuAction::Text(Change::Smaller)),
         crate::app_menu::ACTUAL_ID => Some(MenuAction::Text(Change::Actual)),
+        crate::app_menu::FIND_ID => Some(MenuAction::Find),
         _ => None,
     }
 }
@@ -404,6 +408,11 @@ fn on_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::men
         Some(MenuAction::Pause) => toggle_pause_from_menu(app),
         Some(MenuAction::Quit) => request_quit(app),
         Some(MenuAction::Text(change)) => crate::text_size::change(app, change),
+        // The window comes forward first (it may be closed, with Ozzie in the menu bar), then the page opens Find.
+        Some(MenuAction::Find) => {
+            show_main(app);
+            let _ = app.emit(FIND_EVENT, ());
+        }
         None => {}
     }
 }
@@ -1049,7 +1058,7 @@ mod tests {
             .build()
             .unwrap();
         let heard = Arc::new(Mutex::new(Vec::<(&'static str, String)>::new()));
-        for name in ["ozzie:quit-asked", "ozzie:shown", "ozzie:paused"] {
+        for name in ["ozzie:quit-asked", "ozzie:shown", "ozzie:paused", FIND_EVENT] {
             let heard = heard.clone();
             app.listen(name, move |e| {
                 heard.lock().unwrap().push((name, e.payload().to_string()))
@@ -1101,6 +1110,15 @@ mod tests {
         assert_eq!(
             said(&heard),
             vec![("ozzie:paused", r#"{"paused":false}"#.to_string())]
+        );
+        // Edit › Find… (Command-K): the window is shown, then the page is told to open Find, with nothing in the event.
+        click(crate::app_menu::FIND_ID);
+        assert_eq!(
+            said(&heard),
+            vec![
+                ("ozzie:shown", "null".to_string()),
+                (FIND_EVENT, "null".to_string())
+            ]
         );
         click("not-ours");
         assert_eq!(said(&heard), vec![]);
@@ -1286,6 +1304,11 @@ mod tests {
         assert_eq!(
             menu_action(crate::app_menu::ACTUAL_ID),
             Some(MenuAction::Text(Change::Actual))
+        );
+        // Edit's Find… opens Find in Ozzie on the page.
+        assert_eq!(
+            menu_action(crate::app_menu::FIND_ID),
+            Some(MenuAction::Find)
         );
         // The system's own items (Hide, Copy, Close Window...) and anything unknown do nothing here.
         assert_eq!(menu_action("terminate"), None);

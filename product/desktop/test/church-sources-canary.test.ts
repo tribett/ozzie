@@ -66,6 +66,8 @@ import { briefingVoice } from "../src/briefing.js";
 import { handOff, handOffTo } from "../src/draft-actions.js";
 import { SundayPage } from "../src/sunday-page.js";
 import { TodayPage } from "../src/today-page.js";
+import { findItems, listsForFind, rulesHeadings } from "../src/find-items.js";
+import { systemWords } from "../src/church-system.js";
 import { draftTurns, greeterTurns, scripted, RULES } from "./harness-fakes.js";
 
 const FILE = "QZX-FILE-6620 key holders.csv";
@@ -191,6 +193,18 @@ describe("a church's list at run time", async () => {
     expect(leaks(page)).toEqual(ALL_MARKERS);
   });
 
+  // Owner decision 2026-11-24, item 3: Find (⌘K) may search a list's name and the people's names in it, never the notes.
+  it("Find finds a list's name and the people's names in it, and nothing else of a list: no other cell, header, file, link or match, and none of the notes", () => {
+    const items = findItems({ words: systemWords("planning-center"), pages: [], settingUp: null, settings: [], procedures: [], example: false, services: [], genesis: null,
+      openCards: 0, can: { check: false, ask: false, checkSetup: false }, rules: rulesHeadings({ other: false, systemName: "Planning Center", leads: "Scheduled leads", told: false, procedures: false }),
+      lists: listsForFind(state) });
+    const lists = items.filter(i => i.group === "lists");
+    expect(lists.map(i => i.title)).toEqual([LABEL, "Quinn Qzxkeyholder", "Pat Example", LINK_LABEL, "Morgan Example", "Riley Example"]);
+    expect(leaks(items)).toEqual(["QZX-LABEL-6620", "Qzxkeyholder", "QZX-LLABEL-6620"]);
+    expect(leaks(items.map(i => i.target))).toEqual([]);
+    expect(ADDRESS_MARKER.length > 0 && JSON.stringify(items).includes(ADDRESS_MARKER)).toBe(false);
+  });
+
   it("hands the link's address to native code once and keeps it nowhere: not in the page's state, the page, storage or any later call", () => {
     const carrying = fake.calls.filter(([, args]) => JSON.stringify(args ?? {}).includes(ADDRESS_MARKER));
     expect(carrying).toEqual([["church_link_add", { label: LINK_LABEL, address: ADDRESS }]]);
@@ -294,7 +308,7 @@ describe("a church's list at run time", async () => {
   });
 });
 
-describe("App passes list state only to the Church lists page and the box beside a Sunday card", () => {
+describe("App passes list state only to the Church lists page, the box beside a Sunday card and Find", () => {
   const code = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8").split("\n").filter(l => !/^\s*(?:\/\/|\*|\/\*\*)/u.test(l));
 
   it("App: the controller, reading when Sunday or Church lists is in front, the page, and the slot", () => {
@@ -310,10 +324,31 @@ describe("App passes list state only to the Church lists page and the box beside
       // The box's Open (a section of notes, or the whole list) opens Church lists there.
       /^ {10}beside=\{card => <ChurchOwnWords state=\{sourcesState\} card=\{card\} onOpen=\{target => \{ churchSources\.focus\(target\); setPage\("lists"\); \}\} \/>\} \/>\)\}$/u,
       /^ {8}\{page === "lists" && <ChurchListsPage sources=\{churchSources\} positions=\{positions\} \/>\}$/u,
+      // Find (⌘K; owner decision 2026-11-24, item 3): each list's name and the people's names in it, and nothing else of a
+      // list (find-items.ts listsForFind); Find hands them nowhere else (below).
+      /^ {4}lists: listsForFind\(sourcesState\),$/u,
     ];
     const uses = code("../src/App.tsx").filter(l => /churchSources|sourcesState|ChurchOwnWords|ChurchListsPage|church-sources|church-lists-page|church-own-words/u.test(l));
     for (const line of uses) expect(allowed.some(a => a.test(line)), line).toBe(true);
     expect(uses).toHaveLength(allowed.length);
+  });
+
+  it("Find hands what it found of a list nowhere else: no native call, storage or network; to Ask only what was typed; a list chosen by its id", () => {
+    const raw = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+    const AWAY = /\binvoke\b|@tauri-apps\/api\/core|\bfetch\(|XMLHttpRequest|WebSocket|sendBeacon|postMessage|localStorage|sessionStorage|indexedDB|\bcaches\b|navigator\.clipboard/u;
+    for (const file of ["../src/find-items.ts", "../src/find-match.ts", "../src/find-box.tsx"]) expect(code(file).filter(l => AWAY.test(l)), file).toEqual([]);
+    // Find's one native use: hearing the menu bar's Find… (an event with nothing in it).
+    expect(raw("../src/find-box.tsx").match(/@tauri-apps\/[\w/]+/gu)).toEqual(["@tauri-apps/api/event"]);
+    expect(code("../src/find-box.tsx").filter(l => /\blisten\(/u.test(l)).map(l => l.trim())).toEqual([
+      "const stop = listen(FIND_EVENT, () => { if (live) show(); }).catch(() => () => {});",
+    ]);
+    expect(code("../src/find-items.ts").filter(l => /@tauri-apps|from "\.\/(?:ask-panel|harness-bridge|share-check|siri-shortcuts|proactive|background|draft-actions)/u.test(l))).toEqual([]);
+    // A list chosen in Find is opened by its id alone, and the Ask row hands Ask what was typed, never what was found.
+    expect(raw("../src/find-items.ts")).toContain('| { to: "list"; id: string }');
+    const app = code("../src/App.tsx");
+    expect(app.filter(l => /case "list"/u.test(l)).map(l => l.trim())).toEqual(['case "list": goTo("lists"); foundFocus({ source: t.id }); return;']);
+    expect(app.filter(l => /onAsk=/u.test(l)).map(l => /onAsk=\{[^}]*\}\}/u.exec(l)?.[0])).toEqual(["onAsk={text => { find.close(); handToAsk(text); }}"]);
+    expect(raw("../src/find-box.tsx")).toContain("else onAsk(typed);");
   });
 
   it("Sunday: the slot is a prop it renders on an open card for that card's position, and passes nowhere else", () => {

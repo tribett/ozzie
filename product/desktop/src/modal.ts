@@ -20,6 +20,16 @@ export function inertOutside(dialog: Element): () => void {
   return () => { for (const el of made) el.removeAttribute("inert"); };
 }
 
+/** The questions over the page open now: Find (find-box.tsx) never opens over or under one that is shown. */
+const questions = new Set<Element>();
+/** Whether `el` is inside something hidden (Visitor cards keeps its page, hidden, while another page is shown). */
+const hiddenWithin = (el: Element): boolean => {
+  for (let at: Element | null = el; at; at = at.parentNode as Element | null) if (at.nodeType === 1 && at.hasAttribute("hidden")) return true;
+  return false;
+};
+/** Whether a question is over the page now: one that is open on the page shown, never one left on a hidden page. */
+export const questionOpen = (): boolean => [...questions].some(q => !hiddenWithin(q));
+
 /**
  * For a modal question: on opening, the page outside `dialog` goes inert and `first` (its title, or its safe answer)
  * takes the keyboard; on closing, the page comes back and the keyboard returns where it was.
@@ -27,9 +37,11 @@ export function inertOutside(dialog: Element): () => void {
 export function useModal(dialog: RefObject<HTMLElement | null>, first: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     if (typeof document === "undefined" || !dialog.current) return;
+    const question = dialog.current;
+    questions.add(question);
     const before = document.activeElement as HTMLElement | null;
-    const restore = inertOutside(dialog.current);
+    const restore = inertOutside(question);
     first.current?.focus();
-    return () => { restore(); before?.focus?.(); };
+    return () => { questions.delete(question); restore(); before?.focus?.(); };
   }, []);
 }

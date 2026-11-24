@@ -19,6 +19,8 @@ const paths: ReadonlyMap<string, string> = new Map(Object.entries({
   // Three sliders, for Settings (a chain link read as "links", not settings: audit item 22c).
   sliders: "M4 6h9m4 0h3M4 12h3m4 0h9M4 18h11m4 0h1M15 4v4M9 10v4M17 16v4",
   menu: "M4 6h16M4 12h16M4 18h16",
+  // A magnifying glass, for Find (find-box.tsx).
+  search: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13Zm4.6-1.9L20 20",
   lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
   spinner: "M12 3a9 9 0 1 0 9 9",
   chev: "m9 6 6 6-6 6",

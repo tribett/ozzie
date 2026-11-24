@@ -187,8 +187,11 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
   onDiscardCards?: (() => void) | undefined;
   /** Tests only: whether the rooms, follow-ups and group reads are on, instead of asking native. */
   operationsReads?: boolean | null;
-  /** Opens at this section (its heading's id: AI help after the AI screens were open over Settings), then `onOpenAt`. */
-  openAt?: "ai-title" | null;
+  /**
+   * Opens at this section (its heading's id: AI help after the AI screens were open over Settings, or any section chosen
+   * in Find), then `onOpenAt`.
+   */
+  openAt?: string | null;
   onOpenAt?: () => void;
   /**
    * "Let Ozzie make changes you confirm" (change-card.tsx `ChangesSwitch`), and the line about reading as it reads while

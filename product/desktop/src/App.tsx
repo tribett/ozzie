@@ -25,7 +25,7 @@ import { AlsoOperationsContext, FindingServicesContext, serviceOfTeam as service
 import { WatchedServices } from "./watch-another.js";
 import { RulesPage } from "./rules-page.js";
 import { ActivityPage } from "./activity-page.js";
-import { ConnectionPage } from "./connection-page.js";
+import { ConnectionPage, SETTINGS_SECTIONS } from "./connection-page.js";
 import { TodayPage } from "./today-page.js";
 import { sundayCount, sundayCountText } from "./today-groups.js";
 import { Icon } from "./icons.js";
@@ -37,7 +37,7 @@ import {
 } from "./proactive.js";
 import { desktopSystemProactive, systemReady } from "./system-watch.js";
 import { ProactivePage, useProactiveView } from "./proactive-page.js";
-import { AskIcon, AskPanel, settledRoles, type AskFn, type PlanHooks } from "./ask-panel.js";
+import { AskIcon, AskPanel, HELP_CHIP, settledRoles, type AskFn, type PlanHooks } from "./ask-panel.js";
 import { rolePositions } from "../../../core/src/ask.js";
 import type { Skill } from "../../../core/src/harness/contract.js";
 import type { HarnessData } from "../../../core/src/harness/index.js";
@@ -48,7 +48,7 @@ import {
   askOzzie, buildHarnessData, createAppHarness, desktopRecorder, devLoop, enableDebugLines, grantedFor, localTriggers, procedures as loadProcedures, systemHarnessCapture,
   keptWriteup, lookAtWhoCouldHelp, otherServiceData, PROCEDURE_ORDER, stepNotes, type LoopChoice,
 } from "./harness-bridge.js";
-import { modelSteps, type TaskRow } from "./harness-words.js";
+import { modelSteps, procedureTitle, type TaskRow } from "./harness-words.js";
 import { KeptCards } from "./cards-page.js";
 import { cardNamesNoticeMemory } from "./card-names-notice.js";
 import { FirstRun, startMemory } from "./setup-flow.js";
@@ -112,6 +112,8 @@ import { ListsSystemName, ListsTeamServices } from "./church-notes.js";
 import { refusalLine, SystemNotices } from "./system-pages.js";
 import { ChangeHistory, ChangeResults, ChangesSwitch, filledByAdds, sundayChanges, useChanges } from "./change-card.js";
 import { ACTIVITY_LEDE_ON, quitUndo, SETTINGS_BANNER_ON, SIDEBAR_ON } from "./planning-center-changes.js";
+import { FindBox, FindRow, useFindOpener, useFoundFocus, type AskRow } from "./find-box.js";
+import { listsForFind, rulesHeadings, type FindInput, type FindTarget } from "./find-items.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
 /** The sidebar's pages. The services' own page is "Services", whatever day they are on (owner decision 2026-11-19). */
@@ -318,7 +320,8 @@ export function App() {
   // Handed to buttons as their click handler: never takes the click as where to start.
   const openAi = () => openAiAt({ at: "choose" });
   // Leaving them goes back to the page under them, which their last button names: Settings opens at its AI help section.
-  const [settingsAt, setSettingsAt] = useState<"ai-title" | null>(null);
+  // Find in Ozzie opens it at any section too.
+  const [settingsAt, setSettingsAt] = useState<string | null>(null);
   // First run (onboarding spec §0.3): decided from facts once launch settles ("auto"), then open at a screen or closed
   // (null). Today, the example band and Settings reopen it at the screen that fits.
   const [setup, setSetup] = useState<FirstRunScreen | null | "auto">("auto");
@@ -1824,18 +1827,88 @@ export function App() {
   // Every job this Mac keeps that hasn't ended (the runner's whole list, those waiting unshown included) with its church,
   // and the Planning Center church in Settings, for the switch questions' own words: each counts only the ones it asks about.
   const jobsAtStake = { jobs: runner.jobs(), returning: org || null };
-  return <JobsAtStakeContext.Provider value={jobsAtStake}><DayProvider value={day}><SystemWordsContext.Provider value={onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null)}><ListsSystemName.Provider value={words.name}>
+  // The church's own system's words, as every page reads them.
+  const pageWords = onSystem || onGenesis ? words : nothingChosen && !fictional ? NOT_CHOSEN : systemWords(null);
+
+  // ---- Find in Ozzie (owner decision 2026-11-24): ⌘K, Find… in the menu bar's Edit menu, and Find in the sidebar ----
+  // It finds what these pages hold now, for the church in use (or only the example's, while it is on), and goes there. The
+  // only words that leave it are those the person sends with its Ask row, through Ask's own steps (find-box.tsx).
+  const find = useFindOpener(!quitAsk);
+  useEffect(() => { if (find.open) setMenu(false); }, [find.open]);
+  // "Quit Ozzie?" takes the keyboard: Find gives way to it at once (below) and stays closed.
+  useEffect(() => { if (quitAsk) find.close(); }, [quitAsk]);
+  // While Find is open the sidebar and the page are inert, set here with Ask's own reason, so each has one owner: Ask
+  // coming over the page or going back beside it while Find is open, or Find closing, never frees what the other holds.
+  const findShown = find.open && !quitAsk;
+  // Called after every effect above, so where Find went has the keyboard last.
+  const foundFocus = useFoundFocus(mainRef);
+  const handedCount = useRef(0);
+  const [handed, setHanded] = useState<{ id: number; text: string } | null>(null);
+  const handToAsk = (text: string) => { setMenu(false); setAskOpen(true); handedCount.current += 1; setHanded({ id: handedCount.current, text }); };
+  const findInput = (): FindInput => ({
+    words, pages: navFor(day), settingUp: setupEntry ? SETTING_UP : null,
+    settings: SETTINGS_SECTIONS.filter(s => s.id !== "updates-title" || updateState.view)
+      .map(s => ({ id: s.id, label: s.id === "pco-title" && (onSystem || onGenesis || nothingChosen) ? `${pageWords.name} and which service Ozzie watches` : s.label })),
+    rules: rulesHeadings({ other: offPc, systemName: words.name, leads: day.kind === "weekday" ? `${day.day} leads` : "Scheduled leads", told: feedbackEntries.length > 0,
+      procedures: !offPc && Boolean(orderedProcedures?.length) }),
+    procedures: offPc ? [] : (orderedProcedures ?? []).map(p => ({ id: p.id, title: procedureTitle(p.title, others.length ? MANY_SERVICES : day) ?? p.title })),
+    example: fictional,
+    // The church's own lists by their names and the people's names in them (owner decision 2026-11-24, item 3); Find hands
+    // them nowhere else.
+    lists: listsForFind(sourcesState),
+    // Each watched service as its part of the Services page shows it: the church on another system's own check (or its
+    // example), else Planning Center's check on screen and the other services read with it. Nothing on Genesis.
+    services: onGenesis || !brief ? [] : onSystem
+      ? [{ name: null, brief, decisions, operations: null, names: shownNames ?? {}, capture: systemShownCapture, key: (k: string) => k }]
+      : [{ name: servicesShown ? mainName : null, brief, decisions, operations, names: capture?.names ?? {}, capture, key: (k: string) => k },
+        ...(servicesShown ? alsoParts.map((p, i) => ({ name: p.service.name, brief: p.brief, operations: alsoOps[i]?.operations ?? null, names: p.capture.names, capture: p.capture,
+          decisions: alsoDecisions[decisionsStorageKey(p.brief.mode, p.capture.organization, p.capture.plan_id)] ?? [], key: (k: string) => partKey(p.capture.plan_id, k) })) : [])],
+    genesis: onGenesis && genesisShown.capture && genesisShown.view ? { capture: genesisShown.capture, view: genesisShown.view } : null,
+    openCards,
+    can: { check: !fictional && (onGenesis ? Boolean(sys.state.genesis?.zone) : onSystem ? systemConnected && systemConfigured : connected && configured), ask: askShown, checkSetup: true },
+  });
+  // The Ask row: Ask with AI, on Genesis answered on this Mac, or the way to set up AI first; none while Ask isn't shown.
+  const askRow: AskRow = !askShown ? null : onGenesis ? "here" : modelReady ? "ai" : "needs-ai";
+  /** Goes to a page as the sidebar does, out from over the page anything that would hide it. */
+  const goTo = (to: Page) => { setMenu(false); if (showSetup) setSetup(null); setAiChoosing(false); setChecking(false); setFocusProcedure(null); if (askCovers) closeAsk(); setPage(to); };
+  const isPage = (id: string): id is Page => navFor(day).some(n => n.id === id);
+  const chooseFound = (t: FindTarget) => {
+    find.close();
+    switch (t.to) {
+      case "page": if (isPage(t.page)) { goTo(t.page); foundFocus({ title: true }); } return;
+      case "setup": setMenu(false); setAiChoosing(false); setChecking(false); if (!showSetup) openSetup(setupAt ?? undefined); return;
+      case "settings": goTo("connection"); setSettingsAt(t.section); return;
+      case "heading": if (isPage(t.page)) { goTo(t.page); foundFocus({ id: t.id }); } return;
+      case "procedure": goTo("rules"); setFocusProcedure(t.id); foundFocus({ id: `procedure-${t.id}` }); return;
+      // A list on Church lists, by its id alone.
+      case "list": goTo("lists"); foundFocus({ source: t.id }); return;
+      // The Services page moves to the card itself (sunday-page.tsx `focus`), another service's by its own key.
+      case "card": goTo("sunday"); setSundayFocus(t.key); return;
+      case "do":
+        switch (t.action) {
+          case "check": goTo("sunday"); foundFocus({ title: true }); if (onGenesis) void genesis.read("manual"); else if (onSystem) systemCheck(); else void check(); return;
+          case "ask": setMenu(false); setAskOpen(true); return;
+          case "ai": chooseAi(); return;
+          case "bigger": case "smaller": void invoke("text_size_step", { step: t.action }).catch(() => undefined); return;
+          // What Ozzie can do, answered by Ask on this Mac in fixed words (nothing is sent).
+          case "how": handToAsk(HELP_CHIP); return;
+          case "check-setup": setMenu(false); if (showSetup) setSetup(null); setAiChoosing(false); setChecking(true); return;
+        }
+    }
+  };
+  return <JobsAtStakeContext.Provider value={jobsAtStake}><DayProvider value={day}><SystemWordsContext.Provider value={pageWords}><ListsSystemName.Provider value={words.name}>
     {/* Teams named with their service while more than one is watched (team-labels.ts): Church rules and Church lists. */}
     <TeamServicesContext.Provider value={serviceOfTeam}><FindingServicesContext.Provider value={findingServiceNames}><AlsoOperationsContext.Provider value={alsoOpsWords}><ListsTeamServices.Provider value={listsTeamServices}>
     <ChooseAiContext.Provider value={chooseAi}><div className={`oz app${dark ? " dark" : ""}`}>
     {/* One polite status line for the whole app, outside the shell (accessibility audit S4): announce.tsx. */}
     <Announcer>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
-      <aside ref={side} className={`side${menu ? " is-menu" : ""}`} inert={askCovers}>
+      <aside ref={side} className={`side${menu ? " is-menu" : ""}`} inert={askCovers || findShown}>
         <div className="brand"><img className="logo" src="/ozzie.svg" alt="Ozzie by FlockConnect" /></div>
         <button type="button" ref={menuButton} className="btn btn-secondary side-menu" aria-expanded={menu} aria-controls="side-nav"
           onClick={() => setMenu(!menu)}><Icon name="menu" />Menu</button>
         <p className="small side-bar-org">{churchLine}</p>
+        <FindRow onOpen={find.show} />
         <div id="side-nav" className="side-pages">
         <nav className="nav" aria-label="Pages">
           {/* While setup is unfinished, its own entry comes first: the way back to the screen it would open (review M11). */}
@@ -1859,7 +1932,7 @@ export function App() {
         {askShown && <button type="button" ref={askEntry} className="btn btn-secondary ask-entry" aria-expanded={askOpen} aria-controls="ask-panel"
           onClick={() => { setMenu(false); setAskOpen(!askOpen); }}><AskIcon /><span className="nav-label">Ask Ozzie</span></button>}
       </aside>
-      <main className="main" ref={mainRef} inert={askCovers}>
+      <main className="main" ref={mainRef} inert={askCovers || findShown}>
         {showSetup && choosing && <ChooseSystem onChoose={to => { sys.setState({ ...sys.state, main: to }); setSetupKey(k => k + 1); setSetup("first"); }}
           onExample={() => { setupMemo.set({ exampleSeen: true }); leaveSetup("sunday"); showExample(); }} />}
         {showSetup && !choosing && onSystem && <SystemFirstRun key={setupKey} state={sys.state} onState={sys.setState} start={setup === "service" ? "service" : "connect"}
@@ -2039,11 +2112,14 @@ export function App() {
           looked usable and didn't answer the mouse). */}
       {askCovers && <div className="ask-shade" aria-hidden="true" onClick={closeAsk} />}
       <AskPanel key={onSystem ? `${systemChurchKey ?? onSystem}` : onGenesis ? `genesis:${sys.state.genesis?.church_id ?? "none"}` : askChurch.current ?? "none"} open={askOpen} onClose={closeAsk} ask={ask} brief={askBrief} services={chipServices} settled={chipSettled} chipFindings={chipFindings} modelReady={modelReady} onOpen={setPage}
+        handed={handed} onHanded={() => setHanded(null)}
         connection={onSystem ? (systemConnected ? "connected" : "not-connected") : onGenesis ? (sys.state.genesis ? "connected" : "not-connected") : stillConnected ? "connected" : checkingSaved ? "checking" : checkStuck ? "unchecked" : "not-connected"}
         page={showSetup ? "setup" : page} {...(onGenesis ? { answerHere: (typed: string) => genesisAnswer(typed, genesisShown.capture, genesisShown.view, fictional),
           // What was read decides what Ask offers on Genesis, never Planning Center's check (review of e9cbd97d, M1).
           here: { checked: Boolean(genesisShown.capture), chips: genesisQuestions(genesisShown.view) } } : {})}
         {...(onGenesis ? { jobsNotHere: { parse: plans.parse, text: genesisNoJobs() } } : systemAsk ?? { plans })} />
+      {/* Find in Ozzie over the whole window (find-box.tsx); the app's status line stays outside, so its count is heard. */}
+      {findShown && <FindBox input={findInput} ask={askRow} asked={find.asked} onChoose={chooseFound} onAsk={text => { find.close(); handToAsk(text); }} onClose={find.close} />}
     </div>
     </Announcer>
   </div></ChooseAiContext.Provider></ListsTeamServices.Provider></AlsoOperationsContext.Provider></FindingServicesContext.Provider></TeamServicesContext.Provider></ListsSystemName.Provider></SystemWordsContext.Provider></DayProvider></JobsAtStakeContext.Provider>;

@@ -386,6 +386,12 @@ export function AskPanel(props: {
   settled?: ReadonlySet<string> | undefined;
   /** With more than one service watched: every watched service's findings, the first service's first, for the suggested questions. */
   chipFindings?: SundayBrief["findings"] | undefined;
+  /**
+   * Words the person chose to ask from Find's "Ask Ozzie: …" row (find-box.tsx): asked once each, exactly as if typed in
+   * the box and sent, through the same steps as any question here. `onHanded` says they were taken.
+   */
+  handed?: { id: number; text: string } | null | undefined;
+  onHanded?: (() => void) | undefined;
 }) {
   const { brief, modelReady } = props;
   // Several services watched now: a turn asked now keeps it (Turn `several`), and its answer covers them all (AnswerServices).
@@ -516,6 +522,17 @@ export function AskPanel(props: {
     catch { update(id, { state: "problem", code: null, text: ASK_FAILURES.unfinished }); }
     finally { if (running.current === controller) running.current = null; setBusy(false); backToBox(); }
   };
+  // Words handed over from Find: asked as typed, once Ask is open. While a question runs, or while listening, they wait
+  // in the box for the person to send, as anything typed then would.
+  const handedId = useRef(0);
+  useEffect(() => {
+    const h = props.handed;
+    if (!h || !props.open || h.id === handedId.current) return;
+    handedId.current = h.id;
+    props.onHanded?.();
+    if (!canType || busy || listening !== "no") { setInput(h.text); return; }
+    void ask(h.text);
+  }, [props.handed?.id, props.open]);
 
   const chips = !canType || busy || listening !== "no" ? [] : props.here ? (props.here.checked ? [...props.here.chips] : [HELP_CHIP])
     : ready ? suggestedQuestions(brief && props.chipFindings ? { ...brief, findings: props.chipFindings } : brief, props.services, props.settled) : [HELP_CHIP];

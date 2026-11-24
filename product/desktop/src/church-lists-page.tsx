@@ -223,7 +223,8 @@ function ListCard({ source, read, positions, sources, reading }: {
   // A link's "Read again" only after a read that worked: before one, or after one that didn't, it is tried.
   const again = !link || read?.ok ? READ_AGAIN : read ? TRY_AGAIN : READ_NOW;
   return <section className="find church-list" aria-labelledby={`${id}-t`}>
-    <h2 id={`${id}-t`} className="settings-t">{source.label}</h2>
+    {/* Find (⌘K) opens a list here by its id, `data-source`, never by what the page says (find-box.tsx). */}
+    <h2 id={`${id}-t`} className="settings-t" data-source={source.id}>{source.label}</h2>
     <div className="checkline">
       {/* Where and when it was read only for a read that worked; a read that didn't says only why (review S, L3). A
           link says only its host, never the rest of its address. */}

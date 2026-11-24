@@ -109,12 +109,12 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     <p className="eyebrow">Church rules</p>
     <h1 className="h1">How your church wants its services checked</h1>
     <p className="lede">These are your church's choices. Changing one updates {pageRef()} right away using what was already read. Nothing in {w.name} changes.</p>
-    {other && <section className="find">
+    {other && <section className="find" id="system-rules">
       <h2 className="h3">What Ozzie checks with {w.name}</h2>
       <p className="find-body">{SYSTEM_RULES(w)}</p>
     </section>}
     {keptElsewhere.length > 0 && <p className="banner"><Icon name="info" small /><span>Rules you set for the teams and rooms of {churchList(keptElsewhere)} are kept for {keptElsewhere.length === 1 ? "that church" : "those churches"} and don't apply here. They come back if Ozzie uses {keptElsewhere.length === 1 ? "that church" : "one of them"} again.</span></p>}
-    {!other && <><section className="find">
+    {!other && <><section className="find" id="streak-rules">
       <h2 className="h3">Serving many weeks in a row</h2>
       <p className="find-body">Flag anyone confirmed this many weeks in a row, so a person can check in. It's about care, not performance.</p>
       <div className="row rule-row">
@@ -124,7 +124,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
         <span className="small">{rules.checkInAfterSundaysInARow === 0 ? "Off" : `Flag at ${rules.checkInAfterSundaysInARow}`}</span>
       </div>
     </section>
-    <section className="find">
+    <section className="find" id="leads-rules">
       <h2 className="h3">{d.kind === "weekday" ? `${d.day} leads` : "Scheduled leads"}</h2>
       {/* Neutral before a church has said what it uses (polish 2026-11-21); Planning Center's own words once it has. */}
       <p className="find-body">{w.say(`If a team should always have a scheduled lead on ${dayName(d)}, choose the lead's position from the team's positions, or type its name as it appears in Planning Center. A team leader in Planning Center isn't the same as someone scheduled to lead.`)}</p>
@@ -144,7 +144,7 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
     </section>
     <KidsTeamsRules rules={rules} onChange={onChange} teams={teams} words={d} services={services} />
     {church}
-    <section className="find rule-rooms">
+    <section className="find rule-rooms" id="rooms-rules">
       <h2 className="h3">Rooms</h2>
       <p className="find-body">Say which rooms can't hold two things at once, and how much setup time to allow before each booking. Rooms come from Planning Center Calendar; nothing there changes.</p>
       {rooms.length === 0 && <p className="small">Your rooms show here after a check that includes rooms. Turn that on in Settings.</p>}

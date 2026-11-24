@@ -5,6 +5,9 @@
 //! The View menu also has Bigger Text, Smaller Text and Actual Size (accessibility audit B1): their clicks go to
 //! text_size.rs through the same one handler, which zooms the page natively.
 //!
+//! The Edit menu also has Find… (Command-K; owner decision 2026-11-24): its click shows the window and tells the page to
+//! open Find in Ozzie (always_on.rs), which matches what the page already holds; nothing is read or sent for it.
+//!
 //! There is deliberately no terminate hook: logging out, restarting or shutting down this Mac, and Quit from the
 //! Dock, end Ozzie without asking, so Ozzie never holds up the Mac.
 //!
@@ -35,6 +38,12 @@ pub const ACTUAL_ID: &str = "text-actual";
 pub const ACTUAL_TEXT: &str = "Actual Size";
 pub const ACTUAL_KEYS: &str = "CmdOrCtrl+0";
 
+/// Edit › Find…: the id always_on turns into the page's `ozzie:find` event, its words and its key (Command-K, which the
+/// page also hears itself: find-box.tsx).
+pub const FIND_ID: &str = "find";
+pub const FIND_TEXT: &str = "Find…";
+pub const FIND_KEYS: &str = "CmdOrCtrl+K";
+
 /// Installs the app menu in place of the framework's default (macOS) and `on_click` as the one handler for every
 /// menu's clicks, this menu's and the menu bar icon's (Tauri gives each handler all of them, so there must be exactly
 /// one). always_on::manage calls it once; nothing else in the app sets a menu or a menu handler (review F, L-7).
@@ -47,8 +56,8 @@ pub fn install<R: Runtime, F: Fn(&AppHandle<R>, MenuEvent) + Send + Sync + 'stat
     builder.on_menu_event(on_click)
 }
 
-/// The app menu: Ozzie (About, Services, Hide, Hide Others, Show All, Quit Ozzie), File, Edit, View (Bigger Text,
-/// Smaller Text, Actual Size, Full Screen), Window, Help.
+/// The app menu: Ozzie (About, Services, Hide, Hide Others, Show All, Quit Ozzie), File, Edit (the system's items, then
+/// Find…), View (Bigger Text, Smaller Text, Actual Size, Full Screen), Window, Help.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let info = app.package_info();
     let config = app.config();
@@ -94,6 +103,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::copy(app, None)?,
             &PredefinedMenuItem::paste(app, None)?,
             &PredefinedMenuItem::select_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, FIND_ID, FIND_TEXT, true, Some(FIND_KEYS))?,
         ],
     )?;
     let view = Submenu::with_items(

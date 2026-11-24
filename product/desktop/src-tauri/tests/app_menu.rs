@@ -64,14 +64,16 @@ fn main() {
         .build(tauri::test::mock_context(tauri::test::noop_assets()))
         .expect("the app builds with Ozzie's menu");
 
-    // Ozzie's own items: "Quit Ozzie", with the id always_on sends to the question, and View's three text size items
-    // (accessibility audit B1), with the ids always_on sends to text_size.rs.
+    // Ozzie's own items: "Quit Ozzie", with the id always_on sends to the question, Edit's Find… (owner decision
+    // 2026-11-24), with the id always_on sends to the page, and View's three text size items (accessibility audit B1),
+    // with the ids always_on sends to text_size.rs.
     let mut own = Vec::new();
     own_items(app.menu().expect("the app menu").items().unwrap(), &mut own);
     assert_eq!(
         own,
         vec![
             (app_menu::QUIT_ID.to_owned(), app_menu::QUIT_TEXT.to_owned()),
+            (app_menu::FIND_ID.to_owned(), app_menu::FIND_TEXT.to_owned()),
             (
                 app_menu::BIGGER_ID.to_owned(),
                 app_menu::BIGGER_TEXT.to_owned()
@@ -112,10 +114,12 @@ fn main() {
     assert_eq!(command_q[0].action, "customAction:");
     // Bigger Text is Command-=, Smaller Text Command-minus and Actual Size Command-0, each a menu event and the only
     // item with its key (Command-+ is the page's: text-size.ts).
+    // Find… is Command-K the same way.
     for (title, key) in [
         (app_menu::BIGGER_TEXT, "="),
         (app_menu::SMALLER_TEXT, "-"),
         (app_menu::ACTUAL_TEXT, "0"),
+        (app_menu::FIND_TEXT, "k"),
     ] {
         let with_key: Vec<&Item> = items.iter().filter(|i| i.command && i.key == key).collect();
         assert_eq!(with_key.len(), 1, "one item has Command-{key}");

@@ -272,6 +272,22 @@ invented people). No church data is shown.
   below 760 px (a narrow window, or larger text) it becomes a bar with Menu.
   Ozzie honours the Mac's Increase contrast, Reduce motion and Reduce
   transparency settings.
+- **Finds things in Ozzie with ⌘K.** Press ⌘K, choose Edit › Find…, or click
+  Find near the top of the sidebar, then type: Ozzie's pages, Settings
+  sections, Church rules headings, what needs a decision or is worth a look
+  on the Services page, the people on the plans Ozzie read (with their role,
+  listed in a fixed order that isn't a ranking), your church's lists by
+  their names and the people's names in them (never your notes), how many
+  visitor cards are open for review, and a few safe actions such as checking
+  now and making text bigger. Matching happens on your Mac with no AI;
+  nothing you type is kept, and there are no recent searches. Choosing a
+  result takes you there or does that one thing. Once you've typed
+  something, the last row, "Ask Ozzie: …", hands your words to Ask Ozzie
+  only if you choose that row (Ask puts labels in place of the names on your
+  plans before anything reaches an AI); it is never chosen for you, even when
+  nothing matches. If your words name someone who is only in your Church
+  lists, Ask can't put a label in place of that name, so the row isn't
+  offered and Find says so.
 - **Keyboard and VoiceOver.** Names, status lines, where the keyboard goes
   after an action, and keeping Tab inside a question over the page were
   reviewed against WCAG 2.2 AA in the code (2026-11-22), and automated tests
