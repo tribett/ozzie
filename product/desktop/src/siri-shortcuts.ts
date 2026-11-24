@@ -6,6 +6,8 @@
 //
 // Only this church's current check is kept (share-check.ts `shareable`): otherwise the copy is removed. Whether it's on
 // is kept natively, so turning it off holds without this page, and the helper answers "turned off" without the marker.
+// A church on B1 Church or Breeze keeps its own check's overview the same way (0.10.0); a church on Genesis, which shares
+// no volunteer schedules, has native's fixed line instead, so Siri and Shortcuts say that (save_shortcuts_genesis).
 // Also here: the pages an ozzie:// link opens (native accepts only these, and only while this is on).
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
@@ -16,7 +18,7 @@ import { HarnessTools } from "../../../core/src/harness/tools.js";
 import { sharedEnvelopes } from "../../../core/mcp/snapshot.js";
 import { shortcutsEnvelopes } from "../../../core/mcp/shortcuts.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
-import { copyIdFor, shareable, type Invoke, type ShareContext } from "./share-check.js";
+import { copyIdFor, shareable, systemArgs, type Invoke, type ShareContext } from "./share-check.js";
 
 const nativeInvoke: Invoke = (command, args) => tauriInvoke(command, args);
 
@@ -42,12 +44,18 @@ function inOrder<T>(work: () => Promise<T>): Promise<T> {
  */
 export function syncShortcuts(data: HarnessData, session: HarnessSession, context: ShareContext, invoke: Invoke = nativeInvoke): Promise<boolean> {
   return inOrder(async () => {
+    // A church on Genesis: nothing from the page, only native's own fixed line.
+    if (context.genesis) {
+      try { await invoke<void>("save_shortcuts_genesis"); return true; } catch { /* off, or not written: removed below */ }
+      await invoke<void>("clear_shortcuts_check");
+      return false;
+    }
     let envelopes: string[] = [];
     try {
       if (shareable(data, context)) envelopes = shortcutsEnvelopes(await sharedEnvelopes(new HarnessTools(data, session))).map(e => JSON.stringify(e));
     } catch { envelopes = []; }
     if (envelopes.length) {
-      try { await invoke<void>("save_shortcuts_check", { envelopes, copyId: copyIdFor(session) }); return true; }
+      try { await invoke<void>("save_shortcuts_check", { envelopes, copyId: copyIdFor(session), ...systemArgs(context) }); return true; }
       catch { /* refused (a name, off) or not written: a copy that isn't this check isn't kept */ }
     }
     await invoke<void>("clear_shortcuts_check");
@@ -103,13 +111,14 @@ export function useShortcuts(data: HarnessData, session: HarnessSession, context
   latest.current = { data, context };
   const forgotten = useRef<SundayCapture | null>(null);
   const [forgets, setForgets] = useState(0);
-  const { capture, rules, decisions, granted, mode } = data;
-  const { organization, status } = context;
+  const { capture, rules, decisions, granted, mode, source } = data;
+  const { organization, status, system, genesis } = context;
   useEffect(() => {
     if (!view.on) return;
     const now = latest.current;
     void syncShortcuts(now.data, session, { ...now.context, forgotten: forgotten.current }, invoke).catch(() => undefined);
-  }, [view.on, capture, rules, decisions, granted.join(), mode, session, invoke, organization, status?.state, status?.organization, forgets]);
+  }, [view.on, capture, rules, decisions, granted.join(), mode, session, invoke, organization, status?.state, status?.organization, forgets,
+    source, system?.id, system?.role_numbers, system?.ready, genesis]);
   return {
     settings: { on: view.on, onChange: on => { void control.change(on); }, problem: view.problem },
     forget: () => { forgotten.current = latest.current.data.capture; setForgets(n => n + 1); },

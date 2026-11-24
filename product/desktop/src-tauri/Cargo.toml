@@ -1,6 +1,6 @@
 [package]
 name = "ozzie-desktop"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 publish = false
 license = "Apache-2.0"
@@ -8,6 +8,9 @@ rust-version = "1.99.1"
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }
+# Already locked (a dependency of the app too): build.rs reads tauri.conf.json and TAURI_CONFIG to check that the test
+# copy's two switches agree (src/variant_guard.rs).
+serde_json = "1.0"
 
 [dependencies]
 # tray-icon: the menu bar icon that keeps Ozzie reachable while its window is closed.
@@ -56,3 +59,8 @@ harness = false
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# The test copy of Ozzie (src/test_copy.rs; built only by tools/build-test-copy.sh, private repository, with the overlay
+# tauri.test-copy.conf.json, which build.rs requires with it): its own Keychain names, helpers and data folder; no
+# Planning Center sign-in, updater, phone notice or login item. Never on by default and never in a release
+# (tools/release-mac.sh passes no features).
+test-copy = ["ozzie-native-auth/test-copy", "ozzie-church-systems/test-copy"]

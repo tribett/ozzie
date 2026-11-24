@@ -2,6 +2,9 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "src/variant_guard.rs"]
+mod variant_guard;
+
 /// The server script ozzie-share runs (`pnpm build:share`, git-ignored), so a build can't bundle
 /// a helper without it or with an older copy: build:desktop and tauri's beforeBuildCommand build
 /// it first, and the helper is rebuilt whenever it changes.
@@ -27,6 +30,15 @@ const SIRI_ACTIONS_INPUTS: [&str; 7] = [
     SHORTCUTS_SCRIPT,
 ];
 
+/// Whether this build is the test copy of Ozzie (the `test-copy` feature; src/test_copy.rs). Its helpers are built into
+/// their own folder (TEST_COPY_HELPERS, which tauri.test-copy.conf.json bundles) with `-D OZZIE_TEST_COPY`, so they read
+/// the test copy's data folder, never the real app's; the real app's helpers in `binaries/` are never touched by it,
+/// and its Siri actions are not built at all.
+fn test_copy() -> bool {
+    std::env::var_os("CARGO_FEATURE_TEST_COPY").is_some()
+}
+const TEST_COPY_HELPERS: &str = "binaries/test-copy";
+
 fn modified(path: &str) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -49,7 +61,19 @@ fn helpers() {
         other => panic!("no Mac helpers for {other:?}"),
     };
     let out = std::env::var("OUT_DIR").expect("OUT_DIR");
-    std::fs::create_dir_all("binaries").expect("binaries folder");
+    let test_copy = test_copy();
+    let folder = if test_copy {
+        TEST_COPY_HELPERS
+    } else {
+        "binaries"
+    };
+    std::fs::create_dir_all(folder).expect("binaries folder");
+    // The privacy descriptions a helper carries: the test copy's own Info.plist (no ozzie:// links) in the test copy.
+    let info_plist = if test_copy {
+        "Info-test-copy.plist"
+    } else {
+        "Info.plist"
+    };
     for (script, command) in [
         (SHARE_SCRIPT, "build:share"),
         (SHORTCUTS_SCRIPT, "build:shortcuts"),
@@ -77,12 +101,12 @@ fn helpers() {
         (
             "ozzie-calendar",
             &["helpers/calendar.swift"][..],
-            &[("__info_plist", "Info.plist")][..],
+            &[("__info_plist", info_plist)][..],
         ),
         (
             "ozzie-listen",
             &["helpers/listen.swift"][..],
-            &[("__info_plist", "Info.plist")][..],
+            &[("__info_plist", info_plist)][..],
         ),
         (
             "ozzie-share",
@@ -99,7 +123,7 @@ fn helpers() {
         for source in sources {
             println!("cargo:rerun-if-changed={source}");
         }
-        let built = format!("binaries/{name}-{target}");
+        let built = format!("{folder}/{name}-{target}");
         let newest_input = sources
             .iter()
             .copied()
@@ -126,6 +150,10 @@ fn helpers() {
         if sources.len() > 1 {
             swiftc.arg("-parse-as-library");
         }
+        // The test copy's helpers read the test copy's data folder (helpers/*.swift `#if OZZIE_TEST_COPY`).
+        if test_copy {
+            swiftc.args(["-D", "OZZIE_TEST_COPY"]);
+        }
         swiftc.args(sources);
         for (section, file) in sections {
             swiftc.args([
@@ -146,6 +174,12 @@ fn helpers() {
         assert!(Path::new(&built).is_file());
     }
     println!("cargo:rerun-if-changed=Info.plist");
+    println!("cargo:rerun-if-changed=Info-test-copy.plist");
+    // The test copy has no Siri actions: two apps offering the same actions would compete for Siri's phrases, and the
+    // real app's copy in `binaries/` is left exactly as it is.
+    if test_copy {
+        return;
+    }
     siri_actions(arch, &out);
 }
 
@@ -311,7 +345,23 @@ fn siri_actions(arch: &str, out: &str) {
     assert!(signed.success(), "signing Ozzie's Siri actions failed");
 }
 
+/// The test copy's two switches together or not at all (src/variant_guard.rs): the `test-copy` feature exactly when the
+/// Tauri config this build is given (tauri.conf.json, with TAURI_CONFIG merged over it as tauri's own build reads it)
+/// names the test copy's identifier. Otherwise the build fails here, before any helper is built.
+fn variant_agrees() {
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    let base = std::fs::read_to_string("tauri.conf.json").expect("tauri.conf.json");
+    let overlay = std::env::var("TAURI_CONFIG").ok();
+    let identifier = variant_guard::identifier_in_use(&base, overlay.as_deref())
+        .unwrap_or_else(|why| panic!("{why}"));
+    if let Err(why) = variant_guard::switches_agree(test_copy(), &identifier) {
+        panic!("{why}");
+    }
+}
+
 fn main() {
+    variant_agrees();
     helpers();
     tauri_build::build()
 }

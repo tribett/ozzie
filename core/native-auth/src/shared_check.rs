@@ -18,12 +18,21 @@
 //!
 //! The same checks and the same file handling keep a second copy, in its own Place with its own
 //! marker: the copy Siri and Shortcuts answer from (shortcuts_check.rs, ADR 0006).
+//!
+//! A church on B1 Church or Breeze is shared the same way (0.10.0), from the same tools over that
+//! system's own check, with two more keys after `format`: `system` ("b1" or "breeze") and
+//! `role_numbers` ("all", "some" or "none": whether that system gave the number of people needed
+//! for every role on the service). Every result must then name that system, or the Church rules on
+//! this Mac, as its source; a copy with no system may name neither, nor Genesis; and `role_numbers`
+//! must fit the rows (`numbers_fit`). A Planning Center
+//! copy has neither key and is byte for byte as before; a reader older than 0.10.0 checks the keys
+//! exactly, so it refuses a system's copy whole and says nothing is shared.
 use crate::agent::tool_message_ok;
 use crate::background;
 use crate::ledger::{EventType, FailureCode, RunState, TaskKind, TaskRow};
 use crate::name_guard::NameGuard;
 use crate::sunday_check::{parse_rfc3339, rfc3339};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fs::OpenOptions,
@@ -60,6 +69,48 @@ pub const OTHER_AI_APPS: Place = Place {
     file: SHARED_FILE,
     on_file: ON_FILE,
 };
+/// The church system a copy's check read when it isn't Planning Center (core/mcp/snapshot.ts
+/// SHARED_SYSTEMS). Genesis shares no volunteer schedules, so it has no copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemId {
+    B1,
+    Breeze,
+}
+impl SystemId {
+    /// The source its results name (fixed/vocabulary.json `sources`).
+    pub const fn source(self) -> &'static str {
+        match self {
+            Self::B1 => "B1 Church",
+            Self::Breeze => "Breeze",
+        }
+    }
+}
+/// Whether that system gave the number of people needed for every role on the service, for some
+/// of them, or for none (Breeze's older volunteers page gives none): what Siri, Shortcuts and other
+/// AI apps are told about whether a role is full (core/mcp/snapshot.ts ROLE_NUMBERS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum RoleNumbers {
+    #[serde(rename = "all")]
+    Every,
+    #[serde(rename = "some")]
+    Partly,
+    #[serde(rename = "none")]
+    Unshared,
+}
+/// A church on B1 Church or Breeze, as the webview hands it in. Absent for Planning Center.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SharedSystem {
+    pub id: SystemId,
+    pub role_numbers: RoleNumbers,
+}
+/// Every other church system a result can name (fixed/vocabulary.json `sources`): never in a copy
+/// with no system, so a system's check can't be written as Planning Center's.
+const OTHER_SOURCES: [&str; 3] = ["B1 Church", "Breeze", "Genesis"];
+/// The Church rules' own source: settings on this Mac, in every church's copy.
+const RULES_SOURCE: &str = "Church rules on this Mac";
+
 /// Most recent ledger tasks shared (core/mcp/snapshot.ts MAX_SHARED_TASKS).
 pub const MAX_TASKS: usize = 20;
 /// Largest file written (core/mcp/snapshot.ts MAX_SHARED_BYTES).
@@ -105,6 +156,10 @@ struct SharedTask<'a> {
 #[derive(Serialize)]
 struct SharedCheck<'a> {
     format: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<SystemId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role_numbers: Option<RoleNumbers>,
     copy_id: &'a str,
     checked_at: String,
     shared_at: String,
@@ -187,6 +242,52 @@ pub fn checked_envelopes(
         .collect()
 }
 
+/// Whether checked results fit the church system they are shared as: with `system`, every one
+/// names that system or the Church rules on this Mac as its source, and at least one names the
+/// system; with none (Planning Center), none names another church system.
+fn sources_fit(envelopes: &[Value], system: Option<SharedSystem>) -> bool {
+    let sources: Vec<Option<&str>> = envelopes
+        .iter()
+        .map(|e| e.get("source").and_then(Value::as_str))
+        .collect();
+    match system {
+        Some(s) => {
+            let own = Some(s.id.source());
+            sources.iter().all(|&x| x == own || x == Some(RULES_SOURCE)) && sources.contains(&own)
+        }
+        None => !sources
+            .iter()
+            .any(|x| x.is_some_and(|x| OTHER_SOURCES.contains(&x))),
+    }
+}
+
+/// Whether the page's `role_numbers` fits the rows checked here (privacy review L3): a role the overview
+/// or the open roles count as needing people carries the system's number ("remaining"), or "not known"
+/// where there is none. So a counted number means the system numbered a role (never "none"), and "not
+/// known" means one it didn't (never "all"). Roles with no number that need nobody aren't rows, so
+/// "some" and the rest are the page's, from the roles its check read.
+fn numbers_fit(envelopes: &[Value], numbers: RoleNumbers) -> bool {
+    let rows = envelopes.iter().flat_map(|e| {
+        let list = match e.get("tool").and_then(Value::as_str) {
+            Some("sunday.overview") => "findings",
+            Some("sunday.open_needs") => "needs",
+            _ => return Vec::new(),
+        };
+        e.pointer(&format!("/payload/{list}"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    });
+    let mut remaining = rows
+        .filter(|r| r.get("kind").and_then(Value::as_str) == Some("needs people"))
+        .map(|r| r.get("remaining").is_some_and(Value::is_number));
+    match numbers {
+        RoleNumbers::Every => remaining.all(|numbered| numbered),
+        RoleNumbers::Unshared => remaining.all(|numbered| !numbered),
+        RoleNumbers::Partly => true,
+    }
+}
+
 /// The file's bytes: the checked results, when they were checked (the earliest check time among
 /// them, never the time of saving), the copy id and the newest MAX_TASKS ledger rows (newest first).
 pub fn shared_bytes(
@@ -196,10 +297,27 @@ pub fn shared_bytes(
     copy_id: &str,
     now_ms: u64,
 ) -> Result<Vec<u8>, ShareError> {
+    shared_bytes_of(envelopes, tasks, names, copy_id, None, now_ms)
+}
+
+/// `shared_bytes` for a church on `system` (None: Planning Center, exactly as `shared_bytes`).
+pub fn shared_bytes_of(
+    envelopes: &[String],
+    tasks: &[TaskRow],
+    names: &NameGuard,
+    copy_id: &str,
+    system: Option<SharedSystem>,
+    now_ms: u64,
+) -> Result<Vec<u8>, ShareError> {
     if !copy_id_ok(copy_id) {
         return Err(ShareError::Invalid);
     }
     let envelopes = checked_envelopes(envelopes, names)?;
+    if !sources_fit(&envelopes, system)
+        || system.is_some_and(|s| !numbers_fit(&envelopes, s.role_numbers))
+    {
+        return Err(ShareError::Invalid);
+    }
     let checked_ms = envelopes
         .iter()
         .map(|e| {
@@ -212,6 +330,8 @@ pub fn shared_bytes(
         .ok_or(ShareError::Invalid)?;
     let check = SharedCheck {
         format: SHARED_FORMAT,
+        system: system.map(|s| s.id),
+        role_numbers: system.map(|s| s.role_numbers),
         copy_id,
         checked_at: rfc3339(checked_ms),
         shared_at: rfc3339(now_ms),
@@ -264,6 +384,27 @@ pub fn share(
 ) -> Result<(), ShareError> {
     share_at(OTHER_AI_APPS, dir, envelopes, tasks, names, copy_id, now_ms)
 }
+/// `share` for a church on `system` (None: Planning Center, exactly as `share`).
+pub fn share_of(
+    dir: &Path,
+    envelopes: &[String],
+    tasks: &[TaskRow],
+    names: &NameGuard,
+    copy_id: &str,
+    system: Option<SharedSystem>,
+    now_ms: u64,
+) -> Result<(), ShareError> {
+    share_system_at(
+        OTHER_AI_APPS,
+        dir,
+        envelopes,
+        tasks,
+        names,
+        copy_id,
+        system,
+        now_ms,
+    )
+}
 /// Turning sharing off (`stop_at`).
 pub fn stop(dir: &Path) -> Result<(), ShareError> {
     stop_at(OTHER_AI_APPS, dir)
@@ -307,12 +448,42 @@ pub fn share_at(
     copy_id: &str,
     now_ms: u64,
 ) -> Result<(), ShareError> {
+    share_system_at(place, dir, envelopes, tasks, names, copy_id, None, now_ms)
+}
+
+/// `share_at` for a church on `system` (`shared_bytes_of`; None: Planning Center, exactly as
+/// `share_at`).
+#[allow(clippy::too_many_arguments)]
+pub fn share_system_at(
+    place: Place,
+    dir: &Path,
+    envelopes: &[String],
+    tasks: &[TaskRow],
+    names: &NameGuard,
+    copy_id: &str,
+    system: Option<SharedSystem>,
+    now_ms: u64,
+) -> Result<(), ShareError> {
     let _guard = locked();
     if !is_on_at(place, dir) {
         return Err(ShareError::Off);
     }
-    let bytes = shared_bytes(envelopes, tasks, names, copy_id, now_ms)?;
+    let bytes = shared_bytes_of(envelopes, tasks, names, copy_id, system, now_ms)?;
     write_private(place, dir, &bytes).map_err(|_| ShareError::Unavailable)
+}
+
+/// Writes fixed bytes, chosen here in native code and holding no fact, as the copy at `place`, under
+/// the same lock and the same on-marker as every share (shortcuts_check.rs `save_genesis`).
+pub(crate) fn write_fixed_at(
+    place: Place,
+    dir: &Path,
+    bytes: &'static [u8],
+) -> Result<(), ShareError> {
+    let _guard = locked();
+    if !is_on_at(place, dir) {
+        return Err(ShareError::Off);
+    }
+    write_private(place, dir, bytes).map_err(|_| ShareError::Unavailable)
 }
 
 /// Turning a copy off: removes its marker first (so nothing more is written, and the next start

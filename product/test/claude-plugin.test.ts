@@ -107,12 +107,14 @@ describe("what the plugin says", () => {
     expect(fm.get("description")).toMatch(/^Use when someone asks about their church's coming Sunday/u);
   });
 
-  it("promises only what Ozzie does: read-only, labels instead of names, off until turned on, Planning Center only", () => {
+  it("promises only what Ozzie does: read-only, labels instead of names, off until turned on, Planning Center, B1 Church or Breeze", () => {
     expect(readme).toContain("Claude sees labels like [Person 1] instead, and it can't change or send anything through Ozzie.");
     expect(readme).toContain("Sharing is off until you turn it on, and turning it off removes the shared copy.");
-    expect(readme).toContain("Only a Planning Center check is shared. Checks of other church systems aren't.");
-    // The desktop app shares only the Planning Center check (App.tsx: sharing reads pcHarnessData). If that changes, so must the README.
-    expect(read("product/desktop/src/App.tsx")).toMatch(/const sharing = useSharing\(pcHarnessData,/u);
+    expect(readme).toContain("A check of Planning Center, B1 Church or Breeze is shared. Genesis shares no volunteer schedules, so with Genesis there is no check to share.");
+    // The desktop app shares the Planning Center check, or a B1 Church or Breeze church's own (0.10.0; App.tsx: sharing reads
+    // the system's harnessData on another system, else pcHarnessData, which Genesis leaves empty). If that changes, so must the README.
+    expect(read("product/desktop/src/App.tsx")).toMatch(/const sharing = useSharing\(onSystem \? harnessData : pcHarnessData,/u);
+    expect(skill).toContain("don't call that role full or the service covered");
     // Every read really is read-only.
     const listed = new McpServer({ read: () => null, skills: new Map() }).handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }) as { result: { tools: { annotations: Record<string, unknown> }[] } };
     expect(listed.result.tools).toHaveLength(4);

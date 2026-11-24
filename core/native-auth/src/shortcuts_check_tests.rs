@@ -217,3 +217,76 @@ fn each_start_removes_a_copy_left_while_off() {
     startup(&dir.0).unwrap();
     assert!(copy(&dir.0).exists());
 }
+
+#[test]
+fn a_church_on_another_system_keeps_its_overview_with_its_system() {
+    use crate::shared_check::{RoleNumbers, SharedSystem, SystemId};
+    let breeze = SharedSystem {
+        id: SystemId::Breeze,
+        role_numbers: RoleNumbers::Unshared,
+    };
+    // Breeze with no number for any role: no role counted as needing people (shared_check.rs `numbers_fit`).
+    let overview = r#"{"tool":"sunday.overview","source":"Breeze","check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{"fact":"f1","mode":"live","sunday":"2026-11-22","reads":5,"reads_not_completed":0,"needs_a_decision":0,"worth_a_look":1,"findings":[{"fact":"f2","kind":"pending","tone":"worth a look","role":"[Role 1]","time":"not known","person":"[Person 1]","request":"not known"}]}}"#.to_owned();
+    let dir = on("system");
+    save_of(
+        &dir.0,
+        &[overview.clone()],
+        &roster(),
+        COPY,
+        Some(breeze),
+        NOW,
+    )
+    .unwrap();
+    let value: Value =
+        serde_json::from_str(&std::fs::read_to_string(copy(&dir.0)).unwrap()).unwrap();
+    assert_eq!(value["system"], "breeze");
+    assert_eq!(value["role_numbers"], "none");
+    assert_eq!(value["tasks"], Value::Array(vec![]));
+    // Only the overview, and only as the system it names; Planning Center's as before, with no system.
+    for (envelopes, system) in [
+        (vec![overview.clone()], None),
+        (owned(&[OVERVIEW]), Some(breeze)),
+        (vec![overview.clone(), RULES.to_owned()], Some(breeze)),
+        (owned(&[RULES]), Some(breeze)),
+        (
+            vec![OVERVIEW.replacen("Planning Center Services", "Breeze", 1)],
+            Some(breeze),
+        ),
+        (
+            vec![overview.replacen("[Person 1]", "Avery Brightwater", 1)],
+            Some(breeze),
+        ),
+    ] {
+        let before = std::fs::read(copy(&dir.0)).unwrap();
+        assert_eq!(
+            save_of(&dir.0, &envelopes, &roster(), COPY, system, NOW + 1),
+            Err(ShareError::Invalid)
+        );
+        assert_eq!(std::fs::read(copy(&dir.0)).unwrap(), before);
+    }
+    save(&dir.0, &owned(&[OVERVIEW]), &roster(), COPY, NOW).unwrap();
+    let value: Value =
+        serde_json::from_str(&std::fs::read_to_string(copy(&dir.0)).unwrap()).unwrap();
+    assert!(value.get("system").is_none() && value.get("role_numbers").is_none());
+}
+
+#[test]
+fn a_church_on_genesis_keeps_only_the_fixed_line_and_only_while_on() {
+    let ts =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../mcp/shortcuts.ts"))
+            .unwrap();
+    let fixed = std::str::from_utf8(GENESIS_COPY).unwrap();
+    assert!(ts.contains(&format!("GENESIS_COPY = '{fixed}'")));
+    // It holds no fact: no copy id, no time, no result.
+    let value: Value = serde_json::from_slice(GENESIS_COPY).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 2);
+    let dir = on("genesis");
+    save(&dir.0, &owned(&[OVERVIEW]), &roster(), COPY, NOW).unwrap();
+    save_genesis(&dir.0).unwrap();
+    assert_eq!(std::fs::read(copy(&dir.0)).unwrap(), GENESIS_COPY);
+    // The copy for other AI apps is never touched.
+    assert!(!dir.0.join(SHARED_FILE).exists());
+    stop(&dir.0).unwrap();
+    assert_eq!(save_genesis(&dir.0), Err(ShareError::Off));
+    assert!(!copy(&dir.0).exists());
+}

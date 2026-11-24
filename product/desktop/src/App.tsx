@@ -88,7 +88,7 @@ import { JobsAtStakeContext } from "./jobs-at-stake.js";
 import { ResponsibilityList, useRunnerView, type PlanActions, type PlanContext } from "./responsibility-views.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import type { FeedbackSource } from "./finding-feedback.js";
-import { useSharing } from "./share-check.js";
+import { roleNumbersOf, useSharing, type ShareContext } from "./share-check.js";
 import { useOpenedPage, useShortcuts } from "./siri-shortcuts.js";
 import { updates, useUpdates } from "./updates.js";
 import { UpdateLine, UpdatesSection } from "./updates-view.js";
@@ -104,6 +104,8 @@ import {
 } from "./church-system.js";
 import { ofConnection, readSystem, useSystemChurch } from "./system-church.js";
 import { buildSystemBrief } from "../../../core/src/church-systems/brief.js";
+import { kidsChoices, kidsMarked } from "../../../core/src/church-systems/kids.js";
+import { placeholderScope } from "../../../core/src/church-systems/placeholders.js";
 import { fictionalB1, fictionalBreeze } from "../../../core/src/church-systems/fictional.js";
 import { GenesisFirstRun, GenesisPage, GenesisSettings, GenesisToday, GenesisWatch, genesisAnswer, genesisExample, genesisQuestions, useGenesisChurch } from "./genesis-church.js";
 import { choiceLine, ChooseSystem, listedToday, soonest, SystemFirstRun, systemFirstRunAt, type SystemResultView } from "./system-setup.js";
@@ -114,6 +116,7 @@ import { ChangeHistory, ChangeResults, ChangesSwitch, filledByAdds, sundayChange
 import { ACTIVITY_LEDE_ON, quitUndo, SETTINGS_BANNER_ON, SIDEBAR_ON } from "./planning-center-changes.js";
 import { FindBox, FindRow, useFindOpener, useFoundFocus, type AskRow } from "./find-box.js";
 import { listsForFind, rulesHeadings, type FindInput, type FindTarget } from "./find-items.js";
+import { buildVariant, TEST_COPY_BANNER, TEST_COPY_NOTE } from "./build-variant.js";
 
 type Page = "today" | "sunday" | "cards" | "rules" | "lists" | "automatic" | "activity" | "connection";
 /** The sidebar's pages. The services' own page is "Services", whatever day they are on (owner decision 2026-11-19). */
@@ -482,7 +485,8 @@ export function App() {
   const feedbackEntries = useMemo(() => feedbackOf(rules), [rules]);
   // Every check of it goes through its schedule, once launch has settled (one at a time, recorded in What happened).
   const systemCheckNow = useCallback(() => started.ready.then(() => systemProactive.checkNow()), [started]);
-  const sys = useSystemChurch(now, feedbackEntries, systemCheckNow);
+  // With the kids teams or roles the church marked on it (core church-systems/kids.ts; only its own are read).
+  const sys = useSystemChurch(now, { feedback: feedbackEntries, systemKids: rules.systemKids }, systemCheckNow);
   const sysNow = useRef(sys);
   sysNow.current = sys;
   // The church on another system, as its checks and saved Sundays are kept: `<system>:<church id>`.
@@ -1284,10 +1288,15 @@ export function App() {
   // system named as the source; its names stay on this Mac as Planning Center's do (harness-bridge systemHarnessCapture).
   // It offers no Planning Center check again, and nothing of Calendar, People or Groups.
   const systemShownCapture = onSystem ? (fictional ? systemExample?.capture ?? null : sys.capture) : null;
+  // The same object while the check on screen is the same (the copies for other AI apps and for Siri are kept by it).
+  const systemHarness = useMemo(() => systemShownCapture ? systemHarnessCapture(systemShownCapture, !fictional && sys.saved) : null,
+    [systemShownCapture, fictional, sys.saved]);
   const harnessData = useMemo(() => onSystem ? buildHarnessData({
-    capture: systemShownCapture ? systemHarnessCapture(systemShownCapture, !fictional && sys.saved) : null, fictional, rules, decisions, status: null, configured: false, now,
+    capture: systemHarness, fictional, rules, decisions, status: null, configured: false, now,
     brief, operations: null, fictionalImport: false, source: words.name,
-  }) : pcHarnessData, [onSystem, systemShownCapture, fictional, sys.saved, rules, decisions, now, brief, words.name, pcHarnessData]);
+    // Its own kids teams or roles, for a kids question answered on this Mac (never the example's: it marks none).
+    kids: systemShownCapture && !fictional ? kidsMarked(systemShownCapture, rules) : [],
+  }) : pcHarnessData, [onSystem, systemHarness, systemShownCapture, fictional, rules, decisions, now, brief, words.name, pcHarnessData]);
   const dataNow = useRef(harnessData);
   dataNow.current = harnessData;
   const workspace = org || "this-mac";
@@ -1297,10 +1306,18 @@ export function App() {
   [procedures, workspace, loop, harnessSession, recorder, onSystem]);
   useEffect(() => { harness?.update(harnessData); }, [harness, harnessData]);
   // "Use Ozzie's last check in other AI apps" (Settings): off unless the leader turns it on; only this church's check.
-  // Planning Center's check only: sharing a church system's check with other apps isn't built yet (pcHarnessData has none).
-  const sharing = useSharing(pcHarnessData, harnessSession, ledgerVersion, { organization: org, status });
+  // A church on B1 Church or Breeze shares its own check the same way (0.10.0), named as that system, once it is
+  // connected and, on B1 Church, its time zone is confirmed (share-check.ts SystemShare); Planning Center's as before.
+  const shareSystem = useMemo(() => onSystem ? {
+    id: onSystem, role_numbers: roleNumbersOf(systemShownCapture?.positions ?? []),
+    ready: Boolean(sys.connection) && !(onSystem === "b1" && !sys.connection?.zone) && !sys.built?.coverage.waiting_for_zone,
+  } : null, [onSystem, systemShownCapture, sys.connection, sys.built?.coverage.waiting_for_zone]);
+  const shareContext: ShareContext = shareSystem ? { organization: systemChurchKey ?? "", status: null, system: shareSystem }
+    // Genesis shares no volunteer schedules: no check is shared, and Siri and Shortcuts say why.
+    : onGenesis ? { organization: "", status: null, genesis: true } : { organization: org, status };
+  const sharing = useSharing(onSystem ? harnessData : pcHarnessData, harnessSession, ledgerVersion, shareContext);
   // "Let Siri and Shortcuts ask Ozzie" (Settings): off unless the leader turns it on; the same rule for which check.
-  const shortcuts = useShortcuts(pcHarnessData, harnessSession, { organization: org, status });
+  const shortcuts = useShortcuts(onSystem ? harnessData : pcHarnessData, harnessSession, shareContext);
   const ask: AskFn | null = useMemo(() => harness && procedures
     ? (typed, signal) => askOzzie(harness, typed, { signal, recorder, skills: procedures, sender: yourName.get(), pausedWhen: pausedWhen(modelStatusRef.current?.account),
       local: modelStatusRef.current?.route === "local" })
@@ -1904,7 +1921,9 @@ export function App() {
     <Announcer>
     <div className={`shell ${askOpen ? "shell-ask" : "shell-2"}`}>
       <aside ref={side} className={`side${menu ? " is-menu" : ""}`} inert={askCovers || findShown}>
-        <div className="brand"><img className="logo" src="/ozzie.svg" alt="Ozzie by FlockConnect" /></div>
+        <div className="brand"><img className="logo" src="/ozzie.svg" alt="Ozzie by FlockConnect" />
+          {/* The test copy of Ozzie only (build-variant.ts): on every page, so a screenshot can't pass for the real app. */}
+          {buildVariant.testCopy && <p className="test-copy-banner" role="note" title={TEST_COPY_NOTE} aria-label={TEST_COPY_NOTE}>{TEST_COPY_BANNER}</p>}</div>
         <button type="button" ref={menuButton} className="btn btn-secondary side-menu" aria-expanded={menu} aria-controls="side-nav"
           onClick={() => setMenu(!menu)}><Icon name="menu" />Menu</button>
         <p className="small side-bar-org">{churchLine}</p>
@@ -2035,7 +2054,11 @@ export function App() {
         {page === "rules" && <RulesPage rules={rules} onChange={setRules} positions={positions} keptElsewhere={Object.entries(rulesByChurch.kept).map(([organization, k]) => ({ organization, ...(k.name ? { name: k.name } : {}) }))}
           leaders={capture ? teamLeaders(capture) : {}} names={capture?.names ?? {}} rooms={capture ? captureRooms(capture) : []}
           procedures={orderedProcedures} focus={focusProcedure} church={onSystem || onGenesis ? null : <ChurchReadsRules rules={rules} onChange={setRules} capture={capture} status={status} />}
-          procedureDay={others.length && !offPc ? MANY_SERVICES : undefined} />}
+          procedureDay={others.length && !offPc ? MANY_SERVICES : undefined}
+          // A church on B1 Church or Breeze marks its own kids teams or roles, from its own last check (never the example's).
+          systemKids={onSystem && systemChurchKey ? { system: onSystem, church: systemChurchKey,
+            choices: sys.capture && placeholderScope(sys.capture) === systemChurchKey ? kidsChoices(sys.capture) : [],
+            untied: sys.capture && onSystem === "b1" ? sys.capture.positions.filter(p => p.team_id === null).length : 0 } : null} />}
         {page === "lists" && <ChurchListsPage sources={churchSources} positions={positions} />}
         {page === "automatic" && onSystem && <ProactivePage view={automatic} names={sys.capture?.names ?? {}} organization={systemChurchKey ?? ""} planId={sys.connection?.service_id ?? ""}
           church={sys.connection?.church_name ?? null} readiness={systemReadiness} busy={sys.busy} now={now}
@@ -2084,7 +2107,7 @@ export function App() {
           recordingCount={onSystem ? sys.savedChecks.length + recordings.length : recordings.length} onModel={setModelReady} onAiAnswer={how => setupMemo.set({ aiOffered: true, aiAnswer: how })} prefs={automatic.prefs}
           developer={debug ? { loop, onLoop: next => { devLoop.set(next); setLoop(next); } } : undefined}
           sharing={sharing.settings} siri={shortcuts.settings} updates={<UpdatesSection state={updateState} nowMs={Date.parse(now)} cards={openCards} />} calendars={<CalendarSettings calendars={calendars} />}
-          onAutomatic={() => setPage("automatic")} onSetup={() => openSetup()} onCheckSetup={() => setChecking(true)} onLists={() => setPage("lists")} autostart={autostart}
+          onAutomatic={() => setPage("automatic")} onSetup={() => openSetup()} onCheckSetup={() => setChecking(true)} onLists={() => setPage("lists")} autostart={buildVariant.testCopy ? undefined : autostart}
           onDeleteRecordings={() => { sharing.forget(); shortcuts.forget(); runner.forgetAllWriteups();
             // A church on another system: its own saved checks, and Planning Center's kept from before a switch.
             if (onSystem) {

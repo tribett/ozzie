@@ -19,10 +19,18 @@ const clock = (ms: number) => formatAt(ms, { hour: "numeric", minute: "2-digit" 
 const NAMES: Readonly<Record<MainSystem, string>> = { "planning-center": "Planning Center", b1: "B1 Church", breeze: "Breeze", genesis: "Genesis" };
 /**
  * What a church on another system gets and doesn't get yet, said once where it would look: the jobs it can run (0.8.0,
- * system-jobs.ts), then what still works with Planning Center only.
+ * system-jobs.ts), Spotlight and Shortcuts and the copy for other AI apps (0.10.0, share-check.ts), then what still works
+ * with Planning Center only.
  */
 export const ONLY_PLANNING_CENTER = (name: string) =>
-  `Keep services covered and the morning briefing work with ${name} too; set them up in Keeping watch. Siri and Shortcuts, the copy for other AI apps, and rooms, follow-ups and group meetings (and the jobs that watch them) work with Planning Center only for now. Ozzie can't do these with ${name} yet.`;
+  `Keep services covered and the morning briefing work with ${name} too; set them up in Keeping watch. So do Spotlight and Shortcuts and the copy for other AI apps; turn them on under Other AI apps, Spotlight and Shortcuts. Rooms, follow-ups and group meetings (and the jobs that watch them) work with Planning Center only for now. Ozzie can't do these with ${name} yet.`;
+/**
+ * The kids rule on another system (0.10.0, core church-systems/kids.ts): what is marked there, and that background checks,
+ * which it doesn't share, aren't checked there.
+ */
+export const KIDS_WITH = (system: "b1" | "breeze") => system === "b1"
+  ? "Kids teams work with B1 Church too: mark the teams that serve with kids in Church rules, and Ozzie counts who accepted on them. Ozzie can't read background checks from B1 Church, so it doesn't check them there."
+  : "Kids roles work with Breeze too: Breeze ties no team to its roles, so mark the roles that serve with kids in Church rules, and Ozzie counts who accepted on them. Ozzie doesn't read background checks from Breeze, so it doesn't check them there.";
 
 /**
  * What switching away from `from` forgets on this Mac, in one plain sentence; with `jobs` (every job this Mac keeps, owner
@@ -136,6 +144,7 @@ export function SystemSettings({ connection, onConnection, onForget, onConnect, 
       <details className="listen-more"><summary><Icon name="chev" small />Everything Ozzie can't see in {words.name}</summary>
         <ul className="small">{CONNECT[system].everything.map(line => <li key={line}>{line}</li>)}</ul></details>
       <p className="small">{ONLY_PLANNING_CENTER(words.name)}</p>
+      {(system === "b1" || system === "breeze") && <p className="small">{KIDS_WITH(system)}</p>}
     </section>
   </section>;
 }

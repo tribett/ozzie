@@ -175,6 +175,8 @@ export function briefTarget(f: Finding, occurrence: string, occurrenceLabel?: st
     // correction stops hiding one as soon as that changes. Other kinds keep their facts exactly as before.
     facts: JSON.stringify([f.remaining ?? null, f.notification ?? null, f.sundays ?? null, f.person_id ?? null, sorted(f.confirmed), sorted(f.pending_leads),
       ...(f.kind === "too-few-confirmed" || f.kind === "background-check" ? [f.needed ?? null, sorted(f.asked), sorted(f.not_sent), f.check ?? null, f.tone] : []),
+      // Who hasn't answered where the system doesn't say whether the request was sent (Breeze): only when there is someone.
+      ...(f.waiting?.length ? [sorted(f.waiting)] : []),
       // A blockout adds each role it overlaps and how Planning Center counts the person there.
       ...(f.kind === "blockout" ? [(f.serving ?? []).map(s => [s.team_id, s.name, s.status, s.interval.starts_at, s.interval.ends_at])] : [])]),
     labels: { ...(team && f.position ? { team: f.position.name } : {}), ...(occurrenceLabel ? { occurrence: occurrenceLabel } : {}) },

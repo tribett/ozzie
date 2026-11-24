@@ -69,9 +69,12 @@ invented people). No church data is shown.
   has no blockout dates and doesn't say how many people a role needs, so Ozzie
   shows who is on each role instead of calling the service covered; none of
   them shares background checks). Checks on a schedule, private notices, saved
-  checks, Ask, and the jobs Keep services covered and the morning briefing work
-  with them too, for the one service Ozzie watches there and without scheduled
-  leads, kids teams or rooms; Siri and Shortcuts, the copy for other AI apps and
+  checks, Ask, the jobs Keep services covered and the morning briefing, Spotlight
+  and Shortcuts, and the copy for other AI apps work with them too, for the one
+  service Ozzie watches there and without scheduled leads, background checks or
+  rooms. The kids rule works there too: a church marks the teams (B1 Church) or
+  roles (Breeze, which ties no team to its roles) that serve with kids, and Ozzie
+  counts who accepted on them;
   the extras below (with the jobs that watch them) work with Planning Center
   only for now. Each job is for the church it was set up for: when the Mac
   switches church, each job pauses until you say whether to keep it.
@@ -106,6 +109,9 @@ invented people). No church data is shown.
   never says "adults"), and anyone scheduled on a kids team without a current
   background check on file, or with one that expires before Sunday. A read
   that failed or was refused is listed as not checked, never as "no check".
+  On B1 Church (its teams) and Breeze (its roles, by name), the count of
+  confirmed people works the same way, counting who accepted there; neither
+  shares background checks, so Ozzie says it doesn't check them.
 - **Drafts, never sends.** A note is a draft you copy, or open unsent in your
   own email app or Messages, and send yourself. When you choose Open in Mail
   or Open in Messages on a note Ozzie prepared for one person, and Ozzie has
@@ -249,9 +255,10 @@ invented people). No church data is shown.
   Applications folder and has been opened from there. The answer is
   counts and times from a small copy of Ozzie's last check, never a name, a
   role, team or room name or a background check, and answering uses no AI and
-  reads nothing from Planning Center. On macOS 27.2 the newest Siri didn't run
-  these actions when this was checked, so Ozzie promises Spotlight and
-  Shortcuts, not Siri
+  reads nothing from Planning Center, B1 Church or Breeze. With Genesis, which
+  shares no volunteer schedules, it says so. On macOS 27.2 the newest Siri
+  didn't run these actions when this was checked, so Ozzie promises Spotlight
+  and Shortcuts, not Siri
   ([docs/adr/0007-siri-actions-app-intents-extension.md](docs/adr/0007-siri-actions-app-intents-extension.md)).
 - **Shows lists and notes your church keeps, if you add them.** A spreadsheet
   or a published sheet, matched to Sunday cards, and notes split into sections

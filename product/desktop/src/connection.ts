@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { keychainName } from "./build-variant.js";
 export type UserInfoReason = "transport-failure" | "access-denied" | "provider-failure" | "invalid-json" | "organization-id-missing" | "organization-id-invalid" | "unclassified";
 export type OrganizationDiagnostic = { version: 1 } & (
   { stage: "userinfo"; reason: UserInfoReason } |
@@ -475,7 +476,7 @@ export function disconnectNote(status: Pick<ConnectionStatus, "state" | "problem
   }
   if (plain(status.problem) && Object.hasOwn(status.problem, "store")) {
     return "Ozzie signed out of Planning Center, so this sign-in no longer works, but the Mac's credential storage didn't let Ozzie remove it " +
-      "from this Mac. You can delete it yourself in Keychain Access: search for church.ozzie.planning-center.v1.";
+      `from this Mac. You can delete it yourself in Keychain Access: search for ${keychainName("church.ozzie.planning-center.v1")}.`;
   }
   return "";
 }

@@ -11,6 +11,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { cannotSee, howToConnect } from "../../../core/src/church-systems/facts.js";
 import { isKnownZone, SYSTEM_IDS, SYSTEMS, untimed, type SystemId } from "../../../core/src/church-systems/types.js";
 import { isDateOnly } from "../../../core/src/read-result.js";
+import { buildVariant, keychainName, type BuildVariant } from "./build-variant.js";
 
 /** The church's main system: the one its services, roles and volunteers live in. */
 export type MainSystem = "planning-center" | "b1" | "breeze" | "genesis";
@@ -18,6 +19,8 @@ export type MainSystem = "planning-center" | "b1" | "breeze" | "genesis";
 export type OtherSystem = Extract<SystemId, "b1" | "breeze">;
 export const MAIN_SYSTEMS: readonly MainSystem[] = ["planning-center", "b1", "breeze", "genesis"];
 export const isOtherSystem = (s: unknown): s is OtherSystem => s === "b1" || s === "breeze";
+/** How a key is taken in: "Paste my key", Ozzie's key window, or (the test copy of Ozzie only) its saved test key. */
+export type KeyWay = "paste" | "enter" | "saved";
 
 /** A B1 Church or Breeze connection as this Mac keeps it: ids, the church's name and the plan watched. Never a key. */
 export interface SystemConnection {
@@ -218,8 +221,11 @@ export function validSavedChecks(raw: unknown): SavedCheck[] {
 }
 /** The church system reads. Every one is a GET native allows for that system; nothing here can change anything there. */
 export const churchSystems = {
-  /** "Paste my key" (`paste`: this Mac's clipboard, read once) or "Type or paste it in a window" (`enter`). */
-  connect: (system: SystemId, address: string | null, how: "paste" | "enter") =>
+  /**
+   * "Paste my key" (`paste`: this Mac's clipboard, read once) or "Type or paste it in a window" (`enter`); in the test copy
+   * of Ozzie only, its test key already in its own Keychain item (`saved`; native refuses it in the real app).
+   */
+  connect: (system: SystemId, address: string | null, how: KeyWay) =>
     call<unknown>("church_system_connect", { system, address, how }, outcome => ({ outcome, church: null })).then(validConnected),
   verify: (system: SystemId, churchId: string) =>
     call<unknown>("church_system_verify", { system, churchId }, outcome => ({ outcome, church: null })).then(validConnected),
@@ -280,7 +286,10 @@ export interface SystemWords {
    * two: watching room bookings, follow-ups and group meetings reads Planning Center's Calendar, People and Groups).
    */
   jobs: boolean;
-  /** Siri and Shortcuts, and the copy for other AI apps, read only Planning Center checks for now (Ask reads every system's). */
+  /**
+   * Siri and Shortcuts, and the copy for other AI apps, read this system's checks (Planning Center, B1 Church and Breeze,
+   * 0.10.0); Genesis shares no volunteer schedules, so it has none to share (Ask reads every system's).
+   */
   askAndShare: boolean;
   /** Saved copies of checks. */
   savedChecks: boolean;
@@ -327,7 +336,7 @@ const other = (system: SystemId): SystemWords => {
     notSent: `${name} shows the request hasn't been sent yet. Is that expected?`,
     sentUnknown: SYSTEMS[system].asked ? null : `${name} doesn't say whether the request was sent.`,
     notConnected: `${name} not connected`, connected: `${name} connected`, connectedTo: (church: string) => `${name}: ${church}`,
-    checksOnItsOwn: true, jobs: system !== "genesis", askAndShare: false, savedChecks: true, extras: false,
+    checksOnItsOwn: true, jobs: system !== "genesis", askAndShare: system !== "genesis", savedChecks: true, extras: false,
     notHere: (what: string, plural = false) => `${what} ${plural ? "work" : "works"} with Planning Center only for now. Ozzie can't do ${plural ? "these" : "this"} with ${name} yet.`,
     say: (text: string) => text.replace(/Planning Center Services/gu, name).replace(/Planning Center/gu, name),
     reads: system === "b1"
@@ -427,8 +436,12 @@ export const CONNECT: Readonly<Record<SystemId, ConnectWords>> = Object.freeze({
   },
 });
 
-/** The name of the Keychain item Ozzie keeps a system's key in (native keys.rs `service`), as Keychain Access lists it. */
-export const keychainItem = (system: SystemId): string => `church.ozzie.church-system.${system}.v1`;
+/**
+ * The name of the Keychain item Ozzie keeps a system's key in (native keys.rs `service`), as Keychain Access lists it:
+ * in the test copy of Ozzie, its own item's name (build-variant.ts), so the real app's is never the one named.
+ */
+export const keychainItem = (system: SystemId, variant: BuildVariant = buildVariant): string =>
+  keychainName(`church.ozzie.church-system.${system}.v1`, variant);
 /** Each key check's outcome as its own plain sentence (fixed local copy; native text is never shown). null: it worked. */
 export function connectProblem(system: SystemId, outcome: string, address: string | null): { text: string; alert: boolean } | null {
   const name = SYSTEMS[system].name;
@@ -466,6 +479,8 @@ export function connectProblem(system: SystemId, outcome: string, address: strin
     case "in-the-way": return alert(`${name} accepted the key, but this Mac already keeps an older ${name} key for your church that another program saved, and macOS won't let Ozzie replace it, so nothing was saved. To clear it, open Keychain Access (press Command-Space, type Keychain Access, then press Return), search for ${keychainItem(system)}, delete the item${system === "breeze" && address ? ` whose account is ["local","${address}"]` : " for this church"}, then press Paste my key again.`);
     case "busy": return alert("Ozzie is still checking the last key. Wait a few seconds, then try again.");
     case "no-key": return alert(`Ozzie has no ${name} key on this Mac any more. Connect ${name} again.`);
+    // The test copy of Ozzie only ("Use the test key on this Mac"): no test key for this church in its own Keychain item.
+    case "no-test-key": return alert(`The test copy has no ${name} test key for ${where}. Copy one into it with the developer tool (copy-to-test), then try again.`);
     default: return alert(`${name} couldn't be checked just now, so nothing was saved. Try again in a moment.`);
   }
 }

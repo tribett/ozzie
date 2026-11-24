@@ -782,7 +782,15 @@ fn at_most_eight_links_and_forgetting_touches_only_sheet_links() {
 
 #[test]
 fn the_keychain_service_and_list_are_the_sheet_links_own() {
-    assert_eq!(KEYCHAIN_SERVICE, "church.ozzie.source-links.v1");
+    // The real app's name, with the test copy's prefix in the test copy of Ozzie (variant.rs).
+    assert_eq!(
+        KEYCHAIN_SERVICE,
+        if crate::variant::IS_TEST_COPY {
+            "church.ozzie.desktop.test/church.ozzie.source-links.v1"
+        } else {
+            "church.ozzie.source-links.v1"
+        }
+    );
     assert_ne!(KEYCHAIN_SERVICE, crate::calendar_link::KEYCHAIN_SERVICE);
     assert_eq!(LIST_FILE, "source-links.json");
     assert_eq!(KEYCHAIN_WORKSPACE, "source-link");

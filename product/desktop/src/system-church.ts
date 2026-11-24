@@ -10,6 +10,7 @@ import { placeholderScope } from "../../../core/src/church-systems/placeholders.
 import { isKnownZone, parseSystemCaptureText, type SystemCapture } from "../../../core/src/church-systems/types.js";
 import { localDate } from "../../../core/src/church-time.js";
 import type { FeedbackEntry } from "../../../core/src/finding-feedback.js";
+import type { SundayRules } from "../../../core/src/sunday-capture.js";
 import {
   churchSystem, churchSystems, isOtherSystem, readProblemText, type churchSystemStore, type ChurchSystemState, type OtherSystem, type SavedCheck,
   type SystemConnection,
@@ -83,8 +84,15 @@ export interface SystemChurch {
   forgetCheck: () => void;
 }
 
-export function useSystemChurch(now: string, feedback: readonly FeedbackEntry[], checkNow: () => Promise<SystemCapture>, store: Store = churchSystem,
+/**
+ * The Church rules a system church's brief is built with: the person's finding feedback and, when any are set, the kids
+ * teams or roles (core church-systems/kids.ts; only the connected church's are read). A bare list is the feedback alone.
+ */
+export type SystemChurchRules = readonly FeedbackEntry[] | { feedback: readonly FeedbackEntry[]; systemKids?: SundayRules["systemKids"] };
+export function useSystemChurch(now: string, own: SystemChurchRules, checkNow: () => Promise<SystemCapture>, store: Store = churchSystem,
   bridge: Bridge = churchSystems): SystemChurch {
+  const feedback = Array.isArray(own) ? own as readonly FeedbackEntry[] : (own as Exclude<SystemChurchRules, readonly FeedbackEntry[]>).feedback;
+  const systemKids = Array.isArray(own) ? undefined : (own as Exclude<SystemChurchRules, readonly FeedbackEntry[]>).systemKids;
   const [state, setRaw] = useState(() => store.get());
   const latest = useRef(state);
   latest.current = state;
@@ -103,8 +111,9 @@ export function useSystemChurch(now: string, feedback: readonly FeedbackEntry[],
   const savedShown = savedOk && (preferSaved || !liveOk) ? savedOk : null;
   const liveShown = savedShown ? null : liveOk;
   const shown = liveShown ?? savedShown;
-  const result = useMemo(() => shown && connection ? buildSystemBrief(shown, { confirmedZone: connection.zone, feedback }, now, { saved: shown === savedShown }) : null,
-    [shown, savedShown, connection?.zone, feedback, now]);
+  const result = useMemo(() => shown && connection
+    ? buildSystemBrief(shown, { confirmedZone: connection.zone, feedback, ...(systemKids ? { systemKids } : {}) }, now, { saved: shown === savedShown }) : null,
+  [shown, savedShown, connection?.zone, feedback, systemKids, now]);
 
   // This church's saved checks, read again when the church changes and after each check.
   const church = connection ? `${connection.system}:${connection.church_id}` : null;

@@ -45,7 +45,7 @@ pub const LOCAL_MODEL: &str = "llama3.2";
 /// Vercel AI Gateway's host. An own-provider route pointed here gets the managed route's zero
 /// data retention requirement too.
 pub const GATEWAY_HOST: &str = "ai-gateway.vercel.sh";
-pub const KEYCHAIN_SERVICE: &str = "church.ozzie.model.v1";
+pub const KEYCHAIN_SERVICE: &str = crate::keychain_service!("church.ozzie.model.v1");
 /// Keychain account for the managed route's key.
 pub const MANAGED_ACCOUNT: &str = "vercel-ai-gateway";
 /// An own-provider key is saved under `own-provider:<host>` (with `:<port>` when the URL names

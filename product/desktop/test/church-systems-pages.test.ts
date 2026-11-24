@@ -113,8 +113,8 @@ describe("one source of each system's words", () => {
       expect([w.liveRead, w.checkNow, w.checking, w.connect]).toEqual([`Live read from ${name}`, `Check ${name} now`, `Checking ${name}…`, `Connect ${name}`]);
       expect(w.openIn).toBeNull();
       // Checks on their own and saved checks work with B1 Church and Breeze too (round 2), and so do jobs (Keep services
-      // covered and the morning briefing, 0.8.0); sharing and the extras don't yet.
-      expect([w.checksOnItsOwn, w.savedChecks, w.jobs, w.askAndShare, w.extras]).toEqual([true, true, true, false, false]);
+      // covered and the morning briefing, 0.8.0) and sharing with Siri, Shortcuts and other AI apps (0.10.0); the extras don't yet.
+      expect([w.checksOnItsOwn, w.savedChecks, w.jobs, w.askAndShare, w.extras]).toEqual([true, true, true, true, false]);
       expect(w.say("Nothing in Planning Center Services changed, and Planning Center still counts them.")).toBe(`Nothing in ${name} changed, and ${name} still counts them.`);
       expect(w.notHere("Ask Ozzie")).toBe(`Ask Ozzie works with Planning Center only for now. Ozzie can't do this with ${name} yet.`);
     }
@@ -123,8 +123,9 @@ describe("one source of each system's words", () => {
     expect(systemWords("b1").sentUnknown).toBeNull();
     expect(systemWords("breeze").noTeam).toBe("Breeze doesn't tie a team to each role, so Ozzie can't suggest who could help.");
     expect(systemWords("b1").noTeam).toBeNull();
-    // Genesis shares no volunteer schedules: no job reads it.
+    // Genesis shares no volunteer schedules: no job reads it, and it has no check to share.
     expect(systemWords("genesis").jobs).toBe(false);
+    expect(systemWords("genesis").askAndShare).toBe(false);
   });
 
   it("each host is disclosed in the design's own sentence (design §7)", () => {

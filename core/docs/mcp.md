@@ -10,6 +10,10 @@ since it opened, a check of another church, the church changed in Settings, Plan
 disconnected, saved checks deleted, or a check it refused to share), it removes the copy rather
 than leave an older one. Every result says when its facts were checked, not when the copy was saved.
 
+A church on **B1 Church** or **Breeze** is shared the same way (0.10.0), from that system's own check, once it is
+connected (and, on B1 Church, its time zone is confirmed); see "A church on another system" below. A church on
+**Genesis** has nothing to share: Genesis shares no volunteer schedules.
+
 ## What it can do
 
 Four tools, none of which takes an argument:
@@ -32,8 +36,8 @@ earlier check, or an out-of-date check, says so.
   and nothing the server holds could restore them. A label means the same thing only within one
   shared copy. Each copy carries a random copy id (never derived from the data) and every result
   names it; the same label in a copy with another id may refer to a different person, role or room.
-- **Read Planning Center.** The server has no Planning Center access, no network code and no
-  credentials. It only reads the copy Ozzie wrote at its last check.
+- **Read Planning Center, B1 Church or Breeze.** The server has no access to any church system, no network code and
+  no credentials. It only reads the copy Ozzie wrote at its last check.
 - **Change or send anything.** There is no write, send or draft tool. All four tools are marked
   read-only, idempotent and closed-world.
 - **See what was asked or answered.** `what_happened` comes from Ozzie's task record, which keeps only
@@ -75,6 +79,36 @@ Ozzie (desktop)                                   another AI app
    its month doesn't have, checked part by part so every JavaScript engine agrees), and composes the
    answer. Sharing off, no copy, and a file that isn't one Ozzie wrote all get the same reply, word for
    word, so the other app learns nothing about which, or about any other file.
+
+## A church on another system
+
+For a church on B1 Church or Breeze the desktop app runs the same shared tools over that system's check (the ones Ask
+is offered there: no check-ins, which Ozzie doesn't count there, and no rooms, follow-ups or group meetings, which only
+Planning Center shares). Every result names that system, or the Church rules on this Mac, as its source. The page tells
+native which system it is and whether that system gave the number of people needed for every role on the service,
+some of them, or none (Breeze's older volunteers page gives none). Native refuses a copy whose results don't all fit
+the system it is shared as, and a copy with no system whose results name B1 Church, Breeze or Genesis.
+
+What changed in the file (`shared-check.json`, and Siri and Shortcuts' `shortcuts-check.json`): two keys straight after
+`format`, present only for such a church, both or neither:
+
+```
+{ "format": "ozzie-shared-check-2", "system": "b1" | "breeze", "role_numbers": "all" | "some" | "none",
+  "copy_id": …, "checked_at": …, "shared_at": …, "envelopes": […], "tasks": […] }
+```
+
+A Planning Center copy has neither key and is byte for byte as before. A reader older than 0.10.0 checks the keys
+exactly, so it refuses a system's copy whole and says nothing is shared (Siri and Shortcuts: no saved check). For a
+church on Genesis the copy for Siri and Shortcuts is native's own fixed line,
+`{"format":"ozzie-shared-check-2","system":"genesis"}`, holding no fact; the copy for other AI apps is removed.
+
+What the server says from a system's copy: the system's name wherever Planning Center's copy names Planning Center as
+where the facts are (the handshake's instructions, each result's intro, the procedures' line), where the system gave no
+number of people needed, that Ozzie can't say whether a role is full (at the top of the overview and of the roles that
+still need people, so "nothing needs a decision" never stands for covered), what Ozzie can't see in that system (its
+fixed sentences), that check-ins and rooms, follow-ups and group meetings work with Planning Center only for now, and
+only the procedures that work with it. A check in the task record that names no Planning Center read is "A Sunday
+check", since the record doesn't say which system it read.
 
 ## The helper bundled with Ozzie
 

@@ -25,7 +25,7 @@ use std::sync::Arc;
 pub use url::Url;
 
 /// Keychain service for the addresses: account `["source-link", "<id>"]`, the address as the item's secret.
-pub const KEYCHAIN_SERVICE: &str = "church.ozzie.source-links.v1";
+pub const KEYCHAIN_SERVICE: &str = crate::keychain_service!("church.ozzie.source-links.v1");
 pub const KEYCHAIN_WORKSPACE: &str = "source-link";
 /// The list beside the Keychain, in the app's data folder.
 pub const LIST_FILE: &str = "source-links.json";

@@ -8,6 +8,7 @@
 // run again if it switches back.
 import { buildSystemBrief, type SystemBrief } from "../../../core/src/church-systems/brief.js";
 import { recordSystemCheck } from "../../../core/src/church-systems/changes.js";
+import { kidsMarked } from "../../../core/src/church-systems/kids.js";
 import { placeholderScope } from "../../../core/src/church-systems/placeholders.js";
 import type { SystemCapture } from "../../../core/src/church-systems/types.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
@@ -46,9 +47,12 @@ export const isSystemCheck = (c: object): c is SystemJobCheck =>
   Object.hasOwn(c, "system") && typeof (c as { system: unknown }).system === "object" && (c as { system: unknown }).system !== null;
 /** The system that check read. */
 export const systemOf = (c: SystemJobCheck): OtherSystem => c.system.system as OtherSystem;
-/** The brief the service's page shows for that check: the confirmed zone and the person's own finding feedback. */
+/**
+ * The brief the service's page shows for that check: the confirmed zone, the person's own finding feedback, and the kids
+ * teams or roles the church marked (core church-systems/kids.ts).
+ */
 export const systemJobBrief = (c: SystemJobCheck, rules: SundayRules, now: string): SystemBrief =>
-  buildSystemBrief(c.system, { confirmedZone: c.zone, feedback: feedbackOf(rules) }, now);
+  buildSystemBrief(c.system, { confirmedZone: c.zone, feedback: feedbackOf(rules), ...(rules.systemKids ? { systemKids: rules.systemKids } : {}) }, now);
 /** What the check is compared by: the same record the system's own schedule keeps (core church-systems/changes.ts). */
 export const systemJobRecord = (c: SystemJobCheck, brief: Extract<SystemBrief, { ok: true }>["brief"]): SundayCheckRecord =>
   recordSystemCheck(c.system, brief);
@@ -64,7 +68,7 @@ export function systemJobHarness(c: SystemJobCheck, rules: SundayRules, decision
   const built = systemJobBrief(c, rules, at);
   if (!built.ok) return null;
   return buildHarnessData({ capture: systemHarnessCapture(c.system, false), fictional: false, rules, decisions: [...decisions], status: null, configured: false, now: at,
-    brief: built.brief, operations: null, fictionalImport: false, source: systemWords(systemOf(c)).name });
+    brief: built.brief, operations: null, fictionalImport: false, source: systemWords(systemOf(c)).name, kids: kidsMarked(c.system, rules) });
 }
 
 /**

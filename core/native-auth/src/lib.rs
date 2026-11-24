@@ -49,3 +49,5 @@ pub mod sunday;
 pub mod sunday_check;
 pub mod sunday_picker;
 pub mod sunday_read;
+// Which copy of Ozzie this build is (the real app or the test copy) and the Keychain names that follow from it.
+pub mod variant;

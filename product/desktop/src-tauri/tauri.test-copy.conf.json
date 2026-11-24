@@ -1,0 +1,24 @@
+{
+  "productName": "Ozzie Test",
+  "identifier": "church.ozzie.desktop.test",
+  "plugins": {
+    "updater": null
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/test-copy/ozzie-calendar",
+      "binaries/test-copy/ozzie-card-reader",
+      "binaries/test-copy/ozzie-listen",
+      "binaries/test-copy/ozzie-share",
+      "binaries/test-copy/ozzie-shortcuts"
+    ],
+    "macOS": {
+      "infoPlist": "Info-test-copy.plist",
+      "files": null
+    },
+    "icon": [
+      "icons/icon-test-copy.png"
+    ]
+  }
+}

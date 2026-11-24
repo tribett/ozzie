@@ -9,7 +9,7 @@
 // resource or prompt; this file holds no file, network or process call at all (main.ts reads the one file).
 import type { Skill } from "../src/harness/contract.js";
 import { checkText, happenedText, rulesText } from "./render.js";
-import { parseSharedCheck, type SharedCheck, type SharedTool } from "./snapshot.js";
+import { parseSharedCheck, SHARED_SYSTEMS, systemOf, type SharedCheck, type SharedSystem, type SharedTool } from "./snapshot.js";
 
 export const SERVER_NAME = "ozzie-last-check";
 export const SERVER_VERSION = "0.1.0";
@@ -22,6 +22,12 @@ export const INSTRUCTIONS = "Read-only access to Ozzie's last saved Sunday readi
   + "Labels such as [Person 1] are only meaningful within one copy of the check: each result names its copy, and the same label in another copy may refer to someone else, so don't match labels across copies. "
   + "Nothing here can check Planning Center again, send anything or change anything; "
   + "a person decides what to do. Don't rank or score people, and don't describe anyone as unreliable or at risk.";
+/**
+ * The instructions for the copy there is when a client connects: a church on B1 Church or Breeze (0.10.0) names its own
+ * system; Planning Center's, and no copy at all, are INSTRUCTIONS exactly.
+ */
+export const instructionsFor = (system: SharedSystem | null): string =>
+  system ? INSTRUCTIONS.replace("check Planning Center again", `check ${SHARED_SYSTEMS[system.id]} again`) : INSTRUCTIONS;
 
 interface ToolDef { name: string; title: string; description: string; run: (read: Reading) => string }
 interface Reading { check: SharedCheck | null; skills: ReadonlyMap<string, Skill> }
@@ -97,7 +103,7 @@ export class McpServer {
         const protocolVersion = typeof asked === "string" && PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0];
         return { jsonrpc: "2.0", id, result: {
           protocolVersion, capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: SERVER_NAME, title: "Ozzie's last check", version: SERVER_VERSION }, instructions: INSTRUCTIONS,
+          serverInfo: { name: SERVER_NAME, title: "Ozzie's last check", version: SERVER_VERSION }, instructions: instructionsFor(this.#system()),
         } };
       }
       case "ping": return { jsonrpc: "2.0", id, result: {} };
@@ -106,6 +112,14 @@ export class McpServer {
       case "tools/call": return this.#call(id, m.params);
       default: return error(id, -32601, "Method not found");
     }
+  }
+
+  /** The church system of the copy there is now (read as every tool call reads it), or null: Planning Center's, or none. */
+  #system(): SharedSystem | null {
+    let text: string | null = null;
+    try { text = this.#deps.read(); } catch { text = null; }
+    const check = text === null ? null : parseSharedCheck(text);
+    return check ? systemOf(check) : null;
   }
 
   #call(id: Id, params: unknown): Response {

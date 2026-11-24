@@ -478,3 +478,299 @@ fn background_check_wording_the_grammar_could_form_is_never_written_to_the_share
     );
     assert!(checked_envelopes(&[own], &names).is_ok());
 }
+
+/// A Planning Center church's copy, byte for byte as 0.9.1 wrote it (c1e12bb6), before a church on B1 Church or Breeze
+/// could be shared: no system part, the same keys in the same order, every result as written.
+#[test]
+fn a_planning_center_copy_is_byte_for_byte_as_before() {
+    let dir = on("pin");
+    let ledger = TaskLedger::open(&dir.0).unwrap();
+    let id = "00000000-0000-4000-8000-000000000009";
+    let hash = fixed::skill(CHECK_SKILL).unwrap().hash.clone();
+    ledger.admit(id, "check", CHECK_SKILL, &hash).unwrap();
+    ledger.transition(id, "running", None).unwrap();
+    ledger
+        .event(id, "tool", "planning_center.refresh complete")
+        .unwrap();
+    let tasks: Vec<TaskRow> = ledger
+        .list(50)
+        .into_iter()
+        .map(|mut t| {
+            // Times fixed, so the bytes don't follow the clock the test runs at.
+            t.created_at = "2026-11-20T15:00:00.000Z".into();
+            t.updated_at = "2026-11-20T15:00:04.000Z".into();
+            for e in &mut t.events {
+                e.at = "2026-11-20T15:00:02.000Z".into();
+            }
+            t
+        })
+        .collect();
+    let bytes = shared_bytes(&owned(&[CHECKINS, RULES]), &tasks, &roster(), COPY, NOW).unwrap();
+    assert_eq!(String::from_utf8(bytes).unwrap(), PLANNING_CENTER_COPY);
+}
+const PLANNING_CENTER_COPY: &str = concat!(
+    r#"{"format":"ozzie-shared-check-2","copy_id":"B4K7Q2X9M3T8","checked_at":"2026-11-20T15:00:00.000Z","shared_at":"2026-11-18T11:06:40.000Z","envelopes":[{"check_time":"2026-11-20T15:00:00Z","completeness"#,
+    r#"":"complete","payload":{"check_in_after_sundays_in_a_row":3,"check_in_means":"a schedule fact for a person to look at; about care, not performance","check_ins":[{"fact":"f12","person":"[Person 2]","sundays_in_a_row":3}],"fact":"f11"},"source":"Planning Center Services","tool":"sunday.rule_checkins"},{"check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{"check_in_after_sundays_i"#,
+    r#"n_a_row":3,"fact":"f20","rooms":[{"room":"[Room 1]","rule":"not shared","setup_minutes":15}],"sunday_leads":[]},"source":"Church rules on this Mac","tool":"rules.current"}],"tasks":[{"kind":"check","skill_id":"sunday-ready","state":"running","created_at":"2026-11-20T15:00:00.000Z","updated_at":"2026-11-20T15:00:04.000Z","failure":null,"events":[{"type":"admitted","detail":"","at":"2026-11-20T15:00"#,
+    r#":02.000Z"},{"type":"running","detail":"","at":"2026-11-20T15:00:02.000Z"},{"type":"tool","detail":"planning_center.refresh complete","at":"2026-11-20T15:00:02.000Z"}]}]}"#,
+);
+
+/// The overview of a church on B1 Church, as the agent tools return it over that system's check (core/test/church-systems
+/// fixtures.ts `b1Capture`): the system as the source, labels only.
+const B1_OVERVIEW: &str = r#"{"tool":"sunday.overview","source":"B1 Church","check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{"fact":"f1","mode":"live","sunday":"2026-11-22","reads":9,"reads_not_completed":0,"needs_a_decision":1,"worth_a_look":1,"findings":[{"fact":"f2","kind":"needs people","tone":"needs a decision","role":"[Role 1]","time":{"starts_at":"2026-11-22T09:00-06:00","ends_at":"2026-11-22T10:30-06:00"},"remaining":1},{"fact":"f3","kind":"pending","tone":"worth a look","role":"[Role 1]","time":{"starts_at":"2026-11-22T09:00-06:00","ends_at":"2026-11-22T10:30-06:00"},"person":"[Person 1]","request":"request not sent yet"}]}}"#;
+/** A Breeze church's overview where Breeze gave no number for any role: no role is counted as needing people. */
+const BREEZE_OVERVIEW: &str = r#"{"tool":"sunday.overview","source":"Breeze","check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{"fact":"f1","mode":"live","sunday":"2026-11-22","reads":5,"reads_not_completed":0,"needs_a_decision":0,"worth_a_look":1,"findings":[{"fact":"f2","kind":"pending","tone":"worth a look","role":"[Role 1]","time":"not known","person":"[Person 1]","request":"not known"}]}}"#;
+const B1: SharedSystem = SharedSystem {
+    id: SystemId::B1,
+    role_numbers: RoleNumbers::Every,
+};
+const BREEZE_NONE: SharedSystem = SharedSystem {
+    id: SystemId::Breeze,
+    role_numbers: RoleNumbers::Unshared,
+};
+
+#[test]
+fn the_system_part_matches_the_server() {
+    let ts =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../mcp/snapshot.ts"))
+            .unwrap();
+    assert!(ts.contains(
+        r#"SHARED_SYSTEMS = Object.freeze({ b1: "B1 Church", breeze: "Breeze" } as const)"#
+    ));
+    assert!(ts.contains(r#"ROLE_NUMBERS = Object.freeze(["all", "some", "none"] as const)"#));
+    assert!(ts.contains(
+        r#"OTHER_SOURCES: ReadonlySet<string> = new Set(["B1 Church", "Breeze", "Genesis"])"#
+    ));
+    for (system, id) in [(SystemId::B1, "b1"), (SystemId::Breeze, "breeze")] {
+        assert_eq!(serde_json::to_value(system).unwrap(), id);
+        assert!(ts.contains(&format!("{id}: \"{}\"", system.source())));
+    }
+    for (numbers, word) in [
+        (RoleNumbers::Every, "all"),
+        (RoleNumbers::Partly, "some"),
+        (RoleNumbers::Unshared, "none"),
+    ] {
+        assert_eq!(serde_json::to_value(numbers).unwrap(), word);
+    }
+}
+
+#[test]
+fn the_system_part_is_read_from_the_page_only_in_its_closed_words() {
+    let read = |text: &str| serde_json::from_str::<SharedSystem>(text);
+    assert_eq!(read(r#"{"id":"b1","role_numbers":"all"}"#).unwrap(), B1);
+    assert_eq!(
+        read(r#"{"id":"breeze","role_numbers":"none"}"#).unwrap(),
+        BREEZE_NONE
+    );
+    for bad in [
+        r#"{"id":"genesis","role_numbers":"all"}"#,
+        r#"{"id":"planning-center","role_numbers":"all"}"#,
+        r#"{"id":"B1","role_numbers":"all"}"#,
+        r#"{"id":"b1","role_numbers":"most"}"#,
+        r#"{"id":"b1"}"#,
+        r#"{"id":"b1","role_numbers":"all","church":"Cedar Hollow Fellowship"}"#,
+        r#""b1""#,
+    ] {
+        assert!(read(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_church_on_another_system_is_shared_with_its_system_and_no_name() {
+    let dir = on("system");
+    share_of(
+        &dir.0,
+        &owned(&[B1_OVERVIEW, RULES]),
+        &[],
+        &roster(),
+        COPY,
+        Some(B1),
+        NOW,
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(dir.0.join(SHARED_FILE)).unwrap();
+    // The system part comes straight after the format, so a reader can tell the copy's church system first.
+    assert!(text.starts_with(
+        r#"{"format":"ozzie-shared-check-2","system":"b1","role_numbers":"all","copy_id":"B4K7Q2X9M3T8","checked_at":"#
+    ));
+    let value: Value = serde_json::from_str(&text).unwrap();
+    let mut keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "checked_at",
+            "copy_id",
+            "envelopes",
+            "format",
+            "role_numbers",
+            "shared_at",
+            "system",
+            "tasks"
+        ]
+    );
+    assert_eq!(value["envelopes"][0]["source"], "B1 Church");
+    // Breeze, with no number shared for any role.
+    share_of(
+        &dir.0,
+        &owned(&[BREEZE_OVERVIEW]),
+        &[],
+        &roster(),
+        COPY,
+        Some(BREEZE_NONE),
+        NOW,
+    )
+    .unwrap();
+    let value: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.0.join(SHARED_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        (&value["system"], &value["role_numbers"]),
+        (&Value::from("breeze"), &Value::from("none"))
+    );
+    // Off: nothing is written for another system either.
+    stop(&dir.0).unwrap();
+    assert_eq!(
+        share_of(
+            &dir.0,
+            &owned(&[B1_OVERVIEW]),
+            &[],
+            &roster(),
+            COPY,
+            Some(B1),
+            NOW
+        ),
+        Err(ShareError::Off)
+    );
+    assert!(!dir.0.join(SHARED_FILE).exists());
+}
+
+#[test]
+fn a_check_is_never_shared_as_another_systems_and_names_are_refused_for_every_system() {
+    let names = roster();
+    let pc_overview = B1_OVERVIEW.replacen("B1 Church", "Planning Center Services", 1);
+    let breeze = B1_OVERVIEW.replacen("B1 Church", "Breeze", 1);
+    let genesis = B1_OVERVIEW.replacen("B1 Church", "Genesis", 1);
+    let named = B1_OVERVIEW.replacen("[Person 1]", "Riley Thornbury", 1);
+    let cases: Vec<(&str, Vec<String>, Option<SharedSystem>)> = vec![
+        (
+            "B1 Church's check as Planning Center's",
+            owned(&[B1_OVERVIEW]),
+            None,
+        ),
+        (
+            "Breeze's check as Planning Center's",
+            vec![breeze.clone()],
+            None,
+        ),
+        (
+            "a Genesis source as Planning Center's",
+            vec![genesis.clone()],
+            None,
+        ),
+        ("Breeze's check as B1 Church's", vec![breeze], Some(B1)),
+        (
+            "Planning Center's check as B1 Church's",
+            vec![pc_overview],
+            Some(B1),
+        ),
+        ("a Genesis source as B1 Church's", vec![genesis], Some(B1)),
+        (
+            "only the Church rules as B1 Church's",
+            owned(&[RULES]),
+            Some(B1),
+        ),
+        (
+            "B1 Church's check beside Planning Center's",
+            owned(&[B1_OVERVIEW, CHECKINS]),
+            Some(B1),
+        ),
+        ("a name in B1 Church's check", vec![named], Some(B1)),
+    ];
+    for (label, envelopes, system) in cases {
+        let dir = on("other");
+        assert_eq!(
+            share_of(&dir.0, &envelopes, &[], &names, COPY, system, NOW),
+            Err(ShareError::Invalid),
+            "{label}"
+        );
+        assert!(!dir.0.join(SHARED_FILE).exists(), "{label}");
+    }
+    // Planning Center's own results are still shared with no system, as before.
+    let dir = on("pc");
+    share_of(
+        &dir.0,
+        &owned(&[CHECKINS, RULES]),
+        &[],
+        &names,
+        COPY,
+        None,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(dir.0.join(SHARED_FILE)).unwrap(),
+        shared_bytes(&owned(&[CHECKINS, RULES]), &[], &names, COPY, NOW).unwrap()
+    );
+}
+
+/// Native doesn't take the page's word for whether the system numbered its roles (privacy review L3): a role counted as
+/// needing people with a number means not "none", and one whose number is "not known" means not "all".
+#[test]
+fn role_numbers_must_fit_the_rows_native_checks() {
+    let names = roster();
+    let partly = |id| SharedSystem {
+        id,
+        role_numbers: RoleNumbers::Partly,
+    };
+    let unknown = B1_OVERVIEW.replacen(r#""remaining":1"#, r#""remaining":"not known""#, 1);
+    let needs = r#"{"tool":"sunday.open_needs","source":"B1 Church","check_time":"2026-11-20T15:00:00Z","completeness":"complete","payload":{"fact":"f6","needs":[{"fact":"f7","kind":"needs people","role":"[Role 1]","time":{"starts_at":"2026-11-22T09:00-06:00","ends_at":"2026-11-22T10:30-06:00"},"remaining":"not known","confirmed":[],"people_listed":{"no_overlap_found":0,"possible_conflict":0,"needs_confirmation":0,"left_out":0}}]}}"#;
+    let b1_none = SharedSystem {
+        id: SystemId::B1,
+        role_numbers: RoleNumbers::Unshared,
+    };
+    let breeze_all = SharedSystem {
+        id: SystemId::Breeze,
+        role_numbers: RoleNumbers::Every,
+    };
+    let refused: Vec<(&str, Vec<String>, SharedSystem)> = vec![
+        (
+            "a counted role with none numbered",
+            owned(&[B1_OVERVIEW]),
+            b1_none,
+        ),
+        (
+            "an uncounted role with all numbered",
+            vec![unknown.clone()],
+            B1,
+        ),
+        (
+            "an uncounted role in the open roles with all numbered",
+            vec![B1_OVERVIEW.to_owned(), needs.to_owned()],
+            B1,
+        ),
+    ];
+    for (label, envelopes, system) in refused {
+        let dir = on("numbers");
+        assert_eq!(
+            share_of(&dir.0, &envelopes, &[], &names, COPY, Some(system), NOW),
+            Err(ShareError::Invalid),
+            "{label}"
+        );
+        assert!(!dir.0.join(SHARED_FILE).exists(), "{label}");
+    }
+    // What fits: as the page works it out.
+    for (envelopes, system) in [
+        (owned(&[B1_OVERVIEW]), B1),
+        (vec![unknown], partly(SystemId::B1)),
+        (owned(&[B1_OVERVIEW]), partly(SystemId::B1)),
+        (
+            vec![B1_OVERVIEW.to_owned(), needs.to_owned()],
+            partly(SystemId::B1),
+        ),
+        (owned(&[BREEZE_OVERVIEW]), BREEZE_NONE),
+        (owned(&[BREEZE_OVERVIEW]), breeze_all),
+    ] {
+        let dir = on("numbers-ok");
+        share_of(&dir.0, &envelopes, &[], &names, COPY, Some(system), NOW).unwrap();
+    }
+}

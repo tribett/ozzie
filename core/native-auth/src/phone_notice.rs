@@ -75,7 +75,7 @@ pub const CHANNEL_LEN: usize = PREFIX.len() + GROUPS * GROUP + GROUPS - 1;
 /// Present while the leader has this on. Holds no data.
 pub const ON_FILE: &str = ".phone-notice.on";
 /// Where the channel is kept in this Mac's Keychain: one item.
-pub const KEYCHAIN_SERVICE: &str = "church.ozzie.phone-notice.v1";
+pub const KEYCHAIN_SERVICE: &str = crate::keychain_service!("church.ozzie.phone-notice.v1");
 const KEYCHAIN_WORKSPACE: &str = "phone-notice";
 const KEYCHAIN_ITEM: &str = "channel";
 /// One attempt, given up after this long.

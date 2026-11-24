@@ -32,6 +32,12 @@ const rowsOf = (f: CheckFacts, k: SetupKnown = KNOWN, date: string | null = "Sun
 const said = (r: SetupRow) => [r.verdict, r.fix ? FIX_LABEL[r.fix] : null];
 
 describe("each row's verdict and its one fix", () => {
+  it("the test copy has no Starting with this Mac row: it has no login item", () => {
+    const f = facts({});
+    expect(setupRows(f, KNOWN, { date: "Sunday, November 22", zone: ZONE }).some(r => r.id === "start")).toBe(true);
+    expect(setupRows(f, KNOWN, { date: "Sunday, November 22", zone: ZONE }, true).some(r => r.id === "start")).toBe(false);
+  });
+
   it("Planning Center", () => {
     expect(said(row(rowsOf(facts()), "planning-center"))).toEqual([`Connected to ${CHURCH} · checked 9:12 AM`, null]);
     expect(said(row(rowsOf(facts({ planning_center: "sign-in-again" })), "planning-center"))).toEqual(["Needs you to connect again", "Connect again"]);

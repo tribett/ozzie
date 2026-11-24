@@ -23,7 +23,8 @@ import type { ToolEnvelope } from "./contract.js";
 import { parseAnswer, type AnswerKind } from "./fixed.js";
 import { checkTime } from "./session.js";
 import { FACT_LISTS, localIso, NO_TEAM, OVERVIEW_FOLLOW_UP, OVERVIEW_GROUP, OVERVIEW_ROOM, OVERVIEW_UNCONFIRMED, rowAt, type HarnessData, type HarnessTools, type RowSources, type Scope, type UnverifiedPart } from "./tools.js";
-import { SYSTEMS } from "../church-systems/types.js";
+import { SYSTEMS, type SystemId } from "../church-systems/types.js";
+import { KIDS_UNIT, roleKey, type KidsUnit } from "../church-systems/kids.js";
 
 export interface ComposedAnswer {
   kind: AnswerKind;
@@ -221,7 +222,8 @@ function finding(row: Row, said: SaidDay = NO_DAY, day: Day = null, here: Here |
     }
     case "fewer confirmed than the church rules ask": {
       const c = num(row["confirmed"]) ?? 0, needed = num(row["needed"]), asked = num(row["asked_no_answer"]) ?? 0, unsent = num(row["request_not_sent"]) ?? 0;
-      return `${role}${at(row["time"], said)} has ${c ? plural(c, "confirmed person", "confirmed people") : "no confirmed people"}${needed === null ? "" : `, and your Church rules ask for at least ${needed}`}.` +
+      // No service time (B1 Church counts across the service; an untimed Breeze event): said by its day instead.
+      return `${role}${at(row["time"], said) || ` ${atService(day)}`} has ${c ? plural(c, "confirmed person", "confirmed people") : "no confirmed people"}${needed === null ? "" : `, and your Church rules ask for at least ${needed}`}.` +
         `${asked ? ` ${plural(asked, "more is", "more are")} asked with no answer yet.` : ""}${unsent ? ` ${plural(unsent, "more has", "more have")} a request not sent yet.` : ""}` +
         " Pending isn't counted, and Ozzie doesn't check ages.";
     }
@@ -427,7 +429,9 @@ function summary(tool: string, p: Row, day: Day): string | null {
       const rooms = (Array.isArray(p["rooms"]) ? p["rooms"] as Row[] : []).map(r => `${str(r["room"]) ?? "A room"} isn't shared${num(r["setup_minutes"]) ? `, with ${num(r["setup_minutes"])!} minutes of setup time` : ""}.`);
       // The lead rule as Church rules names it: "a scheduled Wednesday lead", or "a scheduled lead" (sunday-brief.ts dayLead).
       const lead = day?.kind === "weekday" ? `scheduled ${day.day} lead` : "scheduled lead";
-      return [t === "off" ? "Your Church rules don't suggest check-ins." : `Your Church rules suggest a check-in after ${typeof t === "number" ? t : "several"} weeks in a row.`,
+      // No rule given at all: a church on another system, where Ozzie doesn't count weeks in a row (tools.ts `#rules`).
+      return [t === undefined ? "Check-ins after several weeks in a row work with Planning Center only for now."
+        : t === "off" ? "Your Church rules don't suggest check-ins." : `Your Church rules suggest a check-in after ${typeof t === "number" ? t : "several"} weeks in a row.`,
         leads.length ? `They ask for a ${lead} for ${list(leads)}.` : `They don't ask for a ${lead}.`, ...rooms].join(" ");
     }
     case "planning_center.refresh": {
@@ -838,6 +842,33 @@ export const kidsWording = (typed: string) => { const text = fold(typed); return
  */
 export const asksAboutChecksOrKids = (typed: string) => namesACheck(typed) || KIDS_WORDS.test(fold(typed));
 
+/** A church on B1 Church or Breeze (HarnessData `source`): what its Church rules mark as serving with kids, a team or a role. */
+const kidsUnitOf = (data: HarnessData): KidsUnit | null => {
+  if (data.source === undefined) return null;
+  const id = (Object.keys(SYSTEMS) as SystemId[]).find(s => SYSTEMS[s].name === data.source);
+  return (id && KIDS_UNIT[id]) ?? null;
+};
+/**
+ * The kids teams the Church rules mark, by the team id their findings carry: a church system's own (HarnessData `kids`,
+ * B1 Church's teams or Breeze's roles), else Planning Center's, exactly as before.
+ */
+const markedKids = (data: HarnessData): readonly { team_id: string; name?: string; role?: string }[] =>
+  data.source !== undefined ? data.kids ?? [] : kidsTeams(data.rules);
+/**
+ * The team a role is on as the kids rules see it: a Breeze role marked by its name is that mark's, whatever team its own
+ * findings carry (none); everything else its own team. Planning Center marks no role, so its teams are as they are.
+ */
+const kidsTeamOf = (data: HarnessData) => {
+  const roles = new Map(markedKids(data).flatMap(t => t.role ? [[t.role, t.team_id] as const] : []));
+  return (team: string, name: string | undefined) => roles.size && name !== undefined ? roles.get(roleKey(name)) ?? team : team;
+};
+/** A church system's own words where Planning Center's mention background checks it can't read (kidsAnswer). */
+export const noKidsMarked = (unit: KidsUnit) =>
+  `No kids ${unit} is marked in your Church rules, so Ozzie doesn't count confirmed people for one. You can mark one in Church rules, under Kids ${unit}s.`;
+export const noChecksFrom = (system: string, unit: KidsUnit) =>
+  `Ozzie can't read background checks from ${system}, so it doesn't check them for your kids ${unit}s.`;
+const whichKids = (unit: KidsUnit) => `Ozzie couldn't tell which kids ${unit} you mean. Ask about a ${unit} by its name.`;
+
 export interface KidsQuestion {
   /** The teams asked about: kids teams in the order the Church rules mark them, or, with none marked, the teams named. */
   teams: string[];
@@ -864,7 +895,8 @@ export function kidsQuestion(typed: string, data: HarnessData): KidsQuestion | n
   const text = fold(typed);
   if (DRAFT_ASK.test(text)) return null;
   const kids = KIDS_WORDS.test(text), background = mentionsBackgroundCheck(typed), who = WHO_WORDS.test(text);
-  const marked = kidsTeams(data.rules), kidsIds = marked.map(t => t.team_id);
+  const marked = markedKids(data), kidsIds = marked.map(t => t.team_id);
+  const teamOf = kidsTeamOf(data);
   const asked = new Set(teamWords(typed));
   const names = new Map<string, string[][]>();
   const add = (team: string | undefined, name: string | undefined) => {
@@ -875,8 +907,8 @@ export function kidsQuestion(typed: string, data: HarnessData): KidsQuestion | n
   };
   for (const t of marked) if (t.name) add(t.team_id, t.name);
   const ruled = new Set(marked.filter(t => t.name).map(t => t.team_id));
-  for (const p of brief.positions) if (!ruled.has(p.team_id)) add(p.team_id, p.name);
-  for (const f of brief.findings) if (f.position && !ruled.has(f.position.team_id)) add(f.position.team_id, f.position.name);
+  for (const p of brief.positions) if (!ruled.has(teamOf(p.team_id, p.name))) add(teamOf(p.team_id, p.name), p.name);
+  for (const f of brief.findings) if (f.position && !ruled.has(teamOf(f.position.team_id, f.position.name))) add(teamOf(f.position.team_id, f.position.name), f.position.name);
   const matches = (words: string[]) => words.every(w => asked.has(w)) || words.filter(w => asked.has(w)).length >= 2;
   const named = [...names].filter(([, list]) => list.some(matches)).map(([team]) => team);
   const namedKids = kidsIds.filter(t => named.includes(t));
@@ -936,22 +968,27 @@ export async function kidsAnswer(tools: HarnessTools, q: KidsQuestion, signal: A
   const background = q.background, teams = new Set(q.teams);
   const sources: { source: string; check_time: string }[] = [];
   const rulesSource = { source: RULES_SOURCE, check_time: brief.checked_at ?? brief.completed_at };
+  // A church on B1 Church or Breeze: its own marks (a team or a role), and no background checks to read.
+  const unit = kidsUnitOf(data);
   const finish = () => {
-    if (!out.paragraphs.length) out.paragraphs.push(q.marked ? WHICH_TEAM : NO_KIDS_TEAM);
+    if (!out.paragraphs.length) out.paragraphs.push(unit ? q.marked ? whichKids(unit) : noKidsMarked(unit) : q.marked ? WHICH_TEAM : NO_KIDS_TEAM);
     out.sources = once([...sources, rulesSource]);
     return out;
   };
-  const coverage = scheduledOn(data, teams);
-  out.gaps = brief.not_checked.filter(l => l.startsWith(BACKGROUND_LINE) || (!background && /kids team/iu.test(l)));
+  if (unit && background) { out.paragraphs.push(noChecksFrom(data.source!, unit)); return finish(); }
+  const coverage = unit ? { read: !brief.not_checked.some(l => /^Kids (?:team|role) counts weren't checked/u.test(l)), scheduled: 0, checked: false, checkedAt: null }
+    : scheduledOn(data, teams);
+  out.gaps = brief.not_checked.filter(l => l.startsWith(BACKGROUND_LINE) || (!background && /kids (?:team|role)/iu.test(l)));
   if (!coverage.read && q.marked) {
     const line = background ? MEMBERS_UNREAD : KIDS_MEMBERS_UNREAD;
     if (!out.gaps.some(l => /didn't fully load/u.test(l))) out.gaps.push(line);
   }
   // With no kids team marked, a status or background question says so; who could cover a named role doesn't need it.
-  if (!q.marked) { if (background || !q.who || !q.teams.length) out.paragraphs.push(NO_KIDS_TEAM); if (background) return finish(); }
+  if (!q.marked) { if (background || !q.who || !q.teams.length) out.paragraphs.push(unit ? noKidsMarked(unit) : NO_KIDS_TEAM); if (background) return finish(); }
   else if (background && !backgroundChecksOn(rules)) { out.paragraphs.push(BACKGROUND_OFF); return finish(); }
   const decisionsBy = new Map(applyDecisions(brief, decisions).items.map(i => [i.finding.id, i]));
-  const onTeams = (f: Finding) => !!f.position && teams.has(f.position.team_id) && (!background || f.kind === "background-check");
+  const teamOf = kidsTeamOf(data);
+  const onTeams = (f: Finding) => !!f.position && teams.has(teamOf(f.position.team_id, f.position.name)) && (!background || f.kind === "background-check");
   const mine = brief.findings.filter(onTeams);
   const hidden = (brief.hidden ?? []).map(h => h.finding).filter(onTeams);
   // Services findings, as the tools describe them: rows follow the brief as models see it (forModels), in its order.
@@ -971,29 +1008,30 @@ export async function kidsAnswer(tools: HarnessTools, q: KidsQuestion, signal: A
     }
     if (NEED_KINDS.has(f.kind)) {
       const row = needRow(needs.findIndex(x => x.id === f.id));
-      const text = row && openNeeds ? sentenceFor(factOf(openNeeds, "needs", row), day) : null;
+      // A church on another system: its own name where the sentence says where the facts are (inSystem); Planning Center's as before.
+      const text = row && openNeeds ? sentenceFor(factOf(openNeeds, "needs", row), day, NO_DAY, data.source ?? null) : null;
       if (text) out.paragraphs.push(`${tone}: ${text}`);
       const role = row ? str(row["role"]) : null;
       if (q.who && f.kind === "needs-people" && role) {
         const help = await run("sunday.who_could_help", { role });
         const people = rowsOf(help, "people");
         if (help && !people.length) out.paragraphs.push(`The check found no one else on the team for ${role}.`);
-        for (const p of ordered(people.map(r => factOf(help!, "people", r)))) { const s = sentenceFor(p, day); if (s) out.paragraphs.push(s); }
+        for (const p of ordered(people.map(r => factOf(help!, "people", r)))) { const s = sentenceFor(p, day, NO_DAY, data.source ?? null); if (s) out.paragraphs.push(s); }
         if (people.some(r => r["status"] === "no overlap found")) out.paragraphs.push(NOT_FREE);
         if (people.length > 1) out.paragraphs.push(NOT_RANKED);
       }
       continue;
     }
     const row = overviewRow(shared.findIndex(x => x.id === f.id));
-    const text = row ? finding(row) : null;
+    const text = row ? inSystem(finding(row) ?? "", data.source ?? null) || null : null;
     if (text) out.paragraphs.push(`${tone}: ${text}${decided(row!, day)}`);
   }
   if (hidden.length) out.paragraphs.push(setAside(hidden.length, background ? "background check" : "finding", day));
   if (!mine.length && !hidden.length) {
-    const label = (team: string) => kidsTeams(rules).find(t => t.team_id === team)?.name ?? brief.findings.find(f => f.position?.team_id === team)?.position?.name
+    const label = (team: string) => markedKids(data).find(t => t.team_id === team)?.name ?? brief.findings.find(f => f.position?.team_id === team)?.position?.name
       ?? brief.positions.find(p => p.team_id === team)?.name;
     const one = q.teams.length === 1 ? label(q.teams[0]!) : undefined;
-    const where = one ? names.role(one) : q.marked ? "your kids teams" : null;
+    const where = one ? names.role(one) : q.marked ? `your kids ${unit ?? "team"}s` : null;
     if (background) {
       // Only when who is scheduled was read, someone is, every background check was read, and the check is complete and current.
       const current = overview?.completeness === "complete" && !brief.stale && data.mode !== "recording";
@@ -1099,7 +1137,7 @@ export async function decisionsLeftOut(tools: HarnessTools, answer: string, evid
  */
 export async function openDecisions(tools: HarnessTools, signal: AbortSignal): Promise<LocalAnswer> {
   const out = await decisionsLeftOut(tools, '{"answer":"not-covered"}', [], signal, { head: onPage(serviceDay(tools.data)), none: NOTHING_OPEN });
-  out.gaps = (tools.data.brief?.not_checked ?? []).filter(l => l.startsWith(BACKGROUND_LINE) || /kids team/iu.test(l));
+  out.gaps = (tools.data.brief?.not_checked ?? []).filter(l => l.startsWith(BACKGROUND_LINE) || /kids (?:team|role)/iu.test(l));
   return out;
 }
 
@@ -1203,6 +1241,25 @@ export async function rosterAnswer(tools: HarnessTools, q: { kind: Exclude<Roste
       ? `${sys.name} doesn't share how many people each role needs, so Ozzie can't say whether a role is full.`
       : `${sys.name} doesn't share how many people ${andLabels(none.map(r => role(r.name)))} ${none.length === 1 ? "needs" : "need"}, so Ozzie can't say whether ${none.length === 1 ? "it is" : "they are"} full.`;
   };
+  /**
+   * What the Church rules' kids rule found on these roles (core church-systems/kids.ts), as Ozzie says it from the overview
+   * a kids question reads: Breeze shares no number for a role, but the kids rule's own number is one, so a role falling
+   * short of it is said, never left under "can't say" (`only`: the roles asked about; null: every role).
+   */
+  const kidsLines = async (only: readonly string[] | null): Promise<string[]> => {
+    const keys = only ? new Set(only.map(roleKey)) : null;
+    const mine = brief.findings.filter(f => f.kind === "too-few-confirmed" && f.position && (!keys || keys.has(roleKey(f.position.name))));
+    if (!mine.length) return [];
+    const overview = await read("sunday.overview");
+    if (overview) evidence.push(overview);
+    const shared = forModels(brief).findings;
+    const decidedBy = new Map(applyDecisions(brief, tools.data.decisions).items.map(i => [i.finding.id, i]));
+    return mine.flatMap(f => {
+      const row = rowAt(overview, "findings", shared.findIndex(x => x.id === f.id));
+      const text = row ? inSystem(finding(row) ?? "", sys.name) || null : null;
+      return text && row ? [`${toneWith(f, decidedBy)}: ${text}${decided(row, serviceDay(tools.data))}`] : [];
+    });
+  };
   const paragraphs: string[] = [];
   let deadEnd = false;
   switch (q.kind) {
@@ -1227,9 +1284,11 @@ export async function rosterAnswer(tools: HarnessTools, q: { kind: Exclude<Roste
     }
     case "decision": {
       const day = serviceDay(tools.data);
+      const kids = await kidsLines(named ? roles.map(r => r.name) : null);
+      paragraphs.push(...kids);
       paragraphs.push(named
         ? `Ozzie can't say whether ${andLabels(roles.map(r => role(r.name)))} ${roles.length === 1 ? "is" : "are"} full: ${sys.name} doesn't share how many people ${roles.length === 1 ? "it needs" : "they need"}.`
-        : `Ozzie can't say whether anything needs a decision ${day.thisOne}: ${sys.name} doesn't share how many people each role needs.`);
+        : `Ozzie can't say whether anything${kids.length ? " else" : ""} needs a decision ${day.thisOne}: ${sys.name} doesn't share how many people each role needs.`);
       if (named) paragraphs.push(roles.map(r => `${role(r.name)}: ${onRole(r)}`).join("\n"));
       else {
         paragraphs.push(rosterSummary(sys.roster));

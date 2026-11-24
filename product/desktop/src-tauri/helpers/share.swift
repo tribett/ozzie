@@ -52,11 +52,16 @@ func homeFolder() -> String {
 /// White space as JavaScript's String.prototype.trim sees it (Node trims OZZIE_SHARED_CHECK with it).
 let jsWhiteSpace = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\u{0A}\u{0B}\u{0C}\u{0D}\u{FEFF}\u{2028}\u{2029}"))
 
-/// file.ts sharedCheckPath: OZZIE_SHARED_CHECK when it is set, otherwise Ozzie's app data folder on a Mac.
+/// file.ts sharedCheckPath: OZZIE_SHARED_CHECK when it is set, otherwise Ozzie's app data folder on a Mac. The test copy
+/// of Ozzie's helper (build.rs, `-D OZZIE_TEST_COPY`) reads the test copy's own folder, never the real app's.
 func sharedCheckPath(_ file: String) -> String {
     let set = ProcessInfo.processInfo.environment["OZZIE_SHARED_CHECK"]?.trimmingCharacters(in: jsWhiteSpace)
     if let set, !set.isEmpty { return set }
+    #if OZZIE_TEST_COPY
+    return (homeFolder() as NSString).appendingPathComponent("Library/Application Support/church.ozzie.desktop.test/\(file)")
+    #else
     return (homeFolder() as NSString).appendingPathComponent("Library/Application Support/church.ozzie.desktop/\(file)")
+    #endif
 }
 
 /// file.ts sharingOn: native's marker beside the copy (shared_check.rs ON_FILE) is a regular file, not a link.

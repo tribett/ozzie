@@ -9,6 +9,9 @@ body { background: #FAF6EE; }
 .oz .main { overflow-y: auto; padding-bottom: 64px; position: relative; }
 .oz .col { width: 100%; margin: 0 auto; }
 .oz .logo { width: 132px; }
+/* The test copy of Ozzie's banner (build-variant.ts): the same red as its icon's band, in light and dark. */
+.oz .test-copy-banner { margin: 8px 0 0; padding: 4px 10px; border-radius: 6px; background: #C62828; color: #FFFFFF;
+  font-weight: 700; font-size: var(--t-sm); letter-spacing: 0.08em; text-align: center; }
 .oz .side { position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .oz .banner { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-radius: 10px; background: var(--accent-tint); color: var(--accent-ink); font-size: var(--t-sm); }
 .oz .banner.dashed { background: transparent; border: 1.5px dashed var(--control); color: var(--ink-2); }
@@ -428,6 +431,8 @@ body { background: #FAF6EE; }
 .oz .draft > p.small:last-child { margin-top: 12px; }
 /* Kids teams: a team's count sits under its checkbox; the background-check rule is set apart from the teams. */
 .oz .rule-kids .kids-count { margin: 6px 0 4px 34px; }
+/* A B1 Church team's roles, under its checkbox's words like its count, not at the rules page's label column. */
+.oz .rule-kids .rule-note { margin: 0 0 0 34px; }
 .oz .rule-kids .kids-count label { min-width: 146px; }
 .oz .rule-kids .kids-background { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .oz .briefing-preview { margin-top: 10px; padding: 12px 14px; border-radius: 10px; border: 1px dashed var(--line); }

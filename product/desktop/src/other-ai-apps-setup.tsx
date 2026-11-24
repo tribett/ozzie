@@ -7,6 +7,7 @@
 // and won't see.
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, useEffect, useState } from "react";
+import { useSystemWords } from "./church-system.js";
 import { Icon } from "./icons.js";
 import { SETUP_APPS, setupApp, usablePath, type SetupApp, type SetupAppId } from "../../../core/mcp/setup.js";
 
@@ -100,6 +101,8 @@ function ForClaude({ app, path, add }: { app: SetupApp; path: string; add: () =>
 export function OtherAiAppsSetup({ on, path, find = findHelper, add = addToClaude, app = "claude" }: { on: boolean; path?: string | null; find?: () => Promise<string | null>; add?: () => Promise<unknown>; app?: SetupAppId }) {
   const [found, setFound] = useState<string | null | undefined>(path);
   const [chosen, setChosen] = useState<SetupAppId>(app);
+  // A church on another system: its own name where SETUP_NEVER says Planning Center (Planning Center's words unchanged).
+  const w = useSystemWords();
   useEffect(() => {
     if (!on || path !== undefined) return;
     let live = true;
@@ -110,7 +113,7 @@ export function OtherAiAppsSetup({ on, path, find = findHelper, add = addToClaud
   const current = setupApp(chosen);
   return <div className="stack-tight" role="group" aria-labelledby="other-ai-setup-title" style={{ marginTop: 12 }}>
     <p id="other-ai-setup-title" className="bold">Add Ozzie to an AI app on this Mac</p>
-    <p className="small">{SETUP_SEES} {SETUP_NEVER}</p>
+    <p className="small">{SETUP_SEES} {w.say(SETUP_NEVER)}</p>
     {found === null ? <p className="small">{SETUP_MISSING}</p>
       : temporaryPath(found) ? <p className="small">{SETUP_MOVE}</p>
         : !usablePath(found) ? <p className="small">{SETUP_ODD}</p>

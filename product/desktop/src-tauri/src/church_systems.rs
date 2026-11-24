@@ -278,22 +278,66 @@ pub(crate) fn connect_with(
         Ok(key) => key,
         Err(error) => return Connected::failed(key_word(error)),
     };
-    let church = match (system, address) {
-        (System::B1, Some(address)) => b1::connect(http, clock, &key, address),
-        (System::Breeze, Some(church)) => {
-            breeze::verify_key(http, clock, &key, church, Some(pacer))
-        }
-        (System::Genesis, _) => genesis::verify_key(http, clock, &key),
-        _ => return Connected::failed("address"),
-    };
-    let church = match church {
+    let church = match key_opens(system, address, &key, http, clock, pacer) {
         Ok(church) => church,
-        Err(error) => return Connected::failed(error.word()),
+        Err(word) => return Connected::failed(word),
     };
     if let Err(error) = keys::save(store, system, &church.id, &key) {
         return Connected::failed(key_word(error));
     }
     Connected::works(church)
+}
+/// The church `key` opens at `address` (B1 Church, Breeze; Genesis's key names its own), with the system's own key read.
+fn key_opens(
+    system: System,
+    address: Option<&Id>,
+    key: &Key,
+    http: &dyn Http,
+    clock: &dyn Clock,
+    pacer: &Pacer,
+) -> Result<ChurchChoice, &'static str> {
+    match (system, address) {
+        (System::B1, Some(address)) => b1::connect(http, clock, key, address),
+        (System::Breeze, Some(church)) => breeze::verify_key(http, clock, key, church, Some(pacer)),
+        (System::Genesis, _) => genesis::verify_key(http, clock, key),
+        _ => return Err("address"),
+    }
+    .map_err(|error| error.word())
+}
+
+/// The test copy of Ozzie only (docs/build/test-copy.md, private repository): "Use the test key on this Mac". The key the developer tool's
+/// `copy-to-test` put in the test copy's own Keychain item, checked at the church exactly as a pasted key is
+/// (`key_opens`), and left where it is: never saved over, because macOS may refuse Ozzie the removal of an item another
+/// program made (keys.rs `save`). Which key: the one saved for the church at `address` (a Breeze church's id is its
+/// address), or else the only one saved for `system`. It must be that church's own: a key saved under another church's
+/// id is refused (`no-test-key`), so every later read finds it under the church it opens.
+pub(crate) fn connect_saved_with(
+    system: System,
+    address: Option<&Id>,
+    http: &dyn Http,
+    clock: &dyn Clock,
+    pacer: &Pacer,
+    store: &dyn CredentialStore,
+) -> Connected {
+    let saved = match keys::saved(store) {
+        Ok(saved) => saved,
+        Err(error) => return Connected::failed(key_word(error)),
+    };
+    let church_id = match (address.filter(|a| saved.contains(a)), saved.as_slice()) {
+        (Some(address), _) => address.clone(),
+        (None, [only]) => only.clone(),
+        _ => return Connected::failed("no-test-key"),
+    };
+    let key = match saved_key(system, &church_id, store) {
+        Ok(key) => key,
+        Err("no-key") => return Connected::failed("no-test-key"),
+        Err(word) => return Connected::failed(word),
+    };
+    match key_opens(system, address, &key, http, clock, pacer) {
+        Ok(church) if church.id == church_id => Connected::works(church),
+        Ok(_) => Connected::failed("no-test-key"),
+        Err(word) => Connected::failed(word),
+    }
 }
 
 /// The key saved for `church` in `system`, or the closed word for why there isn't one Ozzie can use.
@@ -515,7 +559,7 @@ pub(crate) fn saved_with(store_of: &dyn Fn(System) -> Box<dyn CredentialStore>) 
         .collect()
 }
 
-fn keychain(system: System) -> Box<dyn CredentialStore> {
+pub(crate) fn keychain(system: System) -> Box<dyn CredentialStore> {
     Box::new(keys::keychain(system))
 }
 
@@ -557,6 +601,10 @@ pub async fn church_system_connect(
     let paste = match how.as_str() {
         "paste" => true,
         "enter" => false,
+        // The test copy of Ozzie only: the test key already in its own Keychain item (`connect_saved_with`).
+        "saved" if ozzie_native_auth::variant::IS_TEST_COPY => {
+            return connect_saved(state, system, address).await;
+        }
         _ => return Err("bad-request"),
     };
     // A wrong address is said before anything is asked or read.
@@ -631,6 +679,53 @@ pub async fn church_system_connect(
         let _ = app.run_on_main_thread(move || clipboard::clear_if_equal(&text));
     }
     Ok(connected)
+}
+
+/// The test copy's "Use the test key on this Mac" (`church_system_connect` with `how` "saved"): nothing is asked of the
+/// person and nothing touches the clipboard; the key never leaves native code.
+async fn connect_saved(
+    state: tauri::State<'_, ChurchSystems>,
+    system: System,
+    address: Option<String>,
+) -> Result<Connected, &'static str> {
+    let address = match address_for(system, address.as_deref()) {
+        Ok(address) => address,
+        Err(word) => return Ok(Connected::failed(word)),
+    };
+    let shared = state.inner().0.clone();
+    if shared.connecting.swap(true, Ordering::SeqCst) {
+        return Ok(Connected::failed("busy"));
+    }
+    let busy = Connecting(shared.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _busy = busy;
+        let http = match NativeHttp::new() {
+            Ok(http) => http,
+            Err(error) => return Connected::failed(error.word()),
+        };
+        let store = Watched {
+            store: keys::keychain(system),
+            watch: &shared.keychain,
+        };
+        let connected = connect_saved_with(
+            system,
+            address.as_ref(),
+            &http,
+            &shared.clock,
+            &shared.pacer,
+            &store,
+        );
+        if let Some(church) = connected
+            .church
+            .as_ref()
+            .filter(|_| connected.outcome == "works")
+        {
+            shared.let_go.taken_back(system, &church.id);
+        }
+        connected
+    })
+    .await
+    .map_err(|_| "bad-request")
 }
 
 /// "Check the connection": the key saved for `church_id`, checked again.

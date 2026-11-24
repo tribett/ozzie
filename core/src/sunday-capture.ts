@@ -43,6 +43,11 @@ export interface RoomRuleSetting { room_id: string; exclusive: boolean; setup_mi
 /** A team the church marks as a kids team, and how many confirmed people it needs at each service time. */
 /** `name`: the team's display name when it was marked, local only, so Church rules can list it after it leaves the Sunday checked. */
 export interface KidsTeamSetting { team_id: string; min_confirmed: number; name?: string }
+/**
+ * A kids team (B1 Church: the team, by B1's own group id) or kids role (Breeze: the role, by its name's key) a church on
+ * another system marks, with the confirmed people it needs (core/src/church-systems/kids.ts).
+ */
+export interface SystemKidsSetting { id: string; min_confirmed: number; name?: string }
 export interface SundayRules {
   /** Teams where the church expects a scheduled Sunday lead, by the lead's position name. */
   sundayLeads: { team_id: string; lead_position: string }[];
@@ -63,6 +68,11 @@ export interface SundayRules {
    * Check-Ins rooms the leader matched to a kids team, so that team's rule can be compared with the room's count.
    */
   checkIns?: { event_id?: string; rooms?: { location_id: string; team_id: string }[] };
+  /**
+   * Kids teams or roles for each church on B1 Church or Breeze, by its `<system>:<church id>` (church-systems/kids.ts).
+   * Absent: none. Never read for a Planning Center check.
+   */
+  systemKids?: Record<string, SystemKidsSetting[]>;
 }
 /** Calendar, People and Groups reads (contract "v2 operations reads"). They never feed Services coverage. */
 export const OPERATIONS_COLLECTIONS: ReadonlySet<string> = new Set([

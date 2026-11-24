@@ -48,6 +48,12 @@ export function grantedCopy(status: ConnectionStatus | null, readsOn: boolean | 
   return "What's granted shows here once the connection has been checked.";
 }
 
+/**
+ * A church on Genesis under Other AI apps, Spotlight and Shortcuts: Genesis shares no volunteer schedules, so there is no
+ * check of a service to share, and Spotlight and Shortcuts say so when asked (core/mcp/shortcuts.ts GENESIS).
+ */
+export const NO_SCHEDULES_TO_SHARE = (name: string) =>
+  `${name} shares no volunteer schedules, so Ozzie has no check of a service to share with other AI apps. With Siri and Shortcuts turned on, Spotlight and Shortcuts say that when asked.`;
 export const SHARE_BODY = "An AI app on this Mac, such as Claude, can use the same facts from Ozzie's last check that Ask Ozzie uses. People, roles and rooms are shown to it as labels like [Person 1]; their names stay here.";
 export const SHARE_HOW = [
   "While this is on, Ozzie keeps one copy of its last check on this Mac, with every name replaced by a label. Ozzie checks it again for names before saving it.",
@@ -370,7 +376,7 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
 
     {shares && <section className="settings-sec" aria-labelledby="other-ai-title">
       <h2 id="other-ai-title" className="h3" tabIndex={-1} ref={at("other-ai-title")}>Other AI apps, Spotlight and Shortcuts</h2>
-      {!w.askAndShare && <p className="find-body">{w.notHere("Sharing Ozzie's last check with other AI apps, Spotlight and Shortcuts")}</p>}
+      {!w.askAndShare && <p className="find-body">{NO_SCHEDULES_TO_SHARE(w.name)}</p>}
       {sharing && <section className="find" aria-labelledby="share-title">
         <h3 id="share-title" className="settings-t">Other AI apps</h3>
         <p className="find-body">{SHARE_BODY}</p>
@@ -383,7 +389,8 @@ export function ConnectionPage({ system, others, watched, status, kept = null, s
         <OtherAiAppsSetup on={sharing.on} />
         <details className="listen-more">
           <summary><Icon name="chev" small />See how this works</summary>
-          <ul className="small">{SHARE_HOW.map(line => <li key={line}>{line}</li>)}</ul>
+          {/* A church on another system: its own name where these say Planning Center (Planning Center's words unchanged). */}
+          <ul className="small">{SHARE_HOW.map(line => <li key={line}>{w.say(line)}</li>)}</ul>
         </details>
       </section>}
       {siri && <SiriShortcutsSection {...siri} />}

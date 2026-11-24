@@ -6,6 +6,7 @@
 // switch keeps.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { useSystemWords } from "./church-system.js";
 import { Icon } from "./icons.js";
 import { copySetup, temporaryPath } from "./other-ai-apps-setup.js";
 import type { ShortcutsSettings } from "./siri-shortcuts.js";
@@ -136,6 +137,8 @@ export function ShortcutsSetup({ on, path, actions, find = findHelper, findBundl
  * passed to the setup steps.
  */
 export function SiriShortcutsSection({ on, onChange, problem, path, actions }: ShortcutsSettings & { path?: string | null; actions?: boolean }) {
+  // A church on another system: its own name where these say Planning Center (Planning Center's words unchanged).
+  const w = useSystemWords();
   return <section className="find" aria-labelledby="siri-title">
     <h3 id="siri-title" className="settings-t">Siri and Shortcuts</h3>
       <p className="find-body">{SIRI_BODY}</p>
@@ -145,11 +148,11 @@ export function SiriShortcutsSection({ on, onChange, problem, path, actions }: S
         <p className="small">Off unless you turn it on. Turning it off removes the copy they answer from.</p>
         {problem && <p role="alert" className="problem">{problem}</p>}
       </div>
-      <p className="small" style={{ marginTop: 12 }}>{SIRI_SEES} {SIRI_NEVER}</p>
+      <p className="small" style={{ marginTop: 12 }}>{SIRI_SEES} {w.say(SIRI_NEVER)}</p>
       <ShortcutsSetup on={on} {...(path !== undefined ? { path } : {})} {...(actions !== undefined ? { actions } : {})} />
       <details className="listen-more">
         <summary><Icon name="chev" small />See how this works</summary>
-        <ul className="small">{SIRI_HOW.map(line => <li key={line}>{line}</li>)}</ul>
+        <ul className="small">{SIRI_HOW.map(line => <li key={line}>{w.say(line)}</li>)}</ul>
       </details>
   </section>;
 }

@@ -1162,3 +1162,157 @@ fn an_older_key_another_program_saved_is_named_in_the_way_on_b1_and_breeze() {
         );
     }
 }
+
+// ---- The test copy of Ozzie: "Use the test key on this Mac" (docs/build/test-copy.md, private repository) ---------
+
+/// A store that counts what is written to it or removed from it.
+#[derive(Default)]
+struct Counted {
+    inner: MemoryStore,
+    changes: Mutex<usize>,
+}
+impl CredentialStore for Counted {
+    fn put(&self, workspace: &str, organization: &str, value: &[u8]) -> Result<(), StoreError> {
+        *self.changes.lock().unwrap() += 1;
+        self.inner.put(workspace, organization, value)
+    }
+    fn get(&self, workspace: &str, organization: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        self.inner.get(workspace, organization)
+    }
+    fn delete(&self, workspace: &str, organization: &str) -> Result<(), StoreError> {
+        *self.changes.lock().unwrap() += 1;
+        self.inner.delete(workspace, organization)
+    }
+    fn accounts(&self) -> Result<Vec<(String, String)>, StoreError> {
+        self.inner.accounts()
+    }
+}
+fn connect_saved(
+    system: System,
+    address: Option<&str>,
+    http: &FakeSystem,
+    store: &dyn CredentialStore,
+) -> Connected {
+    let address = match address_for(system, address) {
+        Ok(address) => address,
+        Err(word) => return Connected::failed(word),
+    };
+    connect_saved_with(
+        system,
+        address.as_ref(),
+        http,
+        &FixedClock::new(),
+        &Pacer::new(),
+        store,
+    )
+}
+
+#[test]
+fn the_test_key_already_saved_is_checked_at_the_church_and_left_where_it_is() {
+    // B1 Church: the key is saved under B1's id for the church, found by the address the person typed.
+    let fake = b1_church();
+    let store = Counted::default();
+    store
+        .inner
+        .put("local", CHURCH, b1_key_text().as_bytes())
+        .unwrap();
+    let done = connect_saved(System::B1, Some("cedarhollow.b1.church"), &fake, &store);
+    assert_eq!(
+        done,
+        Connected {
+            outcome: "works",
+            church: Some(Church {
+                id: CHURCH.into(),
+                name: Some("Cedar Hollow Fellowship".into())
+            })
+        }
+    );
+    // The same two reads a pasted key makes, and nothing written or removed: the item stays as the tool made it.
+    assert_eq!(
+        fake.asked(),
+        vec![
+            format!("{B1}/membership/churches/lookup?subDomain=cedarhollow"),
+            format!("{B1}/membership/churches/{CHURCH}?"),
+        ]
+    );
+    assert_eq!(*store.changes.lock().unwrap(), 0);
+    assert!(!format!("{done:?}").contains(&b1_key_text()));
+    // Breeze: the church's id is its address.
+    let host = "cedarhollow.breezechms.com";
+    let breeze = FakeSystem::default().with(
+        &format!("{host}/api/account/summary"),
+        200,
+        serde_json::json!({"id": "1234", "name": "Cedar Hollow Fellowship", "subdomain": "cedarhollow"}),
+    );
+    let store = Counted::default();
+    store
+        .inner
+        .put("local", "cedarhollow", breeze_key_text().as_bytes())
+        .unwrap();
+    store
+        .inner
+        .put("local", "otherchurch", breeze_key_text().as_bytes())
+        .unwrap();
+    let done = connect_saved(System::Breeze, Some("cedarhollow"), &breeze, &store);
+    assert_eq!(done.outcome, "works");
+    assert_eq!(done.church.unwrap().id, "cedarhollow");
+    assert_eq!(*store.changes.lock().unwrap(), 0);
+}
+
+#[test]
+fn without_that_churchs_own_test_key_nothing_is_read() {
+    // Nothing saved.
+    let fake = b1_church();
+    assert_eq!(
+        connect_saved(
+            System::B1,
+            Some("cedarhollow"),
+            &fake,
+            &MemoryStore::default()
+        ),
+        Connected::failed("no-test-key")
+    );
+    // Two saved and neither is the church typed: which one is never guessed.
+    let store = MemoryStore::default();
+    store
+        .put("local", "CHUfict02", b1_key_text().as_bytes())
+        .unwrap();
+    store
+        .put("local", "CHUfict03", b1_key_text().as_bytes())
+        .unwrap();
+    assert_eq!(
+        connect_saved(System::B1, Some("cedarhollow"), &fake, &store),
+        Connected::failed("no-test-key")
+    );
+    assert!(fake.asked().is_empty());
+    // A key saved under another church's id that opens this church is refused: later reads would never find it.
+    let store = MemoryStore::default();
+    store
+        .put("local", "CHUfict02", b1_key_text().as_bytes())
+        .unwrap();
+    assert_eq!(
+        connect_saved(System::B1, Some("cedarhollow"), &fake, &store),
+        Connected::failed("no-test-key")
+    );
+    // A wrong address is said before anything is read; a Keychain that can't list its items says so.
+    assert_eq!(
+        connect_saved(
+            System::B1,
+            Some("not an address"),
+            &b1_church(),
+            &MemoryStore::default()
+        ),
+        Connected::failed("address")
+    );
+    assert_eq!(
+        connect_saved(System::B1, Some("cedarhollow"), &b1_church(), &LockedStore),
+        Connected::failed("unavailable")
+    );
+    // What is saved isn't a key of this system's format.
+    let store = MemoryStore::default();
+    store.put("local", CHURCH, b"not a key").unwrap();
+    assert_eq!(
+        connect_saved(System::B1, Some("cedarhollow"), &b1_church(), &store),
+        Connected::failed("format")
+    );
+}

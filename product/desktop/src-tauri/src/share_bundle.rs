@@ -226,9 +226,13 @@ pub fn open_arguments(file: &Path) -> [std::ffi::OsString; 3] {
     ]
 }
 
-/// "Add Ozzie to Claude": makes the file for this copy of Ozzie and opens it in Claude.
+/// "Add Ozzie to Claude": makes the file for this copy of Ozzie and opens it in Claude. Never from the test copy of
+/// Ozzie: its file would carry the same name ("ozzie") and take the real app's place in Claude.
 #[tauri::command]
 pub async fn add_to_claude(handle: tauri::AppHandle) -> Result<(), AddToClaudeError> {
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return Err(AddToClaudeError::NoHelper);
+    }
     let path = share_helper::share_helper_path().ok_or(AddToClaudeError::NoHelper)?;
     let version = handle.package_info().version.to_string();
     let bytes = bundle_bytes(&path, &version).ok_or(AddToClaudeError::MoveFirst)?;

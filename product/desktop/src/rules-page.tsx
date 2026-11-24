@@ -6,6 +6,9 @@ import type { Skill } from "../../../core/src/harness/contract.js";
 import { Icon } from "./icons.js";
 import { churchList } from "./connection.js";
 import { KidsTeamsRules } from "./kids-rules-section.js";
+import { SystemKidsRules } from "./system-kids-rules.js";
+import type { KidsChoice } from "../../../core/src/church-systems/kids.js";
+import type { OtherSystem } from "./church-system.js";
 import { teamLabel, useTeamServices } from "./team-labels.js";
 import { feedbackOf } from "../../../core/src/finding-feedback.js";
 import { FromYourCards, useFeedback } from "./finding-feedback.js";
@@ -54,14 +57,14 @@ export function HowOzzieChecks({ procedures, focus = null, day }: { procedures: 
 
 /** What Church rules mean for a church on another system, in one plain paragraph. */
 export const SYSTEM_RULES = (w: SystemWords) => w.system === "genesis"
-  ? "With Genesis, Ozzie checks no service: Genesis doesn't share volunteer schedules. It shows the events coming up, how many attended the ones that have ended, your groups, and how many times each form was filled in. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from Genesis."
-  : `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}. Rules for scheduled leads, kids teams and background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
+  ? "With Genesis, Ozzie checks no service: Genesis doesn't share volunteer schedules. It shows the events coming up, how many attended the ones that have ended, your groups, and how many times each form was filled in. Kids rules work with Planning Center, B1 Church and Breeze, which share volunteer schedules. Rules for scheduled leads, background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from Genesis."
+  : `With ${w.name}, Ozzie checks what ${w.name} shares about the service: ${w.system === "breeze" ? "its roles, who answered, and how many people each needs where Breeze gives a number" : "its roles, how many people each needs and who answered"}${w.system === "b1" ? ", who on each role's team could help, and their blockouts" : ""}, and the kids ${w.system === "breeze" ? "roles" : "teams"} you mark below. Rules for scheduled leads, background checks, rooms, and serving many weeks in a row work with Planning Center only for now. Ozzie can't read background checks from ${w.name}.`;
 
 /** Under Scheduled leads: what an empty team box means. */
 export const LEAD_EMPTY_HELP = "Leave a team's box empty if that team doesn't need a scheduled lead.";
 
 /** Church rules are the church's own settings. Changing one re-checks what was already read; it never reads or writes Planning Center. */
-export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null, procedureDay }: {
+export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}, rooms = [], procedures = null, focus = null, keptElsewhere = [], church = null, procedureDay, systemKids = null }: {
   rules: SundayRules; onChange: (r: SundayRules) => void; positions: PositionLabel[];
   /** Team leaders Planning Center lists, by team (null when that read didn't complete). Names resolve on this Mac. */
   leaders?: Record<string, string[] | null>; names?: Record<string, string>;
@@ -77,6 +80,11 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
   church?: ReactNode;
   /** The day words the AI's procedures run over, when not the page's: every service's while more than one is watched. */
   procedureDay?: DayWords | undefined;
+  /**
+   * A church on B1 Church or Breeze (0.10.0): its kids teams or roles (system-kids-rules.tsx), by its own church key, with
+   * what its last check offers to mark. Null for Planning Center, which keeps its own Kids teams section.
+   */
+  systemKids?: { system: OtherSystem; church: string; choices: readonly KidsChoice[]; untied: number } | null;
 }) {
   const d = useDay();
   const w = useSystemWords();
@@ -113,6 +121,8 @@ export function RulesPage({ rules, onChange, positions, leaders = {}, names = {}
       <h2 className="h3">What Ozzie checks with {w.name}</h2>
       <p className="find-body">{SYSTEM_RULES(w)}</p>
     </section>}
+    {other && systemKids && w.system === systemKids.system && <SystemKidsRules rules={rules} onChange={onChange} system={systemKids.system} church={systemKids.church}
+      choices={systemKids.choices} untied={systemKids.untied} />}
     {keptElsewhere.length > 0 && <p className="banner"><Icon name="info" small /><span>Rules you set for the teams and rooms of {churchList(keptElsewhere)} are kept for {keptElsewhere.length === 1 ? "that church" : "those churches"} and don't apply here. They come back if Ozzie uses {keptElsewhere.length === 1 ? "that church" : "one of them"} again.</span></p>}
     {!other && <><section className="find" id="streak-rules">
       <h2 className="h3">Serving many weeks in a row</h2>

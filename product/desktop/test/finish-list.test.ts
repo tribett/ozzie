@@ -32,6 +32,11 @@ const render = (facts: FinishFacts, extra: Partial<ReturnType<typeof props>> & {
   renderToStaticMarkup(React.createElement(FinishSettingUp, { ...props(facts), ...extra }));
 
 describe("which items, in which order", () => {
+  it("the test copy never asks to start with this Mac: it has no login item", () => {
+    expect(finishItems({ ...SETTLED, start: { asked: false, on: false } }, true)).toEqual([]);
+    expect(finishItems({ ...SETTLED, start: { asked: false, on: false }, ai: { left: true, chosen: false } }, true).map(i => i.id)).toEqual(["ai"]);
+  });
+
   it("lists the spec's items in order, each only when it applies", () => {
     expect(finishItems({ ...SETTLED, start: { asked: false, on: false } }).map(i => i.id)).toEqual(["start"]);
     expect(finishItems({ ...SETTLED, ai: { left: true, chosen: false }, service: { deferred: true, watching: false } }).map(i => i.id)).toEqual(["start", "service", "ai"]);

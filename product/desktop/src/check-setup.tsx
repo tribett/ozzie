@@ -11,6 +11,7 @@ import { useDay } from "./day-words.js";
 import { churchName, needsSignIn, type ConnectionStatus } from "./connection.js";
 import { onboarding, type NoticePermission, type OnboardingBridge, type SetupCheck } from "./onboarding-bridge.js";
 import { autostart as macAutostart, type Autostart } from "./background.js";
+import { buildVariant } from "./build-variant.js";
 import type { ModelStatus } from "./model.js";
 import {
   buildReport, type AiCode, type AiCompany, type AiRoute, type NoticesCode, type PlanningCenterCode, type ReportInput, type RowCodes, type ServiceCode, type StartCode,
@@ -109,7 +110,7 @@ function aiName(route: AiRoute, company: AiCompany | null): string {
 }
 
 /** The rows, in the spec's order, each with its verdict, its fixed code word (for the report) and its one fix. */
-export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: string | null | undefined; zone?: string | undefined } = {}): SetupRow[] {
+export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: string | null | undefined; zone?: string | undefined } = {}, testCopy = buildVariant.testCopy): SetupRow[] {
   const c = facts.check;
   const rows: SetupRow[] = [];
   // A church on another system: its row says where Ozzie reads, and what native's check of Planning Center found doesn't apply.
@@ -180,8 +181,9 @@ export function setupRows(facts: CheckFacts, k: SetupKnown, opts: { date?: strin
     fix: notices === "allowed" ? null : "open-notices",
   });
   // Starting with this Mac
+  // The test copy has no login item (always_on.rs), so it never checks or offers it.
   const start: StartCode = c && known(c.start_with_mac) ? c.start_with_mac : facts.startOn === null ? "unknown" : facts.startOn ? "on" : "off";
-  rows.push({
+  if (!testCopy) rows.push({
     id: "start", label: "Starting with this Mac", code: start, ok: start === "on",
     verdict: start === "on" ? "On" : start === "off" ? "Off: Ozzie checks only while you have it open" : UNKNOWN,
     fix: start === "off" ? "turn-on-start" : null,

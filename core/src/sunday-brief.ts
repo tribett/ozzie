@@ -48,6 +48,11 @@ export interface Finding {
   /** too-few-confirmed: people pending at this time whose request was sent (asked, no answer yet) or not sent yet. */
   asked?: string[];
   not_sent?: string[];
+  /**
+   * too-few-confirmed on a church system that doesn't say whether a request was sent (Breeze): people at this time who
+   * haven't answered yet, never called asked or not sent. Absent on Planning Center's findings.
+   */
+  waiting?: string[];
   /** background-check: what Planning Center People shows. Never a check's status, dates or other details. */
   check?: "none-current" | "expires-before-sunday" | "expires-on-sunday";
   /** Where and when this finding's facts were read, when that isn't the Services check (background-check). */

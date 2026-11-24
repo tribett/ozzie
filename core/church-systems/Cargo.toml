@@ -10,6 +10,8 @@ rust-version = "1.99.1"
 # library user can call.
 [features]
 dev-tool = []
+# The test copy of Ozzie: its own Keychain names (native-auth variant.rs). Off by default; never on in a release.
+test-copy = ["ozzie-native-auth/test-copy"]
 
 [dependencies]
 # Only for `credentials::{CredentialStore, StoreError, MacKeychain, read_private}`.

@@ -17,6 +17,10 @@ export {
 } from "./facts.js";
 export { labelsOf, namesOf, placeholderScope } from "./placeholders.js";
 export { buildSystemBrief, type SystemBrief, type SystemBriefRules } from "./brief.js";
+export {
+  KIDS_UNIT, kidsChoices, kidsMarked, kidsTeamId, kidsUncounted, roleKey, systemKidsFindings, systemKidsMarks, withSystemKids, type KidsChoice, type KidsMarked,
+  type KidsUnit, type SystemKidsContext, type SystemKidsResult,
+} from "./kids.js";
 export { fictionalB1, fictionalBreeze } from "./fictional.js";
 export { recordSystemCheck, steadyBrief, systemServing } from "./changes.js";
 export { systemHarnessCapture } from "./harness.js";

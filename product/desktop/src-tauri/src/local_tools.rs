@@ -166,9 +166,9 @@ const MAX_PLAYBACK: Duration = Duration::from_secs(300);
 /// signed with it: Ozzie.app/Contents/MacOS in the app, target/<profile> in a development build.
 pub const CARD_READER: &str = "ozzie-card-reader";
 pub const LISTENER: &str = "ozzie-listen";
-/// Ozzie's bundle identifier (tauri.conf.json). Inside Ozzie.app, Apple's recognizer names its
-/// model caches after it; in a development build, after the reader's file name.
-const BUNDLE_ID: &str = "church.ozzie.desktop";
+/// Ozzie's bundle identifier (tauri.conf.json; the test copy's own in the test copy). Inside Ozzie.app, Apple's
+/// recognizer names its model caches after it; in a development build, after the reader's file name.
+const BUNDLE_ID: &str = ozzie_native_auth::variant::APP_IDENTIFIER;
 /// A Homebrew Tesseract, used only when Ozzie's own reader can't run on this Mac.
 const TESSERACT: &str = "/opt/homebrew/bin/tesseract";
 /// Same per-image limit as the card review lifecycle.
@@ -3840,15 +3840,26 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(app.app, PathBuf::from("/Applications/Ozzie.app"));
+        // The app's own identifier: the real app's, or in the test copy of Ozzie its own (never the real app's caches).
+        let id = ozzie_native_auth::variant::APP_IDENTIFIER;
+        if !ozzie_native_auth::variant::IS_TEST_COPY {
+            assert_eq!(id, ozzie_native_auth::variant::REAL_APP_IDENTIFIER);
+            assert_eq!(
+                app.model_cache,
+                PathBuf::from(
+                    "/fictional-home/Library/Caches/church.ozzie.desktop/com.apple.e5rt.e5bundlecache"
+                )
+            );
+        }
         assert_eq!(
             app.model_cache,
-            PathBuf::from(
-                "/fictional-home/Library/Caches/church.ozzie.desktop/com.apple.e5rt.e5bundlecache"
-            )
+            PathBuf::from(format!(
+                "/fictional-home/Library/Caches/{id}/com.apple.e5rt.e5bundlecache"
+            ))
         );
         assert_eq!(
             app.metal_cache,
-            PathBuf::from("/fictional-cache/C/church.ozzie.desktop/com.apple.metal")
+            PathBuf::from(format!("/fictional-cache/C/{id}/com.apple.metal"))
         );
         let dev = CardReader::at(
             PathBuf::from("/work/ozzie/target/debug/ozzie-card-reader"),

@@ -197,6 +197,8 @@ export interface AppSnapshot {
   fictionalImport?: boolean;
   /** A church on B1 Church or Breeze: the system named as the source of every Services fact (HarnessData `source`). */
   source?: string;
+  /** With `source`: the kids teams or roles its Church rules mark (HarnessData `kids`); none when absent. */
+  kids?: HarnessData["kids"];
   /** Several services watched: each team's service by its own name, for answers written on this Mac (HarnessData `serviceOfTeam`). */
   serviceOfTeam?: Readonly<Record<string, string>> | undefined;
   /** Several services watched: every watched service's own name and whether this check holds it (HarnessData `services`). */
@@ -233,6 +235,7 @@ export function buildHarnessData(s: AppSnapshot, refresh?: HarnessData["refresh"
     connected,
     ...(connected && refresh ? { refresh } : {}),
     ...(s.source ? { source: s.source } : {}),
+    ...(s.source && s.kids?.length ? { kids: s.kids } : {}),
     ...(s.serviceOfTeam ? { serviceOfTeam: s.serviceOfTeam } : {}),
     ...(s.services ? { services: s.services } : {}),
     ...(s.serviceOfFinding ? { serviceOfFinding: s.serviceOfFinding } : {}),

@@ -147,3 +147,40 @@ export function factsCapture(system: Extract<SystemId, "genesis">, over: Partial
 
 /** Round-trips a value through JSON, as native code's text would arrive. */
 export const asJson = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
+
+/**
+ * Cedar Hollow on B1 Church with a Kids Ministry team (B1 group GRP-kids) holding two roles: Nursery needs 2 (Ivy
+ * accepted; Moss hasn't answered and was asked; Fern hasn't answered and wasn't sent the request yet) and Preschool
+ * needs 1 (Ivy again, accepted: one person). For the kids rule (core/src/church-systems/kids.ts).
+ */
+export function b1KidsCapture(over: Partial<SystemCapture> = {}): SystemCapture {
+  const base = b1Capture();
+  return b1Capture({
+    positions: [...base.positions, { id: "POS-nursery", team_id: "GRP-kids", needed: 2 }, { id: "POS-pre", team_id: "GRP-kids", needed: 1 }],
+    assignments: [...base.assignments,
+      { id: "ASN-ivy", position_id: "POS-nursery", person_id: "PER-ivy", status: "accepted", asked: true },
+      { id: "ASN-moss", position_id: "POS-nursery", person_id: "PER-moss", status: "unconfirmed", asked: true },
+      { id: "ASN-fern", position_id: "POS-nursery", person_id: "PER-fern", status: "unconfirmed", asked: false },
+      { id: "ASN-ivy2", position_id: "POS-pre", person_id: "PER-ivy", status: "accepted", asked: true },
+    ],
+    names: { ...base.names, "PER-ivy": "Ivy Fictional", "PER-moss": "Moss Fictional", "PER-fern": "Fern Fictional" },
+    labels: { ...base.labels, "position:POS-nursery": "Nursery", "position:POS-pre": "Preschool", "team:GRP-kids": "Kids Ministry" },
+    ...over,
+  });
+}
+/** Juniper Street on Breeze with a Nursery role (needs 2): Wren accepted, Ash hasn't answered (Breeze doesn't say if asked). */
+export function breezeKidsCapture(over: Partial<SystemCapture> = {}): SystemCapture {
+  const base = breezeCapture();
+  return breezeCapture({
+    positions: [...base.positions, { id: "9630", team_id: null, needed: 2 }],
+    assignments: [
+      { id: "71001", position_id: "9627", person_id: "157801", status: "accepted", asked: null },
+      { id: "71002", position_id: "9628", person_id: "157802", status: "accepted", asked: null },
+      { id: "71003", position_id: "9630", person_id: "157803", status: "accepted", asked: null },
+      { id: "71004", position_id: "9630", person_id: "157804", status: "unconfirmed", asked: null },
+    ],
+    names: { ...base.names, "157803": "Wren Fictional", "157804": "Ash Fictional" },
+    labels: { ...base.labels, "position:9630": "Nursery" },
+    ...over,
+  });
+}

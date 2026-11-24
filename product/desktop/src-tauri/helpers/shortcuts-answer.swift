@@ -78,9 +78,14 @@ struct OzzieAnswers {
         (self.context, self.answers, self.maxCopy, self.copyFile, self.onFile, self.offSentence) = (context, answers, maxCopy, copyFile, onFile, off)
     }
 
-    /// Ozzie's data folder in `home`.
+    /// Ozzie's data folder in `home`. The test copy of Ozzie's helper (build.rs, `-D OZZIE_TEST_COPY`) reads the test
+    /// copy's own folder, never the real app's; the Siri actions are never built for the test copy.
     private func folder(_ home: String) -> String {
-        (home as NSString).appendingPathComponent("Library/Application Support/church.ozzie.desktop")
+        #if OZZIE_TEST_COPY
+        return (home as NSString).appendingPathComponent("Library/Application Support/church.ozzie.desktop.test")
+        #else
+        return (home as NSString).appendingPathComponent("Library/Application Support/church.ozzie.desktop")
+        #endif
     }
 
     /// Whether the leader has "Let Siri and Shortcuts ask Ozzie" on: native's marker in `home` is a regular file.

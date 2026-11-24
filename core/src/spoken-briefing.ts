@@ -124,6 +124,13 @@ function needsPeople(f: Finding, ctx: Ctx): string {
 function fewConfirmed(f: Finding, ctx: Ctx): string {
   const pos = f.position!, c = f.confirmed?.length ?? 0, asked = f.asked?.length ?? 0;
   const at = pos.interval ? ` at the ${clock(pos.interval.starts_at, ctx.timeZone)} service` : noTime(f, ctx);
+  // A church on B1 Church or Breeze (core church-systems/kids.ts): confirmed is who accepted there, said in its words.
+  if (f.source) {
+    const waiting = (f.asked?.length ?? 0) + (f.not_sent?.length ?? 0) + (f.waiting?.length ?? 0);
+    return `${c === 0 ? "No one has accepted" : `Only ${one(c, "person has", "people have")} accepted`} in ${pos.name}${at}. Your Church rules ask for at least ${f.needed ?? 2} confirmed.` +
+      `${waiting ? ` ${waiting === 1 ? "One more hasn't" : `${waiting} more haven't`} answered yet.` : ""}` +
+      `${f.tone === "look" ? ` ${f.source} has an answer Ozzie couldn't read for someone there, so it's worth a look.` : ""}`;
+  }
   const who = c === 0 ? "No confirmed people" : `Only ${one(c, "confirmed person", "confirmed people")}`;
   const more = asked ? ` ${asked === 1 ? "One more is asked but hasn't" : `${asked} more are asked but haven't`} answered.` : "";
   const unsure = f.tone === "look" ? " Planning Center doesn't show which service time some confirmed people serve, so it's worth a look." : "";
@@ -147,7 +154,7 @@ function background(f: Finding, ctx: Ctx): string {
  * A decision's line after "For Sunday, ": the fixed words a kids team's line opens with in lower case ("for Sunday, one
  * person on Nursery…", never "One person"); a line that opens with a role keeps the role's own name as it is.
  */
-const afterFor = (text: string) => /^(?:One person on |No confirmed people |Only )/u.test(text) ? lower(text) : text;
+const afterFor = (text: string) => /^(?:One person on |No confirmed people |No one has accepted |Only )/u.test(text) ? lower(text) : text;
 /** A Sunday item that needs a decision, by kind. */
 function decision(f: Finding, ctx: Ctx): string {
   return f.kind === "too-few-confirmed" ? fewConfirmed(f, ctx) : f.kind === "background-check" ? background(f, ctx) : needsPeople(f, ctx);

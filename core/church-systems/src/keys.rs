@@ -14,12 +14,14 @@ use zeroize::{Zeroize, Zeroizing};
 /// The Keychain workspace every church system's key is saved under.
 pub const WORKSPACE: &str = "local";
 
-/// The Keychain service for a system's keys.
+/// The Keychain service for a system's keys, as this build names it: in the test copy of Ozzie, with the test copy's
+/// prefix in front (native-auth variant.rs), so it never touches the real app's items.
 pub fn service(system: System) -> &'static str {
+    use ozzie_native_auth::keychain_service;
     match system {
-        System::B1 => "church.ozzie.church-system.b1.v1",
-        System::Breeze => "church.ozzie.church-system.breeze.v1",
-        System::Genesis => "church.ozzie.church-system.genesis.v1",
+        System::B1 => keychain_service!("church.ozzie.church-system.b1.v1"),
+        System::Breeze => keychain_service!("church.ozzie.church-system.breeze.v1"),
+        System::Genesis => keychain_service!("church.ozzie.church-system.genesis.v1"),
     }
 }
 /// This Mac's Keychain for a system's keys.
@@ -27,6 +29,16 @@ pub fn keychain(system: System) -> MacKeychain {
     MacKeychain {
         service: service(system).to_owned(),
     }
+}
+/// The test copy's Keychain for a system's keys, whichever copy this build is: for the developer tool's `copy-to-test`
+/// and `forget-test` only. None in a build that is itself the test copy, whose own `keychain` is already that.
+pub fn test_copy_keychain(system: System) -> Option<MacKeychain> {
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return None;
+    }
+    Some(MacKeychain {
+        service: ozzie_native_auth::variant::test_copy_service(service(system))?,
+    })
 }
 
 /// Why a key couldn't be kept, found or used. Closed words: nothing of the key is in one.

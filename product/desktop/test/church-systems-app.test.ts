@@ -5,7 +5,7 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeDom } from "./fake-dom.js";
-import { b1Capture, breezeCapture, breezeUntimedCapture } from "../../../core/test/church-systems/fixtures.js";
+import { b1Capture, b1KidsCapture, breezeCapture, breezeKidsCapture, breezeUntimedCapture } from "../../../core/test/church-systems/fixtures.js";
 import { fictionalGenesis } from "../../../core/src/church-systems/fictional.js";
 import { nov22Capture } from "../../../core/src/fictional-sunday.js";
 import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
@@ -750,5 +750,57 @@ describe("a Mac set up on B1 Church, opened again", () => {
     await app.press("What can you do?");
     expect(dom.seen()).toContain("from what it reads in Breeze:");
     expect(dom.seen()).not.toContain("Show who on a team could help");
+  }, 60_000);
+});
+
+describe("the kids rule on B1 Church and Breeze, through the whole app (0.10.0)", () => {
+  const seed = (connection: Record<string, unknown>) => kept.set("ozzie.church-system.v1", JSON.stringify({ main: connection["system"], genesis: null, connection }));
+  /** Ticks a checkbox on the page by its id, as a person would. */
+  const tickBox = async (id: string, checked: boolean) => {
+    const { act } = await import("react");
+    await act(async () => { propsOf(byId(id))?.onChange?.({ target: { checked } }); await tick(); });
+  };
+
+  it("B1 Church: a team marked on Church rules is checked on the Services page and Today, with nothing new read", async () => {
+    native.capture = JSON.stringify(b1KidsCapture());
+    seed({ system: "b1", church_id: "CHU0000cedar", church_name: "Cedar Hollow Fellowship", address: "cedarhollow", service_id: "PLA0000nov22",
+      service_day: "2026-11-22", service_name: "Sunday Gathering", zone: "America/Chicago", result_seen: true });
+    const app = await launch();
+    await app.waitFor("B1 Church: Cedar Hollow Fellowship");
+    await app.go("Church rules");
+    expect(dom.seen()).toContain("Mark the B1 Church teams that serve with children");
+    expect(dom.seen()).toContain("Kids Ministry serves with kids");
+    expect(dom.seen()).toContain("Ozzie can't read background checks from B1 Church, so this rule doesn't check them.");
+    await tickBox("kids-b1-2", true);
+    await app.settle();
+    expect((JSON.parse(kept.get("ozzie.rules.v1") ?? "{}") as { systemKids?: unknown }).systemKids)
+      .toEqual({ "b1:CHU0000cedar": [{ id: "GRP-kids", min_confirmed: 2, name: "Kids Ministry" }] });
+    expect(misnamed(dom.seen())).toEqual([]);
+    await app.go("Services");
+    await app.waitFor("Only 1 person has accepted in Kids Ministry");
+    expect(dom.seen()).toContain("Your Church rules ask for at least 2 confirmed. Ozzie counts people who accepted in B1 Church as confirmed; it doesn't check ages.");
+    expect(misnamed(dom.seen())).toEqual([]);
+    await app.go("Today");
+    expect(dom.seen()).toContain("Kids Ministry: fewer confirmed people than your rule asks");
+    // Marking re-checked what was already read: B1 Church was read once, on opening.
+    expect(native.calls.filter(([c]) => c === "church_system_check")).toHaveLength(1);
+  }, 60_000);
+
+  it("Breeze: a role marked by name, said without claiming a request was or wasn't sent", async () => {
+    native.capture = JSON.stringify(breezeKidsCapture());
+    seed({ system: "breeze", church_id: "juniperstreet", church_name: "Juniper Street Church", address: "juniperstreet", service_id: "88120031",
+      service_day: "2026-11-22", service_name: null, zone: null, result_seen: true });
+    const app = await launch();
+    await app.waitFor("Breeze: Juniper Street Church");
+    await app.go("Church rules");
+    expect(dom.seen()).toContain("Kids roles");
+    expect(dom.seen()).toContain("Breeze doesn't tie a team to its roles, so mark the roles that serve with children, by name");
+    await tickBox("kids-breeze-2", true);
+    await app.settle();
+    await app.go("Services");
+    await app.waitFor("Only 1 person has accepted in Nursery");
+    expect(dom.seen()).toContain("1 more hasn't answered yet; Breeze doesn't say whether the request was sent.");
+    expect(misnamed(dom.seen())).toEqual([]);
+    expect(native.calls.filter(([c]) => c === "church_system_check")).toHaveLength(1);
   }, 60_000);
 });

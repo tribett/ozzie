@@ -23,9 +23,13 @@ use ozzie_native_auth::phone_notice::{
 use std::sync::{Arc, OnceLock};
 use tauri::Manager;
 
-/// The phone notice for this app's data folder, made once.
+/// The phone notice for this app's data folder, made once. The test copy of Ozzie has none: nothing it does ever
+/// reaches a phone, its Keychain item is never read or made, and turning it on says it is unavailable.
 fn phone(app: &tauri::AppHandle) -> Result<&'static PhoneNotice, PhoneError> {
     static PHONE: OnceLock<PhoneNotice> = OnceLock::new();
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return Err(PhoneError::Unavailable);
+    }
     if let Some(phone) = PHONE.get() {
         return Ok(phone);
     }
@@ -542,6 +546,14 @@ mod tests {
             "pub outcome: Outcome, pub at_ms: u64,"
         );
         // The channel is kept under its own Keychain service, nowhere else.
-        assert_eq!(KEYCHAIN_SERVICE, "church.ozzie.phone-notice.v1");
+        // (In the test copy of Ozzie, with its prefix: native-auth variant.rs.)
+        assert_eq!(
+            KEYCHAIN_SERVICE,
+            if ozzie_native_auth::variant::IS_TEST_COPY {
+                "church.ozzie.desktop.test/church.ozzie.phone-notice.v1"
+            } else {
+                "church.ozzie.phone-notice.v1"
+            }
+        );
     }
 }

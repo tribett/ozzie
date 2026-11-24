@@ -89,7 +89,7 @@ fn main() {
                 Arc::new(AbsentStore)
             } else {
                 Arc::new(MacKeychain {
-                    service: "church.ozzie.planning-center.v1".into(),
+                    service: ozzie_native_auth::variant::PLANNING_CENTER_SERVICE.into(),
                 })
             };
             let auth = AuthController::new(

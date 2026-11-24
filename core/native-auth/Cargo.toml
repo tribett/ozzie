@@ -28,6 +28,10 @@ security-framework = "=3.7.0"
 core-foundation = "=0.10.1"
 core-foundation-sys = "=0.8.7"
 
+# The test copy of Ozzie (variant.rs): its own Keychain names. Off by default; never on in a release.
+[features]
+test-copy = []
+
 [dev-dependencies]
 # Already in this crate's lock (through zeroize's derive): contact_tests.rs reads the sources as Rust reads them, every
 # import flattened and renamed import followed (review Y, L1). Tests only; no new download.

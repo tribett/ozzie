@@ -7,10 +7,11 @@ import { evaluateCoverage, type CandidateAssessment, type ServingInterval } from
 import { plainIssues, roleFacts } from "../coverage-words.js";
 import { applyFeedback, briefTarget, feedbackOf, type FeedbackEntry } from "../finding-feedback.js";
 import { needKey, type Finding, type PositionStatus, type Roster, type SundayBrief } from "../sunday-brief.js";
-import { LIVE_CHECK_VALID_MS } from "../sunday-capture.js";
+import { LIVE_CHECK_VALID_MS, type SundayRules } from "../sunday-capture.js";
 import { longDate } from "../service-day.js";
 import { systemCaptureToCoverage, type CoverageRefusal, type SystemCoverage } from "./coverage.js";
 import { cannotSee, notSharedNotice, numbersNotShared, onServiceWithoutRole, waitingForZone } from "./facts.js";
+import { systemKidsFindings } from "./kids.js";
 import { labelsOf } from "./placeholders.js";
 import { instant, readsFor, SYSTEMS, untimed, type AssignmentStatus, type CapturePart, type ReadOutcome, type SystemCapture } from "./types.js";
 
@@ -20,6 +21,11 @@ export interface SystemBriefRules {
   confirmedZone?: string | null;
   /** What the person said on finding cards (finding-feedback.ts), kept with this church's Church rules. */
   feedback?: readonly FeedbackEntry[];
+  /**
+   * The Church rules' kids teams (B1 Church) or roles (Breeze), by church (SundayRules `systemKids`, kids.ts): only this
+   * capture's church's are read. Absent: none, and the brief is exactly as before.
+   */
+  systemKids?: NonNullable<SundayRules["systemKids"]>;
 }
 export type SystemBrief =
   | {
@@ -170,6 +176,13 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
       ],
     });
   }
+  // Church rules for kids teams (B1 Church) or kids roles (Breeze): the confirmed people each needs at the service, from
+  // the roles and answers already read (kids.ts). Held back with everything else while the zone waits to be confirmed.
+  // B1 Church counts across the service (kids.ts B1_ACROSS_THE_SERVICE), and its service starts at the plan's earliest
+  // time (b1.rs service_of), so its kids findings are said by the day, never as one service time.
+  const serviceInterval = timed && capture.system !== "b1" ? mapped.input.positions.find(p => p.interval)?.interval ?? null : null;
+  const kids = held ? { findings: [], not_checked: [] } : systemKidsFindings(capture, rules, { interval: serviceInterval ? { ...serviceInterval } : null, day });
+  findings.push(...kids.findings);
   // A role the system gave no number for can't be counted, and is never counted as zero. When no role on the service has
   // one, that is what the system shares (Breeze's older volunteers page has no number at all, breeze.rs), not a read
   // that failed: it never makes the check partial (round 4: every Breeze check said "Part of this Sunday couldn't be
@@ -240,6 +253,7 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
       // What Ozzie can't see that bears on this service and a pastor acts on; the rarer lines are in `not_checked_more`,
       // and the rest under "Also read" and in Settings.
       ...cannotSee(capture.system, "service"),
+      ...kids.not_checked,
       ...(unchecked ? [`Blockouts for ${plural(unchecked, "scheduled person", "scheduled people")} couldn't be checked for this service.`] : []),
       ...unread,
       ...(failed.length ? [`Some ${name} reads didn't complete.`] : []),

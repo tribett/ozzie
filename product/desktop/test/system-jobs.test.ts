@@ -446,7 +446,7 @@ describe("a Planning Center check is never a B1 Church or Breeze job's", () => {
 describe.each(["b1", "breeze"] as const)("%s: what Settings, Ask and Today say works", system => {
   const name = NAME[system];
   it("says exactly what works now and what still works with Planning Center only", () => {
-    expect(ONLY_PLANNING_CENTER(name)).toBe(`Keep services covered and the morning briefing work with ${name} too; set them up in Keeping watch. Siri and Shortcuts, the copy for other AI apps, and rooms, follow-ups and group meetings (and the jobs that watch them) work with Planning Center only for now. Ozzie can't do these with ${name} yet.`);
+    expect(ONLY_PLANNING_CENTER(name)).toBe(`Keep services covered and the morning briefing work with ${name} too; set them up in Keeping watch. So do Spotlight and Shortcuts and the copy for other AI apps; turn them on under Other AI apps, Spotlight and Shortcuts. Rooms, follow-ups and group meetings (and the jobs that watch them) work with Planning Center only for now. Ozzie can't do these with ${name} yet.`);
     const help = helpFor(systemWords(system));
     expect(help.can).toContain("Give you a morning briefing on Today.");
     expect(help.can.join(" ")).not.toMatch(/room bookings|follow-ups|group meetings|kids team/u);

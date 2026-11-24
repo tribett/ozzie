@@ -1,6 +1,14 @@
 // What each tool of the server says, in plain words: Ozzie's own sentences (core/src/harness/compose.ts, the same
 // templates Ask Ozzie's answers use) for every fact in the shared tool results, with ISO times written out. Labels
 // stay labels: names live only in Ozzie on the leader's Mac, and nothing here could restore them.
+//
+// A copy of a church on B1 Church or Breeze (0.10.0, snapshot.ts `system`) says that system wherever Planning Center's
+// says Planning Center as where the facts are, says plainly where the system didn't give the number of people a role
+// needs (never leaving "nothing needs a decision" to stand for covered), lists what Ozzie can't see in that system
+// (core/src/church-systems/facts.ts `cannotSee`, fixed sentences) and only the procedures that work with it. Planning
+// Center's words are byte for byte as before.
+import { cannotSee } from "../src/church-systems/facts.js";
+import { SYSTEMS } from "../src/church-systems/types.js";
 import type { Skill, ToolEnvelope } from "../src/harness/contract.js";
 import { composeFacts, NOT_FREE, NOT_RANKED, overviewRowSources } from "../src/harness/compose.js";
 import { idsIn } from "../src/harness/fixed.js";
@@ -8,7 +16,7 @@ import { showTimes } from "../src/harness/session.js";
 import { NATIVE_TOOL_ALLOWLIST } from "../src/harness/contract.js";
 import { isoMillis } from "../src/harness/fixed.js";
 import { LIVE_CHECK_VALID_MS } from "../src/sunday-capture.js";
-import type { SharedCheck, SharedTask, SharedTool } from "./snapshot.js";
+import { SHARED_SYSTEMS, systemOf, type SharedCheck, type SharedSystem, type SharedTask, type SharedTool } from "./snapshot.js";
 
 /**
  * Said whenever there is no copy to show: sharing off in Ozzie, no copy yet, or a file that isn't one Ozzie wrote (missing,
@@ -20,6 +28,29 @@ export const NOT_SHARED = "Nothing from Ozzie is shared on this Mac right now: s
 const aboutLabels = (copy: string) => "People, roles, rooms and follow-ups appear as labels such as [Person 1] and [Role 1]. Their names stay in Ozzie on the leader's Mac and are never shared. "
   + `A label means the same thing only within this copy (copy ${copy}); in another copy the same label may refer to a different person, role or room.`;
 const ONLY_DESCRIBES = "This copy only describes what Ozzie read. It can't check Planning Center again or change anything, and people decide what to do.";
+/** A church on another system: what a copy of its check names in place of Planning Center. */
+const systemName = (system: SharedSystem) => SHARED_SYSTEMS[system.id];
+const onlyDescribes = (system: SharedSystem | null) => system ? ONLY_DESCRIBES.replace("Planning Center", systemName(system)) : ONLY_DESCRIBES;
+/**
+ * Where a system gave no number of people needed for a role, said once at the top of what says which roles need people
+ * (compose.ts limitFor's words): "nothing needs a decision" there never stands for covered.
+ */
+function numbersNote(system: SharedSystem | null): string {
+  if (!system || system.role_numbers === "all") return "";
+  const name = systemName(system);
+  return system.role_numbers === "none" ? `${name} doesn't share how many people each role needs, so Ozzie can't say whether a role is full.`
+    : `${name} doesn't share how many people some roles need, so Ozzie can't say whether they are full.`;
+}
+/** The sections a numbers note goes with: the overview, and the roles that still need people. */
+const ABOUT_NEEDS: ReadonlySet<string> = new Set(["sunday.overview", "sunday.open_needs"]);
+/** Rooms, follow-ups and group meetings for a church on another system: Planning Center's only, in Settings' own words. */
+const noOperations = (system: SharedSystem) =>
+  `Rooms, follow-ups and group meetings work with Planning Center only for now. Ozzie can't do these with ${systemName(system)} yet.`;
+/** Check-ins after weeks in a row for a church on another system: not counted there (host.ts), so never in its copy. */
+const noCheckIns = (system: SharedSystem) =>
+  `## ${HEADINGS["sunday.rule_checkins"]}\nCheck-ins after several weeks in a row work with Planning Center only for now. Ozzie can't do these with ${systemName(system)} yet.`;
+/** Ozzie's own fixed words that name Planning Center as where facts are read, said for another system (church-system.ts `say`). */
+const sayFor = (system: SharedSystem | null, text: string) => system ? text.replace(/Planning Center/gu, systemName(system)) : text;
 
 const COMPLETENESS: Readonly<Record<string, string>> = {
   complete: "",
@@ -102,7 +133,7 @@ function completenessAt(envelope: ToolEnvelope, all: readonly ToolEnvelope[], no
   return checked !== null && now > checked + LIVE_CHECK_VALID_MS ? "stale" : c;
 }
 
-function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelope], now = Date.now()): string {
+function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelope], now = Date.now(), system: SharedSystem | null = null): string {
   const head = `${HEADINGS[envelope.tool as SharedTool] ?? "From the check"} (from ${sourcesOf(envelope, all)})`;
   // An overview cut to fit is said as that, never as reads that didn't complete unless some didn't (review item 6).
   const p = envelope.payload as { left_out_for_length?: unknown; reads_not_completed?: unknown };
@@ -110,9 +141,12 @@ function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelop
   const cut = left > 0 ? `Worth a look: the list was too long to say in full, so ${left === 1 ? "1 finding was" : `${left} findings were`} left out of this copy.` : "";
   const completeness = completenessAt(envelope, all, now);
   const unread = completeness === "partial" && left > 0 && p.reads_not_completed === 0 ? "" : COMPLETENESS[completeness] ?? "";
-  const note = [unread, cut].filter(Boolean).join("\n");
+  const numbers = ABOUT_NEEDS.has(envelope.tool) ? numbersNote(system) : "";
+  const note = [unread, cut, numbers].filter(Boolean).join("\n");
   const body = factsText(envelope);
-  return [`## ${head}`, ...(note ? [note] : []), ...(body.length ? body : ["Nothing to report here."])].join("\n");
+  // Another system's own limits, as fixed sentences, where the check says what it couldn't cover.
+  const limits = system && envelope.tool === "sunday.not_checked" ? cannotSee(system.id, "service") : [];
+  return [`## ${head}`, ...(note ? [note] : []), ...(body.length ? body : ["Nothing to report here."]), ...limits].join("\n");
 }
 
 /**
@@ -121,18 +155,32 @@ function section(envelope: ToolEnvelope, all: readonly ToolEnvelope[] = [envelop
  */
 export function checkText(check: SharedCheck | null, tools: readonly SharedTool[], now = Date.now()): string {
   if (!check) return NOT_SHARED;
+  const system = systemOf(check);
   const found = tools.flatMap(t => check.envelopes.filter(e => e.tool === t));
   // The facts' own check time, never when the copy was saved: a copy saved today can hold last week's check.
-  const intro = `From Ozzie's last saved check, checked ${when(check.checked_at)} (copy ${check.copy_id}). ${aboutLabels(check.copy_id)} ${ONLY_DESCRIBES}`;
-  if (!found.length) return `${intro}\n\nThe last saved check doesn't include this.`;
-  return [intro, ...found.map(e => section(e, check.envelopes, now))].join("\n\n");
+  const intro = `From Ozzie's last saved check, checked ${when(check.checked_at)} (copy ${check.copy_id}). ${aboutLabels(check.copy_id)} ${onlyDescribes(system)}`;
+  // Another system's copy has no check-ins: said where they would be, never left to read as none found.
+  const checkIns = system && tools.includes("sunday.rule_checkins") && !found.some(e => e.tool === "sunday.rule_checkins") ? [noCheckIns(system)] : [];
+  if (!found.length && !checkIns.length) {
+    const operations = system && tools.every(t => OPERATIONS.has(t));
+    return `${intro}\n\n${operations ? noOperations(system) : "The last saved check doesn't include this."}`;
+  }
+  return [intro, ...found.map(e => section(e, check.envelopes, now, system)), ...checkIns].join("\n\n");
 }
+/** Planning Center's rooms, follow-ups and group meetings, which another system's check never holds. */
+const OPERATIONS: ReadonlySet<SharedTool> = new Set(["rooms.conflicts", "followups.unowned", "groups.clashes"]);
+/** Ozzie's procedures that read Planning Center's Calendar, People or Groups: never another system's. */
+const PLANNING_CENTER_PROCEDURES: ReadonlySet<string> = new Set(["room-check", "follow-up-owners", "group-night"]);
+/** Whether a procedure works with the copy's church system: all for Planning Center; who could help only where a team is tied to each role. */
+const worksWith = (id: string, system: SharedSystem | null) => !system || (!PLANNING_CENTER_PROCEDURES.has(id) && (id !== "who-could-help" || SYSTEMS[system.id].teamMembers));
 
 /** The Church rules in words, then the procedures Ozzie follows (their titles and purposes, as shown in Ozzie). */
 export function rulesText(check: SharedCheck | null, skills: ReadonlyMap<string, Skill>, now = Date.now()): string {
   const rules = checkText(check, ["rules.current"], now);
-  const procedures = [...skills.values()].sort((a, b) => a.title.localeCompare(b.title)).map(s => `- ${s.title}: ${s.purpose}`);
-  const how = ["## How Ozzie works through Sunday", "Ozzie follows these written procedures. Each one only reads what was checked; none of them sends anything or changes Planning Center.", ...procedures];
+  const system = check ? systemOf(check) : null;
+  const procedures = [...skills.values()].filter(s => worksWith(s.id, system)).sort((a, b) => a.title.localeCompare(b.title)).map(s => `- ${s.title}: ${sayFor(system, s.purpose)}`);
+  const how = ["## How Ozzie works through Sunday",
+    `Ozzie follows these written procedures. Each one only reads what was checked; none of them sends anything or changes ${system ? systemName(system) : "Planning Center"}.`, ...procedures];
   return [rules, how.join("\n")].join("\n\n");
 }
 
@@ -164,9 +212,18 @@ const TOOL_WORDS: Readonly<Record<(typeof NATIVE_TOOL_ALLOWLIST)[number], string
 };
 const ALLOWED: ReadonlySet<string> = new Set(NATIVE_TOOL_ALLOWLIST);
 
-function taskLine(t: SharedTask, skills: ReadonlyMap<string, Skill>): string {
-  const what = t.kind === "skill" ? `Ozzie's "${skills.get(t.skill_id)?.title ?? "procedure"}" procedure` : KIND[t.kind];
-  const state = t.state === "failed" ? `didn't finish: ${tooManyFacts(t) ? TOO_MANY_FACTS : FAILURE[t.failure ?? ""] ?? "it stopped"}`
+/**
+ * In another church system's copy, a check whose record names no Planning Center read: the record doesn't say which
+ * system it read (a church can switch), so it is said without one, and a system that didn't answer as the church system.
+ */
+const SYSTEM_CHECK = "A Sunday check";
+const SYSTEM_DIDNT_ANSWER = "the church system didn't answer";
+const readPlanningCenter = (t: SharedTask) => t.events.some(e => e.type === "tool" && e.detail.split(" ")[0] === "planning_center.refresh");
+function taskLine(t: SharedTask, skills: ReadonlyMap<string, Skill>, system: SharedSystem | null = null): string {
+  const unnamed = system !== null && !readPlanningCenter(t);
+  const what = t.kind === "skill" ? `Ozzie's "${skills.get(t.skill_id)?.title ?? "procedure"}" procedure` : unnamed && t.kind === "check" ? SYSTEM_CHECK : KIND[t.kind];
+  const failure = unnamed && t.failure === "provider-failure" ? SYSTEM_DIDNT_ANSWER : FAILURE[t.failure ?? ""];
+  const state = t.state === "failed" ? `didn't finish: ${tooManyFacts(t) ? TOO_MANY_FACTS : failure ?? "it stopped"}`
     : t.state === "verified" && t.kind === "check" ? "finished" : STATE[t.state];
   const read = [...new Set(t.events.filter(e => e.type === "tool").map(e => e.detail.split(" ")[0]!).filter(n => ALLOWED.has(n)))]
     .map(n => TOOL_WORDS[n as keyof typeof TOOL_WORDS]);
@@ -180,5 +237,6 @@ export function happenedText(check: SharedCheck | null, skills: ReadonlyMap<stri
   if (!check) return NOT_SHARED;
   const head = `What Ozzie did recently on the leader's Mac, as of ${when(check.shared_at)} when copy ${check.copy_id} was saved, newest first. Ozzie keeps only what ran and how it ended, never what was asked or answered.`;
   if (!check.tasks.length) return `${head}\n\nNothing recorded yet.`;
-  return [head, check.tasks.map(t => taskLine(t, skills)).join("\n")].join("\n\n");
+  const system = systemOf(check);
+  return [head, check.tasks.map(t => taskLine(t, skills, system)).join("\n")].join("\n\n");
 }

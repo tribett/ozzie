@@ -12,9 +12,10 @@ import { isKnownZone, readsFor, SYSTEMS, type SystemCapture, type SystemId } fro
 import { isDateOnly } from "../../../core/src/read-result.js";
 import {
   addressLabel, CONNECT, connectProblem, formatAt, HOST_SENTENCE, keychainAsking, keyGoesTo, letChurchGo, readProblemText, systemWords, useKeychainAsking,
-  type ChurchSystemState, type Connected, type LetGo, type MainSystem,
+  type ChurchSystemState, type Connected, type KeyWay, type LetGo, type MainSystem,
   type OtherSystem, type ServiceChoice, type SystemConnection,
 } from "./church-system.js";
+import { buildVariant, TEST_COPY_NO_PLANNING_CENTER, TEST_COPY_USE_KEY } from "./build-variant.js";
 import { FIRST_RUN, Sheet, StepHead, useTitleFocus } from "./first-run-screens.js";
 import { Icon } from "./icons.js";
 import { eyeLine, pageRef } from "./day-phrases.js";
@@ -40,16 +41,25 @@ export const CHOOSE = {
   free: FIRST_RUN.free,
 } as const;
 
-/** S0, before "Connect Planning Center" (decision 21): which system the church uses. Planning Center is first. */
-export function ChooseSystem({ onChoose, onExample }: { onChoose: (system: MainSystem) => void; onExample: () => void }) {
+/**
+ * S0, before "Connect Planning Center" (decision 21): which system the church uses. Planning Center is first. The test
+ * copy of Ozzie (build-variant.ts) never signs in to Planning Center: there it can't be chosen, and says why.
+ */
+export function ChooseSystem({ onChoose, onExample, testCopy = buildVariant.testCopy }: {
+  onChoose: (system: MainSystem) => void; onExample: () => void; testCopy?: boolean;
+}) {
   const title = useTitleFocus<HTMLHeadingElement>("choose");
   return <section className="fr" aria-labelledby="fr-title">
     <h1 id="fr-title" className="fr-title" tabIndex={-1} ref={title}>{CHOOSE.title}</h1>
     <p className="fr-note">{CHOOSE.body}</p>
     <ul className="fr-services" aria-label={CHOOSE.help}>{CHOOSE.systems.map(s => <li key={s.id}>
-      <button type="button" className="fr-service" onClick={() => onChoose(s.id)}>
-        <span className="fr-service-t">{s.name}</span><span className="fr-service-d">{s.line}</span>
-      </button></li>)}</ul>
+      {testCopy && s.id === "planning-center"
+        ? <button type="button" className="fr-service" disabled aria-disabled="true">
+          <span className="fr-service-t">{s.name}</span><span className="fr-service-d">{TEST_COPY_NO_PLANNING_CENTER}</span>
+        </button>
+        : <button type="button" className="fr-service" onClick={() => onChoose(s.id)}>
+          <span className="fr-service-t">{s.name}</span><span className="fr-service-d">{s.line}</span>
+        </button>}</li>)}</ul>
     <div className="fr-actions"><button type="button" className="fr-link" onClick={onExample}>{CHOOSE.example}</button></div>
     {/* Which system the example shows (round 5); each other system's next screen offers its own. */}
     <p className="fr-small">{CHOOSE.exampleIs}</p>
@@ -73,11 +83,13 @@ const Checks = ({ lines }: { lines: readonly string[] }) =>
  * the key is in that system, the church's address (B1 Church, Breeze), then the key, taken in natively. `connect` is the
  * native call (church-system.ts `churchSystems.connect`); its outcome is said in its own words, and "works" hands on.
  */
-export function SystemConnect({ system, step, again = false, connect, onConnected, onBack, backLabel, notNow, onExample }: {
+export function SystemConnect({ system, step, again = false, connect, onConnected, onBack, backLabel, notNow, onExample, testCopy = buildVariant.testCopy }: {
   system: SystemId; step: string | null; again?: boolean;
   /** "See an example church first": this system's own fictional church (core church-systems/fictional.ts). */
   onExample?: (() => void) | undefined;
-  connect: (address: string | null, how: "paste" | "enter") => Promise<Connected>;
+  /** The test copy of Ozzie (build-variant.ts): also "Use the test key on this Mac" (`saved`). */
+  testCopy?: boolean;
+  connect: (address: string | null, how: KeyWay) => Promise<Connected>;
   onConnected: (church: { id: string; name: string | null }, address: string) => void;
   onBack?: (() => void) | undefined; backLabel?: string; notNow?: (() => void) | undefined;
 }) {
@@ -91,7 +103,7 @@ export function SystemConnect({ system, step, again = false, connect, onConnecte
   const needsAddress = system !== "genesis";
   const label = needsAddress ? addressLabel(system, typed) : null;
   const ready = !needsAddress || label !== null;
-  const go = async (how: "paste" | "enter") => {
+  const go = async (how: KeyWay) => {
     if (needsAddress && !label) { setProblem(connectProblem(system, "address", null)); return; }
     setWorking(true); setProblem(null);
     try {
@@ -129,6 +141,7 @@ export function SystemConnect({ system, step, again = false, connect, onConnecte
     <div className="fr-actions">
       <button type="button" className="btn btn-primary fr-primary" disabled={working || !ready} onClick={() => { void go("paste"); }}>Paste my key</button>
       <button type="button" className="btn btn-secondary" disabled={working || !ready} onClick={() => { void go("enter"); }}>Type or paste it in a window</button>
+      {testCopy && <button type="button" className="btn btn-secondary" disabled={working || !ready} onClick={() => { void go("saved"); }}>{TEST_COPY_USE_KEY}</button>}
       {onBack && <button type="button" className="fr-link" disabled={working} onClick={onBack}>{backLabel ?? FIRST_RUN.back}</button>}
       {notNow && <button type="button" className="fr-link" disabled={working} onClick={notNow}>{FIRST_RUN.notNow}</button>}
       {onExample && !again && <button type="button" className="fr-link" disabled={working} onClick={onExample}>{FIRST_RUN.example}</button>}
@@ -449,7 +462,7 @@ export function SystemFirstRun({ state, onState, start, read, result, day, aiOff
   read: (connection: SystemConnection) => Promise<string>; result: SystemResultView | null; day: DayWords; aiOffered: boolean;
   renderAi?: ((done: (how?: "chosen" | "none" | "later") => void) => ReactNode) | undefined;
   onLeave: (to: "today" | "sunday") => void; onChooseAgain: () => void; nowMs: number;
-  bridge: { connect: (system: SystemId, address: string | null, how: "paste" | "enter") => Promise<Connected>;
+  bridge: { connect: (system: SystemId, address: string | null, how: KeyWay) => Promise<Connected>;
     choices: (system: OtherSystem, churchId: string, from?: string) => Promise<{ outcome: string; choices: ServiceChoice[] }>;
     /** Lets the church connected before go (church-system.ts letChurchGo: kept to try again if the Keychain refuses). */
     letGo?: (c: LetGo) => Promise<boolean> };

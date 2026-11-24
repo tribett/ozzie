@@ -744,11 +744,25 @@ export function showNote(note: HTMLElement, pane: HTMLElement | null, still = re
  */
 export function fewConfirmedTitle(f: Finding, d: DayWords = SUNDAY_WORDS, dayless = false, zone: string | null = null): string {
   const c = f.confirmed?.length ?? 0, at = f.position!.interval ? ` at ${clock(f.position!.interval.starts_at, zone)}` : dayless ? "" : ` ${d.thisOne}`;
+  // A church on B1 Church or Breeze (core church-systems/kids.ts): confirmed is who accepted there, said in its words.
+  if (f.source) return c === 0 ? `No one has accepted in ${f.position!.name}${at}.` : `Only ${count(c, "person has", "people have")} accepted in ${f.position!.name}${at}.`;
   return c === 0 ? `No confirmed people in ${f.position!.name}${at}.` : `Only ${count(c, "confirmed person", "confirmed people")} in ${f.position!.name}${at}.`;
 }
 /** Pending is never confirmed, and an unsent request is never called asked. */
 export function fewConfirmedBody(f: Finding): string {
   const asked = f.asked?.length ?? 0, unsent = f.not_sent?.length ?? 0;
+  // A church on B1 Church or Breeze: someone it doesn't say was sent the request (Breeze) is never called asked or not sent.
+  if (f.source) {
+    const waiting = f.waiting?.length ?? 0;
+    return [
+      asked ? `${asked} more ${asked === 1 ? "is" : "are"} asked but ${asked === 1 ? "hasn't" : "haven't"} answered.` : "",
+      unsent ? `${unsent} more ${unsent === 1 ? "is" : "are"} penciled in, but the request hasn't been sent.` : "",
+      waiting ? `${waiting} more ${waiting === 1 ? "hasn't" : "haven't"} answered yet; ${f.source} doesn't say whether the request was sent.` : "",
+      !asked && !unsent && !waiting ? "No one else is waiting to answer." : "",
+      `Your Church rules ask for at least ${f.needed ?? 2} confirmed. Ozzie counts people who accepted in ${f.source} as confirmed; it doesn't check ages.`,
+      f.tone === "look" ? `${f.source} has an answer Ozzie couldn't read for someone there, so this count may be low.` : "",
+    ].filter(Boolean).join(" ");
+  }
   return [
     asked ? `${asked} more ${asked === 1 ? "is" : "are"} asked but ${asked === 1 ? "hasn't" : "haven't"} answered.` : "",
     unsent ? `${unsent} more ${unsent === 1 ? "is" : "are"} penciled in, but the request hasn't been sent.` : "",

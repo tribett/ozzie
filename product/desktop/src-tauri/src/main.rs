@@ -7,7 +7,7 @@ use ozzie_native_auth::model::{
     self as model_route, DraftRequest, KeychainKeys, ModelError, ModelStatus, Route,
 };
 use ozzie_native_auth::name_guard::NameGuard;
-use ozzie_native_auth::shared_check::{self, ShareError};
+use ozzie_native_auth::shared_check::{self, ShareError, SharedSystem};
 use ozzie_native_auth::{
     callback::CallbackServer,
     connections::{Connections, ConnectionsError, Decision, Purpose, StatusView, SwitchAnswer},
@@ -66,12 +66,25 @@ mod shortcuts;
 mod updater;
 // View › Bigger Text, Smaller Text and Actual Size: the page's zoom, kept across launches (accessibility audit B1).
 mod text_size;
+// The test copy of Ozzie, a build variant for click-throughs (docs/build/test-copy.md, private repository): off unless
+// built as one.
+mod test_copy;
+/// Whether `identifier` (the bundle identifier this build's Tauri config gave it) is the one this build's Keychain names
+/// belong to: the real app's in the real app, the test copy's in the test copy (native-auth variant.rs). A build where
+/// they differ would mix the two copies' data and Keychain items, so `main` stops before touching either.
+fn identity_agrees(identifier: &str) -> bool {
+    identifier == ozzie_native_auth::variant::APP_IDENTIFIER
+}
 /// Where saved connections live in this Mac's Keychain, per organization: `local:<organization>`.
 const WORKSPACE_PREFIX: &str = "local:";
 /// Ozzie's own Public (PKCE) Planning Center registration, "Ozzie for Mac", built in at compile
 /// time from `OZZIE_PCO_APP_CLIENT_ID` (tools/release-mac.sh). A public client ID, not a secret;
 /// kept out of git so a self-built copy uses its own registration under Advanced.
+/// The test copy of Ozzie never has it: it offers no Planning Center sign-in at all (`sign_in`).
 fn app_client_id() -> Option<&'static str> {
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return None;
+    }
     option_env!("OZZIE_PCO_APP_CLIENT_ID").filter(|id| {
         !id.is_empty()
             && id.len() <= 256
@@ -92,7 +105,7 @@ impl Default for Consumer {
                 WORKSPACE_PREFIX,
                 app_client_id().map(str::to_string),
                 Arc::new(MacKeychain {
-                    service: "church.ozzie.planning-center.v1".into(),
+                    service: ozzie_native_auth::variant::PLANNING_CENTER_SERVICE.into(),
                 }),
                 Box::new(|| Ok(Arc::new(PcoProvider(NativeHttp::new()?)) as Arc<dyn Provider>)),
                 Box::new(ozzie_native_auth::oauth::system_clock),
@@ -136,6 +149,10 @@ enum ConsumerError {
     LeftChurch,
     /// A sign-in Ozzie found saved isn't switched to as it is; the person signs in instead.
     SignInInstead,
+    /// The test copy of Ozzie offers no Planning Center sign-in: Planning Center would send it to the real app's own
+    /// address on this Mac (oauth.rs `REDIRECT_URI`), which only one copy may listen on (docs/build/test-copy.md,
+    /// private repository).
+    NotInTestCopy,
 }
 impl From<AuthError> for ConsumerError {
     fn from(error: AuthError) -> Self {
@@ -410,6 +427,10 @@ fn sign_in(
     ask: Ask,
     prepare: impl FnOnce(&Consumer) -> Result<Arc<AuthController>, ConsumerError>,
 ) -> Result<ConnectionStatus, ConsumerError> {
+    // The test copy starts no sign-in: nothing is prepared, no address is listened on and no browser is opened.
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return Err(ConsumerError::NotInTestCopy);
+    }
     {
         // Before this sign-in can add a grant, the church in use gets its rooms-and-groups answer (re-check NH1).
         decide_for_current_church(consumer, app);
@@ -1589,7 +1610,9 @@ async fn ledger_list(
 /// every name this session has shown, adds the task ledger's newest name-free rows (none when the
 /// ledger is unavailable) and writes `shared-check.json` in the app data folder for Ozzie's
 /// read-only server (core/mcp), with the facts' own check time. `off` while sharing is off;
-/// `invalid` leaves the last file as it was. Never reads Planning Center.
+/// `invalid` leaves the last file as it was. Never reads Planning Center. `system`: a church on
+/// B1 Church or Breeze (absent for Planning Center), whose results must all name that system
+/// (shared_check.rs `share_of`).
 #[tauri::command]
 async fn share_last_check(
     ledger: tauri::State<'_, Ledger>,
@@ -1597,6 +1620,7 @@ async fn share_last_check(
     app: tauri::AppHandle,
     envelopes: Vec<String>,
     copy_id: String,
+    system: Option<SharedSystem>,
 ) -> Result<(), ShareError> {
     let tasks = ledger
         .get()
@@ -1604,12 +1628,13 @@ async fn share_last_check(
         .unwrap_or_default();
     let names = names.inner().snapshot();
     in_app_data(app, move |dir| {
-        shared_check::share(
+        shared_check::share_of(
             dir,
             &envelopes,
             &tasks,
             &names,
             &copy_id,
+            system,
             sunday_check::unix_ms(),
         )
     })
@@ -1814,10 +1839,22 @@ fn notify_sunday_attention(
     shown
 }
 fn main() {
+    let context = tauri::generate_context!();
+    if !identity_agrees(&context.config().identifier) {
+        // Before any Keychain item, file or window: this build's identifier and Keychain names belong to different
+        // copies of Ozzie (build.rs refuses to make such a build; this is the last stop).
+        eprintln!(
+            "ozzie: this build's identifier and Keychain names belong to different copies of Ozzie; not starting"
+        );
+        std::process::exit(78);
+    }
     let smoke = std::env::args().any(|arg| arg == "--lifecycle-smoke");
     let consumer = Consumer::default();
     let cleanup = consumer.clone();
-    let app = updater::manage(always_on::manage(tauri::Builder::default()))
+    let builder = test_copy::manage(updater::manage(
+        always_on::manage(tauri::Builder::default()),
+    ));
+    let app = builder
         .plugin(tauri_plugin_notification::init())
         .manage(consumer)
         .manage(SundayChecks::default())
@@ -1864,6 +1901,7 @@ fn main() {
             phone_notice::setup(app);
             text_size::setup(app);
             always_on::setup(app)?;
+            test_copy::setup(app);
             Ok(())
         })
         .on_window_event(always_on::on_window_event)
@@ -1979,6 +2017,7 @@ fn main() {
             shortcuts::stop_shortcuts,
             shortcuts::clear_shortcuts_check,
             shortcuts::save_shortcuts_check,
+            shortcuts::save_shortcuts_genesis,
             shortcuts::shortcuts_helper_path,
             shortcuts::siri_actions_bundled,
             shortcuts::take_opened_page,
@@ -2038,7 +2077,7 @@ fn main() {
             text_size::on_page_load(window);
             always_on::on_page_load(window);
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("native consumer failed to start");
     if smoke {
         println!("native-lifecycle: native window and event loop starting");

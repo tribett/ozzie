@@ -9,6 +9,7 @@ import { Icon } from "./icons.js";
 import { SERVICES } from "./day-phrases.js";
 import { finishMemory, type FinishItemId, type FinishStore } from "./moments.js";
 import { useSystemWords } from "./church-system.js";
+import { buildVariant } from "./build-variant.js";
 import "./first-run.css";
 import "./finish.css";
 
@@ -53,10 +54,13 @@ const TITLES: Record<FinishItemId, string> = {
 /** At most four at once (spec §4.1). */
 export const FINISH_MAX = 4;
 
-/** The items, in the spec's order, each only when it applies; at most four, keeping the open ones first. */
-export function finishItems(f: FinishFacts): FinishItem[] {
+/**
+ * The items, in the spec's order, each only when it applies; at most four, keeping the open ones first. The test copy
+ * has no login item (always_on.rs), so it never asks to start with this Mac.
+ */
+export function finishItems(f: FinishFacts, testCopy = buildVariant.testCopy): FinishItem[] {
   const all: (FinishItem | null)[] = [
-    { id: "start", title: TITLES.start, done: f.start.asked || f.start.on === true },
+    testCopy ? null : { id: "start", title: TITLES.start, done: f.start.asked || f.start.on === true },
     f.service.deferred ? { id: "service", title: TITLES.service, done: f.service.watching } : null,
     f.kids.looking ? { id: "kids", title: TITLES.kids, done: f.kids.answered } : null,
     f.ai.left ? { id: "ai", title: TITLES.ai, done: f.ai.chosen } : null,

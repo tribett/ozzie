@@ -37,7 +37,9 @@ export const systemOwner = (watch: SystemWatch | null | undefined): string | und
 export function systemDigest(capture: SystemCapture, ctx: ProactiveContext, now: string): CheckDigest | null {
   const watch = ctx.system;
   if (!watch || !ofConnection(capture, watch.connection)) return null;
-  const built = buildSystemBrief(capture, { confirmedZone: watch.connection.zone, feedback: feedbackOf(ctx.rules) }, now);
+  // The kids teams or roles the church marked count here too, so a kids team falling short is told like any decision.
+  const built = buildSystemBrief(capture, { confirmedZone: watch.connection.zone, feedback: feedbackOf(ctx.rules),
+    ...(ctx.rules.systemKids ? { systemKids: ctx.rules.systemKids } : {}) }, now);
   if (!built.ok || built.coverage.waiting_for_zone) return null;
   return {
     owner: placeholderScope(capture), plan_id: built.brief.plan.id, record: recordSystemCheck(capture, built.brief),

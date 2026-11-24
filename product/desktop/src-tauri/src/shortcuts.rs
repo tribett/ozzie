@@ -15,7 +15,12 @@
 //! around it. Those spellings arrive as the plain link and can't be told from it here; the exact
 //! text check is applied to what arrives (pinned by a test).
 use crate::SessionNames;
-use ozzie_native_auth::shared_check::ShareError;
+use crate::church_systems;
+use ozzie_church_systems::capture::System;
+use ozzie_church_systems::keys;
+use ozzie_native_auth::credentials::CredentialStore;
+use ozzie_native_auth::oauth::ConnectionState;
+use ozzie_native_auth::shared_check::{ShareError, SharedSystem};
 use ozzie_native_auth::{shortcuts_check, sunday_check};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -138,19 +143,66 @@ pub async fn clear_shortcuts_check(app: tauri::AppHandle) -> Result<(), ShareErr
 }
 /// Saves the Sunday overview from the webview (core/mcp/shortcuts.ts `shortcutsEnvelopes`) as the
 /// copy, checked against every name this session has shown. `off` while the switch is off;
-/// `invalid` leaves the last copy as it was. Never reads Planning Center.
+/// `invalid` leaves the last copy as it was. Never reads Planning Center. `system`: a church on
+/// B1 Church or Breeze (absent for Planning Center; shortcuts_check.rs `save_of`).
 #[tauri::command]
 pub async fn save_shortcuts_check(
     names: tauri::State<'_, SessionNames>,
     app: tauri::AppHandle,
     envelopes: Vec<String>,
     copy_id: String,
+    system: Option<SharedSystem>,
 ) -> Result<(), ShareError> {
     let names = names.inner().snapshot();
     in_app_data(app, move |dir| {
-        shortcuts_check::save(dir, &envelopes, &names, &copy_id, sunday_check::unix_ms())
+        shortcuts_check::save_of(
+            dir,
+            &envelopes,
+            &names,
+            &copy_id,
+            system,
+            sunday_check::unix_ms(),
+        )
     })
     .await
+}
+/// A church on Genesis, which shares no volunteer schedules: the copy is native's own fixed line
+/// (shortcuts_check.rs GENESIS_COPY), so Siri and Shortcuts say that. The webview hands in
+/// nothing. `off` while the switch is off; `invalid` unless the church in use is on Genesis
+/// (`genesis_in_use_with`), so the line is never said for a church on another system.
+#[tauri::command]
+pub async fn save_shortcuts_genesis(
+    app: tauri::AppHandle,
+    consumer: tauri::State<'_, crate::Consumer>,
+) -> Result<(), ShareError> {
+    let planning_center = planning_center_in_use(consumer.inner());
+    in_app_data(app, move |dir| {
+        if !genesis_in_use_with(planning_center, &church_systems::keychain) {
+            return Err(ShareError::Invalid);
+        }
+        shortcuts_check::save_genesis(dir)
+    })
+    .await
+}
+/// Whether Planning Center is the church's connection: a sign-in kept on this Mac in any state but
+/// disconnected (one whose state can't be read counts as kept).
+fn planning_center_in_use(consumer: &crate::Consumer) -> bool {
+    consumer.0.current().is_some_and(|auth| {
+        auth.status_or_busy()
+            .map_or(true, |status| status.state != ConnectionState::Disconnected)
+    })
+}
+/// Whether the church in use is on Genesis: Planning Center isn't its connection, this Mac keeps
+/// no B1 Church or Breeze key (church_systems.rs `service_system_saved_in`: a listing that fails
+/// counts as one), and it keeps a Genesis key (one it can't list counts as none). Genesis read
+/// beside another system ("also read") is never the church's system. Keychain attributes only.
+pub(crate) fn genesis_in_use_with(
+    planning_center: bool,
+    store_of: &dyn Fn(System) -> Box<dyn CredentialStore>,
+) -> bool {
+    !planning_center
+        && !church_systems::service_system_saved_in(store_of)
+        && keys::saved(&*store_of(System::Genesis)).is_ok_and(|churches| !churches.is_empty())
 }
 
 /// The helper beside `program`, as a real path (links resolved), when it is a file.
@@ -198,6 +250,77 @@ pub fn siri_actions_bundled() -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Genesis's fixed line only for a church whose system in use is Genesis (privacy review L3).
+    #[test]
+    fn the_genesis_line_is_kept_only_while_the_church_in_use_is_on_genesis() {
+        use super::genesis_in_use_with;
+        use ozzie_church_systems::capture::System;
+        use ozzie_native_auth::credentials::{CredentialStore, StoreError};
+        struct Listed(Result<Vec<(String, String)>, StoreError>);
+        impl CredentialStore for Listed {
+            fn put(&self, _: &str, _: &str, _: &[u8]) -> Result<(), StoreError> {
+                Err(StoreError::Unavailable)
+            }
+            fn get(&self, _: &str, _: &str) -> Result<Option<Vec<u8>>, StoreError> {
+                Err(StoreError::Unavailable)
+            }
+            fn delete(&self, _: &str, _: &str) -> Result<(), StoreError> {
+                Err(StoreError::Unavailable)
+            }
+            fn accounts(&self) -> Result<Vec<(String, String)>, StoreError> {
+                match &self.0 {
+                    Ok(list) => Ok(list.clone()),
+                    Err(_) => Err(StoreError::Unavailable),
+                }
+            }
+        }
+        let workspace = ozzie_church_systems::keys::WORKSPACE.to_owned();
+        let in_use =
+            |planning_center: bool,
+             keys: &dyn Fn(System) -> Result<Vec<&'static str>, StoreError>| {
+                genesis_in_use_with(planning_center, &|system| {
+                    let list = keys(system).map(|churches| {
+                        churches
+                            .iter()
+                            .map(|c| (workspace.clone(), (*c).to_owned()))
+                            .collect()
+                    });
+                    Box::new(Listed(list)) as Box<dyn CredentialStore>
+                })
+            };
+        let genesis = |system| {
+            Ok(if system == System::Genesis {
+                vec!["9001"]
+            } else {
+                vec![]
+            })
+        };
+        assert!(in_use(false, &genesis));
+        // Genesis read beside Planning Center, B1 Church or Breeze ("also read"): not the church's system.
+        assert!(!in_use(true, &genesis));
+        for other in [System::B1, System::Breeze] {
+            assert!(!in_use(false, &|system| Ok(if system == System::Genesis {
+                vec!["9001"]
+            } else if system == other {
+                vec!["8001"]
+            } else {
+                vec![]
+            })));
+        }
+        // No Genesis key, or a Keychain that can't say: never the Genesis line.
+        assert!(!in_use(false, &|_| Ok(vec![])));
+        assert!(!in_use(false, &|system| if system == System::Genesis {
+            Err(StoreError::Unavailable)
+        } else {
+            Ok(vec![])
+        }));
+        assert!(!in_use(false, &|system| if system == System::Breeze {
+            Err(StoreError::Unavailable)
+        } else {
+            genesis(system)
+        }));
+    }
+
     #[test]
     fn the_way_back_from_the_browser_is_always_accepted_names_no_page_and_carries_nothing() {
         use super::{is_connected_link, page_from_link};

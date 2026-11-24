@@ -331,7 +331,12 @@ impl Updates {
 fn current_version(app: &tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
+/// Where this copy runs. The test copy of Ozzie is never an app Ozzie may replace: it never updates itself, so a release
+/// can never put the real app's identity in its place (docs/build/test-copy.md, private repository).
 fn here() -> (Place, Option<PathBuf>) {
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return (Place::NotAnApp, None);
+    }
     match std::env::current_exe() {
         Ok(exe) => bundle_of(&exe),
         Err(_) => (Place::NotAnApp, None),
@@ -432,6 +437,10 @@ async fn fetch(app: &tauri::AppHandle) -> Result<Option<Update>, ()> {
 /// A check, automatic or from "Check for a new version". Only one runs at a time, never during a
 /// download or reopen. Automatic failures stay silent.
 async fn check(app: tauri::AppHandle, manual: bool) {
+    // The test copy never asks whether there is a new version (it has no updater at all).
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return;
+    }
     let updates = app.state::<Updates>();
     {
         let mut inner = updates.lock();
@@ -484,6 +493,9 @@ async fn check(app: tauri::AppHandle, manual: bool) {
 /// On every wake of the native timer (always_on.rs): starts an automatic check when one is due. Never
 /// waits: a busy state skips this wake.
 pub fn on_wake(app: &tauri::AppHandle, now_ms: u64) {
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return;
+    }
     let Some(updates) = app.try_state::<Updates>() else {
         return;
     };
@@ -613,8 +625,12 @@ fn reopen_after_exit(bundle: &Path) -> std::io::Result<()> {
 
 // ---- Setup and commands ----------------------------------------------------------------------------
 
-/// The updater plugin (configured in tauri.conf.json `plugins.updater`) and this module's state.
+/// The updater plugin (configured in tauri.conf.json `plugins.updater`) and this module's state. The test copy of Ozzie
+/// has no updater plugin (and no `plugins.updater` in tauri.test-copy.conf.json): only the state the page reads.
 pub fn manage(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return builder.manage(Updates::default());
+    }
     builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Updates::default())

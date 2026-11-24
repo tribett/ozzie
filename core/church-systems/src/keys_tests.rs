@@ -3,13 +3,34 @@ use crate::test_support::{MemoryStore, id, key_text};
 
 #[test]
 fn each_system_has_its_own_keychain_service() {
-    assert_eq!(service(System::B1), "church.ozzie.church-system.b1.v1");
+    use ozzie_native_auth::variant::{IS_TEST_COPY, REAL_SERVICES, TEST_COPY_KEYCHAIN_PREFIX};
+    // The test copy (native-auth's `test-copy` feature) puts its prefix in front of each name; the real app doesn't.
+    let prefix = if IS_TEST_COPY {
+        TEST_COPY_KEYCHAIN_PREFIX
+    } else {
+        ""
+    };
+    if !IS_TEST_COPY {
+        assert_eq!(service(System::B1), "church.ozzie.church-system.b1.v1");
+    }
     for system in System::all() {
-        assert_eq!(
-            service(system),
-            format!("church.ozzie.church-system.{}.v1", system.word())
-        );
+        let real = format!("church.ozzie.church-system.{}.v1", system.word());
+        assert_eq!(service(system), format!("{prefix}{real}"));
         assert_eq!(keychain(system).service, service(system));
+        assert!(REAL_SERVICES.contains(&real.as_str()));
+        assert_eq!(REAL_SERVICES.contains(&service(system)), !IS_TEST_COPY);
+        // The developer tool's way to the test copy's item: the real name with the prefix, and only from a real build.
+        match (test_copy_keychain(system), IS_TEST_COPY) {
+            (Some(test), false) => {
+                assert_eq!(test.service, format!("{TEST_COPY_KEYCHAIN_PREFIX}{real}"));
+                assert!(!REAL_SERVICES.contains(&test.service.as_str()));
+            }
+            (None, true) => {}
+            (found, test_copy) => panic!(
+                "{:?} in a build where IS_TEST_COPY is {test_copy}",
+                found.map(|k| k.service)
+            ),
+        }
     }
 }
 
@@ -156,7 +177,11 @@ fn a_breeze_key_is_refused_only_when_it_plainly_isnt_one() {
     );
     assert_eq!(
         keychain(System::Breeze).service,
-        "church.ozzie.church-system.breeze.v1"
+        if ozzie_native_auth::variant::IS_TEST_COPY {
+            "church.ozzie.desktop.test/church.ozzie.church-system.breeze.v1"
+        } else {
+            "church.ozzie.church-system.breeze.v1"
+        }
     );
 }
 

@@ -70,6 +70,13 @@ export interface HarnessData {
    */
   source?: string;
   /**
+   * A church on B1 Church or Breeze: the kids teams (B1 Church) or roles (Breeze) its Church rules mark, by the team id its
+   * kids findings carry (core church-systems/kids.ts `kidsMarked`), in place of Planning Center's `rules.kidsTeams`, so a
+   * kids question answered on this Mac (compose.ts) is about that church's own marks. Local only: no tool reads it, and
+   * nothing in it is ever sent. Absent with `source`: none marked. Never read for Planning Center.
+   */
+  kids?: readonly { readonly team_id: string; readonly name?: string; readonly role?: string }[];
+  /**
    * With more than one service watched (owner decision 2026-11-19, desktop services-merge.ts): each team's service, by
    * its own Planning Center name, so an answer written on this Mac says which service a role is in. Local only: no tool
    * reads it, and nothing in it is ever sent. Absent with one service.
@@ -617,9 +624,11 @@ export class HarnessTools {
           request: this.#request(f) }); break;
         case "streak": Object.assign(base, { person: this.#person(f.person_id), sundays_in_a_row: f.sundays ?? NOT_KNOWN }); break;
         case "worth-a-look": Object.assign(base, { reads_not_completed: own.failed, too_old_to_treat_as_current: !!f.stale }); break;
-        // Counts only: who is confirmed or pending stays on this Mac.
+        // Counts only: who is confirmed or pending stays on this Mac. Where the system doesn't say whether a request was
+        // sent (Breeze: `waiting`), neither count is known, never 0.
         case "too-few-confirmed": Object.assign(base, { role: this.#role(f), time: span(f.position?.interval, zone), confirmed: f.confirmed?.length ?? 0,
-          needed: f.needed ?? NOT_KNOWN, asked_no_answer: f.asked?.length ?? 0, request_not_sent: f.not_sent?.length ?? 0, ages: AGES }); break;
+          needed: f.needed ?? NOT_KNOWN, asked_no_answer: f.waiting?.length ? NOT_KNOWN : f.asked?.length ?? 0,
+          request_not_sent: f.waiting?.length ? NOT_KNOWN : f.not_sent?.length ?? 0, ages: AGES }); break;
         // Each role as Planning Center still counts the person on it (as groups.clashes): never an open role.
         case "blockout": Object.assign(base, { person: this.#person(f.person_id),
           serving: (f.serving ?? []).map(s => ({ role: this.#roleOf(s.name, s.team_id), status: s.status, time: span(s.interval, zone) })) }); break;
@@ -942,9 +951,11 @@ export class HarnessTools {
     const rules = this.#data.rules;
     return {
       source: "Church rules on this Mac", check_time: checkTime(brief.checked_at ?? capture.completed_at), completeness: "complete",
-      // Lead and room rules are Planning Center's (its teams and rooms): a church on another system has none in use.
+      // Lead and room rules are Planning Center's (its teams and rooms): a church on another system has none in use. Nor does
+      // it count weeks in a row (check-ins aren't offered there, host.ts), so its rule isn't given as a suggestion at all:
+      // left out, and said as Planning Center's only (compose.ts).
       payload: {
-        check_in_after_sundays_in_a_row: rules.checkInAfterSundaysInARow > 0 ? rules.checkInAfterSundaysInARow : "off",
+        ...(this.#other ? {} : { check_in_after_sundays_in_a_row: rules.checkInAfterSundaysInARow > 0 ? rules.checkInAfterSundaysInARow : "off" }),
         sunday_leads: this.#other ? [] : rules.sundayLeads.flatMap(l => l.lead_position.trim() ? [{ lead_role: this.#roleOf(l.lead_position, l.team_id) }] : []),
         rooms: this.#other ? [] : roomRules(rules).map(r => ({ room: this.session.room(r.room_id), rule: "not shared", setup_minutes: r.setup_minutes })),
       },

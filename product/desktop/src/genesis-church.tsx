@@ -12,7 +12,7 @@ import {
 import { labelsOf } from "../../../core/src/church-systems/placeholders.js";
 import { instant, parseSystemCaptureText, type SystemCapture } from "../../../core/src/church-systems/types.js";
 import {
-  churchSystems, eventWhen, formatAt, readProblemText, type AlsoRead, type ChurchSystemState, type Connected,
+  churchSystems, eventWhen, formatAt, readProblemText, type AlsoRead, type ChurchSystemState, type Connected, type KeyWay,
 } from "./church-system.js";
 import { StepHead, useTitleFocus } from "./first-run-screens.js";
 import { Icon } from "./icons.js";
@@ -148,7 +148,7 @@ export function genesisExample(): { capture: SystemCapture; view: GenesisView } 
 export function GenesisFirstRun({ state, onState, onLeave, onChooseAgain, onExample, aiOffered, renderAi, nowMs, connect, read: readGenesis, intervalMinutes = 60, shown = null }: {
   state: ChurchSystemState; onState: (next: ChurchSystemState) => void; onLeave: (to: "today" | "sunday") => void; onChooseAgain: () => void;
   onExample?: (() => void) | undefined; aiOffered: boolean; renderAi?: ((done: () => void) => ReactNode) | undefined; nowMs: number;
-  connect?: (address: string | null, how: "paste" | "enter") => Promise<Connected>;
+  connect?: (address: string | null, how: KeyWay) => Promise<Connected>;
   /** The read Genesis's own schedule makes (useGenesisChurch `read`): recorded for What happened, and not made again. */
   read: (at: AlsoRead) => Promise<GenesisRead>;
   intervalMinutes?: number;

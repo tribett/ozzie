@@ -1,6 +1,6 @@
 # Ozzie
 
-Ozzie is a Mac app for church staff and ministry leaders. It reads your church's Planning Center, keeps watch over the coming Sunday and tells you what needs a decision. This plugin lets Claude read Ozzie's last check, so you can ask about Sunday in your own words and get an answer that says where each fact came from and when it was checked.
+Ozzie is a Mac app for church staff and ministry leaders. It reads your church's Planning Center, B1 Church or Breeze, keeps watch over the coming Sunday and tells you what needs a decision. This plugin lets Claude read Ozzie's last check, so you can ask about Sunday in your own words and get an answer that says where each fact came from and when it was checked.
 
 The names Ozzie read stay on your Mac. Claude sees labels like [Person 1] instead, and it can't change or send anything through Ozzie.
 
@@ -11,12 +11,12 @@ The names Ozzie read stay on your Mac. Claude sees labels like [Person 1] instea
 - **Church rules**: the rules Ozzie checks against, in words, and the procedures Ozzie follows.
 - **What happened**: what Ozzie did recently on your Mac and how it ended, never what you asked Ozzie or what it answered.
 
-Only a Planning Center check is shared. Checks of other church systems aren't.
+A check of Planning Center, B1 Church or Breeze is shared. Genesis shares no volunteer schedules, so with Genesis there is no check to share.
 
 ## What Claude can't do
 
 - See a name through Ozzie. People, roles, rooms and follow-ups appear as labels like [Person 1], [Role 1] and [Room 1]. The names stay in Ozzie, on your Mac.
-- Check Planning Center again, change anything or send anything. Ozzie prepares, and people decide.
+- Check your church's system again, change anything or send anything. Ozzie prepares, and people decide.
 - See anything about background checks, or anything you asked Ozzie.
 - Read anything from your church's check while sharing is off. Sharing is off until you turn it on, and turning it off removes the shared copy.
 
@@ -26,7 +26,7 @@ Claude Code and Cowork can also open files and folders on your Mac when you allo
 
 1. Install Ozzie for Mac from https://ozzie.church and keep it in your Applications folder.
 2. In Ozzie, open Settings and, under Other AI apps, Spotlight and Shortcuts, turn on "Use Ozzie's last check in other AI apps".
-3. Check Planning Center in Ozzie. To try it with invented data first, choose See an example church first on Ozzie's first screen, or See a fictional example on its Services page before your first check.
+3. Check your church's system in Ozzie. To try it with invented data first, choose See an example church first on Ozzie's first screen, or See a fictional example on its Services page before your first check.
 
 ## Where it works
 

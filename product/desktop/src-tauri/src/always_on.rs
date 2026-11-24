@@ -450,8 +450,9 @@ pub fn shows_window_at_launch(mut args: impl Iterator<Item = String>) -> bool {
 /// The argument the login item starts Ozzie with.
 pub const AT_LOGIN: &str = "--at-login";
 /// The Launch Agent's label and file name (~/Library/LaunchAgents/church.ozzie.desktop.plist): the
-/// app's own reverse-DNS identifier (tauri.conf.json `identifier`, pinned by a test).
-pub const LAUNCH_AGENT_LABEL: &str = "church.ozzie.desktop";
+/// app's own reverse-DNS identifier (tauri.conf.json `identifier`, pinned by a test). The test copy of Ozzie has no
+/// login item at all (`manage`, `autostart_set`), and its identifier would never name the real app's.
+pub const LAUNCH_AGENT_LABEL: &str = ozzie_native_auth::variant::APP_IDENTIFIER;
 /// Closing the window hides it; Ozzie keeps running in the menu bar. "Quit Ozzie" quits.
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::CloseRequested { api, .. } = event
@@ -580,14 +581,20 @@ pub struct Background {
 /// Everything managed here, for main.rs to add in one place.
 pub fn manage(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     // The app menu replaces the framework's default, whose Quit would end Ozzie with no question (app_menu.rs).
-    crate::app_menu::install(builder, on_menu_event)
-        .plugin(
+    let builder = crate::app_menu::install(builder, on_menu_event);
+    // The test copy of Ozzie never opens at login: no Launch Agent is ever read, written or removed by it.
+    let builder = if ozzie_native_auth::variant::IS_TEST_COPY {
+        builder
+    } else {
+        builder.plugin(
             tauri_plugin_autostart::Builder::new()
                 .macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent)
                 .args([AT_LOGIN])
                 .app_name(LAUNCH_AGENT_LABEL)
                 .build(),
         )
+    };
+    builder
         .manage(Responsibilities::default())
         .manage(Background::default())
         .manage(PauseItem(Mutex::new(None)))
@@ -663,6 +670,10 @@ pub fn background_next_due(background: tauri::State<'_, Background>, at_ms: Opti
 #[tauri::command]
 pub fn autostart_get(app: tauri::AppHandle) -> Result<bool, &'static str> {
     use tauri_plugin_autostart::ManagerExt;
+    // The test copy has no login item.
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return Ok(false);
+    }
     app.autolaunch()
         .is_enabled()
         .map_err(|_| "autostart-unavailable")
@@ -676,6 +687,10 @@ pub fn autostart_get(app: tauri::AppHandle) -> Result<bool, &'static str> {
 #[tauri::command]
 pub fn autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<bool, &'static str> {
     use tauri_plugin_autostart::ManagerExt;
+    // The test copy has no login item, and never turns one on or off.
+    if ozzie_native_auth::variant::IS_TEST_COPY {
+        return Err("autostart-unavailable");
+    }
     let launcher = app.autolaunch();
     let result = if enabled {
         launcher.enable()
@@ -1643,8 +1658,10 @@ mod tests {
             conf["app"]["windows"][0]["label"],
             serde_json::json!("main")
         );
-        // The Launch Agent is labelled with the app's own identifier.
-        assert_eq!(conf["identifier"], serde_json::json!(LAUNCH_AGENT_LABEL));
+        // The Launch Agent is labelled with the app's own identifier (the test copy has none).
+        if !ozzie_native_auth::variant::IS_TEST_COPY {
+            assert_eq!(conf["identifier"], serde_json::json!(LAUNCH_AGENT_LABEL));
+        }
         // A web view that keeps running while hidden needs macOS 14.
         assert_eq!(
             conf["app"]["windows"][0]["backgroundThrottling"],

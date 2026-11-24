@@ -13,8 +13,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HarnessSession } from "../../../core/src/harness/session.js";
 import { HarnessTools } from "../../../core/src/harness/tools.js";
 import { MAX_SHARED_BYTES, sharedCheckText, sharedEnvelopes } from "../../../core/mcp/snapshot.js";
-import { NO_CHECK, OFF, SHORTCUTS_FILE, SHORTCUTS_ON_FILE, shortcutsAnswer, shortcutsEnvelopes } from "../../../core/mcp/shortcuts.js";
+import { GENESIS, GENESIS_COPY, NO_CHECK, OFF, SHORTCUTS_FILE, SHORTCUTS_ON_FILE, shortcutsAnswer, shortcutsEnvelopes } from "../../../core/mcp/shortcuts.js";
 import { FRESH, harnessData } from "../../../core/test/harness/fixtures.js";
+import { buildSystemBrief } from "../../../core/src/church-systems/brief.js";
+import { systemHarnessCapture } from "../../../core/src/church-systems/harness.js";
+import { SYSTEMS, type SystemCapture } from "../../../core/src/church-systems/types.js";
+import { b1Capture, breezeUntimedCapture, NOW as SYSTEM_NOW } from "../../../core/test/church-systems/fixtures.js";
 import { OPENABLE_PAGES } from "../src/siri-shortcuts.js";
 
 const SRC = new URL("../src-tauri/", import.meta.url);
@@ -259,6 +263,37 @@ describe.skipIf(process.platform !== "darwin")("Siri actions answering (the acti
     }
     return sharedCheckText(envelopes, [], FRESH, "B4K7Q2X9M3T8");
   }
+
+  /** A church on B1 Church or Breeze (0.10.0): its own check's overview as native writes it, checked five minutes ago for a Sunday a week away. */
+  async function systemCopy(capture: SystemCapture, numbers: "all" | "none"): Promise<string> {
+    const built = buildSystemBrief(capture, { confirmedZone: capture.church.time_zone }, SYSTEM_NOW);
+    if (!built.ok) throw new Error(built.reason);
+    const data = { capture: systemHarnessCapture(capture, false), brief: built.brief, operations: null, decisions: [], rules: { sundayLeads: [], checkInAfterSundaysInARow: 3 },
+      attention: null, granted: ["services" as const], mode: "live" as const, connected: false, source: SYSTEMS[capture.system].name };
+    const envelopes = shortcutsEnvelopes(await sharedEnvelopes(new HarnessTools(data, new HarnessSession(), { now: () => SYSTEM_NOW })));
+    const week = new Date(Date.now() + 7 * 86_400_000);
+    const day = (n: number) => String(n).padStart(2, "0");
+    for (const e of envelopes) {
+      e.check_time = new Date(Date.now() - 5 * 60_000).toISOString().replace(/\.\d{3}Z$/u, "Z");
+      (e.payload as Record<string, unknown>)["sunday"] = `${week.getFullYear()}-${day(week.getMonth() + 1)}-${day(week.getDate())}`;
+    }
+    return sharedCheckText(envelopes, [], FRESH, "B4K7Q2X9M3T8", { id: capture.system as "b1" | "breeze", role_numbers: numbers });
+  }
+
+  it("says what core/mcp/shortcuts.ts says for a church on B1 Church, Breeze or Genesis, over the same copy", async () => {
+    const { home: h, folder } = home(true);
+    for (const [text, says] of [[await systemCopy(b1Capture(), "all"), "Checked in B1 Church today at"],
+      [await systemCopy(breezeUntimedCapture(), "none"), "Breeze doesn't share how many people each role needs, so Ozzie can't say whether"],
+      [GENESIS_COPY, GENESIS]] as const) {
+      writeFileSync(join(folder, SHORTCUTS_FILE), text, { mode: 0o600 });
+      const before = Date.now();
+      const said = check(h);
+      expect([before, Date.now()].map(nowMs => shortcutsAnswer("sunday", { on: true, text, nowMs, timeZone: ZONE }))).toContain(said);
+      expect(said).toContain(says);
+      const helped = helper(h);
+      if (helped !== null) expect(helped).toBe(said);
+    }
+  });
 
   it("says what the helper says, and what core/mcp/shortcuts.ts says, over the same copy", async () => {
     const { home: h, folder } = home(true);

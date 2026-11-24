@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The test copy of Ozzie (tauri.test-copy.conf.json bundle.macOS.infoPlist). Info.plist's own privacy
+	     descriptions, word for word (a test holds them equal), and nothing that could reach the real app: no ozzie://
+	     links (they belong to the real app alone, so a link never opens this copy) and no other names for Siri. -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Ozzie only reads the calendars you choose, to show what's coming up on Today and when two things are at the same time. It never adds, changes or deletes an event, and what it reads stays on this Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ozzie listens only after you press the microphone button in Ask, to turn your spoken question into text you can check. The sound stays on this Mac and is never recorded.</string>
+	<key>CFBundleURLTypes</key>
+	<array/>
+	<key>INAlternativeAppNames</key>
+	<array/>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Ozzie turns your spoken question into text on this Mac, so you can check it before you ask. Your words are never sent anywhere to do this.</string>
+</dict>
+</plist>

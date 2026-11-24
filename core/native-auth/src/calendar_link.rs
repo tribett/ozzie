@@ -33,7 +33,7 @@ use std::time::Duration;
 use url::{Host, Url};
 
 /// Keychain service for the addresses: account `["calendar-link", "<id>"]`, the address as the item's secret.
-pub const KEYCHAIN_SERVICE: &str = "church.ozzie.calendar-links.v1";
+pub const KEYCHAIN_SERVICE: &str = crate::keychain_service!("church.ozzie.calendar-links.v1");
 const KEYCHAIN_WORKSPACE: &str = "calendar-link";
 pub const MAX_LINKS: usize = 8;
 pub const MAX_ADDRESS: usize = 2048;
