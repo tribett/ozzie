@@ -74,7 +74,8 @@
     "day": "2026-11-22",
     "starts_at": "2026-11-22T15:00:00.000Z",
     "ends_at": "2026-11-22T16:30:00.000Z",
-    "shared": false
+    "shared": false,
+    "times": 1
   },
   "busy": [
     {

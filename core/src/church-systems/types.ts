@@ -94,8 +94,16 @@ export interface SystemRead { read: string; checked_at: string; outcome: ReadOut
 /**
  * `day`: the system's own calendar day for the service (YYYY-MM-DD), or null when it doesn't give one. `shared`: whether
  * the plan is shared with volunteers yet (B1 Church only; null when the system doesn't say or it couldn't be read).
+ * `times`: how many separate start times the plan has in this service (B1 Church, whose plan's times are merged into
+ * one span from the earliest start to the latest end). Absent when the system has one time a service (Breeze) and in a
+ * check kept before this was recorded. More than one: no role's own time is known (`rolesShareOneTime`).
  */
-export interface SystemService { id: string; day: string | null; starts_at: string; ends_at: string | null; shared: boolean | null }
+export interface SystemService { id: string; day: string | null; starts_at: string; ends_at: string | null; shared: boolean | null; times?: number }
+/**
+ * Whether every role in this service serves at its one time, so a role can be said "at 9:00 AM". False when the plan
+ * has several start times (B1 Church): the system doesn't say which of them a role serves, and Ozzie names the day.
+ */
+export const rolesShareOneTime = (service: SystemService): boolean => (service.times ?? 1) <= 1;
 /** Something else a person is scheduled for around the service, such as another plan the same day, and their answer. */
 export interface SystemBusy { person_id: string; starts_at: string; ends_at: string; answer: BusyAnswer }
 export interface SystemPosition { id: string; team_id: string | null; needed: number | null }
@@ -146,7 +154,7 @@ export type ParsedCapture = { ok: true; capture: SystemCapture } | { ok: false; 
 /** Size caps: anything larger refuses the whole capture ("too-many"). */
 export const MAX = Object.freeze({
   reads: 1000, on_service: 500, positions: 200, assignments: 500, team_members: 2000, blockouts: 2000, busy: 2000, groups: 200, events: 200, forms: 200,
-  names: 3000, labels: 3000, text: 200,
+  names: 3000, labels: 3000, text: 200, service_times: 100,
 });
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/u;
@@ -282,10 +290,13 @@ function parse(value: unknown): SystemCapture {
 
   let service: SystemService | null = null;
   if (v["service"] !== null) {
-    const s = object(v["service"], ["id", "day", "starts_at", "ends_at", "shared"]);
+    // `times` is left out where the system has none to count, and in a check kept before it was recorded.
+    const counted = plain(v["service"]) && Object.hasOwn(v["service"], "times");
+    const s = object(v["service"], ["id", "day", "starts_at", "ends_at", "shared", ...(counted ? ["times"] : [])]);
     const shared = s["shared"] === null || typeof s["shared"] === "boolean" ? s["shared"] : refuse("status");
     const day = s["day"] === null ? null : isDateOnly(s["day"]) ? s["day"] : refuse("time");
-    service = { id: id(s["id"]), day, starts_at: time(s["starts_at"]), ends_at: s["ends_at"] === null ? null : time(s["ends_at"]), shared };
+    const times = counted ? (Number.isSafeInteger(s["times"]) && (s["times"] as number) >= 1 && (s["times"] as number) <= MAX.service_times ? s["times"] as number : refuse("count")) : null;
+    service = { id: id(s["id"]), day, starts_at: time(s["starts_at"]), ends_at: s["ends_at"] === null ? null : time(s["ends_at"]), shared, ...(times === null ? {} : { times }) };
     if (service.ends_at !== null) ordered(service.starts_at, service.ends_at);
   }
   const busy = v["busy"] === null ? null : list(v["busy"], MAX.busy, busyEntry);

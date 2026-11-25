@@ -686,6 +686,44 @@ fn a_time_must_be_an_instant_and_end_after_it_starts() {
     );
 }
 
+/// Issue 45: a plan's times are merged into one span, so the capture says how many separate start times it has. The
+/// page names a role's time only when there is one.
+#[test]
+fn the_service_says_how_many_start_times_the_plan_has() {
+    for (times, expected) in [
+        (json!([{"id": "TIMone", "startTime": "2026-11-22T15:00:00.000Z", "endTime": "2026-11-22T16:15:00.000Z"}]), 1),
+        (
+            json!([
+                {"id": "TIMfirst", "startTime": "2026-11-22T15:00:00.000Z", "endTime": "2026-11-22T16:15:00.000Z"},
+                {"id": "TIMsecond", "startTime": "2026-11-22T17:00:00.000Z", "endTime": "2026-11-22T18:15:00.000Z"},
+            ]),
+            2,
+        ),
+        // Two times that start together are one start time.
+        (
+            json!([
+                {"id": "TIMfirst", "startTime": "2026-11-22T15:00:00.000Z", "endTime": "2026-11-22T16:15:00.000Z"},
+                {"id": "TIMsame", "startTime": "2026-11-22T15:00:00.000Z", "endTime": "2026-11-22T16:30:00.000Z"},
+            ]),
+            1,
+        ),
+        // A rehearsal on another day isn't part of the service, so it isn't counted.
+        (
+            json!([
+                {"id": "TIMrehearse", "startTime": "2026-11-20T01:00:00.000Z", "endTime": "2026-11-20T02:00:00.000Z"},
+                {"id": "TIMservice", "startTime": "2026-11-22T15:00:00.000Z", "endTime": "2026-11-22T16:15:00.000Z"},
+            ]),
+            1,
+        ),
+    ] {
+        let (fake, clock) = setup();
+        fake.set(&format!("/doing/times/plan/{PLAN_ID}"), ok(times.clone()));
+        let capture = run_check(&fake, &clock);
+        assert_eq!(outcome(&capture, TIMES), Outcome::Ok, "{times}");
+        assert_eq!(capture.service().unwrap().times, Some(expected), "{times}");
+    }
+}
+
 #[test]
 fn blockouts_follow_b1s_own_day_rule_against_the_service() {
     // Chicago, b1-church-times.md 2.1 and 2.3: Sunday 2026-11-22, 9:00 to 10:15 CST is 15:00Z to 16:15Z; an evening
@@ -697,6 +735,7 @@ fn blockouts_follow_b1s_own_day_rule_against_the_service() {
         starts_at: Time::parse(start).unwrap(),
         ends_at: Some(Time::parse(end).unwrap()),
         shared: None,
+        times: None,
     };
     let morning = service("2026-11-22T15:00:00.000Z", "2026-11-22T16:15:00.000Z");
     let evening = service("2026-11-23T01:00:00.000Z", "2026-11-23T02:00:00.000Z");

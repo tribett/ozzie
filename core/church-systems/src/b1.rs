@@ -637,7 +637,13 @@ fn service_of(plan: &Id, day: Option<Date>, spans: &[Span]) -> Option<Service> {
         starts_at,
         ends_at,
         shared: None,
+        times: start_times(spans),
     })
+}
+/// How many separate start times these are (`Service::times`): two times that start together count once.
+fn start_times(spans: &[Span]) -> Option<u32> {
+    let starts: std::collections::BTreeSet<i64> = spans.iter().map(|(s, _)| s.unix_millis()).collect();
+    u32::try_from(starts.len().min(crate::capture::MAX_SERVICE_TIMES)).ok()
 }
 /// The plan's real local day, from the day B1 stores. B1's admin site saves a plan's day as the UTC date of local noon
 /// on the real day (it sends noon in the browser's zone and keeps the date part in UTC). So the real day is whichever
@@ -724,6 +730,7 @@ fn project_service(spans: &[Span], plan: &Id, day: Date) -> Projected<Option<Ser
     } else {
         None
     };
+    let times = start_times(&candidates);
     (
         Some(Service {
             id: plan.clone(),
@@ -731,6 +738,7 @@ fn project_service(spans: &[Span], plan: &Id, day: Date) -> Projected<Option<Ser
             starts_at: first,
             ends_at,
             shared: None,
+            times,
         }),
         !one_block || near_left_out,
     )

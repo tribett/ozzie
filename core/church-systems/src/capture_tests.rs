@@ -47,6 +47,29 @@ fn a_capture_round_trips_through_its_json() {
     }
 }
 
+/// `service.times` (issue 45): a count from 1, left out where the system has none to count and in a check kept before
+/// it was recorded.
+#[test]
+fn a_services_start_time_count_is_optional_and_at_least_one() {
+    let mut value = base();
+    assert_eq!(value["service"]["times"], 1);
+    value["service"]["times"] = json!(2);
+    assert_eq!(parse(&value).unwrap().service().unwrap().times, Some(2));
+    value["service"].as_object_mut().unwrap().remove("times");
+    let kept = parse(&value).unwrap();
+    assert_eq!(kept.service().unwrap().times, None);
+    let again: Value = serde_json::from_str(&kept.to_json().unwrap()).unwrap();
+    assert!(again["service"].get("times").is_none());
+    for bad in [json!(0), json!(MAX_SERVICE_TIMES + 1)] {
+        value["service"]["times"] = bad.clone();
+        assert_eq!(parse(&value), Err(Invalid::Count), "{bad}");
+    }
+    for bad in [json!(-1), json!("2"), json!(1.5)] {
+        value["service"]["times"] = bad.clone();
+        assert_eq!(parse(&value), Err(Invalid::Shape), "{bad}");
+    }
+}
+
 /// Only the three systems Ozzie reads: a capture naming any other system is refused, the system on hold included (its
 /// name is assembled here only so a search of the library for that name finds nothing; no check enforces that).
 #[test]

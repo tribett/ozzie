@@ -13,7 +13,7 @@ import { systemCaptureToCoverage, type CoverageRefusal, type SystemCoverage } fr
 import { cannotSee, notSharedNotice, numbersNotShared, onServiceWithoutRole, waitingForZone } from "./facts.js";
 import { systemKidsFindings } from "./kids.js";
 import { labelsOf } from "./placeholders.js";
-import { instant, readsFor, SYSTEMS, untimed, type AssignmentStatus, type CapturePart, type ReadOutcome, type SystemCapture } from "./types.js";
+import { instant, readsFor, rolesShareOneTime, SYSTEMS, untimed, type AssignmentStatus, type CapturePart, type ReadOutcome, type SystemCapture } from "./types.js";
 
 /** What the check needs from Church rules and this Mac: the zone the leader confirmed, and their finding feedback. */
 export interface SystemBriefRules {
@@ -83,7 +83,10 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
   // (round 4). The check itself still runs over the day (coverage.ts).
   // Only Breeze writes a service with no time as midnight; another system's midnight is a real time (review of round 4, L1).
   const timed = !(capture.system === "breeze" && untimed(capture.service!.starts_at));
-  const interval = (id: string): ServingInterval | null => timed ? mapped.input.positions.find(p => p.position_id === id)?.interval ?? null : null;
+  // A plan with several start times (B1 Church): the service is their whole span and B1 doesn't say which time a role
+  // serves, so a role's card names the day, never the plan's earliest time (issue 45). The check still runs over the span.
+  const rolesTimed = timed && rolesShareOneTime(capture.service!);
+  const interval = (id: string): ServingInterval | null => rolesTimed ? mapped.input.positions.find(p => p.position_id === id)?.interval ?? null : null;
   const assignmentOf = new Map(capture.assignments.map(a => [a.id, a]));
   const people = (position: string, status: AssignmentStatus) =>
     [...new Set(capture.assignments.filter(a => a.position_id === position && a.status === status).map(a => a.person_id))].sort();
@@ -156,7 +159,7 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
     const role = roleName(a?.position_id ?? p.position_id);
     const seen = blocked.get(b.person_id) ?? { serving: [] };
     seen.serving.push({ position_id: a?.position_id ?? p.position_id, name: role, team_id: positionOf.get(a?.position_id ?? p.position_id)?.team_id ?? p.team_id,
-      status: a?.status === "unconfirmed" ? "pending" : "confirmed", interval: b.interval });
+      status: a?.status === "unconfirmed" ? "pending" : "confirmed", interval: rolesTimed ? b.interval : null });
     blocked.set(b.person_id, seen);
   }
   // Each person's roles in one fixed order (by role name, then answer), the first named as the finding's role: what is
@@ -241,8 +244,9 @@ export function buildSystemBrief(capture: SystemCapture, rules: SystemBriefRules
     mode: options.fictional ? "fictional" : options.saved ? "recording" : "live", source: name,
     plan: { id: mapped.service_id, title: label("service"), dates: occurrence.dates, sort_date: null,
       date: service.day ?? null, starts_at: timed ? service.starts_at : null },
-    // Its one service time, named only on the church's own clock and never for a service with no time of day.
-    time_zone: mapped.time_zone, times: timed && mapped.time_zone ? [service.starts_at] : [], day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
+    // Its one service time, named only on the church's own clock, and never for a service with no time of day or a plan
+    // with several start times (only the earliest is known here, and naming it alone would read as the only one).
+    time_zone: mapped.time_zone, times: rolesTimed && mapped.time_zone ? [service.starts_at] : [], day, checked_at, completed_at: capture.completed_at, status: result.status, stale,
     sources: { reads: reads.length, failed },
     findings: kept.shown,
     ...(kept.hidden.length ? { hidden: kept.hidden.map(h => ({ finding: h.item, entry: h.entry })) } : {}),

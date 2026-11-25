@@ -349,6 +349,28 @@ describe("the service's page on another system", () => {
     expect(titled("Sunday Nov 22")).toContain("Sunday, November 22");
   });
 
+  it("a B1 Church plan with several start times says each role by its day, never the plan's earliest time (issue 45)", () => {
+    const one = b1Capture(), service = one.service!;
+    const two = b1Capture({ service: { ...service, ends_at: "2026-11-22T12:30:00-06:00", times: 2 } });
+    const drawn = inZone("America/Chicago", () => page("b1", resultOf(two).brief, two.names));
+    // B1 merges the plan's times into one span and doesn't say which a role serves: the date line and each role name the
+    // day. (The check's own time, "Checked Fri, Nov 20, 9:00 AM", is this Mac's clock, not the service's.)
+    expect(drawn).toContain("Sunday, November 22 · Sunday Gathering");
+    for (const role of ["Vocals", "Guitar", "Greeter"]) expect(drawn).toContain(`${role} · this Sunday`);
+    expect(drawn).not.toMatch(/November 22 (?:·|at) \d|12:30 PM/u);
+    // A blockout over such a plan is "during the service": no time was named to call "that time" (review M1).
+    const blocked = b1Capture({ service: { ...service, ends_at: "2026-11-22T12:30:00-06:00", times: 2 },
+      blockouts: [{ person_id: "PER-rowan", starts_at: "2026-11-21T00:00:00-06:00", ends_at: "2026-11-23T00:00:00-06:00" }] });
+    const away = inZone("America/Chicago", () => page("b1", resultOf(blocked).brief, blocked.names));
+    expect(away).toContain("Rowan Fictional is scheduled for Vocals and has a blockout in B1 Church during the service.");
+    expect(away).not.toMatch(/at that time|at those times/u);
+    // One start time: as before.
+    const single = b1Capture({ service: { ...service, times: 1 } });
+    const before = inZone("America/Chicago", () => page("b1", resultOf(single).brief, single.names));
+    expect(before).toContain("Sunday, November 22 · 9:00 AM · Sunday Gathering");
+    expect(before).toContain("Vocals · Sunday, November 22 at 9:00 AM");
+  });
+
   it("on any Mac clock, the service's and its roles' times are the church's, and another clock is told which zone that is (0.5.4 used the Mac's on the cards)", () => {
     const b1 = b1Capture(), breeze = breezeCapture(), untimed = breezeUntimedCapture();
     for (const zone of ["America/Chicago", "America/New_York", "UTC", "Asia/Tokyo"]) {

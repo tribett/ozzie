@@ -178,7 +178,7 @@ export function briefTarget(f: Finding, occurrence: string, occurrenceLabel?: st
       // Who hasn't answered where the system doesn't say whether the request was sent (Breeze): only when there is someone.
       ...(f.waiting?.length ? [sorted(f.waiting)] : []),
       // A blockout adds each role it overlaps and how Planning Center counts the person there.
-      ...(f.kind === "blockout" ? [(f.serving ?? []).map(s => [s.team_id, s.name, s.status, s.interval.starts_at, s.interval.ends_at])] : [])]),
+      ...(f.kind === "blockout" ? [(f.serving ?? []).map(s => [s.team_id, s.name, s.status, s.interval?.starts_at ?? null, s.interval?.ends_at ?? null])] : [])]),
     labels: { ...(team && f.position ? { team: f.position.name } : {}), ...(occurrenceLabel ? { occurrence: occurrenceLabel } : {}) },
   };
 }

@@ -141,6 +141,17 @@ const EXPECTED: Record<string, Summary> = {
     ],
     issues: [], on_service: 0, plan_shared: false, unconfirmed: ["unverified", [...HELD, "candidate-unverified@-"]], facts: B1_FACTS,
   },
+  // b1-full's plan with a second service time: the same check over the whole span (its `times` is 2; the brief's wording
+  // for it is pinned in several-times.test.ts).
+  "b1-two-times.json": {
+    system: "b1", coverage: "ok", status: "findings", day: ["Sunday", "your service"],
+    positions: [
+      ["POSvocal", 0, "not-required", { PERdrew: "excluded" }],
+      ["POSsound", 1, "not-required", { PERdrew: "excluded" }],
+      ["POSgreet", 2, "not-required", { PERellis: "suggestion" }],
+    ],
+    issues: [], on_service: 0, plan_shared: true, unconfirmed: ["unverified", [...HELD, "candidate-unverified@-"]], facts: B1_FACTS,
+  },
   // The blockouts read timed out.
   "b1-failed-read.json": B1_BLOCKOUTS_UNREAD,
   // Checked on the service's own day: B1 stops listing a blockout during its last day, so native marks the read cut short.

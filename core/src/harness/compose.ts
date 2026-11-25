@@ -230,8 +230,10 @@ function finding(row: Row, said: SaidDay = NO_DAY, day: Day = null, here: Here |
     case "scheduled with a blockout at this time": {
       const serving = Array.isArray(row["serving"]) ? row["serving"] as Row[] : [];
       const times = new Set(serving.map(s => str((s["time"] as Row | null)?.["starts_at"]))).size;
+      // No role's own time is known (a B1 Church plan with several start times): the blockout is over the service.
+      const untimed = serving.length > 0 && serving.every(s => s["time"] === "not known");
       return `${person} is scheduled for ${list(serving.map(s => `${str(s["role"]) ?? "a role"} (${str(s["status"]) ?? "status not known"})${at(s["time"], said)}`)) || "a role"}` +
-        ` and has a blockout in Planning Center at ${times > 1 ? "those times" : "that time"}. Planning Center still counts them, so ${serving.length > 1 ? "they aren't open spots" : "it isn't an open spot"}.`;
+        ` and has a blockout in Planning Center ${untimed ? "during the service" : times > 1 ? "at those times" : "at that time"}. Planning Center still counts them, so ${serving.length > 1 ? "they aren't open spots" : "it isn't an open spot"}.`;
     }
     case UNVERIFIED: return unverified(row, here);
     // Rooms, follow-ups and group meetings in the overview (tools.ts #operationsShown), as their own tools say them.

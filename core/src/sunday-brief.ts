@@ -62,7 +62,7 @@ export interface Finding {
    * blockout: each role this person is scheduled for (confirmed or pending) whose serving time their own blockout in
    * Planning Center overlaps, in Planning Center's order, with that serving time. The first is `position`.
    */
-  serving?: { name: string; team_id: string; status: "confirmed" | "pending"; interval: ServingInterval }[];
+  serving?: { name: string; team_id: string; status: "confirmed" | "pending"; interval: ServingInterval | null }[];
   /** "Why I flagged this": the rule, the source facts and when they were read. Name-free. */
   why: string[];
 }
@@ -230,10 +230,18 @@ export function withServices(f: Finding, services: TeamServices | undefined): Fi
     ...(f.serving ? { serving: f.serving.map(s => ({ ...s, name: named(s.name, s.team_id) })) } : {}),
   };
 }
+/**
+ * When a blockout finding's blockout falls, as its sentence ends: "at that time" for one serving time, "at those times"
+ * for several, and "during the service" when no role's own time is known (a B1 Church plan with several start times,
+ * church-systems/brief.ts: the blockout overlaps the plan's whole span, and which time the person serves isn't said).
+ */
+export const blockoutWhen = (f: Pick<Finding, "serving" | "position">): string =>
+  blockoutTime(f) ? "at that time" : (f.serving?.length ?? 0) > 0 && f.serving!.every(s => s.interval === null) ? "during the service"
+    : (f.serving?.length ?? 0) > 1 ? "at those times" : "at that time";
 /** The one serving time a blockout finding is about, or null when it names more than one. */
 export const blockoutTime = (f: Pick<Finding, "serving" | "position">): ServingInterval | null => {
   const times = [...new Map((f.serving ?? []).map(s => [JSON.stringify(s.interval), s.interval])).values()];
-  return times.length === 1 ? times[0]! : times.length ? null : f.position?.interval ?? null;
+  return times.length === 1 ? times[0] ?? null : times.length ? null : f.position?.interval ?? null;
 };
 const bucket = (cs: CandidateAssessment[], d: CandidateAssessment["disposition"]) =>
   cs.filter(c => c.disposition === d).map(c => ({ person_id: c.person_id, reasons: c.reasons }));

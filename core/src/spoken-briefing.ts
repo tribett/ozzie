@@ -7,7 +7,7 @@
 // Mac's own voice, and `<`, `>` and `&` never reach it (no markup a voice could act on).
 import type { AttentionReport } from "./attention-import/index.js";
 import { operationsNotChecked, type AlsoOperations, type SundayOperations } from "./operations-capture.js";
-import { blockoutRoles, blockoutTime, findingService, roleReasons, rolesUnchecked, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices,
+import { blockoutRoles, blockoutTime, blockoutWhen, findingService, roleReasons, rolesUnchecked, rosterNeedsYou, rosterSummary, serviceOfTeam, unnumberedRoster, withServices,
   type Finding, type FindingServices, type SundayBrief, type TeamServices } from "./sunday-brief.js";
 import type { DecidedBrief, DecidedItem } from "./sunday-decisions.js";
 import { SUNDAY_WORDS, type DayWords } from "./service-day.js";
@@ -180,7 +180,7 @@ function look(f: Finding, ctx: Ctx, stale: boolean): string {
       return `Ozzie couldn't confirm the scheduled lead for ${pos}, so it isn't counting it as covered.`;
     case "blockout": {
       const one = blockoutTime(f), at = one ? ` at ${clock(one.starts_at, ctx.timeZone)}` : "";
-      const when = !one && (f.serving?.length ?? 0) > 1 ? "at those times" : "at that time";
+      const when = blockoutWhen(f);
       return name ? `${name} is scheduled for ${blockoutRoles(f)}${at} and has a blockout in ${f.source ?? "Planning Center"} ${when}.`
         : `Someone scheduled for ${blockoutRoles(f)}${at} has a blockout in ${f.source ?? "Planning Center"} ${when}.`;
     }

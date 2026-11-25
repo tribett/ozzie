@@ -63,6 +63,22 @@ fn captures() -> Vec<(&'static str, SystemCapture)> {
             );
         }),
     ));
+    // The plan with a second service time (11:00 to 12:15 CST): the service is the whole span, and `times` is 2, so
+    // the page names no single time for a role (issue 45).
+    out.push((
+        "b1-two-times",
+        b1_at(NOW, |fake| {
+            fake.set(
+                "/doing/times/plan/PLAfict01",
+                ok(json!([
+                    {"id": "TIMservice", "planId": "PLAfict01", "displayName": "Sunday", "startTime": "2026-11-22T15:00:00.000Z",
+                     "endTime": "2026-11-22T16:30:00.000Z", "teams": "Worship,Technical,Hospitality", "serviceTimeType": "service"},
+                    {"id": "TIMsecond", "planId": "PLAfict01", "displayName": "Second service", "startTime": "2026-11-22T17:00:00.000Z",
+                     "endTime": "2026-11-22T18:15:00.000Z", "teams": "Worship", "serviceTimeType": "service"}
+                ])),
+            );
+        }),
+    ));
     // A church with no zone in B1, checked with the zone the person confirmed (Auckland): B1 saved the Sunday 11-22
     // plan as 11-21, the Saturday 19:00 rehearsal (06:00Z) is left out, and Drew's Sunday blockout runs Auckland
     // midnight to midnight, so it covers the service (21:00Z).

@@ -37,6 +37,8 @@ pub const MAX_LABEL_UNITS: usize = 200;
 pub const MAX_ID_CHARS: usize = 64;
 /// The largest count a capture holds (a role's wanted number, a group's members, attendance, submissions).
 pub const MAX_COUNT: u32 = 100_000;
+/// Start times one service can be said to have (`Service::times`).
+pub const MAX_SERVICE_TIMES: usize = 100;
 
 /// The church systems Ozzie can read besides Planning Center.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -610,6 +612,11 @@ pub struct Service {
     /// while it isn't (B1: penciled in); null when it doesn't say or couldn't be read (Breeze always).
     #[serde(deserialize_with = "Option::deserialize")]
     pub shared: Option<bool>,
+    /// How many separate start times the plan has in this service (B1 Church: a plan's times are merged into one
+    /// span, so a role's own time is only known when this is 1). Absent when the system has one time a service
+    /// (Breeze), and in a check kept before this was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub times: Option<u32>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -804,6 +811,14 @@ impl SystemCapture {
             && !in_order(&s.starts_at, s.ends_at.as_ref(), false)
         {
             return Err(Invalid::Times);
+        }
+        if self
+            .service
+            .as_ref()
+            .and_then(|s| s.times)
+            .is_some_and(|n| n == 0 || n as usize > MAX_SERVICE_TIMES)
+        {
+            return Err(Invalid::Count);
         }
         if self
             .blockouts

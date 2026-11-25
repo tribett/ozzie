@@ -2,7 +2,7 @@
 // everything still open for the Sunday on screen, in one place, with what wasn't checked and when it
 // was read. Built only from the brief, the person's decisions and the rooms / follow-ups check the
 // Sunday page shows; names resolve on this Mac only. Read-only: decisions happen on the Sunday page.
-import { blockoutRoles, blockoutTime, findingService, roleReasons, rolesUnchecked, rosterSummary, shownUncertainties, sundayShownCount, serviceOfTeam, unnumberedRoster, withServices,
+import { blockoutRoles, blockoutWhen, findingService, roleReasons, rolesUnchecked, rosterSummary, shownUncertainties, sundayShownCount, serviceOfTeam, unnumberedRoster, withServices,
   type Finding, type FindingServices, type SundayBrief, type TeamServices } from "../../../core/src/sunday-brief.js";
 import type { SundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
@@ -46,7 +46,7 @@ export function sundayReadyLine(found: Finding, names: Names, d: DayWords = SUND
     // In the service's own day words (it said "this Sunday" for every service), or none once said with its own service.
     case "too-few-confirmed": return fewConfirmedTitle(f, d, Boolean(serviceOfTeam(f.position?.team_id, services)), zone);
     case "background-check": return backgroundTitle(nameOf(names, f.person_id), f.check);
-    case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} at ${blockoutTime(f) ? "that time" : "those times"}. ${f.source ?? "Planning Center"} still counts them.`;
+    case "blockout": return `${nameOf(names, f.person_id)} is scheduled for ${blockoutRoles(f)} and has a blockout in ${f.source ?? "Planning Center"} ${blockoutWhen(f)}. ${f.source ?? "Planning Center"} still counts them.`;
     case "worth-a-look": return f.stale ? `This check is out of date. Check ${f.source ?? "Planning Center"} again before relying on it.`
       // Only facts about roles: how many, then each plain reason, as the Services page says them; with more than one
       // service watched, its service first, as Ask says it (the page shows it under that service's heading).

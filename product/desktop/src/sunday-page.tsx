@@ -1,6 +1,6 @@
 import { onChurchClock, otherClock, timesText, titleOnlyDate } from "../../../core/src/service-day.js";
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { blockoutCounted, blockoutRoles, blockoutTime, byServiceTime, findingTime, rolesUnchecked as coreRolesUnchecked, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
+import { blockoutCounted, blockoutRoles, blockoutTime, blockoutWhen, byServiceTime, findingTime, rolesUnchecked as coreRolesUnchecked, shownUncertainties, sundayShownCount, type BriefPerson, type Finding, type Roster, type RosterRole, rosterSummary, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import type { ServingInterval } from "../../../core/src/coverage.js";
 import type { SundayCapture } from "../../../core/src/sunday-capture.js";
 import { useSystemWords, type SystemWords } from "./church-system.js";
@@ -918,7 +918,7 @@ function FindingCard({ item, names, checkedAt, sender, sunday, canReword, onDeci
     case "blockout": {
       // Planning Center's own count stands: they're still counted, so no role reads as open (sunday-brief.ts).
       const one = blockoutTime(finding), many = (finding.serving?.length ?? 0) > 1;
-      title = `${nameOf(names, finding.person_id)} is scheduled for ${blockoutRoles(finding)}${one ? ` at ${clock(one.starts_at, zone)}` : ""} and has a blockout in ${w.name} at ${one ? "that time" : "those times"}.`;
+      title = `${nameOf(names, finding.person_id)} is scheduled for ${blockoutRoles(finding)}${one ? ` at ${clock(one.starts_at, zone)}` : ""} and has a blockout in ${w.name} ${blockoutWhen(finding)}.`;
       body = `${w.name} still counts them as ${blockoutCounted(finding)}, so ${many ? "they aren't open spots" : "it isn't an open spot"}. Only they can say whether they'll be there.`;
       break;
     }

@@ -532,6 +532,7 @@ fn project_instance(
                 starts_at: event.starts_at,
                 ends_at: event.ends_at,
                 shared: None,
+                times: None,
             })
         }
         None => None,
