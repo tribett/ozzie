@@ -7,6 +7,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
+import { openExample } from "../src/example-now.js";
 import { installFakeDom } from "./fake-dom.js";
 import { inZone, inZoneAsync } from "./zone.js";
 import { PREPARE_NOTE, SundayPage } from "../src/sunday-page.js";
@@ -27,6 +28,8 @@ import type { FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import { wednesdayCapture, wednesdayWords } from "../../../core/test/fixtures/service-days/wednesday.js";
 import { twoTimes } from "../../../core/test/fixtures/service-days/two-times.js";
 import { exampleRequest } from "../src/ai-parts.js";
+// The example as written (its own week): these tests read its fixed November 22 dates (example-now.ts).
+openExample("2026-11-21T12:00:00Z");
 
 const dom = installFakeDom({ focus: true });
 type El = NonNullable<ReturnType<typeof dom.button>>;

@@ -2,9 +2,12 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { openExample } from "../src/example-now.js";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => new Promise(() => {})) }));
 import { GenesisPage, genesisAnswer, genesisExample, genesisQuestions, GenesisToday, GenesisWatch, keptCounts } from "../src/genesis-church.js";
 import { progressEmptyText } from "../src/today-groups.js";
+// The example as written (its own week): these tests read its fixed November 22 dates (example-now.ts).
+openExample("2026-11-21T12:00:00Z");
 
 const { capture, view } = genesisExample();
 const text = (html: string) => html.replace(/<[^>]+>/gu, " ").replace(/&#x27;/gu, "'").replace(/\s+/gu, " ");

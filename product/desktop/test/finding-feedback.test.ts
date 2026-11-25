@@ -3,6 +3,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { openExample } from "../src/example-now.js";
 import { SundayPage } from "../src/sunday-page.js";
 import { RulesPage } from "../src/rules-page.js";
 import { TodayPage } from "../src/today-page.js";
@@ -17,6 +18,8 @@ import { applyDecisions, decide } from "../../../core/src/sunday-decisions.js";
 import { briefTarget, type CorrectionWhat, type FeedbackEntry } from "../../../core/src/finding-feedback.js";
 import { evaluateAttentionImport } from "../../../core/src/attention-import/index.js";
 import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
+// The example as written (its own week): these tests read its fixed November 22 dates (example-now.ts).
+openExample("2026-11-21T12:00:00Z");
 
 const AT = "2026-11-20T15:10:00Z";
 const names = nov22Capture().names;

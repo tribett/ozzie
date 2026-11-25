@@ -4,7 +4,8 @@
 import { isTimeZone } from "../../../core/src/church-time.js";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { evaluateAttentionImport, type AttentionFinding, type Message, type CalendarEvent } from "../../../core/src/attention-import/index.js";
-import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
+import { exampleAttention } from "../../../core/src/example.js";
+import { exampleNow } from "./example-now.js";
 import { roleWithService, rosterNeedsYou, rosterSummary, serviceOfTeam, sundayShownCount, unnumberedRoster, type Roster, type RosterRole, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { useAlsoOperations, useTeamServices } from "./team-labels.js";
 import { partKey, withOthers } from "./services-merge.js";
@@ -216,10 +217,11 @@ export function TodayPage({ brief, onSunday, names = NO_NAMES, sundayDecisions =
   const zone = zoneProp ?? macZone();
   const { controls, notice } = useFeedback(feedback, names);
   const entries = feedback?.entries ?? NO_ENTRIES;
-  const imported = useMemo(() => evaluateAttentionImport(harborAttentionImport()), []);
+  const shift = exampleNow();
+  const imported = useMemo(() => evaluateAttentionImport(exampleAttention(shift)), [shift]);
   // "This isn't right" sets an email-and-calendar finding aside for that import, before grouping and in the briefing.
   const report = useMemo(() => imported.ok ? { ...imported, findings: imported.findings.filter(f => !correctionFor(entries, attentionTarget(f))) } : imported, [imported, entries]);
-  const input = useMemo(() => harborAttentionImport(), []);
+  const input = useMemo(() => exampleAttention(shift), [shift]);
   // Findings set aside by the person's Church rules are already out of the brief, so Sunday's count leaves them out too.
   const decided = useMemo(() => brief ? applyDecisions(brief, sundayDecisions) : null, [brief, sundayDecisions]);
   // With more than one service watched, each other service's own rooms and group meetings (services-merge.ts), counted

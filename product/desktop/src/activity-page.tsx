@@ -187,12 +187,16 @@ export function RecentWork({ tasks, procedures = null, trigger = () => undefined
   </>;
 }
 
+/** Where the example church's reads came from, as the Services page says it. */
+export const FICTIONAL_READS = "Fictional example data";
 /**
  * "What happened": what Ozzie did recently, then every read in the latest check. With changes off for the church, all
  * reads; with them on (Planning Center only), the changes the leader confirmed come first (`changes`, change-card.tsx
  * `ChangeHistory`).
  */
-export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, service, serviceNames, now, ollama = null, system = null, changes }: {
+export function ActivityPage({ capture, notGranted = false, tasks, procedures = null, trigger, end, found, source, parts, service, serviceNames, now, ollama = null, system = null, changes, fictional = false }: {
+  /** The example church is on screen: its reads are made up, and are never said to come from the church's system. */
+  fictional?: boolean;
   /** Each check's Planning Center service type, and each watched service's name by it (several services watched). */
   service?: (taskId: string) => string | undefined; serviceNames?: Readonly<Record<string, string>>;
   capture: SundayCapture | null; notGranted?: boolean;
@@ -229,7 +233,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
       {!system.check && <p className="panel-sunken">No check has run yet. Every read appears here once {SERVICES} are checked.</p>}
       {system.check && <>
-        <p className="checkline">{system.name} · started {new Date(system.check.started_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {system.check.reads.length} reads</p>
+        <p className="checkline">{fictional ? FICTIONAL_READS : system.name} · started {new Date(system.check.started_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {system.check.reads.length} reads</p>
         <ol className="log">{system.check.reads.map((r, i) => {
           // Cut short by design every time (B1's forms, Breeze's newest form entries): read as Ozzie reads it, no problem.
           const designed = !!system.check?.system && shortByDesign(system.check.system, r.read, r.outcome) && !!BY_DESIGN_OUTCOME[r.read];
@@ -245,7 +249,7 @@ export function ActivityPage({ capture, notGranted = false, tasks, procedures = 
       <h2 id="reads-title" className="h3">Every read in the latest check</h2>
       {!capture && <p className="panel-sunken">No check has run yet. Every read appears here once {SERVICES} are checked, or when you open the fictional example on {pageRef()}.</p>}
       {capture && <>
-        <p className="checkline">{capture.kind === "recording" ? "Saved copy of a check" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
+        <p className="checkline">{fictional ? FICTIONAL_READS : capture.kind === "recording" ? "Saved copy of a check" : "Planning Center"} · started {new Date(capture.started_at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {capture.reads.length} reads</p>
         <ol className="log">{capture.reads.map((r, i) => <li key={i} className={r.outcome === "ok" || r.outcome === "not-requested" ? "" : "is-problem"}>
           <span className="log-t">{new Date(r.checked_at).toLocaleTimeString("en-US")}</span>
           <span>{activityLabel(r.collection)}{r.offset ? " (continued)" : ""}</span>

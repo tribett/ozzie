@@ -5,7 +5,8 @@
 // and on the person's interval while Ozzie is open, and answers Ask from what it read, on this Mac. Genesis gives no
 // one's name; the church's own words for events, forms and groups stay on this Mac. Read-only, like every system.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { fictionalGenesis } from "../../../core/src/church-systems/fictional.js";
+import { exampleSystem } from "../../../core/src/example.js";
+import { exampleNow } from "./example-now.js";
 import {
   GENESIS_NO_SCHEDULES, genesisLabel, genesisSummary, genesisView, newSubmissionLine, type FormCounts, type GenesisView,
 } from "../../../core/src/church-systems/genesis-view.js";
@@ -137,7 +138,7 @@ export function useGenesisChurch(o: { state: ChurchSystemState; on: boolean; int
 
 /** The fictional Genesis church (core fictional.ts), as of its own check, never going out of date. */
 export function genesisExample(): { capture: SystemCapture; view: GenesisView } {
-  const capture = fictionalGenesis();
+  const capture = exampleSystem("genesis", exampleNow());
   return { capture, view: genesisView(capture, capture.church.time_zone, capture.completed_at, { "GF-prayer": 5, "GF-serve": 3 }) };
 }
 

@@ -8,7 +8,8 @@ import { AI, CHOICE } from "./ai-words.js";
 import type { OnboardingBridge } from "./onboarding-bridge.js";
 import { buildRewordRequest, templateDraft } from "../../../core/src/draft-request.js";
 import { buildSundayBrief } from "../../../core/src/sunday-brief.js";
-import { nov22Capture } from "../../../core/src/fictional-sunday.js";
+import { exampleSundayOnly } from "../../../core/src/example.js";
+import { exampleNow } from "./example-now.js";
 import "./ai-screens.css";
 
 /** What every AI screen needs from where it is shown. `focus`: move focus to each screen's title (not on a page load). */
@@ -84,7 +85,7 @@ export function Problem({ text, children, calm = false }: { text: string; childr
  * sent"): its service time on the church's clock, as the Services page writes the note.
  */
 export function exampleRequest() {
-  const capture = nov22Capture();
+  const capture = exampleSundayOnly(exampleNow());
   const brief = buildSundayBrief(capture, { sundayLeads: [], checkInAfterSundaysInARow: 3 }, capture.completed_at, true);
   const finding = brief.findings.find(f => f.kind === "needs-people" && f.position);
   return finding ? buildRewordRequest(templateDraft({ finding, person_id: "example", zone: brief.time_zone }, capture.names), "warmer", capture.names) : null;

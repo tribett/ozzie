@@ -12,8 +12,8 @@ import "./styles.css";
 import { buildSundayBrief, roleWithService, sundayShownCount, teamLeaders, type SundayBrief } from "../../../core/src/sunday-brief.js";
 import { captureToCoverage, type PositionLabel, type SundayCapture, type SundayRules } from "../../../core/src/sunday-capture.js";
 import type { SystemCapture } from "../../../core/src/church-systems/types.js";
-import { nov22Capture, nov22LaterCapture } from "../../../core/src/fictional-sunday.js";
-import { withFictionalOperations } from "../../../core/src/fictional-operations.js";
+import { exampleCapture, exampleLaterCapture, exampleSystem } from "../../../core/src/example.js";
+import { exampleFirstCheck, exampleNow, leaveExampleVisit, openExample } from "./example-now.js";
 import { captureRooms, sundayOperations } from "../../../core/src/operations-capture.js";
 import { applyDecisions, decisionsStorageKey, loadDecisions, type SundayDecision } from "../../../core/src/sunday-decisions.js";
 import { CHECKING_LINE, PageControls, SERVICE_UNNAMED, STUCK_LINE, SundayPage, useDecisionsMap, useSundayDecisions, type WhoCouldHelp } from "./sunday-page.js";
@@ -106,7 +106,6 @@ import { ofConnection, readSystem, useSystemChurch } from "./system-church.js";
 import { buildSystemBrief } from "../../../core/src/church-systems/brief.js";
 import { kidsChoices, kidsMarked } from "../../../core/src/church-systems/kids.js";
 import { placeholderScope } from "../../../core/src/church-systems/placeholders.js";
-import { fictionalB1, fictionalBreeze } from "../../../core/src/church-systems/fictional.js";
 import { GenesisFirstRun, GenesisPage, GenesisSettings, GenesisToday, GenesisWatch, genesisAnswer, genesisExample, genesisQuestions, useGenesisChurch } from "./genesis-church.js";
 import { choiceLine, ChooseSystem, listedToday, soonest, SystemFirstRun, systemFirstRunAt, type SystemResultView } from "./system-setup.js";
 import { GenesisAlsoRead, OtherSystems, SystemFactsList, SystemSettings } from "./system-settings.js";
@@ -611,7 +610,9 @@ export function App() {
   const genesis = useGenesisChurch({ state: sys.state, on: onGenesis, intervalMinutes: automatic.prefs.intervalMinutes, paused: automatic.schedule.paused,
     now: () => new Date().toISOString(), record: (work, trigger) => recorder.checkSystem(work, "genesis", trigger),
     onSeen: church => { const kept = churchSystem.get(); if (kept.main === "genesis" && kept.genesis?.church_id === church && !kept.genesis.result_seen) sys.setState({ ...kept, genesis: { ...kept.genesis, result_seen: true } }); } });
-  const genesisExampleShown = useMemo(() => onGenesis ? genesisExample() : null, [onGenesis]);
+  // Built for the week the example is shown in, each time it is opened (review of d4bb7c4c, M1): never the week the app started in.
+  const exampleWeek = fictional ? exampleNow() : null;
+  const genesisExampleShown = useMemo(() => onGenesis && exampleWeek ? genesisExample() : null, [onGenesis, exampleWeek]);
   // What the Genesis pages show: the fictional example church while it is on, else the last read.
   const genesisShown = fictional && genesisExampleShown ? genesisExampleShown : { capture: genesis.capture, view: genesis.view };
   const hooks: ProactiveHooks = useMemo(() => ({
@@ -906,10 +907,10 @@ export function App() {
   const systemShown = Boolean(onSystem) && !fictional;
   const systemExample = useMemo(() => {
     if (!onSystem || !fictional) return null;
-    const example = onSystem === "b1" ? fictionalB1() : fictionalBreeze();
+    const example = exampleSystem(onSystem, exampleNow());
     const built = buildSystemBrief(example, { confirmedZone: example.church.time_zone }, now, { fictional: true });
     return built.ok ? { capture: example, brief: built.brief } : null;
-  }, [onSystem, fictional]);
+  }, [onSystem, fictional, fictional ? exampleNow() : null]);
   const brief = onSystem ? (fictional ? systemExample?.brief ?? null : sys.built?.brief ?? null) : pcBrief;
   // The names the pages resolve, from the check on screen (Planning Center's, or the other system's).
   const shownNames = onSystem ? (fictional ? systemExample?.capture.names : sys.capture?.names) : capture?.names;
@@ -1355,7 +1356,8 @@ export function App() {
   // Says whether the check came (a change's role waits for it).
   const act = async (work: () => Promise<SundayCapture>, isFictional = false): Promise<boolean> => {
     setBusy(true); setProblem(""); setRefused(false);
-    try { setCapture(await work()); setFictional(isFictional); setNow(new Date().toISOString()); return true; }
+    // A real check ends any visit to the example, even one opened and never shown (review of 3faec11b).
+    try { const read = await work(); if (!isFictional) leaveExampleVisit(); setCapture(read); setFictional(isFictional); setNow(new Date().toISOString()); return true; }
     catch (error) { setProblem(sundayProblem(error)); setRefused(refusedRead(error)); return false; }
     finally { setBusy(false); }
   };
@@ -1558,11 +1560,15 @@ export function App() {
   // The fictional example (audit item 2): opened from setup, Today or Sunday; a band on every page says so while it is on.
   const showExample = () => {
     // A church on B1 Church or Breeze sees its own system's example church (memo above), never Planning Center's.
+    // Its Sunday is the coming one, worked out each time it is opened (example-now.ts).
+    openExample();
     if (onSystem || onGenesis) { setCapture(null); setFictional(true); setProblem(""); setRefused(false); setNow(new Date().toISOString()); return; }
-    void act(() => Promise.resolve(withFictionalOperations(nov22Capture())), true);
+    void act(() => Promise.resolve(exampleCapture(exampleNow())), true);
   };
   // Nothing chosen yet (a fresh Mac): leaving the example goes back to "What does your church use?" (round 5).
-  const leaveExample = () => { setCapture(null); setFictional(false); setProblem(""); setRefused(false); if (nothingChosen) { setSetupKey(k => k + 1); setSetup("first"); } };
+  // However the example is left (its own button, a real check, a saved one): the visit is over.
+  useEffect(() => { if (!fictional) leaveExampleVisit(); }, [fictional]);
+  const leaveExample = () => { leaveExampleVisit(); setCapture(null); setFictional(false); setProblem(""); setRefused(false); if (nothingChosen) { setSetupKey(k => k + 1); setSetup("first"); } };
   // The regular Sunday check as Today shows it (audit item 24): its schedule, last and next look, and what it missed today.
   // What quitting would stop or lose, told to native code as it changes: open cards (a count) and whether the regular
   // Sunday check or any job is on.
@@ -2031,8 +2037,8 @@ export function App() {
           onCheck={onSystem ? systemCheck : () => { void check(); }}
           onRecording={onSystem ? () => { void sys.showSaved(); } : () => { if (latest) void act(() => sundaySource.loadRecording(org, latest.path_id)); }}
           onExample={showExample}
-          onLaterExample={fictional && capture?.completed_at === nov22Capture().completed_at
-            ? () => { void act(() => Promise.resolve(withFictionalOperations(nov22LaterCapture())), true); } : undefined}
+          onLaterExample={fictional && capture?.completed_at === exampleFirstCheck()
+            ? () => { void act(() => Promise.resolve(exampleLaterCapture(exampleNow())), true); } : undefined}
           whoCouldHelp={onSystem === "breeze" ? undefined : whoCouldHelp} feedback={feedback} onSettings={() => setPage("connection")} refused={!onSystem && refused} onSetUp={() => openSetup()}
           people={onSystem ? null : { granted: operationsGranted(status), onAdd: () => setPage("connection") }} asked={askedSlot} focus={sundayFocus && !fromPartKey(sundayFocus) ? sundayFocus : null} onFocused={() => setSundayFocus(null)}
           openInPlanningCenter={fictional || onSystem ? null : openInPlanningCenter} pane={mainRef} changes={changesOnSunday}
@@ -2071,11 +2077,11 @@ export function App() {
           readiness={readiness} shownReadiness={shownReadiness} busy={busy} now={now} churchTimeZone={churchZone}
           onCheckNow={() => { void check(); }} onPause={() => proactive.pause()} onResume={() => proactive.resume()} onPrefs={setPrefs} several={servicesShown}
           responsibilities={regular => <ResponsibilityList view={watch} context={planContext} runner={runner} actions={planActions} sunday={regular} names={changeNames} />} />}
-        {page === "activity" && <ActivityPage capture={capture} notGranted={!offPc && (operationsAsked.get() || operationsReads.on === true) && Boolean(status?.scopes) && !operationsGranted(status)}
+        {page === "activity" && <ActivityPage capture={capture} fictional={fictional} notGranted={!offPc && (operationsAsked.get() || operationsReads.on === true) && Boolean(status?.scopes) && !operationsGranted(status)}
           tasks={tasks} procedures={procedures} trigger={triggers.get} end={triggers.end} found={triggers.found} source={triggers.source} parts={triggers.parts} ollama={ollamaDone}
           service={triggers.service} serviceNames={servicesShown ? Object.fromEntries([[settings.serviceTypeId, mainName], ...also.map(x => [x.serviceTypeId, x.name] as const)]
             .filter((e): e is [string, string] => Boolean(e[1]))) : {}}
-          system={onSystem ? { name: words.name, check: sys.capture } : onGenesis ? { name: words.name, check: genesis.capture } : null}
+          system={onSystem ? { name: words.name, check: fictional ? systemExample?.capture ?? null : sys.capture } : onGenesis ? { name: words.name, check: genesis.capture } : null}
           changes={!offPc && (changesOn || (changes.history?.length ?? 0) > 0)
             ? { lede: changesShownOn ? ACTIVITY_LEDE_ON : null, section: <ChangeHistory records={changes.history} names={historyNames} services={serviceNamesById} /> } : undefined} />}
         {page === "connection" && <ConnectionPage

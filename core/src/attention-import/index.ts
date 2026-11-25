@@ -1,4 +1,12 @@
+import { isTimeZone, localDate, offsetAt } from "../church-time.js";
 import { validate } from "./validate.js";
+
+/** Whether `start` is at 5 PM or later on the same day as `at`, on `zone`'s clock (a zone not known here: never). */
+function sameEvening(start: string, at: string, zone: string): boolean {
+  const s = Date.parse(start), a = Date.parse(at);
+  if (!Number.isFinite(s) || !Number.isFinite(a) || !isTimeZone(zone)) return false;
+  return localDate(s, zone) === localDate(a, zone) && new Date(s + offsetAt(s, zone)).getUTCHours() >= 17;
+}
 
 export type Outcome = "complete" | "partial" | "stale" | "denied";
 export interface Binding { workspace_id: string; account_id: string }
@@ -72,8 +80,9 @@ export function evaluateAttentionImport(value: unknown): AttentionResult {
     const passed = untilStart !== null && untilStart <= 0;
     const knownStatus = event?.status === "confirmed";
     const uncertain = !event || !knownStatus || !mailChecked || stale || passed || contradictory;
-    const tonight = event?.title === "Volunteer orientation" && event.start_at === "2026-11-20T00:00:00Z" &&
-      input.evaluated_at === "2026-11-19T14:00:00Z";
+    // The scene's orientation, still to come on the evening of the day the import was read (on the import's own clock): "tonight". It was
+    // the scene's two exact times until the example church began to follow the calendar (example-dates.ts).
+    const tonight = event?.title === "Volunteer orientation" && !passed && sameEvening(event.start_at, input.evaluated_at, input.timezone);
     findings.push({
       id: JSON.stringify([input.workspace_id, input.account_id, eventId, [...kinds].sort(compare)]),
       source_ids: [...new Set([...evidence.map(a => a.message_id), ...(event ? [event.id] : [])])].sort(compare),

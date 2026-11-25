@@ -59,6 +59,18 @@ describe("every page is headed the same way: the page's name small above, then o
     expect(t).toMatch(/^ Settings How Ozzie is set up on this Mac Which church and service Ozzie reads, how it uses AI and tells you things, and what it keeps here\. To make everything bigger, press ⌘ and \+ \(Command and plus\)\. ⌘ and − makes it smaller, and ⌘ and 0 puts it back\. They are also in the View menu, and Ozzie keeps your choice\. On this page /u);
   });
 
+  it("What happened says the example church's reads are fictional, never from Planning Center (first-run walk, 2026-11-25)", () => {
+    const real = text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: nov22Capture(), tasks: [] })));
+    expect(real).toContain("Planning Center · started");
+    const example = text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: nov22Capture(), tasks: [], fictional: true })));
+    expect(example).toContain("Fictional example data · started");
+    expect(example).not.toContain("Planning Center · started");
+    const check = { started_at: "2026-11-20T15:00:00Z", reads: [] };
+    const system = text(renderToStaticMarkup(React.createElement(ActivityPage, { capture: null, tasks: [], system: { name: "B1 Church", check }, fictional: true })));
+    expect(system).toContain("Fictional example data · started");
+    expect(system).not.toContain("B1 Church · started");
+  });
+
   it("Settings puts its title where every other page does: 16px under the eyebrow, though its sections sit closer", () => {
     const css = ["hearth.css", "styles.css"].map(f => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")).join("\n").replace(/\/\*[\s\S]*?\*\//gu, "");
     const decls = (selector: string) => [...css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]

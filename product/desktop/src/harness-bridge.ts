@@ -10,7 +10,9 @@
 // Automatic and manual Sunday checks stay deterministic (no model) and are recorded as "check" tasks.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { evaluateAttentionImport, type AttentionReport } from "../../../core/src/attention-import/index.js";
-import { harborAttentionImport } from "../../../core/src/fictional-attention.js";
+import { exampleAttention } from "../../../core/src/example.js";
+import type { ExampleShift } from "../../../core/src/example-dates.js";
+import { exampleNow } from "./example-now.js";
 import { bundledSkills } from "../../../core/src/harness/bundled-skills.js";
 import type { AgentRuntime, AgentStepReply, FailureCode, ModelStep, Skill, TaskEvent, TaskOutcome, ToolEnvelope } from "../../../core/src/harness/contract.js";
 import { REFUSALS } from "../../../core/src/ask.js";
@@ -171,10 +173,12 @@ export const sundayBrief = (capture: SundayCapture, rules: SundayRules, now: str
 export const sundayOps = (capture: SundayCapture, rules: SundayRules, now: string, fictional: boolean): SundayOperations | null =>
   sundayOperations(capture, rules, fictional ? {} : { now });
 
-let fictionalImport: AttentionReport | null | undefined;
+let fictionalImport: { shift: ExampleShift; report: AttentionReport | null } | undefined;
 const attentionImport = () => {
-  if (fictionalImport === undefined) { const r = evaluateAttentionImport(harborAttentionImport()); fictionalImport = r.ok ? r : null; }
-  return fictionalImport;
+  // The example's import as it is shown now (example-now.ts): read again when the example moves to another week.
+  const shift = exampleNow();
+  if (fictionalImport?.shift !== shift) { const r = evaluateAttentionImport(exampleAttention(shift)); fictionalImport = { shift, report: r.ok ? r : null }; }
+  return fictionalImport.report;
 };
 const OPERATIONS_READ = /^(?:calendar|people|groups)_/u;
 
